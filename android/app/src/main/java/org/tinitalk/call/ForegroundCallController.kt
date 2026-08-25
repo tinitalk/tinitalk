@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 
 class ForegroundCallController(
     private val signal: SignalClient,
-    private val mediaFactory: (String, List<IceServerData>, (IceCandidateData) -> Unit) -> MediaSession,
+    private val mediaFactory: (String, List<IceServerData>, (IceCandidateData) -> Unit, () -> Unit) -> MediaSession,
     private val ids: EventIds = UuidEventIds(),
 ) {
     private var session: MediaSession? = null
@@ -64,9 +64,20 @@ class ForegroundCallController(
         if (current != null && callId == nextCallId) return current
         close()
         callId = nextCallId
-        return mediaFactory(nextCallId, iceServers) { candidate -> sendIce(nextCallId, candidate) }.also {
+        return mediaFactory(
+            nextCallId,
+            iceServers,
+            { candidate -> sendIce(nextCallId, candidate) },
+            { restartIce(nextCallId) },
+        ).also {
             session = it
         }
+    }
+
+    private fun restartIce(nextCallId: String) {
+        val media = session ?: return
+        val offer = runBlockingLite { media.restartIce() }
+        sendSdp(nextCallId, "rtc.offer", offer)
     }
 
     private fun JsonObject.parseIceServers(): List<IceServerData> {

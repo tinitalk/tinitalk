@@ -19,7 +19,7 @@ class SignalSocket(
 	private var socket: WebSocket? = null
 	@Volatile private var closed = false
 
-	fun connect(onEvent: (SequencedSignalEvent) -> Unit) {
+	fun connect(onEvent: (SequencedSignalEvent) -> Unit, onOpen: () -> Unit = {}) {
 		closed = false
 		val request = Request.Builder()
 			.url(socketUrl())
@@ -28,6 +28,7 @@ class SignalSocket(
 		socket = client.newWebSocket(request, object : WebSocketListener() {
 			override fun onOpen(webSocket: WebSocket, response: Response) {
 				backoff.reset()
+				onOpen()
 			}
 
 			override fun onMessage(webSocket: WebSocket, text: String) {
@@ -40,7 +41,7 @@ class SignalSocket(
 				if (closed) return
 				Thread {
 					Thread.sleep(backoff.nextDelayMillis())
-					if (!closed) connect(onEvent)
+					if (!closed) connect(onEvent, onOpen)
 				}.start()
 			}
 		})

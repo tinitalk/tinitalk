@@ -10,8 +10,10 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class SignalSocketTest {
@@ -26,7 +28,7 @@ class SignalSocketTest {
                 Session(server.url("/").toString(), "alice", "secret-token"),
             )
 
-            socket.connect {}
+            socket.connect(onEvent = {})
 
             val request = server.takeRequest()
             assertEquals("/api/socket", request.path)
@@ -45,8 +47,10 @@ class SignalSocketTest {
             server.start()
             val client = OkHttpClient()
             val socket = SignalSocket(client, Session(server.url("/").toString(), "alice", "token"))
-            socket.connect {}
+            val opened = CountDownLatch(1)
+            socket.connect(onEvent = {}, onOpen = { opened.countDown() })
             listener.awaitOpen()
+            assertTrue(opened.await(2, TimeUnit.SECONDS))
 
             socket.send(
                 SignalEvent(

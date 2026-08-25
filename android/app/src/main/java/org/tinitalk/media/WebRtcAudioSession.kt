@@ -19,6 +19,7 @@ class WebRtcAudioSession private constructor(
     context: Context,
     iceServers: List<IceServerData>,
     private val onLocalIceCandidate: (IceCandidateData) -> Unit,
+    private val onIceRestartNeeded: () -> Unit,
     forceRelay: Boolean,
 ) : MediaSession {
     private val iceQueue = IceQueue()
@@ -28,6 +29,8 @@ class WebRtcAudioSession private constructor(
     private val sender: RtpSender?
     private val peerConnection: PeerConnection
     @Volatile private var closed = false
+    @Volatile private var restartRequested = false
+    @Volatile private var iceState: PeerConnection.IceConnectionState = PeerConnection.IceConnectionState.NEW
 
     init {
         prepareFactory(context.applicationContext)
@@ -47,7 +50,10 @@ class WebRtcAudioSession private constructor(
         peerConnection = requireNotNull(
             factory.createPeerConnection(
                 config,
-                PeerConnectionObserver(onLocalIceCandidate = onLocalIceCandidate),
+                PeerConnectionObserver(
+                    onLocalIceCandidate = onLocalIceCandidate,
+                    onConnectionChange = { state -> onIceConnectionState(state) },
+                ),
             ),
         )
         audioSource = factory.createAudioSource(audioConstraints())
@@ -144,6 +150,19 @@ class WebRtcAudioSession private constructor(
         check(!closed) { "media session is closed" }
     }
 
+    private fun onIceConnectionState(state: PeerConnection.IceConnectionState) {
+        iceState = state
+        if (restartRequested || closed) return
+        if (state != PeerConnection.IceConnectionState.DISCONNECTED && state != PeerConnection.IceConnectionState.FAILED) return
+        restartRequested = true
+        Thread {
+            Thread.sleep(3000)
+            if (!closed && (iceState == PeerConnection.IceConnectionState.DISCONNECTED || iceState == PeerConnection.IceConnectionState.FAILED)) {
+                onIceRestartNeeded()
+            }
+        }.start()
+    }
+
     private fun IceServerData.toWebRtc(): PeerConnection.IceServer {
         val builder = PeerConnection.IceServer.builder(urls)
         if (username.isNotEmpty() || password.isNotEmpty()) {
@@ -166,7 +185,8 @@ class WebRtcAudioSession private constructor(
             iceServers: List<IceServerData> = emptyList(),
             forceRelay: Boolean = false,
             onLocalIceCandidate: (IceCandidateData) -> Unit = {},
-        ): WebRtcAudioSession = WebRtcAudioSession(context, iceServers, onLocalIceCandidate, forceRelay)
+            onIceRestartNeeded: () -> Unit = {},
+        ): WebRtcAudioSession = WebRtcAudioSession(context, iceServers, onLocalIceCandidate, onIceRestartNeeded, forceRelay)
 
         @Synchronized
         private fun prepareFactory(context: Context) {

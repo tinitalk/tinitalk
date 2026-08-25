@@ -104,6 +104,31 @@ func TestHubDeduplicatesAndReplaysAfterSequence(t *testing.T) {
 	}
 }
 
+func TestHubHandlesResumeEventByReplayingToSender(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a90301", "018f7d51-40a1-7bb5-a2d0-7e47f9180301", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	if err := hub.Handle("bob", event("018f7d51-3f90-7e63-b657-4a83a6a90302", start.CallID, "call.ringing", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a90303", start.CallID, "call.resume", map[string]any{"last_seq": 1})); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := next(t, alice); got.Type != "call.ringing" || got.Seq != 2 {
+		t.Fatalf("alice replay = %+v", got)
+	}
+	if got, ok := bob.TryNext(); ok {
+		t.Fatalf("bob received resume side effect: %+v", got)
+	}
+}
+
 func TestHubCancelsEndsExpiresAndLimitsICE(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	hub.SetNow(func() time.Time { return time.Unix(1000, 0) })
@@ -168,6 +193,21 @@ func TestHubLimitsConnectionsPerUser(t *testing.T) {
 	}
 	if _, err := hub.ConnectChecked("alice"); err == nil {
 		t.Fatal("extra ConnectChecked error = nil, want limit")
+	}
+}
+
+func TestHubDisconnectReleasesConnectionSlot(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	client, err := hub.ConnectChecked("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.Disconnect(client)
+
+	for i := 0; i < MaxConnectionsPerUser; i++ {
+		if _, err := hub.ConnectChecked("alice"); err != nil {
+			t.Fatalf("ConnectChecked %d error = %v", i, err)
+		}
 	}
 }
 

@@ -50,6 +50,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	client := s.hub.Connect(currentUser(r).Login)
+	defer s.hub.Disconnect(client)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

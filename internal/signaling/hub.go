@@ -70,6 +70,24 @@ func (h *Hub) ConnectChecked(user string) (*Client, error) {
 	return client, nil
 }
 
+func (h *Hub) Disconnect(client *Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if client.closed {
+		return
+	}
+	client.closed = true
+	if h.clients[client.user] == client {
+		delete(h.clients, client.user)
+	}
+	if h.clientCounts[client.user] <= 1 {
+		delete(h.clientCounts, client.user)
+	} else {
+		h.clientCounts[client.user]--
+	}
+	close(client.inbox)
+}
+
 func (h *Hub) SetNow(now func() time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -94,6 +112,18 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	}
 	if !c.participant(sender) {
 		return errors.New("sender is not a call participant")
+	}
+	if event.Type == "call.resume" {
+		var payload struct {
+			LastSeq uint64 `json:"last_seq"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		for _, delivered := range c.after(payload.LastSeq) {
+			h.deliver(sender, delivered)
+		}
+		return nil
 	}
 	if event.Type == "rtc.ice" {
 		if err := h.checkICERate(c); err != nil {

@@ -148,20 +148,28 @@ class MainActivity : Activity() {
         val newCoordinator = CallCoordinator(session.login, newSocket)
         val newForegroundCall = ForegroundCallController(
             signal = newSocket,
-            mediaFactory = { _, iceServers, onLocalIce ->
-                WebRtcAudioSession.create(this, iceServers = iceServers, onLocalIceCandidate = onLocalIce)
+            mediaFactory = { _, iceServers, onLocalIce, onIceRestartNeeded ->
+                WebRtcAudioSession.create(
+                    this,
+                    iceServers = iceServers,
+                    onLocalIceCandidate = onLocalIce,
+                    onIceRestartNeeded = onIceRestartNeeded,
+                )
             },
         )
         socket = newSocket
         coordinator = newCoordinator
         foregroundCall = newForegroundCall
         runCatching { TelecomCallController(AndroidTelecomRegistrar(this)).registerAudioOnly() }
-        newSocket.connect { event ->
-            if (newCoordinator.onEvent(event)) {
-                newForegroundCall.onSignalEvent(newCoordinator.snapshot(), event.event)
-            }
-            renderCallState()
-        }
+        newSocket.connect(
+            onEvent = { event ->
+                if (newCoordinator.onEvent(event)) {
+                    newForegroundCall.onSignalEvent(newCoordinator.snapshot(), event.event)
+                }
+                renderCallState()
+            },
+            onOpen = { newCoordinator.resume() },
+        )
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -249,19 +257,23 @@ class MainActivity : Activity() {
                         text = "Hang up"
                         setOnClickListener {
                             coordinator?.cancel()
-                            foregroundCall?.close()
-                            stopService(Intent(this@MainActivity, CallForegroundService::class.java))
+                            cleanupCall()
                             renderCallState()
                         }
                     })
                 }
                 CallPhase.Ended -> {
-                    foregroundCall?.close()
-                    stopService(Intent(this, CallForegroundService::class.java))
+                    cleanupCall()
                     status.text = "Call ended"
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        socket?.close()
+        foregroundCall?.close()
+        super.onDestroy()
     }
 
     private fun ensureRecordAudioPermission(): Boolean {
@@ -290,5 +302,12 @@ class MainActivity : Activity() {
         } else {
             startService(intent)
         }
+    }
+
+    private fun cleanupCall() {
+        foregroundCall?.close()
+        IncomingCallNotifier(this).cancel()
+        incomingController.clear(this)
+        stopService(Intent(this, CallForegroundService::class.java))
     }
 }
