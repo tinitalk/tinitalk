@@ -140,7 +140,9 @@ class MainActivity : Activity() {
         val newCoordinator = CallCoordinator(session.login, newSocket)
         val newForegroundCall = ForegroundCallController(
             signal = newSocket,
-            mediaFactory = { _, onLocalIce -> WebRtcAudioSession.create(this, onLocalIceCandidate = onLocalIce) },
+            mediaFactory = { _, iceServers, onLocalIce ->
+                WebRtcAudioSession.create(this, iceServers = iceServers, onLocalIceCandidate = onLocalIce)
+            },
         )
         socket = newSocket
         coordinator = newCoordinator

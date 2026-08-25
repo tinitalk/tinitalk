@@ -39,6 +39,33 @@ func TestHubRoutesAcceptRejectAndRejectsThirdParty(t *testing.T) {
 	}
 }
 
+func TestHubSendsICEConfigToParticipantsAfterAccept(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	hub.SetICEConfigProvider(fakeICEConfig{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a90601", "018f7d51-40a1-7bb5-a2d0-7e47f9180601", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	accept := event("018f7d51-3f90-7e63-b657-4a83a6a90602", start.CallID, "call.accept", map[string]any{})
+	if err := hub.Handle("bob", accept); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := next(t, alice); got.Type != "call.accept" {
+		t.Fatalf("alice accept = %+v", got)
+	}
+	if got := next(t, alice); got.Type != "rtc.config" {
+		t.Fatalf("alice config = %+v", got)
+	}
+	if got := next(t, bob); got.Type != "rtc.config" {
+		t.Fatalf("bob config = %+v", got)
+	}
+}
+
 func TestHubDeduplicatesAndReplaysAfterSequence(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alice := hub.Connect("alice")
@@ -166,4 +193,10 @@ func next(t *testing.T, c *Client) DeliveredEvent {
 
 func uuid(n int) string {
 	return fmt.Sprintf("018f7d51-3f90-7e63-b657-4a83a6a%05d", n)
+}
+
+type fakeICEConfig struct{}
+
+func (fakeICEConfig) ICEConfig(callID, user string) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"user":%q,"call_id":%q}`, user, callID))
 }

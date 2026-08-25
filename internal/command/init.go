@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"tinitalk/internal/app"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
+	"tinitalk/internal/turnserver"
 )
 
 func run(w io.Writer, args []string) (string, error) {
@@ -64,6 +66,9 @@ func runServe(args []string) error {
 	}
 	addr := ":8080"
 	allowLoopback := false
+	turnPublicHost := ""
+	turnPublicIP := ""
+	turnAddr := ":3478"
 	for len(rest) > 0 {
 		switch rest[0] {
 		case "--addr":
@@ -75,8 +80,26 @@ func runServe(args []string) error {
 		case "--loopback-insecure":
 			allowLoopback = true
 			rest = rest[1:]
+		case "--turn-public-host":
+			if len(rest) < 2 {
+				return errors.New("--turn-public-host requires a value")
+			}
+			turnPublicHost = rest[1]
+			rest = rest[2:]
+		case "--turn-public-ip":
+			if len(rest) < 2 {
+				return errors.New("--turn-public-ip requires a value")
+			}
+			turnPublicIP = rest[1]
+			rest = rest[2:]
+		case "--turn-addr":
+			if len(rest) < 2 {
+				return errors.New("--turn-addr requires a value")
+			}
+			turnAddr = rest[1]
+			rest = rest[2:]
 		default:
-			return errors.New("usage: tinitalk serve --data-dir DIR [--addr ADDR] [--loopback-insecure]")
+			return errors.New("usage: tinitalk serve --data-dir DIR [--addr ADDR] [--loopback-insecure] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR]]")
 		}
 	}
 	db, err := state.OpenDir(dataDir)
@@ -84,7 +107,25 @@ func runServe(args []string) error {
 		return err
 	}
 	defer db.Close()
-	server := app.NewHTTPServer(db, app.ServerConfig{Addr: addr, AllowInsecureLoopback: allowLoopback, Hub: signaling.NewHub(signaling.NoopNotifier{})})
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	var iceConfig signaling.ICEConfigProvider
+	if turnPublicHost != "" || turnPublicIP != "" {
+		if turnPublicHost == "" || turnPublicIP == "" {
+			return errors.New("TURN requires --turn-public-host and --turn-public-ip")
+		}
+		secret, err := db.Secret("turn_secret")
+		if err != nil {
+			return err
+		}
+		issuer := turnserver.CredentialIssuer{Secret: secret, TTL: 10 * time.Minute}
+		turn, err := turnserver.Start(turnserver.Config{PublicIP: turnPublicIP, Addr: turnAddr, Realm: turnPublicHost, Issuer: issuer})
+		if err != nil {
+			return err
+		}
+		defer turn.Close()
+		iceConfig = turnserver.ICEConfigProvider{PublicHost: turnPublicHost, Realm: turnPublicHost, Issuer: issuer}
+	}
+	server := app.NewHTTPServer(db, app.ServerConfig{Addr: addr, AllowInsecureLoopback: allowLoopback, Hub: hub, ICEConfigProvider: iceConfig})
 	return server.ListenAndServe()
 }
 

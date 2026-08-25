@@ -18,9 +18,14 @@ type NoopNotifier struct{}
 
 func (NoopNotifier) IncomingCall(string, DeliveredEvent) {}
 
+type ICEConfigProvider interface {
+	ICEConfig(callID, user string) json.RawMessage
+}
+
 type Hub struct {
 	mu           sync.Mutex
 	notifier     Notifier
+	iceConfig    ICEConfigProvider
 	clients      map[string]*Client
 	clientCounts map[string]int
 	calls        map[string]*call
@@ -40,6 +45,12 @@ func NewHub(notifier Notifier) *Hub {
 		activeByUser: map[string]string{},
 		now:          time.Now,
 	}
+}
+
+func (h *Hub) SetICEConfigProvider(provider ICEConfigProvider) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.iceConfig = provider
 }
 
 func (h *Hub) Connect(user string) *Client {
@@ -94,11 +105,28 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	h.deliver(c.other(sender), delivered)
 	if event.Type == "call.accept" {
 		c.answered = true
+		h.deliverICEConfig(c)
 	}
 	if endsCall(event.Type) {
 		h.end(c)
 	}
 	return nil
+}
+
+func (h *Hub) deliverICEConfig(c *call) {
+	if h.iceConfig == nil {
+		return
+	}
+	for _, participant := range []string{c.caller, c.callee} {
+		event := protocol.Event{
+			ID:      rtcConfigID(c.id, participant),
+			CallID:  c.id,
+			Type:    "rtc.config",
+			SentAt:  h.now().UnixMilli(),
+			Payload: h.iceConfig.ICEConfig(c.id, participant),
+		}
+		h.deliver(participant, h.next(c, event))
+	}
 }
 
 func (h *Hub) Resume(user, callID string, lastSeq uint64) ([]DeliveredEvent, error) {
@@ -241,4 +269,11 @@ func (h *Hub) ActiveCall(user string) (string, error) {
 
 func expireID(callID string) string {
 	return callID[:len(callID)-3] + "999"
+}
+
+func rtcConfigID(callID, participant string) string {
+	if participant == "" || participant[0]%2 == 0 {
+		return callID[:len(callID)-3] + "201"
+	}
+	return callID[:len(callID)-3] + "202"
 }

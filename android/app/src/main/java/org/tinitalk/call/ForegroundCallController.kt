@@ -3,6 +3,7 @@ package org.tinitalk.call
 import com.google.gson.JsonObject
 import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.media.IceCandidateData
+import org.tinitalk.media.IceServerData
 import org.tinitalk.media.MediaSession
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.EmptyCoroutineContext
@@ -12,11 +13,12 @@ import java.util.concurrent.TimeUnit
 
 class ForegroundCallController(
     private val signal: SignalClient,
-    private val mediaFactory: (String, (IceCandidateData) -> Unit) -> MediaSession,
+    private val mediaFactory: (String, List<IceServerData>, (IceCandidateData) -> Unit) -> MediaSession,
     private val ids: EventIds = UuidEventIds(),
 ) {
     private var session: MediaSession? = null
     private var callId: String? = null
+    private var iceServers: List<IceServerData> = emptyList()
 
     fun onSignalEvent(snapshot: CallSnapshot, event: SignalEvent) {
         when (event.type) {
@@ -30,6 +32,7 @@ class ForegroundCallController(
                 val answer = runBlockingLite { media.acceptOffer(event.payload["sdp"].asString) }
                 sendSdp(event.callId, "rtc.answer", answer)
             }
+            "rtc.config" -> iceServers = event.payload.parseIceServers()
             "rtc.answer" -> session?.let { media ->
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
             }
@@ -61,8 +64,21 @@ class ForegroundCallController(
         if (current != null && callId == nextCallId) return current
         close()
         callId = nextCallId
-        return mediaFactory(nextCallId) { candidate -> sendIce(nextCallId, candidate) }.also {
+        return mediaFactory(nextCallId, iceServers) { candidate -> sendIce(nextCallId, candidate) }.also {
             session = it
+        }
+    }
+
+    private fun JsonObject.parseIceServers(): List<IceServerData> {
+        val servers = getAsJsonArray("ice_servers") ?: return emptyList()
+        return servers.mapNotNull { element ->
+            val server = element.asJsonObject
+            val urls = server.getAsJsonArray("urls")?.map { it.asString } ?: return@mapNotNull null
+            IceServerData(
+                urls = urls,
+                username = server.get("username")?.asString.orEmpty(),
+                password = server.get("credential")?.asString.orEmpty(),
+            )
         }
     }
 

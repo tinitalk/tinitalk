@@ -14,6 +14,7 @@ type ServerConfig struct {
 	Addr                  string
 	AllowInsecureLoopback bool
 	Hub                   *signaling.Hub
+	ICEConfigProvider     signaling.ICEConfigProvider
 }
 
 func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
@@ -21,9 +22,13 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 	if addr == "" {
 		addr = ":8080"
 	}
+	hub := config.Hub
+	if hub != nil && config.ICEConfigProvider != nil {
+		hub.SetICEConfigProvider(config.ICEConfigProvider)
+	}
 	return &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.NewServer(db, httpapi.Options{AllowInsecureLoopback: config.AllowInsecureLoopback, Hub: config.Hub}),
+		Handler:           httpapi.NewServer(db, httpapi.Options{AllowInsecureLoopback: config.AllowInsecureLoopback, Hub: hub}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
