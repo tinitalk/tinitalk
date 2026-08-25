@@ -38,6 +38,22 @@ class TelecomCallControllerTest {
         assertEquals("call-1", registrar.rejectedCall)
     }
 
+    @Test
+    fun addsAndActivatesOutgoingCall() {
+        val registrar = FakeTelecomRegistrar()
+        val controller = TelecomCallController(registrar)
+        var disconnected = false
+
+        controller.addOutgoing("call-2", "Bob") { disconnected = true }
+        registrar.outgoingDisconnect?.invoke()
+        controller.setActive("call-2")
+
+        assertEquals("call-2", registrar.outgoingCallId)
+        assertEquals("Bob", registrar.outgoingDisplayName)
+        assertTrue(disconnected)
+        assertEquals("call-2", registrar.activeCall)
+    }
+
     private class FakeTelecomRegistrar : TelecomRegistrar {
         var registered: TelecomCapabilities? = null
         var invite: IncomingInvite? = null
@@ -45,6 +61,10 @@ class TelecomCallControllerTest {
         var onDisconnect: (() -> Unit)? = null
         var answeredCall: String? = null
         var rejectedCall: String? = null
+        var outgoingCallId: String? = null
+        var outgoingDisplayName: String? = null
+        var outgoingDisconnect: (() -> Unit)? = null
+        var activeCall: String? = null
 
         override fun register(capabilities: TelecomCapabilities) {
             registered = capabilities
@@ -56,12 +76,22 @@ class TelecomCallControllerTest {
             this.onDisconnect = onDisconnect
         }
 
+        override fun addOutgoing(callId: String, displayName: String, onDisconnect: () -> Unit) {
+            outgoingCallId = callId
+            outgoingDisplayName = displayName
+            outgoingDisconnect = onDisconnect
+        }
+
         override fun answer(callId: String) {
             answeredCall = callId
         }
 
         override fun reject(callId: String) {
             rejectedCall = callId
+        }
+
+        override fun setActive(callId: String) {
+            activeCall = callId
         }
 
         override fun cancel(callId: String) = Unit

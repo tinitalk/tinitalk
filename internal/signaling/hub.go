@@ -220,6 +220,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 
 	incoming := event
 	incoming.Type = "call.incoming"
+	incoming.SentAt = h.now().UnixMilli()
 	delivered := h.next(c, incoming, payload.CalleeID)
 	h.deliver(payload.CalleeID, delivered)
 	go h.notifier.IncomingCall(sender, payload.CalleeID, delivered)

@@ -35,6 +35,7 @@ class CallForegroundService : Service() {
     private var media: ForegroundCallController? = null
     private var connected = false
     private var finishing = false
+    private val telecom by lazy { TelecomCallController(AndroidTelecomRegistrar(this)) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         ensureChannel()
@@ -93,6 +94,9 @@ class CallForegroundService : Service() {
                 if (newCoordinator.onEvent(incoming)) {
                     newMedia.onSignalEvent(newCoordinator.snapshot(), incoming.event)
                 }
+                if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
+                    telecom.setActive(incoming.event.callId)
+                }
                 publish()
                 if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCall()
             },
@@ -112,7 +116,11 @@ class CallForegroundService : Service() {
         when (intent.action) {
             ActionStart -> {
                 CallServiceState.publish(call.snapshot())
-                call.startCall(intent.getStringExtra(ExtraCallee) ?: return)
+                val callee = intent.getStringExtra(ExtraCallee) ?: return
+                call.startCall(callee)
+                call.snapshot().callId?.let { callId ->
+                    telecom.addOutgoing(callId, callee) { end(this) }
+                }
             }
             ActionAnswer -> {
                 invite ?: return
@@ -142,7 +150,7 @@ class CallForegroundService : Service() {
         }
         publish()
         if (call.snapshot().phase == CallPhase.Ended) {
-            if (connected) finishCallSoon()
+            if (connected) finishCallSoon() else handler.postDelayed({ finishCall() }, SignalFlushTimeoutMillis)
         }
     }
 
@@ -160,7 +168,7 @@ class CallForegroundService : Service() {
         media?.close()
         IncomingCallNotifier(this).cancel()
         IncomingCallController().clear(this)
-        coordinator?.snapshot()?.callId?.let { TelecomCallController(AndroidTelecomRegistrar(this)).cancel(it) }
+        coordinator?.snapshot()?.callId?.let(telecom::cancel)
         stopSelf()
     }
 
@@ -222,6 +230,7 @@ class CallForegroundService : Service() {
         private const val ExtraMuted = "muted"
         const val ChannelId = "calls"
         const val NotificationId = 10
+        private const val SignalFlushTimeoutMillis = 5_000L
 
         fun startOutgoing(context: Context, callee: String) {
             start(context, Intent(context, CallForegroundService::class.java).setAction(ActionStart).putExtra(ExtraCallee, callee))

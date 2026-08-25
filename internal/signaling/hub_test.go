@@ -39,6 +39,22 @@ func TestHubRoutesAcceptRejectAndRejectsThirdParty(t *testing.T) {
 	}
 }
 
+func TestHubUsesServerTimeForIncomingCall(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	now := time.Unix(1787666400, 0)
+	hub.SetNow(func() time.Time { return now })
+	bob := hub.Connect("bob")
+
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a90111", "018f7d51-40a1-7bb5-a2d0-7e47f9180111", "call.start", map[string]any{"callee_id": "bob"})
+	start.SentAt = 1
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	if incoming := next(t, bob); incoming.SentAt != now.UnixMilli() {
+		t.Fatalf("incoming sent_at = %d, want %d", incoming.SentAt, now.UnixMilli())
+	}
+}
+
 func TestHubSendsICEConfigToParticipantsAfterAccept(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	hub.SetICEConfigProvider(fakeICEConfig{})
