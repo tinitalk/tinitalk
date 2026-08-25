@@ -1,0 +1,9 @@
+{
+  "id": "018f7d51-3f90-7e63-b657-4a83a6a90210",
+  "call_id": "not-a-call-id",
+  "type": "call.start",
+  "sent_at": 1787666400000,
+  "payload": {
+    "callee_id": "bob"
+  }
+}

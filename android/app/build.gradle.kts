@@ -27,5 +27,6 @@ kotlin {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    implementation(libs.gson)
     testImplementation(libs.junit)
 }

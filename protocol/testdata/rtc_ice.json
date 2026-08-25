@@ -1,0 +1,11 @@
+{
+  "id": "018f7d51-3f90-7e63-b657-4a83a6a90212",
+  "call_id": "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+  "type": "rtc.ice",
+  "sent_at": 1787666401000,
+  "payload": {
+    "candidate": "candidate:1 1 udp 2130706431 192.0.2.10 3478 typ host",
+    "sdp_mid": "0",
+    "sdp_mline_index": 0
+  }
+}
