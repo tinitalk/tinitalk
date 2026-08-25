@@ -28,5 +28,7 @@ kotlin {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.gson)
+    implementation(libs.okhttp)
     testImplementation(libs.junit)
+    testImplementation(libs.mockwebserver)
 }

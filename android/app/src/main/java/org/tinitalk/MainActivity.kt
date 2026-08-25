@@ -8,19 +8,27 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import org.tinitalk.call.CallCoordinator
+import org.tinitalk.call.CallPhase
+import org.tinitalk.data.Contact
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
+import org.tinitalk.data.signal.SignalSocket
+import okhttp3.OkHttpClient
 
 class MainActivity : Activity() {
     private lateinit var status: TextView
-    private lateinit var contacts: TextView
+    private lateinit var contacts: LinearLayout
     private lateinit var repository: ContactRepository
+    private lateinit var authStore: AuthStore
+    private var socket: SignalSocket? = null
+    private var coordinator: CallCoordinator? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+        authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         repository = ContactRepository(authStore)
 
         val url = field("https://")
@@ -30,7 +38,7 @@ class MainActivity : Activity() {
             imeOptions = EditorInfo.IME_ACTION_DONE
         }
         status = TextView(this).apply { text = "Not connected" }
-        contacts = TextView(this)
+        contacts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val connect = Button(this).apply {
             text = "Connect"
             setOnClickListener {
@@ -57,7 +65,12 @@ class MainActivity : Activity() {
         )
         Thread {
             runCatching { repository.restoreContacts() }
-                .onSuccess { restored -> restored?.let { showContacts(it) } }
+                .onSuccess { restored ->
+                    restored?.let {
+                        setupSignal()
+                        showContacts(it)
+                    }
+                }
                 .onFailure { showError(it) }
         }.start()
     }
@@ -76,22 +89,88 @@ class MainActivity : Activity() {
         status.text = "Connecting..."
         Thread {
             runCatching { repository.signIn(url, login, token) }
-                .onSuccess { showContacts(it) }
+                .onSuccess {
+                    setupSignal()
+                    showContacts(it)
+                }
                 .onFailure { showError(it) }
         }.start()
     }
 
-    private fun showContacts(items: List<org.tinitalk.data.Contact>) {
+    private fun showContacts(items: List<Contact>) {
         runOnUiThread {
             status.text = "Connected"
-            contacts.text = items.joinToString(separator = "\n") { it.displayName }
+            contacts.removeAllViews()
+            items.forEach { contact ->
+                contacts.addView(Button(this).apply {
+                    text = "Call ${contact.displayName}"
+                    setOnClickListener {
+                        runCatching { coordinator?.startCall(contact.login) }
+                            .onSuccess { renderCallState() }
+                            .onFailure { showError(it) }
+                    }
+                })
+            }
         }
     }
 
     private fun showError(error: Throwable) {
         runOnUiThread {
             status.text = error.message ?: "Connection failed"
-            contacts.text = ""
+            contacts.removeAllViews()
+        }
+    }
+
+    private fun setupSignal() {
+        val session = authStore.load() ?: return
+        socket?.close()
+        val newSocket = SignalSocket(OkHttpClient(), session)
+        val newCoordinator = CallCoordinator(session.login, newSocket)
+        socket = newSocket
+        coordinator = newCoordinator
+        newSocket.connect { event ->
+            newCoordinator.onEvent(event)
+            renderCallState()
+        }
+    }
+
+    private fun renderCallState() {
+        val snapshot = coordinator?.snapshot() ?: return
+        runOnUiThread {
+            when (snapshot.phase) {
+                CallPhase.Idle -> status.text = "Connected"
+                CallPhase.Connecting -> {
+                    status.text = "Calling..."
+                    contacts.removeAllViews()
+                    contacts.addView(Button(this).apply {
+                        text = "Cancel"
+                        setOnClickListener {
+                            coordinator?.cancel()
+                            renderCallState()
+                        }
+                    })
+                }
+                CallPhase.Ringing -> {
+                    status.text = "Incoming call"
+                    contacts.removeAllViews()
+                    contacts.addView(Button(this).apply {
+                        text = "Accept"
+                        setOnClickListener {
+                            coordinator?.accept()
+                            renderCallState()
+                        }
+                    })
+                    contacts.addView(Button(this).apply {
+                        text = "Reject"
+                        setOnClickListener {
+                            coordinator?.reject()
+                            renderCallState()
+                        }
+                    })
+                }
+                CallPhase.Active -> status.text = "Call active"
+                CallPhase.Ended -> status.text = "Call ended"
+            }
         }
     }
 }
