@@ -59,8 +59,8 @@ class CallCoordinator(
         signal.send(event(callId, "call.resume", payload))
     }
 
-    fun onEvent(incoming: SequencedSignalEvent) {
-        if (incoming.seq <= machine.snapshot().lastSeq) return
+    fun onEvent(incoming: SequencedSignalEvent): Boolean {
+        if (incoming.seq <= machine.snapshot().lastSeq) return false
         machine.recordSeq(incoming.seq)
         when (incoming.event.type) {
             "call.incoming" -> machine.transition(CallPhase.Ringing, incoming.event.callId)
@@ -68,6 +68,7 @@ class CallCoordinator(
             "call.accept" -> machine.transition(CallPhase.Active, incoming.event.callId)
             "call.reject", "call.cancel", "call.end", "call.expire" -> machine.transition(CallPhase.Ended, incoming.event.callId)
         }
+        return true
     }
 
     private fun sendTerminal(type: String) {

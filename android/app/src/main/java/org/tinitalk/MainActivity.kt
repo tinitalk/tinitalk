@@ -1,6 +1,10 @@
 package org.tinitalk
 
+import android.Manifest
 import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.inputmethod.EditorInfo
@@ -10,12 +14,17 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import org.tinitalk.call.CallCoordinator
 import org.tinitalk.call.CallPhase
+import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.Contact
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
+import org.tinitalk.media.WebRtcAudioSession
+import org.tinitalk.telecom.AndroidTelecomRegistrar
+import org.tinitalk.telecom.CallForegroundService
+import org.tinitalk.telecom.TelecomCallController
 import okhttp3.OkHttpClient
 
 class MainActivity : Activity() {
@@ -25,6 +34,8 @@ class MainActivity : Activity() {
     private lateinit var authStore: AuthStore
     private var socket: SignalSocket? = null
     private var coordinator: CallCoordinator? = null
+    private var foregroundCall: ForegroundCallController? = null
+    private var muted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,6 +116,7 @@ class MainActivity : Activity() {
                 contacts.addView(Button(this).apply {
                     text = "Call ${contact.displayName}"
                     setOnClickListener {
+                        if (!ensureRecordAudioPermission()) return@setOnClickListener
                         runCatching { coordinator?.startCall(contact.login) }
                             .onSuccess { renderCallState() }
                             .onFailure { showError(it) }
@@ -126,10 +138,18 @@ class MainActivity : Activity() {
         socket?.close()
         val newSocket = SignalSocket(OkHttpClient(), session)
         val newCoordinator = CallCoordinator(session.login, newSocket)
+        val newForegroundCall = ForegroundCallController(
+            signal = newSocket,
+            mediaFactory = { _, onLocalIce -> WebRtcAudioSession.create(this, onLocalIceCandidate = onLocalIce) },
+        )
         socket = newSocket
         coordinator = newCoordinator
+        foregroundCall = newForegroundCall
+        runCatching { TelecomCallController(AndroidTelecomRegistrar(this)).registerAudioOnly() }
         newSocket.connect { event ->
-            newCoordinator.onEvent(event)
+            if (newCoordinator.onEvent(event)) {
+                newForegroundCall.onSignalEvent(newCoordinator.snapshot(), event.event)
+            }
             renderCallState()
         }
     }
@@ -156,6 +176,7 @@ class MainActivity : Activity() {
                     contacts.addView(Button(this).apply {
                         text = "Accept"
                         setOnClickListener {
+                            if (!ensureRecordAudioPermission()) return@setOnClickListener
                             coordinator?.accept()
                             renderCallState()
                         }
@@ -168,9 +189,50 @@ class MainActivity : Activity() {
                         }
                     })
                 }
-                CallPhase.Active -> status.text = "Call active"
-                CallPhase.Ended -> status.text = "Call ended"
+                CallPhase.Active -> {
+                    startCallService()
+                    status.text = "Call active"
+                    contacts.removeAllViews()
+                    contacts.addView(Button(this).apply {
+                        text = if (muted) "Unmute" else "Mute"
+                        setOnClickListener {
+                            muted = !muted
+                            foregroundCall?.setMuted(muted)
+                            renderCallState()
+                        }
+                    })
+                    contacts.addView(Button(this).apply {
+                        text = "Hang up"
+                        setOnClickListener {
+                            coordinator?.cancel()
+                            foregroundCall?.close()
+                            stopService(Intent(this@MainActivity, CallForegroundService::class.java))
+                            renderCallState()
+                        }
+                    })
+                }
+                CallPhase.Ended -> {
+                    foregroundCall?.close()
+                    stopService(Intent(this, CallForegroundService::class.java))
+                    status.text = "Call ended"
+                }
             }
+        }
+    }
+
+    private fun ensureRecordAudioPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return true
+        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 20)
+        return false
+    }
+
+    private fun startCallService() {
+        val intent = Intent(this, CallForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
     }
 }

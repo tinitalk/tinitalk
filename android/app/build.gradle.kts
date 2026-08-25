@@ -28,6 +28,7 @@ kotlin {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.telecom)
     implementation(libs.gson)
     implementation(libs.okhttp)
     implementation(libs.webrtc)

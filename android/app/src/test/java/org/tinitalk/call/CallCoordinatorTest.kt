@@ -17,8 +17,8 @@ class CallCoordinatorTest {
         assertEquals("call.start", signal.sent.single().type)
         assertEquals(CallPhase.Connecting, coordinator.snapshot().phase)
 
-        coordinator.onEvent(event("call.accept", seq = 2))
-        coordinator.onEvent(event("call.ringing", seq = 1))
+        assertTrue(coordinator.onEvent(event("call.accept", seq = 2)))
+        assertTrue(!coordinator.onEvent(event("call.ringing", seq = 1)))
 
         assertEquals(listOf("call.start"), signal.sent.map { it.type })
         assertEquals(CallPhase.Active, coordinator.snapshot().phase)
