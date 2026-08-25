@@ -43,7 +43,7 @@ func TestInitAndUserCommands(t *testing.T) {
 	if strings.Count(out.String(), "token:") != 1 {
 		t.Fatalf("rotate output = %q, want one token", out.String())
 	}
-	if _, err := RunResult("serve", "--data-dir", filepath.Join(dir, "missing")); err == nil {
+	if _, err := RunResult("serve", "--data-dir", filepath.Join(dir, "missing"), "--bad"); err == nil {
 		t.Fatal("serve with unsupported flags error = nil, want rejection")
 	}
 }

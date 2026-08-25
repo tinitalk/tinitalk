@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 
 	"tinitalk/internal/app"
@@ -58,19 +57,34 @@ func runInit(w io.Writer, args []string) error {
 }
 
 func runServe(args []string) error {
-	if len(args) > 1 {
-		return errors.New("usage: tinitalk serve [addr]")
+	dataDir, rest, err := parseDataDir(args)
+	if err != nil {
+		return err
 	}
 	addr := ":8080"
-	if len(args) == 1 {
-		addr = args[0]
+	allowLoopback := false
+	for len(rest) > 0 {
+		switch rest[0] {
+		case "--addr":
+			if len(rest) < 2 {
+				return errors.New("--addr requires a value")
+			}
+			addr = rest[1]
+			rest = rest[2:]
+		case "--loopback-insecure":
+			allowLoopback = true
+			rest = rest[1:]
+		default:
+			return errors.New("usage: tinitalk serve --data-dir DIR [--addr ADDR] [--loopback-insecure]")
+		}
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(app.HealthPayload()))
-	})
-	return http.ListenAndServe(addr, mux)
+	db, err := state.OpenDir(dataDir)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	server := app.NewHTTPServer(db, app.ServerConfig{Addr: addr, AllowInsecureLoopback: allowLoopback})
+	return server.ListenAndServe()
 }
 
 func parseDataDir(args []string) (string, []string, error) {
