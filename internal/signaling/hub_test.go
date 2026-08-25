@@ -133,12 +133,17 @@ func TestHubCancelsEndsExpiresAndLimitsICE(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	hub.SetNow(func() time.Time { return time.Unix(1000, 0) })
 	alice := hub.Connect("alice")
-	_ = hub.Connect("bob")
+	bob := hub.Connect("bob")
 
 	start := event("018f7d51-3f90-7e63-b657-4a83a6a90401", "018f7d51-40a1-7bb5-a2d0-7e47f9180401", "call.start", map[string]any{"callee_id": "bob"})
 	if err := hub.Handle("alice", start); err != nil {
 		t.Fatal(err)
 	}
+	_ = next(t, bob)
+	if err := hub.Handle("bob", event("018f7d51-3f90-7e63-b657-4a83a6a90402", start.CallID, "call.accept", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice)
 	for i := 0; i < MaxICEPerMinute; i++ {
 		if err := hub.Handle("alice", event(uuid(500+i), start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"})); err != nil {
 			t.Fatalf("ice %d rejected: %v", i, err)
@@ -147,11 +152,11 @@ func TestHubCancelsEndsExpiresAndLimitsICE(t *testing.T) {
 	if err := hub.Handle("alice", event(uuid(900), start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"})); err == nil {
 		t.Fatal("extra ICE event error = nil, want rate limit")
 	}
-	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a90499", start.CallID, "call.cancel", map[string]any{})); err != nil {
+	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a90499", start.CallID, "call.end", map[string]any{})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := hub.ActiveCall("alice"); err == nil {
-		t.Fatal("ActiveCall after cancel error = nil, want released participant")
+		t.Fatal("ActiveCall after end error = nil, want released participant")
 	}
 	if got, ok := alice.TryNext(); ok {
 		t.Fatalf("alice received own event: %+v", got)
@@ -182,6 +187,15 @@ func TestHubExpiresRingingCall(t *testing.T) {
 	if got := next(t, bob); got.Type != "call.expire" {
 		t.Fatalf("bob expiry event = %+v", got)
 	}
+	if got := hub.ExpireWaiting(); got != 0 {
+		t.Fatalf("second ExpireWaiting() = %d, want 0", got)
+	}
+
+	now = now.Add(TerminalRetention + time.Second)
+	hub.Sweep()
+	if _, err := hub.Resume("alice", start.CallID, 0); err == nil {
+		t.Fatal("Resume after terminal retention error = nil")
+	}
 }
 
 func TestHubLimitsConnectionsPerUser(t *testing.T) {
@@ -209,6 +223,106 @@ func TestHubDisconnectReleasesConnectionSlot(t *testing.T) {
 			t.Fatalf("ConnectChecked %d error = %v", i, err)
 		}
 	}
+}
+
+func TestHubDeliversToEveryConnectionForUser(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	bobPhone := hub.Connect("bob")
+	bobTablet := hub.Connect("bob")
+
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a90701", "018f7d51-40a1-7bb5-a2d0-7e47f9180701", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, bobPhone); got.Type != "call.incoming" {
+		t.Fatalf("phone event = %+v", got)
+	}
+	if got := next(t, bobTablet); got.Type != "call.incoming" {
+		t.Fatalf("tablet event = %+v", got)
+	}
+}
+
+func TestHubReplayContainsOnlyEventsAddressedToUser(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	hub.SetICEConfigProvider(fakeICEConfig{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a90801", "018f7d51-40a1-7bb5-a2d0-7e47f9180801", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	if err := hub.Handle("bob", event("018f7d51-3f90-7e63-b657-4a83a6a90802", start.CallID, "call.accept", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice) // call.accept, seq 2
+	_ = next(t, alice) // alice rtc.config, seq 3
+	_ = next(t, bob)   // bob rtc.config, seq 4
+
+	offer := event("018f7d51-3f90-7e63-b657-4a83a6a90803", start.CallID, "rtc.offer", map[string]any{"sdp": "offer"})
+	if err := hub.Handle("alice", offer); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+
+	aliceReplay, err := hub.Resume("alice", start.CallID, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceReplay) != 0 {
+		t.Fatalf("alice replay leaked events addressed to bob: %+v", aliceReplay)
+	}
+	bobReplay, err := hub.Resume("bob", start.CallID, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bobReplay) != 1 || bobReplay[0].Type != "rtc.offer" {
+		t.Fatalf("bob replay = %+v", bobReplay)
+	}
+}
+
+func TestHubRejectsSelfCallAndInvalidTransitions(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	selfCall := event("018f7d51-3f90-7e63-b657-4a83a6a90901", "018f7d51-40a1-7bb5-a2d0-7e47f9180901", "call.start", map[string]any{"callee_id": "alice"})
+	if err := hub.Handle("alice", selfCall); err == nil {
+		t.Fatal("self call error = nil")
+	}
+
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a90902", "018f7d51-40a1-7bb5-a2d0-7e47f9180902", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a90903", start.CallID, "call.accept", map[string]any{})); err == nil {
+		t.Fatal("caller accepted own call")
+	}
+	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a90904", start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"})); err == nil {
+		t.Fatal("ICE before acceptance error = nil")
+	}
+}
+
+func TestHubDoesNotWaitForIncomingCallNotification(t *testing.T) {
+	notifier := &blockingNotifier{started: make(chan struct{}), release: make(chan struct{})}
+	hub := NewHub(notifier)
+	done := make(chan error, 1)
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a91001", "018f7d51-40a1-7bb5-a2d0-7e47f9181001", "call.start", map[string]any{"callee_id": "bob"})
+	go func() { done <- hub.Handle("alice", start) }()
+
+	select {
+	case <-notifier.started:
+	case <-time.After(time.Second):
+		t.Fatal("notifier was not called")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(notifier.release)
+		t.Fatal("Handle waited for notifier")
+	}
+	close(notifier.release)
 }
 
 func event(id, callID, typ string, payload map[string]any) protocol.Event {
@@ -239,4 +353,14 @@ type fakeICEConfig struct{}
 
 func (fakeICEConfig) ICEConfig(callID, user string) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(`{"user":%q,"call_id":%q}`, user, callID))
+}
+
+type blockingNotifier struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (n *blockingNotifier) IncomingCall(string, DeliveredEvent) {
+	close(n.started)
+	<-n.release
 }

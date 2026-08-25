@@ -33,8 +33,6 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 		Handler:           httpapi.NewServer(db, httpapi.Options{AllowInsecureLoopback: config.AllowInsecureLoopback, Hub: hub}),
 		TLSConfig:         config.TLSConfig,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 }

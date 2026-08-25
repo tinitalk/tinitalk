@@ -2,17 +2,41 @@ package signaling
 
 import "time"
 
+type callState uint8
+
+const (
+	callRinging callState = iota
+	callActive
+	callEnded
+)
+
+type replayEntry struct {
+	recipient string
+	event     DeliveredEvent
+}
+
 type call struct {
 	id          string
 	caller      string
 	callee      string
 	nextSeq     uint64
 	seen        map[string]struct{}
-	replay      []DeliveredEvent
+	seenOrder   []string
+	replay      []replayEntry
 	startedAt   time.Time
+	endedAt     time.Time
 	iceWindowAt time.Time
 	iceCount    int
-	answered    bool
+	state       callState
+}
+
+func (c *call) remember(eventID string) {
+	c.seen[eventID] = struct{}{}
+	c.seenOrder = append(c.seenOrder, eventID)
+	if len(c.seenOrder) > ReplayLimit {
+		delete(c.seen, c.seenOrder[0])
+		c.seenOrder = c.seenOrder[1:]
+	}
 }
 
 func (c *call) participant(user string) bool {

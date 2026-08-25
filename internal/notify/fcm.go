@@ -9,12 +9,15 @@ import (
 	"strconv"
 	"time"
 
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
 
 var ErrInvalidRegistration = errors.New("invalid FCM registration token")
+
+const RequestTimeout = 5 * time.Second
 
 type DeviceToken struct {
 	DeviceID string
@@ -147,6 +150,7 @@ func (s HTTPv1Sender) Send(request WakeRequest) error {
 }
 
 func BearerTokenFromServiceAccount(ctx context.Context, serviceAccount []byte) (func() (string, error), error) {
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Timeout: RequestTimeout})
 	config, err := google.JWTConfigFromJSON(serviceAccount, "https://www.googleapis.com/auth/firebase.messaging")
 	if err != nil {
 		return nil, err

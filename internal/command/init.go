@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"tinitalk/internal/app"
@@ -69,6 +71,8 @@ func runInit(w io.Writer, args []string) error {
 }
 
 func runServe(args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	dataDir, rest, err := parseDataDir(args)
 	if err != nil {
 		return err
@@ -92,12 +96,12 @@ func runServe(args []string) error {
 		if err != nil {
 			return err
 		}
-		bearer, err := notify.BearerTokenFromServiceAccount(context.Background(), fcmServiceAccount)
+		bearer, err := notify.BearerTokenFromServiceAccount(ctx, fcmServiceAccount)
 		if err != nil {
 			return err
 		}
 		sender := notify.HTTPv1Sender{
-			Client:      http.DefaultClient,
+			Client:      &http.Client{Timeout: notify.RequestTimeout},
 			Endpoint:    "https://fcm.googleapis.com/v1/projects/" + project + "/messages:send",
 			BearerToken: bearer,
 		}
@@ -134,10 +138,33 @@ func runServe(args []string) error {
 		iceConfig = turnserver.ICEConfigProvider{PublicHost: options.turnPublicHost, Realm: options.turnPublicHost, Issuer: issuer}
 	}
 	server := app.NewHTTPServer(db, app.ServerConfig{Addr: options.addr, AllowInsecureLoopback: options.allowLoopback, Hub: hub, ICEConfigProvider: iceConfig, TLSConfig: tlsConfig})
-	if tlsConfig != nil {
-		return server.ListenAndServeTLS("", "")
+	go hub.Run(ctx)
+	serverDone := make(chan error, 1)
+	go func() {
+		if tlsConfig != nil {
+			serverDone <- server.ListenAndServeTLS("", "")
+			return
+		}
+		serverDone <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverDone:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := app.Shutdown(shutdownContext, server); err != nil {
+			return err
+		}
+		if err := <-serverDone; !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
 	}
-	return server.ListenAndServe()
 }
 
 func parseDataDir(args []string) (string, []string, error) {

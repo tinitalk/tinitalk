@@ -109,6 +109,37 @@ func TestSocketRoutesCallEvents(t *testing.T) {
 	}
 }
 
+func TestSocketRejectsConnectionAbovePerUserLimit(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	server := httptest.NewServer(NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}))
+	defer server.Close()
+
+	connections := make([]*websocket.Conn, 0, signaling.MaxConnectionsPerUser)
+	for range signaling.MaxConnectionsPerUser {
+		connections = append(connections, dialSocket(t, server.URL, "alice", tokens["alice"]))
+	}
+	defer func() {
+		for _, conn := range connections {
+			_ = conn.Close()
+		}
+	}()
+
+	header := http.Header{}
+	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("alice:"+tokens["alice"])))
+	url := "ws" + server.URL[len("http"):] + "/api/socket"
+	conn, response, err := websocket.DefaultDialer.Dial(url, header)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if err == nil {
+		t.Fatal("connection above limit succeeded")
+	}
+	if response == nil || response.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("response = %+v, want status %d", response, http.StatusTooManyRequests)
+	}
+}
+
 func testDB(t *testing.T) (*state.DB, map[string]string) {
 	t.Helper()
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))

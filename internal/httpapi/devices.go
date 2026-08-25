@@ -3,6 +3,8 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"tinitalk/internal/protocol"
@@ -43,19 +45,33 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "websocket endpoint is not active yet", http.StatusUpgradeRequired)
 		return
 	}
+	user := currentUser(r).Login
+	client, err := s.hub.ConnectChecked(user)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
 	conn, err := websocket.Upgrade(w, r, nil, protocol.MaxEventBytes, protocol.MaxEventBytes)
 	if err != nil {
+		s.hub.Disconnect(client)
 		return
 	}
 	defer conn.Close()
-
-	client := s.hub.Connect(currentUser(r).Login)
 	defer s.hub.Disconnect(client)
+	_ = conn.SetReadDeadline(time.Time{})
+	_ = conn.SetWriteDeadline(time.Time{})
+	var writeMu sync.Mutex
+	writeJSON := func(value any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.WriteJSON(value)
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for event := range client.Events() {
-			if err := conn.WriteJSON(event); err != nil {
+			if err := writeJSON(event); err != nil {
+				_ = conn.Close()
 				return
 			}
 		}
@@ -69,11 +85,11 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		}
 		event, err := protocol.Decode(raw)
 		if err != nil {
-			_ = conn.WriteJSON(map[string]string{"error": err.Error()})
+			_ = writeJSON(map[string]string{"error": err.Error()})
 			continue
 		}
-		if err := s.hub.Handle(currentUser(r).Login, event); err != nil {
-			_ = conn.WriteJSON(map[string]string{"error": err.Error()})
+		if err := s.hub.Handle(user, event); err != nil {
+			_ = writeJSON(map[string]string{"error": err.Error()})
 			continue
 		}
 		select {
