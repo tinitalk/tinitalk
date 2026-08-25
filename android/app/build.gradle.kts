@@ -13,6 +13,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -29,6 +30,10 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.gson)
     implementation(libs.okhttp)
+    implementation(libs.webrtc)
     testImplementation(libs.junit)
     testImplementation(libs.mockwebserver)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
 }
