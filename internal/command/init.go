@@ -118,7 +118,7 @@ func runServe(args []string) error {
 			return err
 		}
 		issuer := turnserver.CredentialIssuer{Secret: secret, TTL: 10 * time.Minute}
-		turn, err := turnserver.Start(turnserver.Config{PublicIP: turnPublicIP, Addr: turnAddr, Realm: turnPublicHost, Issuer: issuer})
+		turn, err := turnserver.Start(turnserver.Config{PublicIP: turnPublicIP, UDPAddr: turnAddr, TCPAddr: turnAddr, Realm: turnPublicHost, Issuer: issuer, Relay: turnserver.RelayPortRange{Min: 49160, Max: 49200}, MaxAllocations: 16, MaxAllocationsPerUser: 2})
 		if err != nil {
 			return err
 		}

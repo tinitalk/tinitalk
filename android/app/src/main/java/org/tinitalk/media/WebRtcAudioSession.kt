@@ -19,6 +19,7 @@ class WebRtcAudioSession private constructor(
     context: Context,
     iceServers: List<IceServerData>,
     private val onLocalIceCandidate: (IceCandidateData) -> Unit,
+    forceRelay: Boolean,
 ) : MediaSession {
     private val iceQueue = IceQueue()
     private val factory: PeerConnectionFactory
@@ -41,6 +42,7 @@ class WebRtcAudioSession private constructor(
 
         val config = PeerConnection.RTCConfiguration(iceServers.map { it.toWebRtc() })
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        config.iceTransportsType = WebRtcPolicy.iceTransport(forceRelay)
 
         peerConnection = requireNotNull(
             factory.createPeerConnection(
@@ -162,8 +164,9 @@ class WebRtcAudioSession private constructor(
         fun create(
             context: Context,
             iceServers: List<IceServerData> = emptyList(),
+            forceRelay: Boolean = false,
             onLocalIceCandidate: (IceCandidateData) -> Unit = {},
-        ): WebRtcAudioSession = WebRtcAudioSession(context, iceServers, onLocalIceCandidate)
+        ): WebRtcAudioSession = WebRtcAudioSession(context, iceServers, onLocalIceCandidate, forceRelay)
 
         @Synchronized
         private fun prepareFactory(context: Context) {
