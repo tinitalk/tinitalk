@@ -3,7 +3,7 @@ JAVA17 ?= C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot
 SHELL := cmd.exe
 .SHELLFLAGS := /C
 
-.PHONY: server client test clean
+.PHONY: server client test check clean
 
 server:
 	@if not exist dist mkdir dist
@@ -17,6 +17,8 @@ client:
 test:
 	@go test ./...
 	@cd android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest
+
+check: test server client
 
 clean:
 	@if exist dist rmdir /S /Q dist
