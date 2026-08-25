@@ -1,5 +1,6 @@
 GOARCH ?= amd64
 JAVA17 ?= C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot
+GRADLE_ARGS ?=
 SHELL := cmd.exe
 .SHELLFLAGS := /C
 
@@ -11,7 +12,7 @@ server:
 
 client:
 	@if not exist dist mkdir dist
-	@cd android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest assembleDebug
+	@cd android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest assembleDebug $(GRADLE_ARGS)
 	@copy /Y android\app\build\outputs\apk\debug\app-debug.apk dist\tinitalk-debug.apk >NUL
 
 test:

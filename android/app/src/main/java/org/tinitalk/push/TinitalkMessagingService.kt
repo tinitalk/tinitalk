@@ -32,7 +32,7 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         TelecomCallController(AndroidTelecomRegistrar(this)).addIncoming(
             invite,
             onAnswer = { incoming.answerFromTelecom(this, invite) },
-            onDisconnect = { incoming.rejectFromTelecom(this, invite) },
+            onDisconnect = { incoming.disconnectFromTelecom(this, invite) },
         )
         notifier.show(invite)
     }

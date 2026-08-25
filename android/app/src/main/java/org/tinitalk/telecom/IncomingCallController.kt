@@ -3,7 +3,6 @@ package org.tinitalk.telecom
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import org.tinitalk.MainActivity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
@@ -64,15 +63,9 @@ class IncomingCallController {
 
     fun answerFromTelecom(context: Context, invite: IncomingInvite) {
         save(context, invite, ActionAnswer)
-        val service = Intent(context, CallForegroundService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(service)
-        } else {
-            context.startService(service)
-        }
-        context.startActivity(
-            intent(context, MainActivity::class.java, ActionAnswer, invite)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        CallForegroundService.start(
+            context,
+            intent(context, CallForegroundService::class.java, CallForegroundService.ActionAnswer, invite),
         )
     }
 
@@ -84,9 +77,16 @@ class IncomingCallController {
     fun rejectFromTelecom(context: Context, invite: IncomingInvite) {
         save(context, invite, ActionReject)
         IncomingCallNotifier(context).cancel()
-        context.startActivity(
-            intent(context, MainActivity::class.java, ActionReject, invite)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        CallForegroundService.start(
+            context,
+            intent(context, CallForegroundService::class.java, CallForegroundService.ActionReject, invite),
+        )
+    }
+
+    fun disconnectFromTelecom(context: Context, invite: IncomingInvite) {
+        CallForegroundService.start(
+            context,
+            intent(context, CallForegroundService::class.java, CallForegroundService.ActionDisconnect, invite),
         )
     }
 

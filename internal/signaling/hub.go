@@ -150,16 +150,17 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 }
 
 func (h *Hub) deliverICEConfig(c *call) {
-	if h.iceConfig == nil {
-		return
-	}
 	for _, participant := range []string{c.caller, c.callee} {
+		payload := json.RawMessage(`{"ice_servers":[]}`)
+		if h.iceConfig != nil {
+			payload = h.iceConfig.ICEConfig(c.id, participant)
+		}
 		event := protocol.Event{
 			ID:      rtcConfigID(c.id, participant),
 			CallID:  c.id,
 			Type:    "rtc.config",
 			SentAt:  h.now().UnixMilli(),
-			Payload: h.iceConfig.ICEConfig(c.id, participant),
+			Payload: payload,
 		}
 		h.deliver(participant, h.next(c, event, participant))
 	}

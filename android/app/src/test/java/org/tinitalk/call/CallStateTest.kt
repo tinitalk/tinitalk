@@ -17,5 +17,9 @@ class CallStateTest {
         assertEquals(CallPhase.Ended, machine.snapshot().phase)
         val invalid = runCatching { machine.transition(CallPhase.Active, "call-b") }
         assertTrue(invalid.isFailure)
+
+        machine.reset()
+        machine.transition(CallPhase.Connecting, "call-b")
+        assertEquals(CallPhase.Connecting, machine.snapshot().phase)
     }
 }

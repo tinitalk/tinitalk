@@ -31,6 +31,11 @@ class CallStateMachine {
         }
     }
 
+    fun reset() {
+        require(snapshot.phase == CallPhase.Ended) { "only ended call can be reset" }
+        snapshot = CallSnapshot()
+    }
+
     private fun allowed(current: CallPhase, next: CallPhase): Boolean =
         when (current) {
             CallPhase.Idle -> next == CallPhase.Ringing || next == CallPhase.Connecting || next == CallPhase.Ended

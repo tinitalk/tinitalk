@@ -18,9 +18,16 @@ class SignalSocket(
 ) : SignalClient {
 	private var socket: WebSocket? = null
 	@Volatile private var closed = false
+	@Volatile private var opened = false
+	private val pending = ArrayDeque<String>()
 
-	fun connect(onEvent: (SequencedSignalEvent) -> Unit, onOpen: () -> Unit = {}) {
+	fun connect(
+		onEvent: (SequencedSignalEvent) -> Unit,
+		onOpen: () -> Unit = {},
+		onDisconnected: () -> Unit = {},
+	) {
 		closed = false
+		opened = false
 		val request = Request.Builder()
 			.url(socketUrl())
 			.header("Authorization", basicAuth())
@@ -28,6 +35,11 @@ class SignalSocket(
 		socket = client.newWebSocket(request, object : WebSocketListener() {
 			override fun onOpen(webSocket: WebSocket, response: Response) {
 				backoff.reset()
+				synchronized(pending) {
+					pending.forEach(webSocket::send)
+					pending.clear()
+					opened = true
+				}
 				onOpen()
 			}
 
@@ -39,22 +51,32 @@ class SignalSocket(
 
 			override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
 				if (closed) return
+				synchronized(pending) { opened = false }
+				onDisconnected()
 				Thread {
 					Thread.sleep(backoff.nextDelayMillis())
-					if (!closed) connect(onEvent, onOpen)
+					if (!closed) connect(onEvent, onOpen, onDisconnected)
 				}.start()
 			}
 		})
 	}
 
     override fun send(event: SignalEvent) {
-        socket?.send(event.encode())
+		val raw = event.encode()
+		synchronized(pending) {
+			val current = socket
+			if (opened && current != null && current.send(raw)) return
+			if (pending.size == SignalEvent.EVENT_BUFFER_LIMIT) pending.removeFirst()
+			pending.addLast(raw)
+		}
     }
 
 	fun close() {
 		closed = true
+		synchronized(pending) { opened = false }
 		socket?.close(1000, "closed")
 		socket = null
+		synchronized(pending) { pending.clear() }
 	}
 
     private fun socketUrl(): String {

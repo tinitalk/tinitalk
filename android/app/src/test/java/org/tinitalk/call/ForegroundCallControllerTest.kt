@@ -19,25 +19,31 @@ class ForegroundCallControllerTest {
     }
 
     @Test
-    fun callerCreatesOfferAfterCallIsAccepted() {
+    fun callerWaitsForIceConfigBeforeCreatingOffer() {
         val signal = CapturingSignalClient()
         val media = FakeMediaSession(offer = "local-offer")
         val controller = ForegroundCallController(signal, { _, _, _, _ -> media }, ids)
 
         controller.onSignalEvent(activeSnapshot(), event("call.accept"))
 
+        assertTrue(signal.sent.isEmpty())
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+
         assertEquals("rtc.offer", signal.sent.single().type)
         assertEquals("local-offer", signal.sent.single().payload["sdp"].asString)
     }
 
     @Test
-    fun calleeAnswersIncomingOffer() {
+    fun calleeWaitsForIceConfigBeforeAnsweringOffer() {
         val signal = CapturingSignalClient()
         val media = FakeMediaSession(answer = "local-answer")
         val controller = ForegroundCallController(signal, { _, _, _, _ -> media }, ids)
         val payload = JsonObject().apply { addProperty("sdp", "remote-offer") }
 
         controller.onSignalEvent(activeSnapshot(), event("rtc.offer", payload))
+
+        assertTrue(signal.sent.isEmpty())
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
 
         assertEquals("remote-offer", media.acceptedOffer)
         assertEquals("rtc.answer", signal.sent.single().type)
@@ -51,7 +57,10 @@ class ForegroundCallControllerTest {
         ForegroundCallController(signal, { _, _, callback, _ ->
             localIce = callback
             FakeMediaSession()
-        }, ids).onSignalEvent(activeSnapshot(), event("call.accept"))
+        }, ids).also {
+            it.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+            it.onSignalEvent(activeSnapshot(), event("call.accept"))
+        }
 
         localIce(IceCandidateData("audio", 0, "candidate:1"))
 
@@ -64,6 +73,7 @@ class ForegroundCallControllerTest {
         val signal = CapturingSignalClient()
         val media = FakeMediaSession()
         val controller = ForegroundCallController(signal, { _, _, _, _ -> media }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
         controller.onSignalEvent(activeSnapshot(), event("call.accept"))
 
         controller.onSignalEvent(CallSnapshot(CallPhase.Ended, callId, 2), event("call.end"))
@@ -106,6 +116,7 @@ class ForegroundCallControllerTest {
             restart = callback
             media
         }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
         controller.onSignalEvent(activeSnapshot(), event("call.accept"))
         signal.sent.clear()
 
@@ -119,6 +130,8 @@ class ForegroundCallControllerTest {
 
     private fun event(type: String, payload: JsonObject = JsonObject()): SignalEvent =
         SignalEvent("00000000-0000-0000-0000-000000000001", callId, type, 10L, payload)
+
+    private fun emptyIceConfig() = JsonObject().apply { add("ice_servers", JsonArray()) }
 
     private class CapturingSignalClient : SignalClient {
         val sent = mutableListOf<SignalEvent>()

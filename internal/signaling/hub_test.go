@@ -66,6 +66,27 @@ func TestHubSendsICEConfigToParticipantsAfterAccept(t *testing.T) {
 	}
 }
 
+func TestHubSendsEmptyICEConfigWhenTURNIsDisabled(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a91101", "018f7d51-40a1-7bb5-a2d0-7e47f9181101", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	if err := hub.Handle("bob", event("018f7d51-3f90-7e63-b657-4a83a6a91102", start.CallID, "call.accept", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice)
+	for _, client := range []*Client{alice, bob} {
+		config := next(t, client)
+		if config.Type != "rtc.config" || string(config.Payload) != `{"ice_servers":[]}` {
+			t.Fatalf("config = %+v", config)
+		}
+	}
+}
+
 func TestHubDeduplicatesAndReplaysAfterSequence(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alice := hub.Connect("alice")
@@ -143,6 +164,7 @@ func TestHubCancelsEndsExpiresAndLimitsICE(t *testing.T) {
 	if err := hub.Handle("bob", event("018f7d51-3f90-7e63-b657-4a83a6a90402", start.CallID, "call.accept", map[string]any{})); err != nil {
 		t.Fatal(err)
 	}
+	_ = next(t, alice)
 	_ = next(t, alice)
 	for i := 0; i < MaxICEPerMinute; i++ {
 		if err := hub.Handle("alice", event(uuid(500+i), start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"})); err != nil {

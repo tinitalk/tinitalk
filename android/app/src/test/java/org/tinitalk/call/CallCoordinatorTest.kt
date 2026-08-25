@@ -57,6 +57,21 @@ class CallCoordinatorTest {
         assertTrue(sent.payload["last_seq"].asLong == 7L)
     }
 
+    @Test
+    fun endsActiveCallAndStartsAnotherCallAfterCleanup() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("alice", signal, ids = FixedIds())
+        coordinator.startCall("bob")
+        coordinator.onEvent(event("call.accept", seq = 1))
+
+        coordinator.hangUp()
+        coordinator.finish()
+        coordinator.startCall("carol")
+
+        assertEquals(listOf("call.start", "call.end", "call.start"), signal.sent.map { it.type })
+        assertEquals(CallPhase.Connecting, coordinator.snapshot().phase)
+    }
+
     private fun event(type: String, seq: Long): SequencedSignalEvent =
         SequencedSignalEvent(
             SignalEvent(

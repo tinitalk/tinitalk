@@ -19,20 +19,33 @@ class ForegroundCallController(
     private var session: MediaSession? = null
     private var callId: String? = null
     private var iceServers: List<IceServerData> = emptyList()
+    private var configuredCallId: String? = null
+    private var acceptedCallId: String? = null
+    private var offerStartedCallId: String? = null
+    private var pendingOffer: SignalEvent? = null
 
     fun onSignalEvent(snapshot: CallSnapshot, event: SignalEvent) {
         when (event.type) {
             "call.accept" -> if (snapshot.phase == CallPhase.Active) {
-                val media = ensureSession(event.callId)
-                val offer = runBlockingLite { media.createOffer() }
-                sendSdp(event.callId, "rtc.offer", offer)
+                acceptedCallId = event.callId
+                startOfferWhenReady(event.callId)
             }
             "rtc.offer" -> {
-                val media = ensureSession(event.callId)
-                val answer = runBlockingLite { media.acceptOffer(event.payload["sdp"].asString) }
-                sendSdp(event.callId, "rtc.answer", answer)
+                if (configuredCallId == event.callId) {
+                    answerOffer(event)
+                } else {
+                    pendingOffer = event
+                }
             }
-            "rtc.config" -> iceServers = event.payload.parseIceServers()
+            "rtc.config" -> {
+                iceServers = event.payload.parseIceServers()
+                configuredCallId = event.callId
+                startOfferWhenReady(event.callId)
+                pendingOffer?.takeIf { it.callId == event.callId }?.let {
+                    pendingOffer = null
+                    answerOffer(it)
+                }
+            }
             "rtc.answer" -> session?.let { media ->
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
             }
@@ -53,16 +66,33 @@ class ForegroundCallController(
     }
 
     fun close() {
-        val media = session ?: return
+        val media = session
         session = null
         callId = null
-        runBlockingLite { media.close() }
+        iceServers = emptyList()
+        configuredCallId = null
+        acceptedCallId = null
+        offerStartedCallId = null
+        pendingOffer = null
+        if (media != null) runBlockingLite { media.close() }
+    }
+
+    private fun startOfferWhenReady(nextCallId: String) {
+        if (acceptedCallId != nextCallId || configuredCallId != nextCallId || offerStartedCallId == nextCallId) return
+        offerStartedCallId = nextCallId
+        val offer = runBlockingLite { ensureSession(nextCallId).createOffer() }
+        sendSdp(nextCallId, "rtc.offer", offer)
+    }
+
+    private fun answerOffer(event: SignalEvent) {
+        val answer = runBlockingLite { ensureSession(event.callId).acceptOffer(event.payload["sdp"].asString) }
+        sendSdp(event.callId, "rtc.answer", answer)
     }
 
     private fun ensureSession(nextCallId: String): MediaSession {
         val current = session
         if (current != null && callId == nextCallId) return current
-        close()
+        if (current != null) close()
         callId = nextCallId
         return mediaFactory(
             nextCallId,

@@ -53,6 +53,14 @@ class CallCoordinator(
         sendTerminal("call.cancel")
     }
 
+    fun hangUp() {
+        sendTerminal("call.end")
+    }
+
+    fun finish() {
+        machine.reset()
+    }
+
     fun resume() {
         val callId = machine.snapshot().callId ?: return
         val payload = JsonObject().apply { addProperty("last_seq", machine.snapshot().lastSeq) }

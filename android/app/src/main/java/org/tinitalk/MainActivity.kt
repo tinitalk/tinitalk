@@ -12,32 +12,29 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
-import org.tinitalk.call.CallCoordinator
 import org.tinitalk.call.CallPhase
-import org.tinitalk.call.ForegroundCallController
+import org.tinitalk.call.CallServiceState
+import org.tinitalk.call.CallSnapshot
 import org.tinitalk.data.Contact
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
-import org.tinitalk.data.signal.SignalSocket
-import org.tinitalk.media.WebRtcAudioSession
 import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
-import okhttp3.OkHttpClient
 
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var contacts: LinearLayout
     private lateinit var repository: ContactRepository
     private lateinit var authStore: AuthStore
-    private var socket: SignalSocket? = null
-    private var coordinator: CallCoordinator? = null
-    private var foregroundCall: ForegroundCallController? = null
+    private var contactItems: List<Contact> = emptyList()
+    private var incomingInvite: org.tinitalk.push.IncomingInvite? = null
     private var muted = false
     private val incomingController = IncomingCallController()
+    private val callObserver: (CallSnapshot) -> Unit = { snapshot -> runOnUiThread { renderCallState(snapshot) } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,11 +73,11 @@ class MainActivity : Activity() {
                 addView(contacts)
             }
         )
+        CallServiceState.observe(callObserver)
         Thread {
             runCatching { repository.restoreContacts() }
                 .onSuccess { restored ->
                     restored?.let {
-                        setupSignal()
                         registerPushToken()
                         showContacts(it)
                         runOnUiThread { handleIncomingIntent(intent) }
@@ -105,7 +102,6 @@ class MainActivity : Activity() {
         Thread {
             runCatching { repository.signIn(url, login, token) }
                 .onSuccess {
-                    setupSignal()
                     registerPushToken()
                     showContacts(it)
                     runOnUiThread { handleIncomingIntent(intent) }
@@ -115,20 +111,21 @@ class MainActivity : Activity() {
     }
 
     private fun showContacts(items: List<Contact>) {
-        runOnUiThread {
-            status.text = "Connected"
-            contacts.removeAllViews()
-            items.forEach { contact ->
-                contacts.addView(Button(this).apply {
-                    text = "Call ${contact.displayName}"
-                    setOnClickListener {
-                        if (!ensureRecordAudioPermission()) return@setOnClickListener
-                        runCatching { coordinator?.startCall(contact.login) }
-                            .onSuccess { renderCallState() }
-                            .onFailure { showError(it) }
-                    }
-                })
-            }
+        contactItems = items
+        runOnUiThread { renderCallState(CallServiceState.snapshot()) }
+    }
+
+    private fun renderContacts() {
+        status.text = "Connected"
+        contacts.removeAllViews()
+        contactItems.forEach { contact ->
+            contacts.addView(Button(this).apply {
+                text = "Call ${contact.displayName}"
+                setOnClickListener {
+                    if (!ensureRecordAudioPermission()) return@setOnClickListener
+                    CallForegroundService.startOutgoing(this@MainActivity, contact.login)
+                }
+            })
         }
     }
 
@@ -137,36 +134,6 @@ class MainActivity : Activity() {
             status.text = error.message ?: "Connection failed"
             contacts.removeAllViews()
         }
-    }
-
-    private fun setupSignal() {
-        val session = authStore.load() ?: return
-        socket?.close()
-        val newSocket = SignalSocket(OkHttpClient(), session)
-        val newCoordinator = CallCoordinator(session.login, newSocket)
-        val newForegroundCall = ForegroundCallController(
-            signal = newSocket,
-            mediaFactory = { _, iceServers, onLocalIce, onIceRestartNeeded ->
-                WebRtcAudioSession.create(
-                    this,
-                    iceServers = iceServers,
-                    onLocalIceCandidate = onLocalIce,
-                    onIceRestartNeeded = onIceRestartNeeded,
-                )
-            },
-        )
-        socket = newSocket
-        coordinator = newCoordinator
-        foregroundCall = newForegroundCall
-        newSocket.connect(
-            onEvent = { event ->
-                if (newCoordinator.onEvent(event)) {
-                    newForegroundCall.onSignalEvent(newCoordinator.snapshot(), event.event)
-                }
-                renderCallState()
-            },
-            onOpen = { newCoordinator.resume() },
-        )
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -183,93 +150,75 @@ class MainActivity : Activity() {
             IncomingCallNotifier(this).cancel()
             return
         }
+        incomingInvite = invite
         val action = intent?.action ?: pending?.action ?: IncomingCallController.ActionIncoming
-        coordinator?.restoreIncoming(invite.callId, invite.lastSeq)
         when (action) {
             IncomingCallController.ActionAnswer -> {
                 if (!ensureRecordAudioPermission()) return
-                startCallService()
-                coordinator?.resume()
-                coordinator?.accept()
-                IncomingCallNotifier(this).cancel()
-                incomingController.clear(this)
+                incomingController.answer(this, invite)
             }
             IncomingCallController.ActionReject -> {
-                coordinator?.reject()
-                IncomingCallNotifier(this).cancel()
-                incomingController.clear(this)
+                incomingController.reject(this, invite)
             }
         }
-        renderCallState()
+        renderCallState(CallServiceState.snapshot())
     }
 
-    private fun renderCallState() {
-        val snapshot = coordinator?.snapshot() ?: return
-        runOnUiThread {
-            when (snapshot.phase) {
-                CallPhase.Idle -> status.text = "Connected"
-                CallPhase.Connecting -> {
-                    status.text = "Calling..."
-                    contacts.removeAllViews()
-                    contacts.addView(Button(this).apply {
-                        text = "Cancel"
-                        setOnClickListener {
-                            coordinator?.cancel()
-                            renderCallState()
-                        }
-                    })
-                }
-                CallPhase.Ringing -> {
-                    status.text = "Incoming call"
-                    contacts.removeAllViews()
-                    contacts.addView(Button(this).apply {
-                        text = "Accept"
-                        setOnClickListener {
-                            if (!ensureRecordAudioPermission()) return@setOnClickListener
-                            coordinator?.accept()
-                            renderCallState()
-                        }
-                    })
-                    contacts.addView(Button(this).apply {
-                        text = "Reject"
-                        setOnClickListener {
-                            coordinator?.reject()
-                            renderCallState()
-                        }
-                    })
-                }
-                CallPhase.Active -> {
-                    startCallService()
-                    status.text = "Call active"
-                    contacts.removeAllViews()
-                    contacts.addView(Button(this).apply {
-                        text = if (muted) "Unmute" else "Mute"
-                        setOnClickListener {
-                            muted = !muted
-                            foregroundCall?.setMuted(muted)
-                            renderCallState()
-                        }
-                    })
-                    contacts.addView(Button(this).apply {
-                        text = "Hang up"
-                        setOnClickListener {
-                            coordinator?.cancel()
-                            cleanupCall()
-                            renderCallState()
-                        }
-                    })
-                }
-                CallPhase.Ended -> {
-                    cleanupCall()
-                    status.text = "Call ended"
-                }
+    private fun renderCallState(snapshot: CallSnapshot) {
+        val invite = incomingInvite?.takeIf { it.expiresAt.isAfter(java.time.Instant.now()) }
+        val phase = if (snapshot.phase == CallPhase.Idle && invite != null) CallPhase.Ringing else snapshot.phase
+        when (snapshot.phase) {
+            CallPhase.Idle -> if (phase == CallPhase.Ringing) renderIncoming(invite!!) else renderContacts()
+            CallPhase.Connecting -> {
+                status.text = "Calling..."
+                contacts.removeAllViews()
+                contacts.addView(Button(this).apply {
+                    text = "Cancel"
+                    setOnClickListener { CallForegroundService.end(this@MainActivity) }
+                })
+            }
+            CallPhase.Ringing -> invite?.let(::renderIncoming)
+            CallPhase.Active -> {
+                status.text = "Call active"
+                contacts.removeAllViews()
+                contacts.addView(Button(this).apply {
+                    text = if (muted) "Unmute" else "Mute"
+                    setOnClickListener {
+                        muted = !muted
+                        CallForegroundService.mute(this@MainActivity, muted)
+                        renderCallState(snapshot)
+                    }
+                })
+                contacts.addView(Button(this).apply {
+                    text = "Hang up"
+                    setOnClickListener { CallForegroundService.end(this@MainActivity) }
+                })
+            }
+            CallPhase.Ended -> {
+                incomingInvite = null
+                renderContacts()
             }
         }
+    }
+
+    private fun renderIncoming(invite: org.tinitalk.push.IncomingInvite) {
+        status.text = "Incoming call from ${invite.caller.ifEmpty { "TiniTalk" }}"
+        contacts.removeAllViews()
+        contacts.addView(Button(this).apply {
+            text = "Accept"
+            setOnClickListener {
+                if (!ensureRecordAudioPermission()) return@setOnClickListener
+                incomingController.answer(this@MainActivity, invite)
+            }
+        })
+        contacts.addView(Button(this).apply {
+            text = "Reject"
+            setOnClickListener { incomingController.reject(this@MainActivity, invite) }
+        })
     }
 
     override fun onDestroy() {
-        socket?.close()
-        foregroundCall?.close()
+        CallServiceState.removeObserver(callObserver)
         super.onDestroy()
     }
 
@@ -292,19 +241,4 @@ class MainActivity : Activity() {
         DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this))
     }
 
-    private fun startCallService() {
-        val intent = Intent(this, CallForegroundService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-    }
-
-    private fun cleanupCall() {
-        foregroundCall?.close()
-        IncomingCallNotifier(this).cancel()
-        incomingController.clear(this)
-        stopService(Intent(this, CallForegroundService::class.java))
-    }
 }

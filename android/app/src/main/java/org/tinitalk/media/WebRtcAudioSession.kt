@@ -24,6 +24,7 @@ class WebRtcAudioSession private constructor(
 ) : MediaSession {
     private val iceQueue = IceQueue()
     private val factory: PeerConnectionFactory
+    private val audioDeviceModule: JavaAudioDeviceModule
     private val audioSource: AudioSource
     private val audioTrack: AudioTrack
     private val sender: RtpSender?
@@ -34,7 +35,7 @@ class WebRtcAudioSession private constructor(
 
     init {
         prepareFactory(context.applicationContext)
-        val audioDeviceModule = JavaAudioDeviceModule.builder(context.applicationContext)
+        audioDeviceModule = JavaAudioDeviceModule.builder(context.applicationContext)
             .setUseHardwareAcousticEchoCanceler(true)
             .setUseHardwareNoiseSuppressor(true)
             .createAudioDeviceModule()
@@ -110,6 +111,7 @@ class WebRtcAudioSession private constructor(
         peerConnection.close()
         peerConnection.dispose()
         factory.dispose()
+        audioDeviceModule.release()
     }
 
     private suspend fun setLocalDescription(description: SessionDescription) {
