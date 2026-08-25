@@ -8,6 +8,7 @@ Record device models, Android API levels, network type, server region, and times
 - `make client`
 - `make check`
 - `tinitalk doctor --data-dir /var/lib/tinitalk --host calls.example.com --addr :443 --turn-addr :3478`
+- Start `tinitalk serve` with readable `--tls-cert` and `--tls-key` files and verify TCP 5349 is listening.
 - `tinitalk backup --data-dir /var/lib/tinitalk --out /var/backups/tinitalk/state-test.db`
 
 Expected:

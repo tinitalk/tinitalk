@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"time"
 
@@ -15,6 +16,7 @@ type ServerConfig struct {
 	AllowInsecureLoopback bool
 	Hub                   *signaling.Hub
 	ICEConfigProvider     signaling.ICEConfigProvider
+	TLSConfig             *tls.Config
 }
 
 func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
@@ -29,6 +31,7 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           httpapi.NewServer(db, httpapi.Options{AllowInsecureLoopback: config.AllowInsecureLoopback, Hub: hub}),
+		TLSConfig:         config.TLSConfig,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"tinitalk/internal/notify"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
+	"tinitalk/internal/tlscert"
 	"tinitalk/internal/turnserver"
 )
 
@@ -71,43 +73,9 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	addr := ":8080"
-	allowLoopback := false
-	turnPublicHost := ""
-	turnPublicIP := ""
-	turnAddr := ":3478"
-	for len(rest) > 0 {
-		switch rest[0] {
-		case "--addr":
-			if len(rest) < 2 {
-				return errors.New("--addr requires a value")
-			}
-			addr = rest[1]
-			rest = rest[2:]
-		case "--loopback-insecure":
-			allowLoopback = true
-			rest = rest[1:]
-		case "--turn-public-host":
-			if len(rest) < 2 {
-				return errors.New("--turn-public-host requires a value")
-			}
-			turnPublicHost = rest[1]
-			rest = rest[2:]
-		case "--turn-public-ip":
-			if len(rest) < 2 {
-				return errors.New("--turn-public-ip requires a value")
-			}
-			turnPublicIP = rest[1]
-			rest = rest[2:]
-		case "--turn-addr":
-			if len(rest) < 2 {
-				return errors.New("--turn-addr requires a value")
-			}
-			turnAddr = rest[1]
-			rest = rest[2:]
-		default:
-			return errors.New("usage: tinitalk serve --data-dir DIR [--addr ADDR] [--loopback-insecure] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR]]")
-		}
+	options, err := parseServeOptions(rest)
+	if err != nil {
+		return err
 	}
 	db, err := state.OpenDir(dataDir)
 	if err != nil {
@@ -136,24 +104,39 @@ func runServe(args []string) error {
 		notifier = notify.NewFCMNotifier(notify.DBTokenStore{DB: db}, sender, project)
 	}
 	hub := signaling.NewHub(notifier)
-	var iceConfig signaling.ICEConfigProvider
-	if turnPublicHost != "" || turnPublicIP != "" {
-		if turnPublicHost == "" || turnPublicIP == "" {
-			return errors.New("TURN requires --turn-public-host and --turn-public-ip")
+	var tlsConfig *tls.Config
+	if options.tlsCert != "" {
+		loader, err := tlscert.NewLoader(options.tlsCert, options.tlsKey)
+		if err != nil {
+			return err
 		}
+		tlsConfig = loader.Config()
+	}
+	var iceConfig signaling.ICEConfigProvider
+	if options.turnPublicHost != "" {
 		secret, err := db.Secret("turn_secret")
 		if err != nil {
 			return err
 		}
+		if len(secret) == 0 {
+			return errors.New("TURN secret is missing; run tinitalk init")
+		}
 		issuer := turnserver.CredentialIssuer{Secret: secret, TTL: 10 * time.Minute}
-		turn, err := turnserver.Start(turnserver.Config{PublicIP: turnPublicIP, UDPAddr: turnAddr, TCPAddr: turnAddr, Realm: turnPublicHost, Issuer: issuer, Relay: turnserver.RelayPortRange{Min: 49160, Max: 49200}, MaxAllocations: 16, MaxAllocationsPerUser: 2})
+		turnTLSAddr := ""
+		if tlsConfig != nil {
+			turnTLSAddr = options.turnTLSAddr
+		}
+		turn, err := turnserver.Start(turnserver.Config{PublicIP: options.turnPublicIP, UDPAddr: options.turnAddr, TCPAddr: options.turnAddr, TLSAddr: turnTLSAddr, TLS: tlsConfig, Realm: options.turnPublicHost, Issuer: issuer, Relay: turnserver.RelayPortRange{Min: 49160, Max: 49200}, MaxAllocations: 16, MaxAllocationsPerUser: 2})
 		if err != nil {
 			return err
 		}
 		defer turn.Close()
-		iceConfig = turnserver.ICEConfigProvider{PublicHost: turnPublicHost, Realm: turnPublicHost, Issuer: issuer}
+		iceConfig = turnserver.ICEConfigProvider{PublicHost: options.turnPublicHost, Realm: options.turnPublicHost, Issuer: issuer}
 	}
-	server := app.NewHTTPServer(db, app.ServerConfig{Addr: addr, AllowInsecureLoopback: allowLoopback, Hub: hub, ICEConfigProvider: iceConfig})
+	server := app.NewHTTPServer(db, app.ServerConfig{Addr: options.addr, AllowInsecureLoopback: options.allowLoopback, Hub: hub, ICEConfigProvider: iceConfig, TLSConfig: tlsConfig})
+	if tlsConfig != nil {
+		return server.ListenAndServeTLS("", "")
+	}
 	return server.ListenAndServe()
 }
 

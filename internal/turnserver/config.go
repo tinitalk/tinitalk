@@ -23,11 +23,7 @@ func (p ICEConfigProvider) ICEConfig(_ string, user string) json.RawMessage {
 			Credential string   `json:"credential"`
 		}{
 			{
-				URLs: []string{
-					"stun:" + p.PublicHost + ":3478",
-					"turn:" + p.PublicHost + ":3478?transport=udp",
-					"turns:" + p.PublicHost + ":5349?transport=tcp",
-				},
+				URLs:       p.urls(),
 				Username:   cred.Username,
 				Credential: cred.Password,
 			},
@@ -35,4 +31,13 @@ func (p ICEConfigProvider) ICEConfig(_ string, user string) json.RawMessage {
 	}
 	raw, _ := json.Marshal(payload)
 	return raw
+}
+
+func (p ICEConfigProvider) urls() []string {
+	urls := []string{
+		"stun:" + p.PublicHost + ":3478",
+		"turn:" + p.PublicHost + ":3478?transport=udp",
+		"turns:" + p.PublicHost + ":5349?transport=tcp",
+	}
+	return urls
 }
