@@ -22,6 +22,7 @@ import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.media.WebRtcAudioSession
+import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.TelecomCallController
@@ -79,6 +80,7 @@ class MainActivity : Activity() {
                 .onSuccess { restored ->
                     restored?.let {
                         setupSignal()
+                        registerPushToken()
                         showContacts(it)
                     }
                 }
@@ -102,6 +104,7 @@ class MainActivity : Activity() {
             runCatching { repository.signIn(url, login, token) }
                 .onSuccess {
                     setupSignal()
+                    registerPushToken()
                     showContacts(it)
                 }
                 .onFailure { showError(it) }
@@ -227,6 +230,18 @@ class MainActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return true
         requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 20)
         return false
+    }
+
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 21)
+    }
+
+    private fun registerPushToken() {
+        ensureNotificationPermission()
+        val session = authStore.load() ?: return
+        DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this))
     }
 
     private fun startCallService() {

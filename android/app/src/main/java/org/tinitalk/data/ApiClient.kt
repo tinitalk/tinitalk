@@ -14,6 +14,7 @@ class ApiException(val code: Int, message: String) : RuntimeException(message)
 interface HouseholdApi {
     fun me(): Profile
     fun contacts(): List<Contact>
+    fun putDevice(deviceId: String, fcmToken: String)
 }
 
 class UrlConnectionApiClient(
@@ -26,6 +27,23 @@ class UrlConnectionApiClient(
 
     override fun contacts(): List<Contact> =
         get("/api/contacts", Array<Contact>::class.java).toList()
+
+    override fun putDevice(deviceId: String, fcmToken: String) {
+        val body = gson.toJson(mapOf("device_id" to deviceId, "fcm_token" to fcmToken)).toByteArray(Charsets.UTF_8)
+        val connection = (URL(baseUrl.trimEnd('/') + "/api/device").openConnection() as HttpURLConnection).apply {
+            requestMethod = "PUT"
+            connectTimeout = 5000
+            readTimeout = 5000
+            doOutput = true
+            setRequestProperty("Authorization", basicAuth())
+            setRequestProperty("Content-Type", "application/json")
+            outputStream.use { it.write(body) }
+        }
+        val code = connection.responseCode
+        if (code !in 200..299) {
+            throw ApiException(code, connection.errorStream?.bufferedReader()?.readText() ?: "request failed")
+        }
+    }
 
     private fun <T> get(path: String, type: Class<T>): T {
         val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {

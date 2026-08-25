@@ -8,6 +8,7 @@ okhttp = "4.12.0"
 androidxTest = "1.7.0"
 webrtc = "144.7559.12"
 coreTelecom = "1.0.1"
+firebaseBom = "34.17.0"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -23,3 +24,5 @@ androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTes
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTest" }
 androidx-core-telecom = { module = "androidx.core:core-telecom", version.ref = "coreTelecom" }
 webrtc = { module = "io.github.webrtc-sdk:android", version.ref = "webrtc" }
+firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
+firebase-messaging = { module = "com.google.firebase:firebase-messaging" }

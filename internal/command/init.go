@@ -1,13 +1,16 @@
 package command
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
 	"tinitalk/internal/app"
+	"tinitalk/internal/notify"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 	"tinitalk/internal/turnserver"
@@ -107,7 +110,28 @@ func runServe(args []string) error {
 		return err
 	}
 	defer db.Close()
-	hub := signaling.NewHub(signaling.NoopNotifier{})
+	notifier := signaling.Notifier(signaling.NoopNotifier{})
+	fcmServiceAccount, err := db.Secret("fcm_service_account")
+	if err != nil {
+		return err
+	}
+	if len(fcmServiceAccount) > 0 {
+		project, err := notify.ProjectIDFromServiceAccount(fcmServiceAccount)
+		if err != nil {
+			return err
+		}
+		bearer, err := notify.BearerTokenFromServiceAccount(context.Background(), fcmServiceAccount)
+		if err != nil {
+			return err
+		}
+		sender := notify.HTTPv1Sender{
+			Client:      http.DefaultClient,
+			Endpoint:    "https://fcm.googleapis.com/v1/projects/" + project + "/messages:send",
+			BearerToken: bearer,
+		}
+		notifier = notify.NewFCMNotifier(notify.DBTokenStore{DB: db}, sender, project)
+	}
+	hub := signaling.NewHub(notifier)
 	var iceConfig signaling.ICEConfigProvider
 	if turnPublicHost != "" || turnPublicIP != "" {
 		if turnPublicHost == "" || turnPublicIP == "" {

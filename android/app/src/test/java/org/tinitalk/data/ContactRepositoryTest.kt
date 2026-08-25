@@ -47,4 +47,6 @@ private class FakeApiClient(
         error?.let { throw it }
         return contacts
     }
+
+    override fun putDevice(deviceId: String, fcmToken: String) = Unit
 }
