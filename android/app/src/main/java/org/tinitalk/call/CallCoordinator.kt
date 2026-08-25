@@ -42,7 +42,7 @@ class CallCoordinator(
     fun accept() {
         val callId = requireNotNull(machine.snapshot().callId) { "no call" }
         signal.send(event(callId, "call.accept", JsonObject()))
-        machine.transition(CallPhase.Connecting, callId)
+        machine.transition(CallPhase.Active, callId)
     }
 
     fun reject() {
@@ -57,6 +57,13 @@ class CallCoordinator(
         val callId = machine.snapshot().callId ?: return
         val payload = JsonObject().apply { addProperty("last_seq", machine.snapshot().lastSeq) }
         signal.send(event(callId, "call.resume", payload))
+    }
+
+    fun restoreIncoming(callId: String, lastSeq: Long = 0) {
+        if (machine.snapshot().phase == CallPhase.Idle) {
+            machine.transition(CallPhase.Ringing, callId)
+        }
+        machine.recordSeq(lastSeq)
     }
 
     fun onEvent(incoming: SequencedSignalEvent): Boolean {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"golang.org/x/oauth2/google"
@@ -90,6 +91,7 @@ func WakeMessage(_ string, token string, event signaling.DeliveredEvent, ttl tim
 		"type":       "incoming_call",
 		"call_id":    event.CallID,
 		"caller":     callerName(event),
+		"last_seq":   strconv.FormatUint(event.Seq, 10),
 		"expires_at": time.UnixMilli(event.SentAt).Add(ttl).Format(time.RFC3339),
 	}
 	request.Message.Android.Priority = "HIGH"

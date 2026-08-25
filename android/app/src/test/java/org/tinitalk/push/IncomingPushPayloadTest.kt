@@ -13,6 +13,7 @@ class IncomingPushPayloadTest {
                 "type" to "incoming_call",
                 "call_id" to "call-1",
                 "caller" to "Alice",
+                "last_seq" to "7",
                 "expires_at" to "2026-08-26T10:00:30Z",
             ),
             now = Instant.parse("2026-08-26T10:00:00Z"),
@@ -20,6 +21,7 @@ class IncomingPushPayloadTest {
 
         assertEquals("call-1", invite?.callId)
         assertEquals("Alice", invite?.caller)
+        assertEquals(7L, invite?.lastSeq)
     }
 
     @Test

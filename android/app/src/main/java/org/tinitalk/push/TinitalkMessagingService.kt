@@ -5,7 +5,9 @@ import com.google.firebase.messaging.RemoteMessage
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SharedPreferencesKeyValueStore
+import org.tinitalk.telecom.IncomingCallController
 
+@Suppress("OVERRIDE_DEPRECATION")
 class TinitalkMessagingService : FirebaseMessagingService() {
     @Suppress("DEPRECATION")
     override fun onNewToken(token: String) {
@@ -17,6 +19,7 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         val notifier = IncomingCallNotifier(this)
         if (IncomingPushPayload.action(message.data) == PushAction.Cancel) {
             notifier.cancel()
+            IncomingCallController().clear(this)
             return
         }
         val invite = IncomingPushPayload.parse(message.data) ?: return

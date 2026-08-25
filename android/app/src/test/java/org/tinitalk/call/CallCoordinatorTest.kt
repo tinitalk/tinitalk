@@ -27,6 +27,21 @@ class CallCoordinatorTest {
         incoming.onEvent(event("call.incoming", seq = 1))
         incoming.accept()
         assertEquals("call.accept", signal.sent.last().type)
+        assertEquals(CallPhase.Active, incoming.snapshot().phase)
+    }
+
+    @Test
+    fun restoresIncomingCallFromWakePayload() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("bob", signal, ids = FixedIds())
+
+        coordinator.restoreIncoming("018f7d51-40a1-7bb5-a2d0-7e47f9181000", lastSeq = 1)
+        coordinator.resume()
+        coordinator.accept()
+
+        assertEquals(CallPhase.Active, coordinator.snapshot().phase)
+        assertEquals(listOf("call.resume", "call.accept"), signal.sent.map { it.type })
+        assertEquals(1L, signal.sent.first().payload["last_seq"].asLong)
     }
 
     @Test

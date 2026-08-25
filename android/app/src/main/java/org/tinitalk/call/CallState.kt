@@ -34,7 +34,7 @@ class CallStateMachine {
     private fun allowed(current: CallPhase, next: CallPhase): Boolean =
         when (current) {
             CallPhase.Idle -> next == CallPhase.Ringing || next == CallPhase.Connecting || next == CallPhase.Ended
-            CallPhase.Ringing -> next == CallPhase.Connecting || next == CallPhase.Ended
+            CallPhase.Ringing -> next == CallPhase.Connecting || next == CallPhase.Active || next == CallPhase.Ended
             CallPhase.Connecting -> next == CallPhase.Active || next == CallPhase.Ended
             CallPhase.Active -> next == CallPhase.Ended
             CallPhase.Ended -> false

@@ -23,8 +23,10 @@ import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.media.WebRtcAudioSession
 import org.tinitalk.push.DeviceRegistrar
+import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
+import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.TelecomCallController
 import okhttp3.OkHttpClient
 
@@ -37,6 +39,7 @@ class MainActivity : Activity() {
     private var coordinator: CallCoordinator? = null
     private var foregroundCall: ForegroundCallController? = null
     private var muted = false
+    private val incomingController = IncomingCallController()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,6 +85,7 @@ class MainActivity : Activity() {
                         setupSignal()
                         registerPushToken()
                         showContacts(it)
+                        runOnUiThread { handleIncomingIntent(intent) }
                     }
                 }
                 .onFailure { showError(it) }
@@ -106,6 +110,7 @@ class MainActivity : Activity() {
                     setupSignal()
                     registerPushToken()
                     showContacts(it)
+                    runOnUiThread { handleIncomingIntent(intent) }
                 }
                 .onFailure { showError(it) }
         }.start()
@@ -157,6 +162,40 @@ class MainActivity : Activity() {
             }
             renderCallState()
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        val pending = incomingController.load(this)
+        val invite = IncomingCallController.inviteFrom(intent) ?: pending?.invite ?: return
+        if (!invite.expiresAt.isAfter(java.time.Instant.now())) {
+            incomingController.clear(this)
+            IncomingCallNotifier(this).cancel()
+            return
+        }
+        val action = intent?.action ?: pending?.action ?: IncomingCallController.ActionIncoming
+        coordinator?.restoreIncoming(invite.callId, invite.lastSeq)
+        when (action) {
+            IncomingCallController.ActionAnswer -> {
+                if (!ensureRecordAudioPermission()) return
+                startCallService()
+                coordinator?.resume()
+                coordinator?.accept()
+                IncomingCallNotifier(this).cancel()
+                incomingController.clear(this)
+            }
+            IncomingCallController.ActionReject -> {
+                coordinator?.reject()
+                IncomingCallNotifier(this).cancel()
+                incomingController.clear(this)
+            }
+        }
+        renderCallState()
     }
 
     private fun renderCallState() {

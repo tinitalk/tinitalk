@@ -24,6 +24,9 @@ func TestWakeMessageUsesHighPriorityAndShortTTL(t *testing.T) {
 	if msg.Message.Data["call_id"] != "call-1" || msg.Message.Data["type"] != "incoming_call" {
 		t.Fatalf("data = %+v", msg.Message.Data)
 	}
+	if msg.Message.Data["last_seq"] != "1" {
+		t.Fatalf("last_seq = %q", msg.Message.Data["last_seq"])
+	}
 }
 
 func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {

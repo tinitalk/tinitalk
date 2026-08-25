@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
         android:theme="@style/AppTheme"
@@ -23,6 +24,9 @@
             android:name=".telecom.CallForegroundService"
             android:exported="false"
             android:foregroundServiceType="phoneCall" />
+        <receiver
+            android:name=".telecom.CallActionReceiver"
+            android:exported="false" />
         <service
             android:name=".push.TinitalkMessagingService"
             android:exported="false">
