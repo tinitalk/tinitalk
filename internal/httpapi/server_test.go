@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gorilla/websocket"
+	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
 
@@ -78,6 +80,35 @@ func TestRejectsBasicAuthWithoutTLSExceptLoopbackMode(t *testing.T) {
 	}
 }
 
+func TestSocketRoutesCallEvents(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	server := httptest.NewServer(NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}))
+	defer server.Close()
+
+	alice := dialSocket(t, server.URL, "alice", tokens["alice"])
+	defer alice.Close()
+	bob := dialSocket(t, server.URL, "bob", tokens["bob"])
+	defer bob.Close()
+
+	if err := alice.WriteJSON(map[string]any{
+		"id":      "018f7d51-3f90-7e63-b657-4a83a6a90301",
+		"call_id": "018f7d51-40a1-7bb5-a2d0-7e47f9180301",
+		"type":    "call.start",
+		"sent_at": 1787666400000,
+		"payload": map[string]any{"callee_id": "bob"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var incoming map[string]any
+	if err := bob.ReadJSON(&incoming); err != nil {
+		t.Fatal(err)
+	}
+	if incoming["type"] != "call.incoming" || incoming["seq"].(float64) != 1 {
+		t.Fatalf("incoming = %+v", incoming)
+	}
+}
+
 func testDB(t *testing.T) (*state.DB, map[string]string) {
 	t.Helper()
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
@@ -106,4 +137,16 @@ func request(t *testing.T, h http.Handler, method, path string, body []byte, log
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+func dialSocket(t *testing.T, baseURL, login, token string) *websocket.Conn {
+	t.Helper()
+	header := http.Header{}
+	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(login+":"+token)))
+	url := "ws" + baseURL[len("http"):] + "/api/socket"
+	conn, _, err := websocket.DefaultDialer.Dial(url, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn
 }

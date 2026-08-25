@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"tinitalk/internal/httpapi"
+	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
 
 type ServerConfig struct {
 	Addr                  string
 	AllowInsecureLoopback bool
+	Hub                   *signaling.Hub
 }
 
 func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
@@ -21,7 +23,7 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 	}
 	return &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.NewServer(db, httpapi.Options{AllowInsecureLoopback: config.AllowInsecureLoopback}),
+		Handler:           httpapi.NewServer(db, httpapi.Options{AllowInsecureLoopback: config.AllowInsecureLoopback, Hub: config.Hub}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

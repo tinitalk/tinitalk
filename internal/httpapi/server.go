@@ -5,16 +5,19 @@ import (
 	"net/http"
 
 	"tinitalk/internal/auth"
+	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
 
 type Options struct {
 	AllowInsecureLoopback bool
+	Hub                   *signaling.Hub
 }
 
 type Server struct {
 	db      *state.DB
 	auth    *auth.BasicAuthenticator
+	hub     *signaling.Hub
 	options Options
 	mux     *http.ServeMux
 }
@@ -23,6 +26,7 @@ func NewServer(db *state.DB, options Options) http.Handler {
 	s := &Server{
 		db:      db,
 		auth:    auth.NewBasicAuthenticator(db),
+		hub:     options.Hub,
 		options: options,
 		mux:     http.NewServeMux(),
 	}

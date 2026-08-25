@@ -2,7 +2,10 @@ module tinitalk
 
 go 1.26.7
 
-require modernc.org/sqlite v1.57.0
+require (
+	github.com/gorilla/websocket v1.5.3
+	modernc.org/sqlite v1.57.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"tinitalk/internal/app"
+	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
 
@@ -83,7 +84,7 @@ func runServe(args []string) error {
 		return err
 	}
 	defer db.Close()
-	server := app.NewHTTPServer(db, app.ServerConfig{Addr: addr, AllowInsecureLoopback: allowLoopback})
+	server := app.NewHTTPServer(db, app.ServerConfig{Addr: addr, AllowInsecureLoopback: allowLoopback, Hub: signaling.NewHub(signaling.NoopNotifier{})})
 	return server.ListenAndServe()
 }
 

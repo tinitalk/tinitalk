@@ -3,6 +3,9 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/gorilla/websocket"
+	"tinitalk/internal/protocol"
 )
 
 type deviceRequest struct {
@@ -36,5 +39,46 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	http.Error(w, "websocket endpoint is not active yet", http.StatusUpgradeRequired)
+	if s.hub == nil {
+		http.Error(w, "websocket endpoint is not active yet", http.StatusUpgradeRequired)
+		return
+	}
+	conn, err := websocket.Upgrade(w, r, nil, protocol.MaxEventBytes, protocol.MaxEventBytes)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	client := s.hub.Connect(currentUser(r).Login)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for event := range client.Events() {
+			if err := conn.WriteJSON(event); err != nil {
+				return
+			}
+		}
+	}()
+
+	conn.SetReadLimit(protocol.MaxEventBytes)
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		event, err := protocol.Decode(raw)
+		if err != nil {
+			_ = conn.WriteJSON(map[string]string{"error": err.Error()})
+			continue
+		}
+		if err := s.hub.Handle(currentUser(r).Login, event); err != nil {
+			_ = conn.WriteJSON(map[string]string{"error": err.Error()})
+			continue
+		}
+		select {
+		case <-done:
+			return
+		default:
+		}
+	}
 }
