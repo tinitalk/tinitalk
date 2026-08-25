@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"tinitalk/internal/protocol"
 )
@@ -21,8 +22,10 @@ type Hub struct {
 	mu           sync.Mutex
 	notifier     Notifier
 	clients      map[string]*Client
+	clientCounts map[string]int
 	calls        map[string]*call
 	activeByUser map[string]string
+	now          func() time.Time
 }
 
 func NewHub(notifier Notifier) *Hub {
@@ -32,17 +35,34 @@ func NewHub(notifier Notifier) *Hub {
 	return &Hub{
 		notifier:     notifier,
 		clients:      map[string]*Client{},
+		clientCounts: map[string]int{},
 		calls:        map[string]*call{},
 		activeByUser: map[string]string{},
+		now:          time.Now,
 	}
 }
 
 func (h *Hub) Connect(user string) *Client {
+	client, _ := h.ConnectChecked(user)
+	return client
+}
+
+func (h *Hub) ConnectChecked(user string) (*Client, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.clientCounts[user] >= MaxConnectionsPerUser {
+		return nil, errors.New("too many connections for user")
+	}
 	client := &Client{user: user, inbox: make(chan DeliveredEvent, ReplayLimit)}
 	h.clients[user] = client
-	return client
+	h.clientCounts[user]++
+	return client, nil
+}
+
+func (h *Hub) SetNow(now func() time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.now = now
 }
 
 func (h *Hub) Handle(sender string, event protocol.Event) error {
@@ -64,9 +84,17 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	if !c.participant(sender) {
 		return errors.New("sender is not a call participant")
 	}
+	if event.Type == "rtc.ice" {
+		if err := h.checkICERate(c); err != nil {
+			return err
+		}
+	}
 	c.seen[event.ID] = struct{}{}
 	delivered := h.next(c, event)
 	h.deliver(c.other(sender), delivered)
+	if event.Type == "call.accept" {
+		c.answered = true
+	}
 	if endsCall(event.Type) {
 		h.end(c)
 	}
@@ -109,11 +137,12 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 		return errors.New("callee already has an active call")
 	}
 	c := &call{
-		id:      event.CallID,
-		caller:  sender,
-		callee:  payload.CalleeID,
-		seen:    map[string]struct{}{event.ID: {}},
-		nextSeq: 1,
+		id:        event.CallID,
+		caller:    sender,
+		callee:    payload.CalleeID,
+		seen:      map[string]struct{}{event.ID: {}},
+		nextSeq:   1,
+		startedAt: h.now(),
 	}
 	h.calls[event.CallID] = c
 	h.activeByUser[sender] = event.CallID
@@ -124,6 +153,47 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 	delivered := h.next(c, incoming)
 	h.deliver(payload.CalleeID, delivered)
 	h.notifier.IncomingCall(payload.CalleeID, delivered)
+	return nil
+}
+
+func (h *Hub) ExpireWaiting() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	expired := 0
+	for _, c := range h.calls {
+		if c.answered {
+			continue
+		}
+		if now.Sub(c.startedAt) <= time.Duration(protocol.RingTimeoutSecs)*time.Second {
+			continue
+		}
+		event := protocol.Event{
+			ID:      expireID(c.id),
+			CallID:  c.id,
+			Type:    "call.expire",
+			SentAt:  now.UnixMilli(),
+			Payload: json.RawMessage(`{}`),
+		}
+		delivered := h.next(c, event)
+		h.deliver(c.caller, delivered)
+		h.deliver(c.callee, delivered)
+		h.end(c)
+		expired++
+	}
+	return expired
+}
+
+func (h *Hub) checkICERate(c *call) error {
+	now := h.now()
+	if c.iceWindowAt.IsZero() || now.Sub(c.iceWindowAt) >= time.Minute {
+		c.iceWindowAt = now
+		c.iceCount = 0
+	}
+	if c.iceCount >= MaxICEPerMinute {
+		return errors.New("too many ICE events")
+	}
+	c.iceCount++
 	return nil
 }
 
@@ -167,4 +237,8 @@ func (h *Hub) ActiveCall(user string) (string, error) {
 		return "", fmt.Errorf("active call not found")
 	}
 	return callID, nil
+}
+
+func expireID(callID string) string {
+	return callID[:len(callID)-3] + "999"
 }

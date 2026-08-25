@@ -2,7 +2,9 @@ package signaling
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	"tinitalk/internal/protocol"
 )
@@ -75,6 +77,73 @@ func TestHubDeduplicatesAndReplaysAfterSequence(t *testing.T) {
 	}
 }
 
+func TestHubCancelsEndsExpiresAndLimitsICE(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return time.Unix(1000, 0) })
+	alice := hub.Connect("alice")
+	_ = hub.Connect("bob")
+
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a90401", "018f7d51-40a1-7bb5-a2d0-7e47f9180401", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < MaxICEPerMinute; i++ {
+		if err := hub.Handle("alice", event(uuid(500+i), start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"})); err != nil {
+			t.Fatalf("ice %d rejected: %v", i, err)
+		}
+	}
+	if err := hub.Handle("alice", event(uuid(900), start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"})); err == nil {
+		t.Fatal("extra ICE event error = nil, want rate limit")
+	}
+	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a90499", start.CallID, "call.cancel", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.ActiveCall("alice"); err == nil {
+		t.Fatal("ActiveCall after cancel error = nil, want released participant")
+	}
+	if got, ok := alice.TryNext(); ok {
+		t.Fatalf("alice received own event: %+v", got)
+	}
+}
+
+func TestHubExpiresRingingCall(t *testing.T) {
+	now := time.Unix(2000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	_ = hub.Connect("alice")
+	bob := hub.Connect("bob")
+
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a90501", "018f7d51-40a1-7bb5-a2d0-7e47f9180501", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	now = now.Add((protocol.RingTimeoutSecs + 1) * time.Second)
+
+	expired := hub.ExpireWaiting()
+	if expired != 1 {
+		t.Fatalf("ExpireWaiting() = %d, want 1", expired)
+	}
+	if _, err := hub.ActiveCall("alice"); err == nil {
+		t.Fatal("ActiveCall after expiry error = nil")
+	}
+	if got := next(t, bob); got.Type != "call.expire" {
+		t.Fatalf("bob expiry event = %+v", got)
+	}
+}
+
+func TestHubLimitsConnectionsPerUser(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	for i := 0; i < MaxConnectionsPerUser; i++ {
+		if _, err := hub.ConnectChecked("alice"); err != nil {
+			t.Fatalf("ConnectChecked %d error = %v", i, err)
+		}
+	}
+	if _, err := hub.ConnectChecked("alice"); err == nil {
+		t.Fatal("extra ConnectChecked error = nil, want limit")
+	}
+}
+
 func event(id, callID, typ string, payload map[string]any) protocol.Event {
 	raw, _ := json.Marshal(payload)
 	return protocol.Event{
@@ -93,4 +162,8 @@ func next(t *testing.T, c *Client) DeliveredEvent {
 		t.Fatal("no event delivered")
 	}
 	return got
+}
+
+func uuid(n int) string {
+	return fmt.Sprintf("018f7d51-3f90-7e63-b657-4a83a6a%05d", n)
 }

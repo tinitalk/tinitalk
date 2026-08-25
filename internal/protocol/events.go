@@ -82,6 +82,45 @@ func (e Event) Validate() error {
 	if len(e.Payload) == 0 || !json.Valid(e.Payload) || e.Payload[0] != '{' {
 		return errors.New("payload must be a JSON object")
 	}
+	if err := e.validatePayload(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e Event) validatePayload() error {
+	switch e.Type {
+	case "call.start":
+		var payload struct {
+			CalleeID string `json:"callee_id"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.CalleeID == "" {
+			return errors.New("callee_id is required")
+		}
+	case "call.resume":
+		var payload struct {
+			LastSeq int64 `json:"last_seq"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.LastSeq < 0 {
+			return errors.New("last_seq must be non-negative")
+		}
+	case "rtc.ice":
+		var payload struct {
+			Candidate string `json:"candidate"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Candidate == "" {
+			return errors.New("candidate is required")
+		}
+	}
 	return nil
 }
 

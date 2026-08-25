@@ -1,13 +1,18 @@
 package signaling
 
+import "time"
+
 type call struct {
-	id           string
-	caller       string
-	callee       string
-	nextSeq      uint64
-	seen         map[string]struct{}
-	replay       []DeliveredEvent
-	waitingEnded bool
+	id          string
+	caller      string
+	callee      string
+	nextSeq     uint64
+	seen        map[string]struct{}
+	replay      []DeliveredEvent
+	startedAt   time.Time
+	iceWindowAt time.Time
+	iceCount    int
+	answered    bool
 }
 
 func (c *call) participant(user string) bool {

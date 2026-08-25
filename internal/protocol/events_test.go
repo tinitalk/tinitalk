@@ -50,6 +50,19 @@ func TestDecodeRejectsOversizedPayload(t *testing.T) {
 	}
 }
 
+func TestDecodeValidatesPayloadShape(t *testing.T) {
+	cases := []string{
+		`{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.start","sent_at":1787666400000,"payload":{}}`,
+		`{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.resume","sent_at":1787666400000,"payload":{"last_seq":-1}}`,
+		`{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"rtc.ice","sent_at":1787666400000,"payload":{"candidate":""}}`,
+	}
+	for _, raw := range cases {
+		if _, err := Decode([]byte(raw)); err == nil {
+			t.Fatalf("Decode(%s) error = nil, want payload rejection", raw)
+		}
+	}
+}
+
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "protocol", "testdata", name))
