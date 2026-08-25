@@ -13,7 +13,7 @@ func TestWakeMessageUsesHighPriorityAndShortTTL(t *testing.T) {
 	msg := WakeMessage("project-1", "token-1", signaling.DeliveredEvent{
 		Event: protocol.Event{CallID: "call-1", Type: "call.incoming", SentAt: 1000, Payload: json.RawMessage(`{"caller":"Alice"}`)},
 		Seq:   1,
-	}, 30*time.Second)
+	}, "Alice", 30*time.Second)
 
 	if msg.Message.Token != "token-1" {
 		t.Fatalf("token = %q", msg.Message.Token)
@@ -30,17 +30,32 @@ func TestWakeMessageUsesHighPriorityAndShortTTL(t *testing.T) {
 }
 
 func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
-	store := &fakeTokenStore{tokens: []DeviceToken{{Token: "bad-token"}}}
+	store := &fakeTokenStore{tokens: []DeviceToken{{Token: "bad-token"}}, displayName: "Alice"}
 	sender := &fakeSender{err: ErrInvalidRegistration}
 	notifier := NewFCMNotifier(store, sender, "project-1")
 
-	notifier.IncomingCall("bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1"}})
+	notifier.IncomingCall("alice", "bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1"}})
 
 	if sender.calls != 1 {
 		t.Fatalf("send calls = %d", sender.calls)
 	}
 	if store.disabled != "bad-token" {
 		t.Fatalf("disabled = %q", store.disabled)
+	}
+	if sender.last.Message.Data["caller"] != "Alice" {
+		t.Fatalf("caller = %q", sender.last.Message.Data["caller"])
+	}
+}
+
+func TestNotifierSendsCallCancellation(t *testing.T) {
+	store := &fakeTokenStore{tokens: []DeviceToken{{Token: "token-1"}}}
+	sender := &fakeSender{}
+	notifier := NewFCMNotifier(store, sender, "project-1")
+
+	notifier.CancelCall("bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1"}})
+
+	if sender.last.Message.Data["type"] != "call_cancel" || sender.last.Message.Data["call_id"] != "call-1" {
+		t.Fatalf("data = %+v", sender.last.Message.Data)
 	}
 }
 
@@ -55,11 +70,13 @@ func TestProjectIDFromServiceAccount(t *testing.T) {
 }
 
 type fakeTokenStore struct {
-	tokens   []DeviceToken
-	disabled string
+	tokens      []DeviceToken
+	disabled    string
+	displayName string
 }
 
 func (s *fakeTokenStore) TokensForUser(string) ([]DeviceToken, error) { return s.tokens, nil }
+func (s *fakeTokenStore) DisplayName(string) (string, error)          { return s.displayName, nil }
 func (s *fakeTokenStore) DisableToken(token string) error {
 	s.disabled = token
 	return nil
@@ -68,9 +85,11 @@ func (s *fakeTokenStore) DisableToken(token string) error {
 type fakeSender struct {
 	calls int
 	err   error
+	last  WakeRequest
 }
 
-func (s *fakeSender) Send(WakeRequest) error {
+func (s *fakeSender) Send(request WakeRequest) error {
 	s.calls++
+	s.last = request
 	return s.err
 }

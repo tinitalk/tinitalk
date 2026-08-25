@@ -12,12 +12,14 @@ import (
 )
 
 type Notifier interface {
-	IncomingCall(callee string, event DeliveredEvent)
+	IncomingCall(caller, callee string, event DeliveredEvent)
+	CancelCall(callee string, event DeliveredEvent)
 }
 
 type NoopNotifier struct{}
 
-func (NoopNotifier) IncomingCall(string, DeliveredEvent) {}
+func (NoopNotifier) IncomingCall(string, string, DeliveredEvent) {}
+func (NoopNotifier) CancelCall(string, DeliveredEvent)           {}
 
 type ICEConfigProvider interface {
 	ICEConfig(callID, user string) json.RawMessage
@@ -138,6 +140,9 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 		c.state = callActive
 		h.deliverICEConfig(c)
 	}
+	if event.Type == "call.accept" || event.Type == "call.reject" || event.Type == "call.cancel" {
+		go h.notifier.CancelCall(c.callee, delivered)
+	}
 	if endsCall(event.Type) {
 		h.end(c)
 	}
@@ -216,7 +221,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 	incoming.Type = "call.incoming"
 	delivered := h.next(c, incoming, payload.CalleeID)
 	h.deliver(payload.CalleeID, delivered)
-	go h.notifier.IncomingCall(payload.CalleeID, delivered)
+	go h.notifier.IncomingCall(sender, payload.CalleeID, delivered)
 	return nil
 }
 
@@ -252,6 +257,7 @@ func (h *Hub) Sweep() int {
 		delivered := h.next(c, event, c.caller, c.callee)
 		h.deliver(c.caller, delivered)
 		h.deliver(c.callee, delivered)
+		go h.notifier.CancelCall(c.callee, delivered)
 		h.end(c)
 		expired++
 	}

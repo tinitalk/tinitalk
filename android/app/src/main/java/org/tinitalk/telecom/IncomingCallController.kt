@@ -58,6 +58,11 @@ class IncomingCallController {
         )
 
     fun answer(context: Context, invite: IncomingInvite) {
+        TelecomCallController(AndroidTelecomRegistrar(context)).answer(invite.callId)
+        answerFromTelecom(context, invite)
+    }
+
+    fun answerFromTelecom(context: Context, invite: IncomingInvite) {
         save(context, invite, ActionAnswer)
         val service = Intent(context, CallForegroundService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -72,6 +77,11 @@ class IncomingCallController {
     }
 
     fun reject(context: Context, invite: IncomingInvite) {
+        TelecomCallController(AndroidTelecomRegistrar(context)).reject(invite.callId)
+        rejectFromTelecom(context, invite)
+    }
+
+    fun rejectFromTelecom(context: Context, invite: IncomingInvite) {
         save(context, invite, ActionReject)
         IncomingCallNotifier(context).cancel()
         context.startActivity(

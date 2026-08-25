@@ -9,10 +9,13 @@ androidxTest = "1.7.0"
 webrtc = "144.7559.12"
 coreTelecom = "1.0.1"
 firebaseBom = "34.17.0"
+googleServices = "4.5.0"
+coroutines = "1.8.1"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -26,3 +29,4 @@ androidx-core-telecom = { module = "androidx.core:core-telecom", version.ref = "
 webrtc = { module = "io.github.webrtc-sdk:android", version.ref = "webrtc" }
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }

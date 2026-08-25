@@ -360,7 +360,9 @@ type blockingNotifier struct {
 	release chan struct{}
 }
 
-func (n *blockingNotifier) IncomingCall(string, DeliveredEvent) {
+func (n *blockingNotifier) IncomingCall(string, string, DeliveredEvent) {
 	close(n.started)
 	<-n.release
 }
+
+func (n *blockingNotifier) CancelCall(string, DeliveredEvent) {}

@@ -24,10 +24,8 @@ import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.media.WebRtcAudioSession
 import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.push.IncomingCallNotifier
-import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
-import org.tinitalk.telecom.TelecomCallController
 import okhttp3.OkHttpClient
 
 class MainActivity : Activity() {
@@ -160,7 +158,6 @@ class MainActivity : Activity() {
         socket = newSocket
         coordinator = newCoordinator
         foregroundCall = newForegroundCall
-        runCatching { TelecomCallController(AndroidTelecomRegistrar(this)).registerAudioOnly() }
         newSocket.connect(
             onEvent = { event ->
                 if (newCoordinator.onEvent(event)) {

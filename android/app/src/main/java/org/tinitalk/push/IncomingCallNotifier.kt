@@ -3,11 +3,13 @@ package org.tinitalk.push
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Person
 import android.content.Context
 import android.os.Build
 import org.tinitalk.R
 import org.tinitalk.telecom.IncomingCallController
 import java.time.Instant
+import java.time.Duration
 
 data class IncomingInvite(
     val callId: String,
@@ -31,7 +33,7 @@ class IncomingCallNotifier(private val context: Context) {
         val reject = controller.actionIntent(context, IncomingCallController.ActionReject, invite)
         val fullScreen = controller.activityIntent(context, IncomingCallController.ActionIncoming, invite)
         @Suppress("DEPRECATION")
-        val notification = builder
+        builder
             .setSmallIcon(R.drawable.ic_call)
             .setContentTitle("Incoming TiniTalk call")
             .setContentText(invite.caller.ifEmpty { "Incoming call" })
@@ -39,10 +41,22 @@ class IncomingCallNotifier(private val context: Context) {
             .setPriority(Notification.PRIORITY_HIGH)
             .setContentIntent(fullScreen)
             .setFullScreenIntent(fullScreen, canUseFullScreenIntent())
-            .addAction(Notification.Action.Builder(R.drawable.ic_call, "Reject", reject).build())
-            .addAction(Notification.Action.Builder(R.drawable.ic_call, "Answer", answer).build())
             .setOngoing(true)
-            .build()
+            .setTimeoutAfter(Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0))
+        if (Build.VERSION.SDK_INT >= 31) {
+            builder.setStyle(
+                Notification.CallStyle.forIncomingCall(
+                    Person.Builder().setName(invite.caller.ifEmpty { "TiniTalk" }).setImportant(true).build(),
+                    reject,
+                    answer,
+                ),
+            )
+        } else {
+            builder
+                .addAction(Notification.Action.Builder(R.drawable.ic_call, "Reject", reject).build())
+                .addAction(Notification.Action.Builder(R.drawable.ic_call, "Answer", answer).build())
+        }
+        val notification = builder.build()
         context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
     }
 

@@ -26,6 +26,7 @@ type DeviceToken struct {
 
 type TokenStore interface {
 	TokensForUser(login string) ([]DeviceToken, error)
+	DisplayName(login string) (string, error)
 	DisableToken(token string) error
 }
 
@@ -53,6 +54,10 @@ func (s DBTokenStore) DisableToken(token string) error {
 	return s.DB.DisableToken(token)
 }
 
+func (s DBTokenStore) DisplayName(login string) (string, error) {
+	return s.DB.DisplayName(login)
+}
+
 type FCMNotifier struct {
 	store   TokenStore
 	sender  Sender
@@ -63,13 +68,26 @@ func NewFCMNotifier(store TokenStore, sender Sender, project string) *FCMNotifie
 	return &FCMNotifier{store: store, sender: sender, project: project}
 }
 
-func (n *FCMNotifier) IncomingCall(callee string, event signaling.DeliveredEvent) {
+func (n *FCMNotifier) IncomingCall(caller, callee string, event signaling.DeliveredEvent) {
+	name, err := n.store.DisplayName(caller)
+	if err != nil || name == "" {
+		name = caller
+	}
+	n.send(callee, WakeMessage(n.project, "", event, name, 30*time.Second))
+}
+
+func (n *FCMNotifier) CancelCall(callee string, event signaling.DeliveredEvent) {
+	n.send(callee, CancelMessage(n.project, "", event, 30*time.Second))
+}
+
+func (n *FCMNotifier) send(callee string, request WakeRequest) {
 	tokens, err := n.store.TokensForUser(callee)
 	if err != nil {
 		return
 	}
 	for _, token := range tokens {
-		err := n.sender.Send(WakeMessage(n.project, token.Token, event, 30*time.Second))
+		request.Message.Token = token.Token
+		err := n.sender.Send(request)
 		if errors.Is(err, ErrInvalidRegistration) {
 			_ = n.store.DisableToken(token.Token)
 		}
@@ -87,13 +105,13 @@ type WakeRequest struct {
 	} `json:"message"`
 }
 
-func WakeMessage(_ string, token string, event signaling.DeliveredEvent, ttl time.Duration) WakeRequest {
+func WakeMessage(_ string, token string, event signaling.DeliveredEvent, caller string, ttl time.Duration) WakeRequest {
 	var request WakeRequest
 	request.Message.Token = token
 	request.Message.Data = map[string]string{
 		"type":       "incoming_call",
 		"call_id":    event.CallID,
-		"caller":     callerName(event),
+		"caller":     caller,
 		"last_seq":   strconv.FormatUint(event.Seq, 10),
 		"expires_at": time.UnixMilli(event.SentAt).Add(ttl).Format(time.RFC3339),
 	}
@@ -102,12 +120,16 @@ func WakeMessage(_ string, token string, event signaling.DeliveredEvent, ttl tim
 	return request
 }
 
-func callerName(event signaling.DeliveredEvent) string {
-	var payload struct {
-		Caller string `json:"caller"`
+func CancelMessage(_ string, token string, event signaling.DeliveredEvent, ttl time.Duration) WakeRequest {
+	var request WakeRequest
+	request.Message.Token = token
+	request.Message.Data = map[string]string{
+		"type":    "call_cancel",
+		"call_id": event.CallID,
 	}
-	_ = json.Unmarshal(event.Payload, &payload)
-	return payload.Caller
+	request.Message.Android.Priority = "HIGH"
+	request.Message.Android.TTL = ttl.String()
+	return request
 }
 
 type HTTPv1Sender struct {

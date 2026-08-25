@@ -18,7 +18,9 @@ class DeviceRegistrar(
         fun forSession(context: Context, session: Session): DeviceRegistrar {
             @Suppress("DEPRECATION")
             fun fetchToken(callback: (String) -> Unit) {
-                FirebaseMessaging.getInstance().token.addOnSuccessListener(callback)
+                runCatching { FirebaseMessaging.getInstance().token }
+                    .getOrNull()
+                    ?.addOnSuccessListener(callback)
             }
             return DeviceRegistrar(
                 tokenProvider = ::fetchToken,

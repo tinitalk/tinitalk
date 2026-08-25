@@ -54,6 +54,12 @@ func (db *DB) ListUsers() ([]User, error) {
 	return users, rows.Err()
 }
 
+func (db *DB) DisplayName(login string) (string, error) {
+	var displayName string
+	err := db.sql.QueryRow("SELECT display_name FROM users WHERE login = ? AND disabled = 0", login).Scan(&displayName)
+	return displayName, err
+}
+
 func (db *DB) DisableUser(login string) error {
 	result, err := db.sql.Exec("UPDATE users SET disabled = 1 WHERE login = ?", login)
 	if err != nil {
