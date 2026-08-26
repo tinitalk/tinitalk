@@ -1,17 +1,23 @@
 package org.tinitalk
 
 import android.Manifest
-import android.app.Activity
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallSnapshot
@@ -22,16 +28,27 @@ import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.push.IncomingCallNotifier
+import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { refreshPermissions() }
+    private val microphonePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { refreshPermissions() }
     private lateinit var status: TextView
     private lateinit var contacts: LinearLayout
+    private lateinit var sessionControls: LinearLayout
     private lateinit var repository: ContactRepository
     private lateinit var authStore: AuthStore
     private var contactItems: List<Contact> = emptyList()
     private var incomingInvite: org.tinitalk.push.IncomingInvite? = null
+    private var permissionsState = AppPermissionsState()
+    private var signedIn = false
+    private var pushRegistrationStarted = false
     private var muted = false
     private val incomingController = IncomingCallController()
     private val callObserver: (CallSnapshot) -> Unit = { snapshot -> runOnUiThread { renderCallState(snapshot) } }
@@ -55,6 +72,13 @@ class MainActivity : Activity() {
                 loadContacts(url.text.toString(), login.text.toString(), token.text.toString())
             }
         }
+        sessionControls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(url)
+            addView(login)
+            addView(token)
+            addView(connect)
+        }
         setContentView(
             LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -65,22 +89,18 @@ class MainActivity : Activity() {
                     textSize = 28f
                     gravity = Gravity.CENTER
                 })
-                addView(url)
-                addView(login)
-                addView(token)
-                addView(connect)
+                addView(sessionControls)
                 addView(status)
                 addView(contacts)
             }
         )
         CallServiceState.observe(callObserver)
+        refreshPermissions()
         Thread {
             runCatching { repository.restoreContacts() }
                 .onSuccess { restored ->
                     restored?.let {
-                        registerPushToken()
                         showContacts(it)
-                        runOnUiThread { handleIncomingIntent(intent) }
                     }
                 }
                 .onFailure { showError(it) }
@@ -102,9 +122,7 @@ class MainActivity : Activity() {
         Thread {
             runCatching { repository.signIn(url, login, token) }
                 .onSuccess {
-                    registerPushToken()
                     showContacts(it)
-                    runOnUiThread { handleIncomingIntent(intent) }
                 }
                 .onFailure { showError(it) }
         }.start()
@@ -112,17 +130,25 @@ class MainActivity : Activity() {
 
     private fun showContacts(items: List<Contact>) {
         contactItems = items
-        runOnUiThread { renderCallState(CallServiceState.snapshot()) }
+        signedIn = true
+        runOnUiThread {
+            sessionControls.visibility = View.GONE
+            refreshPermissions()
+            if (permissionsState.allRequiredGranted) handleIncomingIntent(intent)
+        }
     }
 
     private fun renderContacts() {
+        if (!permissionsState.allRequiredGranted) {
+            renderPermissions()
+            return
+        }
         status.text = "Connected"
         contacts.removeAllViews()
         contactItems.forEach { contact ->
             contacts.addView(Button(this).apply {
                 text = "Call ${contact.displayName}"
                 setOnClickListener {
-                    if (!ensureRecordAudioPermission()) return@setOnClickListener
                     CallForegroundService.startOutgoing(this@MainActivity, contact.login)
                 }
             })
@@ -139,6 +165,10 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (!permissionsState.allRequiredGranted) {
+            renderPermissions()
+            return
+        }
         handleIncomingIntent(intent)
     }
 
@@ -154,7 +184,6 @@ class MainActivity : Activity() {
         val action = intent?.action ?: pending?.action ?: IncomingCallController.ActionIncoming
         when (action) {
             IncomingCallController.ActionAnswer -> {
-                if (!ensureRecordAudioPermission()) return
                 incomingController.answer(this, invite)
             }
             IncomingCallController.ActionReject -> {
@@ -165,6 +194,11 @@ class MainActivity : Activity() {
     }
 
     private fun renderCallState(snapshot: CallSnapshot) {
+        if (!signedIn) return
+        if (!permissionsState.allRequiredGranted) {
+            renderPermissions()
+            return
+        }
         val invite = incomingInvite?.takeIf { it.expiresAt.isAfter(java.time.Instant.now()) }
         val phase = if (snapshot.phase == CallPhase.Idle && invite != null) CallPhase.Ringing else snapshot.phase
         when (snapshot.phase) {
@@ -207,7 +241,6 @@ class MainActivity : Activity() {
         contacts.addView(Button(this).apply {
             text = "Accept"
             setOnClickListener {
-                if (!ensureRecordAudioPermission()) return@setOnClickListener
                 incomingController.answer(this@MainActivity, invite)
             }
         })
@@ -222,22 +255,107 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    private fun ensureRecordAudioPermission(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return true
-        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 20)
-        return false
+    override fun onResume() {
+        super.onResume()
+        refreshPermissions()
     }
 
-    private fun ensureNotificationPermission() {
-        if (Build.VERSION.SDK_INT < 33) return
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
-        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 21)
+    private fun refreshPermissions() {
+        val notificationsGranted =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED
+        val microphoneGranted =
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO,
+            ) == PackageManager.PERMISSION_GRANTED
+        val fullScreenIntentGranted =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+                getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+
+        permissionsState = AppPermissionsState(
+            notificationsGranted = notificationsGranted,
+            microphoneGranted = microphoneGranted,
+            fullScreenIntentGranted = fullScreenIntentGranted,
+        )
+        if (!signedIn || !::contacts.isInitialized) return
+        if (permissionsState.allRequiredGranted) {
+            registerPushToken()
+            renderCallState(CallServiceState.snapshot())
+        } else {
+            renderPermissions()
+        }
+    }
+
+    private fun renderPermissions() {
+        status.text = "Permissions required"
+        contacts.removeAllViews()
+        permissionButton(
+            title = "Notifications",
+            granted = permissionsState.notificationsGranted,
+            onRequest = ::requestNotificationPermission,
+        )
+        permissionButton(
+            title = "Microphone",
+            granted = permissionsState.microphoneGranted,
+            onRequest = ::requestMicrophonePermission,
+        )
+        permissionButton(
+            title = "Full-screen incoming calls",
+            granted = permissionsState.fullScreenIntentGranted,
+            onRequest = ::requestFullScreenIntentPermission,
+        )
+        contacts.addView(Button(this).apply {
+            text = "Refresh"
+            setOnClickListener { refreshPermissions() }
+        })
+    }
+
+    private fun permissionButton(title: String, granted: Boolean, onRequest: () -> Unit) {
+        contacts.addView(Button(this).apply {
+            text = if (granted) "$title: allowed" else "Allow $title"
+            isEnabled = !granted
+            setOnClickListener { onRequest() }
+        })
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            refreshPermissions()
+        }
+    }
+
+    private fun requestMicrophonePermission() {
+        microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    private fun requestFullScreenIntentPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            refreshPermissions()
+            return
+        }
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        if (notificationManager.canUseFullScreenIntent()) {
+            refreshPermissions()
+            return
+        }
+        runCatching {
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
+                    .setData(Uri.parse("package:$packageName")),
+            )
+        }
     }
 
     private fun registerPushToken() {
-        ensureNotificationPermission()
+        if (pushRegistrationStarted || !permissionsState.allRequiredGranted) return
         val session = authStore.load() ?: return
+        pushRegistrationStarted = true
         DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this))
     }
 

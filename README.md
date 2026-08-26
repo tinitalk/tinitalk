@@ -63,6 +63,6 @@ VPS notes:
 Android notes:
 
 - Register Android app ID `org.tinitalk` in the same Firebase project, then place its downloaded config at `android/app/google-services.json` before `make client`. The file is ignored by Git. An APK built without it works only while the app is already running; FCM wake-up is unavailable.
-- Install `dist/tinitalk-debug.apk`, open the app once, sign in, and grant microphone/notification permissions.
+- Install `dist/tinitalk-debug.apk`, open the app once, sign in, and complete the microphone, notification, and full-screen incoming-call permission screen.
 - Build the relay-only diagnostic APK with `make client GRADLE_ARGS=-PtinitalkForceRelay=true`; rebuild normally afterward.
 - Test both direct media and forced TURN relay from the real networks you care about.
