@@ -29,9 +29,8 @@ class WebRtcAudioSession private constructor(
     private val audioTrack: AudioTrack
     private val sender: RtpSender?
     private val peerConnection: PeerConnection
+    private val restartGate = IceRestartGate(ExecutorTaskScheduler())
     @Volatile private var closed = false
-    @Volatile private var restartRequested = false
-    @Volatile private var iceState: PeerConnection.IceConnectionState = PeerConnection.IceConnectionState.NEW
 
     init {
         prepareFactory(context.applicationContext)
@@ -104,6 +103,7 @@ class WebRtcAudioSession private constructor(
     override suspend fun close() {
         if (closed) return
         closed = true
+        restartGate.close()
         iceQueue.clear()
         sender?.let { peerConnection.removeTrack(it) }
         audioTrack.dispose()
@@ -153,16 +153,15 @@ class WebRtcAudioSession private constructor(
     }
 
     private fun onIceConnectionState(state: PeerConnection.IceConnectionState) {
-        iceState = state
-        if (restartRequested || closed) return
-        if (state != PeerConnection.IceConnectionState.DISCONNECTED && state != PeerConnection.IceConnectionState.FAILED) return
-        restartRequested = true
-        Thread {
-            Thread.sleep(3000)
-            if (!closed && (iceState == PeerConnection.IceConnectionState.DISCONNECTED || iceState == PeerConnection.IceConnectionState.FAILED)) {
-                onIceRestartNeeded()
-            }
-        }.start()
+        if (closed) return
+        when (state) {
+            PeerConnection.IceConnectionState.DISCONNECTED,
+            PeerConnection.IceConnectionState.FAILED -> restartGate.onState(true, onIceRestartNeeded)
+            PeerConnection.IceConnectionState.CONNECTED,
+            PeerConnection.IceConnectionState.COMPLETED,
+            PeerConnection.IceConnectionState.CLOSED -> restartGate.onState(false, onIceRestartNeeded)
+            else -> Unit
+        }
     }
 
     private fun IceServerData.toWebRtc(): PeerConnection.IceServer {

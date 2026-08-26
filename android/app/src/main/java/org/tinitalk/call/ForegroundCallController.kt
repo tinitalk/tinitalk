@@ -118,6 +118,7 @@ class ForegroundCallController(
     }
 
     private fun restartIce(nextCallId: String) {
+        if (offerStartedCallId != nextCallId || callId != nextCallId) return
         val media = session ?: return
         val offer = runBlockingLite { media.restartIce() }
         sendSdp(nextCallId, "rtc.offer", offer)

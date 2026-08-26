@@ -127,6 +127,36 @@ class ForegroundCallControllerTest {
     }
 
     @Test
+    fun onlyInitialOffererSendsRestartOffersAcrossOutages() {
+        val callerSignal = CapturingSignalClient()
+        val calleeSignal = CapturingSignalClient()
+        lateinit var callerRestart: () -> Unit
+        lateinit var calleeRestart: () -> Unit
+        val caller = ForegroundCallController(callerSignal, { _, _, _, callback ->
+            callerRestart = callback
+            FakeMediaSession(offer = "caller-restart")
+        }, ids)
+        val callee = ForegroundCallController(calleeSignal, { _, _, _, callback ->
+            calleeRestart = callback
+            FakeMediaSession(offer = "callee-restart")
+        }, ids)
+
+        caller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        caller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        callee.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        callee.onSignalEvent(activeSnapshot(), event("rtc.offer", JsonObject().apply { addProperty("sdp", "remote-offer") }))
+        callerSignal.sent.clear()
+        calleeSignal.sent.clear()
+
+        callerRestart()
+        calleeRestart()
+        callerRestart()
+
+        assertEquals(listOf("rtc.offer", "rtc.offer"), callerSignal.sent.map { it.type })
+        assertTrue(calleeSignal.sent.isEmpty())
+    }
+
+    @Test
     fun keepsRemoteIceCandidateThatArrivesBeforeOffer() {
         val media = FakeMediaSession()
         val controller = ForegroundCallController(CapturingSignalClient(), { _, _, _, _ -> media }, ids)
