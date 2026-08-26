@@ -2,6 +2,7 @@ package signaling
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -36,6 +37,18 @@ func TestHubRoutesAcceptRejectAndRejectsThirdParty(t *testing.T) {
 	}
 	if got, ok := eve.TryNext(); ok {
 		t.Fatalf("eve received event: %+v", got)
+	}
+}
+
+func TestHubReportsBusyCallee(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	_ = activeCall(t, hub, alice, bob, 101)
+
+	err := hub.Handle("carol", event(uuid(104), uuid(105), "call.start", map[string]any{"callee_id": "bob"}))
+	if !errors.Is(err, ErrCalleeBusy) {
+		t.Fatalf("Handle() error = %v, want ErrCalleeBusy", err)
 	}
 }
 

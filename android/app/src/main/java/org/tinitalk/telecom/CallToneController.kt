@@ -4,14 +4,16 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Handler
 import org.tinitalk.call.CallDirection
+import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
 import java.io.Closeable
 
-internal enum class CallToneMode { Silent, Reaching, Ringing, Reconnecting, Ended }
+internal enum class CallToneMode { Silent, Reaching, Ringing, Reconnecting, Busy, Ended }
 
 internal fun callToneMode(state: CallUiState): CallToneMode = when {
+    state.phase == CallPhase.Ended && state.endReason == CallEndReason.Busy -> CallToneMode.Busy
     state.phase == CallPhase.Ended && state.connectedAtElapsedMs != null -> CallToneMode.Ended
     state.phase == CallPhase.Active && state.connectionHealth == ConnectionHealth.Reconnecting -> CallToneMode.Reconnecting
     state.direction == CallDirection.Outgoing && state.phase == CallPhase.Connecting -> CallToneMode.Reaching
@@ -40,6 +42,7 @@ class CallToneController(private val handler: Handler) : Closeable {
         when (next) {
             CallToneMode.Reaching, CallToneMode.Reconnecting -> handler.post(pulseTone)
             CallToneMode.Ringing -> runCatching { tone?.startTone(ToneGenerator.TONE_SUP_RINGTONE) }
+            CallToneMode.Busy -> runCatching { tone?.startTone(ToneGenerator.TONE_SUP_BUSY) }
             CallToneMode.Ended -> runCatching { tone?.startTone(ToneGenerator.TONE_PROP_ACK, EndToneMillis) }
             CallToneMode.Silent -> Unit
         }

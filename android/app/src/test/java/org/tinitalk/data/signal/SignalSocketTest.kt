@@ -73,12 +73,12 @@ class SignalSocketTest {
     @Test
     fun reportsServerErrorEnvelope() {
         MockWebServer().use { server ->
-            server.enqueue(MockResponse().withWebSocketUpgrade(SendingWebSocketListener("""{"error":"call not found"}""")))
+            server.enqueue(MockResponse().withWebSocketUpgrade(SendingWebSocketListener("""{"error":"callee already has an active call","code":"busy","call_id":"call-1"}""")))
             server.start()
             val client = OkHttpClient()
             lateinit var socket: SignalSocket
             socket = SignalSocket(client, Session(server.url("/").toString(), "alice", "token"))
-            val error = LinkedBlockingQueue<String>()
+            val error = LinkedBlockingQueue<SignalFailure>()
 
             socket.connect(
                 onEvent = { throw AssertionError("unexpected signal event") },
@@ -88,7 +88,10 @@ class SignalSocketTest {
                 },
             )
 
-            assertEquals("call not found", error.poll(2, TimeUnit.SECONDS))
+            assertEquals(
+                SignalFailure(message = "callee already has an active call", code = "busy", callId = "call-1"),
+                error.poll(2, TimeUnit.SECONDS),
+            )
             socket.close()
             client.shutdown()
         }

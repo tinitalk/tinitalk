@@ -1,9 +1,11 @@
 package org.tinitalk.telecom
 
 import org.tinitalk.call.CallDirection
+import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
+import org.tinitalk.data.signal.SignalFailure
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -26,5 +28,17 @@ class CallToneModeTest {
             CallToneMode.Silent,
             callToneMode(CallUiState(phase = CallPhase.Ended)),
         )
+        assertEquals(
+            CallToneMode.Busy,
+            callToneMode(CallUiState(phase = CallPhase.Ended, endReason = CallEndReason.Busy)),
+        )
+    }
+
+    @Test
+    fun mapsOnlyMatchingBusyFailureToBusyReason() {
+        val busy = SignalFailure("callee already has an active call", "busy", "call-1")
+
+        assertEquals(CallEndReason.Busy, signalingFailureEndReason(busy, "call-1"))
+        assertEquals(CallEndReason.Failed, signalingFailureEndReason(busy, "call-2"))
     }
 }

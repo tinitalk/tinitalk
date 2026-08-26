@@ -40,6 +40,8 @@ type Hub struct {
 
 const notificationQueueLimit = 64
 
+var ErrCalleeBusy = errors.New("callee already has an active call")
+
 type notification struct {
 	caller string
 	callee string
@@ -293,7 +295,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 		return errors.New("cannot call yourself")
 	}
 	if _, ok := h.activeByUser[payload.CalleeID]; ok {
-		return errors.New("callee already has an active call")
+		return ErrCalleeBusy
 	}
 	c := &call{
 		id:           event.CallID,

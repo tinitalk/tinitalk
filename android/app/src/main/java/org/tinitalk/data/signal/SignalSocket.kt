@@ -11,6 +11,12 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
+data class SignalFailure(
+	val message: String,
+	val code: String? = null,
+	val callId: String? = null,
+)
+
 class SignalSocket(
 	private val client: OkHttpClient,
 	private val session: Session,
@@ -25,7 +31,7 @@ class SignalSocket(
 		onEvent: (SequencedSignalEvent) -> Unit,
 		onOpen: () -> Unit = {},
 		onDisconnected: () -> Unit = {},
-		onError: (String) -> Unit = {},
+		onError: (SignalFailure) -> Unit = {},
 	) {
 		closed = false
 		open(onEvent, onOpen, onDisconnected, onError)
@@ -35,7 +41,7 @@ class SignalSocket(
 		onEvent: (SequencedSignalEvent) -> Unit,
 		onOpen: () -> Unit,
 		onDisconnected: () -> Unit,
-		onError: (String) -> Unit,
+		onError: (SignalFailure) -> Unit,
 	) {
 		if (closed) return
 		opened = false
@@ -60,13 +66,19 @@ class SignalSocket(
 				try {
 					val json = JsonParser.parseString(text).asJsonObject
 					json["error"]?.asString?.let {
-						onError(it)
+						onError(
+							SignalFailure(
+								message = it,
+								code = json["code"]?.asString,
+								callId = json["call_id"]?.asString,
+							),
+						)
 						return
 					}
 					val seq = json.remove("seq")?.asLong ?: 0L
 					onEvent(SequencedSignalEvent(SignalEvent.decode(json.toString()), seq))
 				} catch (_: Exception) {
-					onError("invalid server event")
+					onError(SignalFailure("invalid server event"))
 				}
 			}
 
@@ -89,7 +101,7 @@ class SignalSocket(
 		onEvent: (SequencedSignalEvent) -> Unit,
 		onOpen: () -> Unit,
 		onDisconnected: () -> Unit,
-		onError: (String) -> Unit,
+		onError: (SignalFailure) -> Unit,
 	) {
 		synchronized(pending) {
 			if (closed || socket !== webSocket) return

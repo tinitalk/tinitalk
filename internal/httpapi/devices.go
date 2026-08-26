@@ -2,12 +2,14 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"tinitalk/internal/protocol"
+	"tinitalk/internal/signaling"
 )
 
 type deviceRequest struct {
@@ -121,7 +123,12 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := s.hub.Handle(user, event); err != nil {
-			_ = writeJSON(map[string]string{"error": err.Error()})
+			failure := map[string]string{"error": err.Error()}
+			if errors.Is(err, signaling.ErrCalleeBusy) {
+				failure["code"] = "busy"
+				failure["call_id"] = event.CallID
+			}
+			_ = writeJSON(failure)
 			continue
 		}
 		select {

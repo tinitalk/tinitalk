@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.R
+import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.telecom.AudioEndpoint
 import org.tinitalk.ui.theme.CallRejectRed
@@ -167,8 +168,8 @@ private fun audioEndpointIcon(endpoint: AudioEndpoint?): Int = when (endpoint?.t
 }
 
 @Composable
-fun EndedCallScreen(peerName: String) {
-    CallScreenSurface(status = "Звонок завершён", peerName = peerName) {
+fun EndedCallScreen(peerName: String, reason: CallEndReason?) {
+    CallScreenSurface(status = if (reason == CallEndReason.Busy) "Занято" else "Звонок завершён", peerName = peerName) {
         Spacer(Modifier.height(18.dp))
     }
 }

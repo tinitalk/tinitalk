@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.core.view.WindowCompat
 import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.call.CallDirection
+import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallScreenAction
@@ -125,7 +126,7 @@ class CallActivity : ComponentActivity() {
                 val durationText = rememberDurationText(visibleState)
 
                 when {
-                    visibleState.phase == CallPhase.Ended -> EndedCallScreen(peerName)
+                    visibleState.phase == CallPhase.Ended -> EndedCallScreen(peerName, visibleState.endReason)
                     visibleState.phase == CallPhase.Active -> ActiveCallScreen(
                         peerName = peerName,
                         durationText = durationText,
@@ -167,7 +168,7 @@ class CallActivity : ComponentActivity() {
                 LaunchedEffect(visibleState.callId, visibleState.phase) {
                     when (visibleState.phase) {
                         CallPhase.Ended -> {
-                            delay(EndedScreenMillis)
+                            delay(if (visibleState.endReason == CallEndReason.Busy) BusyScreenMillis else EndedScreenMillis)
                             finish()
                         }
                         CallPhase.Idle -> {
@@ -313,6 +314,7 @@ class CallActivity : ComponentActivity() {
         private const val InviteCheckIntervalMillis = 500L
         private const val IdleGraceMillis = 1_000L
         private const val EndedScreenMillis = 900L
+        private const val BusyScreenMillis = 2_200L
 
         fun outgoingIntent(context: Context, login: String, displayName: String): Intent =
             Intent(context, CallActivity::class.java)

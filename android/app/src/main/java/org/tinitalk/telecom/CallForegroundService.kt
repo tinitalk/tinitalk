@@ -31,6 +31,7 @@ import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
+import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.WebRtcAudioSession
 import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.push.IncomingCallNotifier
@@ -219,12 +220,17 @@ class CallForegroundService : Service() {
                     if (socket === newSocket) connected = false
                 }
             },
-            onError = {
+            onError = { failure ->
                 handler.post {
                     if (socket !== newSocket || finishing) return@post
+                    val reason = signalingFailureEndReason(failure, newCoordinator.snapshot().callId)
                     newCoordinator.fail()
-                    publish(CallEndReason.Failed)
-                    finishCallSoon()
+                    publish(reason)
+                    if (reason == CallEndReason.Busy) {
+                        finishCallAfter(BusyToneDelayMillis)
+                    } else {
+                        finishCallSoon()
+                    }
                 }
             },
         )
@@ -371,7 +377,11 @@ class CallForegroundService : Service() {
     }
 
     private fun finishCallSoon() {
-        handler.postDelayed({ finishCall() }, FinishToneDelayMillis)
+        finishCallAfter(FinishToneDelayMillis)
+    }
+
+    private fun finishCallAfter(delayMillis: Long) {
+        handler.postDelayed({ finishCall() }, delayMillis)
     }
 
     private fun finishCall() {
@@ -431,7 +441,7 @@ class CallForegroundService : Service() {
             CallPhase.Ringing -> if (state.direction == CallDirection.Outgoing) "Ждём ответа…" else "Входящий звонок"
             CallPhase.Connecting -> "Пробуем связаться…"
             CallPhase.Active -> if (state.muted) "Микрофон выключен" else "Звонок идёт"
-            CallPhase.Ended -> "Звонок завершён"
+            CallPhase.Ended -> if (state.endReason == CallEndReason.Busy) "Занято" else "Звонок завершён"
             CallPhase.Idle -> "Звонок"
         }
         builder
@@ -489,6 +499,7 @@ class CallForegroundService : Service() {
         const val NotificationId = 10
         private const val SignalFlushTimeoutMillis = 5_000L
         private const val FinishToneDelayMillis = 450L
+        private const val BusyToneDelayMillis = 2_200L
         private const val EndedStateLifetimeMillis = 1_000L
         private const val CallLogTag = "TiniTalkCall"
         fun startOutgoing(context: Context, callee: String, displayName: String = callee) {
@@ -536,6 +547,13 @@ class CallForegroundService : Service() {
         }
     }
 }
+
+internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: String?): CallEndReason =
+    if (failure.code == "busy" && failure.callId != null && failure.callId == currentCallId) {
+        CallEndReason.Busy
+    } else {
+        CallEndReason.Failed
+    }
 
 private fun org.tinitalk.data.signal.SignalEvent.endReason(): CallEndReason? = when (type) {
     "call.reject" -> CallEndReason.Rejected
