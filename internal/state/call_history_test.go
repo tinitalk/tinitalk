@@ -131,6 +131,26 @@ func TestCallHistoryReadMarkerCannotHideFutureMissedCalls(t *testing.T) {
 	}
 }
 
+func TestRecordBusyCallIsCompleteAndIdempotent(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+
+	if err := db.RecordBusyCall("busy", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordBusyCall("busy", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	page, err := db.CallHistory("alice", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Outcome != CallOutcomeBusy {
+		t.Fatalf("busy history = %+v", page.Items)
+	}
+}
+
 func TestRecoverCallHistoryFinalizesUnfinishedCalls(t *testing.T) {
 	db := openCallHistoryTestDB(t)
 	defer db.Close()

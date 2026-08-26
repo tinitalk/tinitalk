@@ -71,6 +71,44 @@ func (db *DB) StartCall(callID, caller, callee string, startedAt time.Time) erro
 	return requireAffected(result, "call participant not found")
 }
 
+func (db *DB) RecordBusyCall(callID, caller, callee string, startedAt time.Time) error {
+	result, err := db.sql.Exec(`
+		INSERT OR IGNORE INTO call_history(
+			call_id, caller_id, callee_id, stage, outcome, started_at, ended_at
+		)
+		SELECT ?, caller.id, callee.id, ?, ?, ?, ?
+		FROM users caller, users callee
+		WHERE caller.login = ? AND caller.disabled = 0
+			AND callee.login = ? AND callee.disabled = 0
+	`, callID, callStageStarted, CallOutcomeBusy, startedAt.Unix(), startedAt.Unix(), caller, callee)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected > 0 {
+		return err
+	}
+	var storedCaller, storedCallee string
+	var outcome CallOutcome
+	err = db.sql.QueryRow(`
+		SELECT caller.login, callee.login, h.outcome
+		FROM call_history h
+		JOIN users caller ON caller.id = h.caller_id
+		JOIN users callee ON callee.id = h.callee_id
+		WHERE h.call_id = ?
+	`, callID).Scan(&storedCaller, &storedCallee, &outcome)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("call participant not found")
+	}
+	if err != nil {
+		return err
+	}
+	if storedCaller != caller || storedCallee != callee || outcome != CallOutcomeBusy {
+		return errors.New("call ID is already in use")
+	}
+	return nil
+}
+
 func (db *DB) MarkCallRinging(callID string) error {
 	return db.markCallStage(callID, callStageRinging)
 }

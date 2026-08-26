@@ -25,6 +25,8 @@ type call struct {
 	replay            []replayEntry
 	aliases           []string
 	startedAt         time.Time
+	ringingAt         time.Time
+	connectedAt       time.Time
 	endedAt           time.Time
 	iceWindowAt       time.Time
 	iceCount          int

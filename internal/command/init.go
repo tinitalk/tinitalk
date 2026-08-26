@@ -86,6 +86,9 @@ func runServe(args []string) error {
 		return err
 	}
 	defer db.Close()
+	if err := db.RecoverCallHistory(time.Now()); err != nil {
+		return err
+	}
 	notifier := signaling.Notifier(signaling.NoopNotifier{})
 	fcmServiceAccount, err := db.Secret("fcm_service_account")
 	if err != nil {
@@ -108,6 +111,7 @@ func runServe(args []string) error {
 		notifier = notify.NewFCMNotifier(notify.DBTokenStore{DB: db}, sender, project)
 	}
 	hub := signaling.NewHub(notifier)
+	hub.SetCallHistoryStore(db)
 	var tlsConfig *tls.Config
 	if options.tlsCert != "" {
 		loader, err := tlscert.NewLoader(options.tlsCert, options.tlsKey)

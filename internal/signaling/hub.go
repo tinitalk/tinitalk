@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"tinitalk/internal/protocol"
+	"tinitalk/internal/state"
 )
 
 type Notifier interface {
@@ -25,10 +26,20 @@ type ICEConfigProvider interface {
 	ICEConfig(callID, user string) json.RawMessage
 }
 
+type CallHistoryStore interface {
+	StartCall(callID, caller, callee string, startedAt time.Time) error
+	RecordBusyCall(callID, caller, callee string, startedAt time.Time) error
+	MarkCallRinging(callID string) error
+	MarkCallAccepted(callID string) error
+	MarkCallConnected(callID string, connectedAt time.Time) error
+	FinishCall(callID string, outcome state.CallOutcome, endedAt time.Time) error
+}
+
 type Hub struct {
 	mu            sync.Mutex
 	notifier      Notifier
 	iceConfig     ICEConfigProvider
+	history       CallHistoryStore
 	clients       map[string]map[*Client]struct{}
 	calls         map[string]*call
 	callAliases   map[string]string
@@ -69,6 +80,12 @@ func (h *Hub) SetICEConfigProvider(provider ICEConfigProvider) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.iceConfig = provider
+}
+
+func (h *Hub) SetCallHistoryStore(store CallHistoryStore) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.history = store
 }
 
 func (h *Hub) Connect(user string) *Client {
@@ -200,6 +217,37 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 			return err
 		}
 	}
+	now := h.now()
+	if h.history != nil {
+		switch event.Type {
+		case "call.ringing":
+			if err := h.history.MarkCallRinging(c.id); err != nil {
+				return err
+			}
+		case "call.accept":
+			if err := h.history.MarkCallAccepted(c.id); err != nil {
+				return err
+			}
+		case "call.connected":
+			if c.connectedAt.IsZero() {
+				if err := h.history.MarkCallConnected(c.id, now); err != nil {
+					return err
+				}
+			}
+		default:
+			if endsCall(event.Type) {
+				if err := h.history.FinishCall(c.id, outcomeForEvent(c, event.Type), now); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if event.Type == "call.ringing" && c.ringingAt.IsZero() {
+		c.ringingAt = now
+	}
+	if event.Type == "call.connected" && c.connectedAt.IsZero() {
+		c.connectedAt = now
+	}
 	c.remember(event.ID)
 	recipient := c.other(sender)
 	delivered := h.next(c, event, recipient)
@@ -305,14 +353,24 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 				existing.caller == payload.CalleeID &&
 				existing.callee == sender &&
 				existing.supportsCrossCall && payload.SupportsCrossCall {
-				h.acceptCrossed(existing, event)
-				return nil
+				return h.acceptCrossed(existing, event)
 			}
 		}
 		return ErrCalleeBusy
 	}
 	if _, ok := h.activeByUser[payload.CalleeID]; ok {
+		if h.history != nil {
+			if err := h.history.RecordBusyCall(event.CallID, sender, payload.CalleeID, h.now()); err != nil {
+				return err
+			}
+		}
 		return ErrCalleeBusy
+	}
+	now := h.now()
+	if h.history != nil {
+		if err := h.history.StartCall(event.CallID, sender, payload.CalleeID, now); err != nil {
+			return err
+		}
 	}
 	c := &call{
 		id:                event.CallID,
@@ -321,7 +379,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 		seen:              map[string]struct{}{},
 		offlineSince:      map[string]time.Time{},
 		nextSeq:           1,
-		startedAt:         h.now(),
+		startedAt:         now,
 		state:             callRinging,
 		supportsCrossCall: payload.SupportsCrossCall,
 	}
@@ -332,14 +390,19 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 
 	incoming := event
 	incoming.Type = "call.incoming"
-	incoming.SentAt = h.now().UnixMilli()
+	incoming.SentAt = now.UnixMilli()
 	delivered := h.next(c, incoming, payload.CalleeID)
 	h.deliver(payload.CalleeID, delivered)
 	h.enqueueNotification(notification{caller: sender, callee: payload.CalleeID, event: delivered})
 	return nil
 }
 
-func (h *Hub) acceptCrossed(c *call, source protocol.Event) {
+func (h *Hub) acceptCrossed(c *call, source protocol.Event) error {
+	if h.history != nil {
+		if err := h.history.MarkCallAccepted(c.id); err != nil {
+			return err
+		}
+	}
 	c.remember(source.ID)
 	h.callAliases[source.CallID] = c.id
 	c.aliases = append(c.aliases, source.CallID)
@@ -361,6 +424,7 @@ func (h *Hub) acceptCrossed(c *call, source protocol.Event) {
 	h.deliver(c.callee, calleeEvent)
 	h.deliverICEConfig(c, "")
 	h.enqueueNotification(notification{callee: c.callee, event: calleeEvent, cancel: true})
+	return nil
 }
 
 func (h *Hub) ExpireWaiting() int {
@@ -397,6 +461,7 @@ func (h *Hub) Sweep() int {
 					Payload: json.RawMessage(`{"reason":"participant_disconnected"}`),
 				}
 				delivered := h.next(c, event, c.caller, c.callee)
+				h.finishHistory(c, disconnectedOutcome(c), now)
 				h.deliver(c.caller, delivered)
 				h.deliver(c.callee, delivered)
 				h.end(c)
@@ -419,6 +484,7 @@ func (h *Hub) Sweep() int {
 			Payload: json.RawMessage(`{}`),
 		}
 		delivered := h.next(c, event, c.caller, c.callee)
+		h.finishHistory(c, outcomeForEvent(c, event.Type), now)
 		h.deliver(c.caller, delivered)
 		h.deliver(c.callee, delivered)
 		h.enqueueNotification(notification{callee: c.callee, event: delivered, cancel: true})
@@ -596,6 +662,43 @@ func (h *Hub) end(c *call) {
 	delete(h.activeByUser, c.callee)
 }
 
+func (h *Hub) finishHistory(c *call, outcome state.CallOutcome, endedAt time.Time) {
+	if h.history != nil {
+		_ = h.history.FinishCall(c.id, outcome, endedAt)
+	}
+}
+
+func outcomeForEvent(c *call, eventType string) state.CallOutcome {
+	switch eventType {
+	case "call.reject":
+		return state.CallOutcomeRejected
+	case "call.cancel":
+		if c.ringingAt.IsZero() {
+			return state.CallOutcomeCancelledBeforeRinging
+		}
+		return state.CallOutcomeCancelledAfterRinging
+	case "call.expire":
+		if c.ringingAt.IsZero() {
+			return state.CallOutcomeUnreachable
+		}
+		return state.CallOutcomeUnanswered
+	case "call.end":
+		if c.connectedAt.IsZero() {
+			return state.CallOutcomeConnectionFailed
+		}
+		return state.CallOutcomeCompleted
+	default:
+		return state.CallOutcomeInterruptedBeforeAnswer
+	}
+}
+
+func disconnectedOutcome(c *call) state.CallOutcome {
+	if c.connectedAt.IsZero() {
+		return state.CallOutcomeConnectionFailed
+	}
+	return state.CallOutcomeInterrupted
+}
+
 func (c *call) validateTransition(sender, eventType string) error {
 	if c.state == callEnded {
 		return errors.New("call has ended")
@@ -617,7 +720,7 @@ func (c *call) validateTransition(sender, eventType string) error {
 		}
 	}
 	switch eventType {
-	case "call.end", "rtc.ice":
+	case "call.end", "call.connected", "rtc.ice":
 		return nil
 	case "rtc.offer", "rtc.restart":
 		if sender != c.caller {
