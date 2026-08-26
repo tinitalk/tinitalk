@@ -13,7 +13,7 @@ func TestWakeMessageUsesHighPriorityAndShortTTL(t *testing.T) {
 	msg := WakeMessage("project-1", "token-1", signaling.DeliveredEvent{
 		Event: protocol.Event{CallID: "call-1", Type: "call.incoming", SentAt: 1000, Payload: json.RawMessage(`{"caller":"Alice"}`)},
 		Seq:   1,
-	}, "Alice", 30*time.Second)
+	}, "alice", "Alice", 30*time.Second)
 
 	if msg.Message.Token != "token-1" {
 		t.Fatalf("token = %q", msg.Message.Token)
@@ -26,6 +26,9 @@ func TestWakeMessageUsesHighPriorityAndShortTTL(t *testing.T) {
 	}
 	if msg.Message.Data["last_seq"] != "1" {
 		t.Fatalf("last_seq = %q", msg.Message.Data["last_seq"])
+	}
+	if msg.Message.Data["caller_login"] != "alice" {
+		t.Fatalf("caller_login = %q", msg.Message.Data["caller_login"])
 	}
 }
 
@@ -44,6 +47,9 @@ func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
 	}
 	if sender.last.Message.Data["caller"] != "Alice" {
 		t.Fatalf("caller = %q", sender.last.Message.Data["caller"])
+	}
+	if sender.last.Message.Data["caller_login"] != "alice" {
+		t.Fatalf("caller_login = %q", sender.last.Message.Data["caller_login"])
 	}
 }
 

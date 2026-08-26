@@ -18,6 +18,7 @@ class IncomingPushPayloadTest {
                 "type" to "incoming_call",
                 "call_id" to "call-1",
                 "caller" to "Alice",
+                "caller_login" to "alice",
                 "last_seq" to "7",
                 "expires_at" to "2026-08-26T10:00:30Z",
             ),
@@ -26,6 +27,7 @@ class IncomingPushPayloadTest {
 
         assertEquals("call-1", invite?.callId)
         assertEquals("Alice", invite?.caller)
+        assertEquals("alice", invite?.callerLogin)
         assertEquals(7L, invite?.lastSeq)
     }
 
@@ -66,6 +68,26 @@ class IncomingPushPayloadTest {
         val cancel = CallCancellation("old-call", "call.cancel")
 
         assertFalse(cancel.shouldDismiss("new-call", CallSnapshot(CallPhase.Ringing, "new-call")))
+    }
+
+    @Test
+    fun onlyUnansweredMatchingCancellationIsMissed() {
+        assertTrue(
+            CallCancellation("call-1", "call.cancel")
+                .shouldShowMissed("call-1", CallSnapshot(CallPhase.Ringing, "call-1")),
+        )
+        assertFalse(
+            CallCancellation("call-1", "call.accept")
+                .shouldShowMissed("call-1", CallSnapshot()),
+        )
+        assertFalse(
+            CallCancellation("call-1", "call.reject")
+                .shouldShowMissed("call-1", CallSnapshot()),
+        )
+        assertFalse(
+            CallCancellation("old-call", "call.cancel")
+                .shouldShowMissed("new-call", CallSnapshot(CallPhase.Ringing, "new-call")),
+        )
     }
 
     @Test

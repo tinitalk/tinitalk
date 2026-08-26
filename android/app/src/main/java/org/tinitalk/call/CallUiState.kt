@@ -195,6 +195,13 @@ object CallUiStateStore {
         publish(CallUiState())
     }
 
+    @Synchronized
+    fun reset(callId: String): Boolean {
+        if (current.callId != callId) return false
+        publish(CallUiState())
+        return true
+    }
+
     private fun publish(state: CallUiState) {
         current = state
         listeners.forEach { it(state) }

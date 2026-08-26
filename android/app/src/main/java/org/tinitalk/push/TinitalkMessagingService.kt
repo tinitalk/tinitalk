@@ -28,7 +28,12 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         if (cancellation != null) {
             val incoming = IncomingCallController()
             incoming.rememberTerminal(this, cancellation.callId)
-            if (cancellation.shouldDismiss(incoming.load(this)?.invite?.callId, CallServiceState.snapshot())) {
+            val pending = incoming.load(this)?.invite
+            val snapshot = CallServiceState.snapshot()
+            if (cancellation.shouldDismiss(pending?.callId, snapshot)) {
+                if (pending != null && cancellation.shouldShowMissed(pending.callId, snapshot)) {
+                    notifier.showMissed(pending)
+                }
                 TelecomCallController(AndroidTelecomRegistrar(this)).cancel(cancellation.callId)
                 notifier.cancel()
                 incoming.clear(this, cancellation.callId)

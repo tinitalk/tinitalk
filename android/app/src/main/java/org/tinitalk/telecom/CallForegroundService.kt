@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import org.tinitalk.BuildConfig
 import org.tinitalk.CallActivity
@@ -24,6 +25,7 @@ import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiStateStore
+import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
@@ -52,6 +54,13 @@ class CallForegroundService : Service() {
     private var statsPolling = false
     private var callNetworkLock: CallNetworkLock? = null
     private val connectionHealthClassifier = ConnectionHealthClassifier()
+    private val callUiObserver: (CallUiState) -> Unit = { state ->
+        handler.post {
+            if (!finishing && state.phase != CallPhase.Idle) {
+                getSystemService(NotificationManager::class.java).notify(NotificationId, notification(state))
+            }
+        }
+    }
     private val statsTask = object : Runnable {
         override fun run() {
             if (!statsPolling) return
@@ -79,10 +88,15 @@ class CallForegroundService : Service() {
     }
     private val telecom by lazy { TelecomCallController(AndroidTelecomRegistrar(this)) }
 
+    override fun onCreate() {
+        super.onCreate()
+        ensureChannel()
+        CallUiStateStore.observe(callUiObserver)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (finishing) return START_NOT_STICKY
-        ensureChannel()
-        startForeground(NotificationId, notification())
+        startForeground(NotificationId, notification(CallUiStateStore.snapshot()))
         if (intent == null || !ensureRuntime()) {
             stopSelf()
             return START_NOT_STICKY
@@ -94,6 +108,7 @@ class CallForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        CallUiStateStore.removeObserver(callUiObserver)
         stopStatsPolling()
         callNetworkLock?.close()
         callNetworkLock = null
@@ -114,6 +129,9 @@ class CallForegroundService : Service() {
             runCatching { coordinator?.finish() }
         }
         CallServiceState.reset()
+        CallUiStateStore.snapshot().takeIf { it.phase == CallPhase.Ended }?.callId?.let { callId ->
+            handler.postDelayed({ CallUiStateStore.reset(callId) }, EndedStateLifetimeMillis)
+        }
         media = null
         socket = null
         httpClient = null
@@ -236,7 +254,7 @@ class CallForegroundService : Service() {
                 connectionHealthClassifier.reset()
                 CallUiStateStore.begin(
                     invite.callId,
-                    CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }),
+                    CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }, login = invite.callerLogin),
                     CallDirection.Incoming,
                     CallPhase.Ringing,
                 )
@@ -253,7 +271,7 @@ class CallForegroundService : Service() {
                 if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callId != invite.callId) return
                 CallUiStateStore.begin(
                     invite.callId,
-                    CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }),
+                    CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }, login = invite.callerLogin),
                     CallDirection.Incoming,
                     CallPhase.Ringing,
                 )
@@ -379,7 +397,7 @@ class CallForegroundService : Service() {
         )
     }
 
-    private fun notification(): Notification {
+    private fun notification(state: CallUiState): Notification {
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, ChannelId)
         } else {
@@ -398,22 +416,38 @@ class CallForegroundService : Service() {
             Intent(this, CallForegroundService::class.java).setAction(ActionEnd),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val peerName = state.peer?.displayName?.takeIf(String::isNotBlank) ?: "TiniTalk"
+        val status = when (state.phase) {
+            CallPhase.Ringing -> "Входящий звонок"
+            CallPhase.Connecting -> "Соединяемся…"
+            CallPhase.Active -> if (state.muted) "Микрофон выключен" else "Звонок идёт"
+            CallPhase.Ended -> "Звонок завершён"
+            CallPhase.Idle -> "Звонок"
+        }
         builder
             .setSmallIcon(R.drawable.ic_call)
-            .setContentTitle("TiniTalk call")
-            .setContentText("Call in progress")
+            .setContentTitle(peerName)
+            .setContentText(status)
+            .setCategory(Notification.CATEGORY_CALL)
             .setContentIntent(content)
             .setOngoing(true)
+        state.connectedAtElapsedMs?.takeIf { state.phase == CallPhase.Active }?.let { connectedAt ->
+            val elapsed = (SystemClock.elapsedRealtime() - connectedAt).coerceAtLeast(0L)
+            builder
+                .setWhen(System.currentTimeMillis() - elapsed)
+                .setUsesChronometer(true)
+                .setShowWhen(true)
+        } ?: builder.setShowWhen(false)
         if (Build.VERSION.SDK_INT >= 31) {
             builder.setStyle(
                 Notification.CallStyle.forOngoingCall(
-                    Person.Builder().setName("TiniTalk").setImportant(true).build(),
+                    Person.Builder().setName(peerName).setImportant(true).build(),
                     hangUp,
                 ),
             )
         } else {
             @Suppress("DEPRECATION")
-            builder.addAction(Notification.Action.Builder(R.drawable.ic_call, "Hang up", hangUp).build())
+            builder.addAction(Notification.Action.Builder(R.drawable.ic_call, "Завершить", hangUp).build())
         }
         return builder.build()
     }
@@ -422,7 +456,7 @@ class CallForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
-            NotificationChannel(ChannelId, "Calls", NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(ChannelId, "Активные звонки", NotificationManager.IMPORTANCE_LOW),
         )
     }
 
@@ -444,6 +478,7 @@ class CallForegroundService : Service() {
         const val ChannelId = "calls"
         const val NotificationId = 10
         private const val SignalFlushTimeoutMillis = 5_000L
+        private const val EndedStateLifetimeMillis = 1_000L
         private const val CallLogTag = "TiniTalkCall"
         fun startOutgoing(context: Context, callee: String, displayName: String = callee) {
             start(

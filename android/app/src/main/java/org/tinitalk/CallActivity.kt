@@ -27,6 +27,7 @@ import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallPhase
+import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.ConnectionHealth
@@ -206,10 +207,22 @@ class CallActivity : ComponentActivity() {
             return
         }
         val login = intent?.getStringExtra(ExtraOutgoingLogin) ?: return
+        val redial = intent.action == ActionRedial
+        if (redial) intent.action = null
+        val servicePhase = CallServiceState.snapshot().phase
+        if (redial && servicePhase != CallPhase.Idle && servicePhase != CallPhase.Ended) {
+            incomingInvite = null
+            outgoingLogin = null
+            outgoingName = null
+            return
+        }
         if (outgoingLogin != login) terminalActionKey = null
         outgoingLogin = login
         outgoingName = intent.getStringExtra(ExtraOutgoingName).orEmpty().ifBlank { login }
         incomingInvite = null
+        if (redial) {
+            CallForegroundService.startOutgoing(this, login, outgoingName.orEmpty())
+        }
     }
 
     private fun visibleCallState(): CallUiState {
@@ -217,7 +230,7 @@ class CallActivity : ComponentActivity() {
         if (invite != null && callState.callId != invite.callId) {
             return CallUiState(
                 callId = invite.callId,
-                peer = CallPeer(invite.caller.ifBlank { "TiniTalk" }),
+                peer = CallPeer(invite.caller.ifBlank { "TiniTalk" }, invite.callerLogin),
                 direction = CallDirection.Incoming,
                 phase = CallPhase.Ringing,
             )
@@ -281,6 +294,7 @@ class CallActivity : ComponentActivity() {
     companion object {
         private const val ExtraOutgoingLogin = "outgoing_login"
         private const val ExtraOutgoingName = "outgoing_name"
+        private const val ActionRedial = "org.tinitalk.action.REDIAL"
         private const val InviteCheckIntervalMillis = 500L
         private const val IdleGraceMillis = 1_000L
         private const val EndedScreenMillis = 900L
@@ -292,6 +306,11 @@ class CallActivity : ComponentActivity() {
 
         fun ongoingIntent(context: Context): Intent =
             Intent(context, CallActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+
+        fun redialIntent(context: Context, login: String, displayName: String): Intent =
+            outgoingIntent(context, login, displayName)
+                .setAction(ActionRedial)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
     }
 }

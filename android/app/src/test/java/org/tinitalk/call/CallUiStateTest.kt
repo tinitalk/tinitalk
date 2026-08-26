@@ -2,7 +2,9 @@ package org.tinitalk.call
 
 import org.tinitalk.media.MediaConnectionState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CallUiStateTest {
@@ -36,5 +38,14 @@ class CallUiStateTest {
         assertEquals("00:00", formatCallDuration(0L))
         assertEquals("04:09", formatCallDuration(249_999L))
         assertEquals("1:04:09", formatCallDuration(3_849_999L))
+    }
+
+    @Test
+    fun delayedResetCannotClearTheNextCall() {
+        CallUiStateStore.begin("new-call", CallPeer("Alice"), CallDirection.Incoming, CallPhase.Ringing)
+
+        assertFalse(CallUiStateStore.reset("old-call"))
+        assertEquals("new-call", CallUiStateStore.snapshot().callId)
+        assertTrue(CallUiStateStore.reset("new-call"))
     }
 }

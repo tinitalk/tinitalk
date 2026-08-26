@@ -13,6 +13,7 @@ class IncomingCallController {
         prefs(context).edit()
             .putString(ExtraCallId, invite.callId)
             .putString(ExtraCaller, invite.caller)
+            .putString(ExtraCallerLogin, invite.callerLogin)
             .putString(ExtraExpiresAt, invite.expiresAt.toString())
             .putLong(ExtraLastSeq, invite.lastSeq)
             .putString(ExtraAction, action)
@@ -54,6 +55,7 @@ class IncomingCallController {
                 callId = callId,
                 caller = prefs.getString(ExtraCaller, "").orEmpty(),
                 expiresAt = expiresAt,
+                callerLogin = prefs.getString(ExtraCallerLogin, null),
                 lastSeq = prefs.getLong(ExtraLastSeq, 0),
             ),
             prefs.getString(ExtraAction, null),
@@ -128,6 +130,7 @@ class IncomingCallController {
         private const val TerminalEntries = "entries"
         private const val ExtraCallId = "call_id"
         private const val ExtraCaller = "caller"
+        private const val ExtraCallerLogin = "caller_login"
         private const val ExtraExpiresAt = "expires_at"
         private const val ExtraLastSeq = "last_seq"
         private const val ExtraAction = "action"
@@ -140,6 +143,7 @@ class IncomingCallController {
                 callId = callId,
                 caller = intent.getStringExtra(ExtraCaller).orEmpty(),
                 expiresAt = expiresAt,
+                callerLogin = intent.getStringExtra(ExtraCallerLogin),
                 lastSeq = intent.getLongExtra(ExtraLastSeq, 0),
             )
         }
@@ -157,6 +161,7 @@ class IncomingCallController {
                 .setAction(action)
                 .putExtra(ExtraCallId, invite.callId)
                 .putExtra(ExtraCaller, invite.caller)
+                .putExtra(ExtraCallerLogin, invite.callerLogin)
                 .putExtra(ExtraExpiresAt, invite.expiresAt.toString())
                 .putExtra(ExtraLastSeq, invite.lastSeq)
     }

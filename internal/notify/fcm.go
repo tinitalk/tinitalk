@@ -73,7 +73,7 @@ func (n *FCMNotifier) IncomingCall(caller, callee string, event signaling.Delive
 	if err != nil || name == "" {
 		name = caller
 	}
-	n.send(callee, WakeMessage(n.project, "", event, name, 30*time.Second))
+	n.send(callee, WakeMessage(n.project, "", event, caller, name, 30*time.Second))
 }
 
 func (n *FCMNotifier) CancelCall(callee string, event signaling.DeliveredEvent) {
@@ -105,15 +105,16 @@ type WakeRequest struct {
 	} `json:"message"`
 }
 
-func WakeMessage(_ string, token string, event signaling.DeliveredEvent, caller string, ttl time.Duration) WakeRequest {
+func WakeMessage(_ string, token string, event signaling.DeliveredEvent, callerLogin, caller string, ttl time.Duration) WakeRequest {
 	var request WakeRequest
 	request.Message.Token = token
 	request.Message.Data = map[string]string{
-		"type":       "incoming_call",
-		"call_id":    event.CallID,
-		"caller":     caller,
-		"last_seq":   strconv.FormatUint(event.Seq, 10),
-		"expires_at": time.UnixMilli(event.SentAt).Add(ttl).Format(time.RFC3339),
+		"type":         "incoming_call",
+		"call_id":      event.CallID,
+		"caller":       caller,
+		"caller_login": callerLogin,
+		"last_seq":     strconv.FormatUint(event.Seq, 10),
+		"expires_at":   time.UnixMilli(event.SentAt).Add(ttl).Format(time.RFC3339),
 	}
 	request.Message.Android.Priority = "HIGH"
 	request.Message.Android.TTL = ttl.String()
