@@ -24,5 +24,6 @@ interface MediaSession {
     suspend fun updateIceServers(servers: List<IceServerData>)
     fun setMuted(muted: Boolean)
     fun setActive(active: Boolean)
+    fun getStats(onResult: (CallStats) -> Unit)
     suspend fun close()
 }

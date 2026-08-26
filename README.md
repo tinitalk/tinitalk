@@ -68,3 +68,5 @@ Android notes:
 - Install `dist/tinitalk-debug.apk`, open the app once, sign in, and complete the microphone, notification, and full-screen incoming-call permission screen.
 - Build the relay-only diagnostic APK with `make client GRADLE_ARGS=-PtinitalkForceRelay=true`; rebuild normally afterward.
 - Test both direct media and forced TURN relay from the real networks you care about.
+- During an active call, inspect the redacted WebRTC diagnostics with `adb logcat -s TiniTalkCall`.
+- A forced-relay run is accepted only when `local_candidate_type` or `remote_candidate_type` is `relay`; these logs contain no IP addresses or credentials.

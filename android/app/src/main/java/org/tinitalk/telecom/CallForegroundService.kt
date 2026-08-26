@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import org.tinitalk.BuildConfig
 import org.tinitalk.MainActivity
 import org.tinitalk.R
@@ -42,7 +43,35 @@ class CallForegroundService : Service() {
     private var coordinator: CallCoordinator? = null
     private var media: ForegroundCallController? = null
     private var connected = false
-    private var finishing = false
+    @Volatile private var finishing = false
+    @Volatile private var statsPolling = false
+    private val statsTask = object : Runnable {
+        override fun run() {
+            if (!statsPolling) return
+            val activeCallId = CallServiceState.snapshot()
+                .takeIf { it.phase == CallPhase.Active }
+                ?.callId
+            val currentMedia = media
+            if (activeCallId != null && currentMedia != null) {
+                currentMedia.getStats { stats ->
+                    handler.post {
+                        val snapshot = CallServiceState.snapshot()
+                        val stillActive = statsPolling && !finishing &&
+                            snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
+                        if (stillActive && media === currentMedia) {
+                            Log.i(
+                                CallLogTag,
+                                "rtt_ms=${stats.rttMs} jitter_ms=${stats.jitterMs} loss_percent=${stats.packetLossPercent} " +
+                                    "bitrate_kbps=${stats.bitrateKbps} local_candidate_type=${stats.localCandidateType} " +
+                                    "remote_candidate_type=${stats.remoteCandidateType}",
+                            )
+                        }
+                    }
+                }
+            }
+            if (statsPolling) handler.postDelayed(this, StatsIntervalMillis)
+        }
+    }
     private val telecom by lazy { TelecomCallController(AndroidTelecomRegistrar(this)) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -59,6 +88,7 @@ class CallForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        stopStatsPolling()
         val snapshot = coordinator?.snapshot()
         val unexpected = !finishing
         if (unexpected && connected && snapshot?.phase == CallPhase.Active) {
@@ -199,7 +229,24 @@ class CallForegroundService : Service() {
     }
 
     private fun publish() {
-        coordinator?.snapshot()?.let(CallServiceState::publish)
+        coordinator?.snapshot()?.let { snapshot ->
+            CallServiceState.publish(snapshot)
+            handler.post(::updateStatsPolling)
+        }
+    }
+
+    private fun updateStatsPolling() {
+        if (finishing || CallServiceState.snapshot().phase != CallPhase.Active) {
+            stopStatsPolling()
+        } else if (!statsPolling) {
+            statsPolling = true
+            handler.postDelayed(statsTask, StatsIntervalMillis)
+        }
+    }
+
+    private fun stopStatsPolling() {
+        statsPolling = false
+        handler.removeCallbacks(statsTask)
     }
 
     private fun finishCallSoon() {
@@ -209,6 +256,7 @@ class CallForegroundService : Service() {
     private fun finishCall() {
         if (finishing) return
         finishing = true
+        stopStatsPolling()
         val snapshot = coordinator?.snapshot()
         val callId = snapshot?.callId
         CallAudioState.reset()
@@ -308,6 +356,8 @@ class CallForegroundService : Service() {
         const val ChannelId = "calls"
         const val NotificationId = 10
         private const val SignalFlushTimeoutMillis = 5_000L
+        private const val StatsIntervalMillis = 10_000L
+        private const val CallLogTag = "TiniTalkCall"
         fun startOutgoing(context: Context, callee: String) {
             start(context, Intent(context, CallForegroundService::class.java).setAction(ActionStart).putExtra(ExtraCallee, callee))
         }

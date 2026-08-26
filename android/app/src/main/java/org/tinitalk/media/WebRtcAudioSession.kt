@@ -30,6 +30,7 @@ class WebRtcAudioSession private constructor(
     private val sender: RtpSender?
     private val peerConnection: PeerConnection
     private val restartGate = IceRestartGate(ExecutorTaskScheduler())
+    private val statsCollector = CallStatsCollector()
     @Volatile private var closed = false
     private var active = false
     private var muted = false
@@ -108,6 +109,22 @@ class WebRtcAudioSession private constructor(
     override fun setActive(active: Boolean) {
         this.active = active
         applyAudioTrackState()
+    }
+
+    override fun getStats(onResult: (CallStats) -> Unit) {
+        if (closed) return
+        runCatching {
+            peerConnection.getStats { report ->
+                runCatching {
+                    if (closed) return@runCatching
+                    val stats = statsCollector.collect(
+                        report.statsMap.mapValues { (_, item) -> CallStatsSample(item.type, item.members) },
+                        System.currentTimeMillis(),
+                    )
+                    if (!closed) onResult(stats)
+                }
+            }
+        }
     }
 
     override suspend fun close() {

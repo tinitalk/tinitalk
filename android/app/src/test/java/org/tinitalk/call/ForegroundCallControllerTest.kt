@@ -8,6 +8,7 @@ import com.google.gson.JsonPrimitive
 import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
+import org.tinitalk.media.CallStats
 import org.tinitalk.media.MediaSession
 import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.TaskScheduler
@@ -107,6 +108,35 @@ class ForegroundCallControllerTest {
         controller.setActive(false)
 
         assertEquals(listOf(false, true, false), media.activity)
+    }
+
+    @Test
+    fun forwardsStatsFromCurrentMediaSession() {
+        val media = FakeMediaSession()
+        val controller = ForegroundCallController(CapturingSignalClient(), { _, _, _, _ -> media }, ids)
+        var reported: CallStats? = null
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+
+        controller.getStats { reported = it }
+        media.publishStats(CallStats(rttMs = 120, localCandidateType = "relay"))
+
+        assertEquals(CallStats(rttMs = 120, localCandidateType = "relay"), reported)
+    }
+
+    @Test
+    fun doesNotForwardStatsFromClosedMediaSession() {
+        val media = FakeMediaSession()
+        val controller = ForegroundCallController(CapturingSignalClient(), { _, _, _, _ -> media }, ids)
+        var reported: CallStats? = null
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.getStats { reported = it }
+
+        controller.close()
+        media.publishStats(CallStats(rttMs = 120))
+
+        assertEquals(null, reported)
     }
 
     @Test
@@ -433,6 +463,7 @@ class ForegroundCallControllerTest {
         val updatedServers = mutableListOf<IceServerData>()
         val activity = mutableListOf<Boolean>()
         val muted = mutableListOf<Boolean>()
+        private var statsCallback: ((CallStats) -> Unit)? = null
 
         override suspend fun createOffer(): String = offer
         override suspend fun acceptOffer(sdp: String): String {
@@ -453,6 +484,12 @@ class ForegroundCallControllerTest {
         }
         override fun setActive(active: Boolean) {
             activity += active
+        }
+        override fun getStats(onResult: (CallStats) -> Unit) {
+            statsCallback = onResult
+        }
+        fun publishStats(stats: CallStats) {
+            statsCallback?.invoke(stats)
         }
         override suspend fun close() {
             closed = true

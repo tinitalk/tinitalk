@@ -4,6 +4,7 @@ import com.google.gson.JsonObject
 import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
+import org.tinitalk.media.CallStats
 import org.tinitalk.media.MediaSession
 import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.ExecutorTaskScheduler
@@ -105,6 +106,14 @@ class ForegroundCallController(
     }
 
     @Synchronized
+    fun getStats(onResult: (CallStats) -> Unit) {
+        val current = session ?: return
+        current.getStats { stats ->
+            if (isCurrentSession(current)) onResult(stats)
+        }
+    }
+
+    @Synchronized
     fun close() {
         credentialRefreshTask?.cancel()
         credentialRefreshTask = null
@@ -158,6 +167,9 @@ class ForegroundCallController(
         }
         return created
     }
+
+    @Synchronized
+    private fun isCurrentSession(candidate: MediaSession): Boolean = session === candidate
 
     @Synchronized
     private fun restartIce(nextCallId: String) {
