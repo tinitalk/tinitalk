@@ -11,6 +11,8 @@ val CallAnswerGreen = Color(0xFF21A366)
 val CallRejectRed = Color(0xFFE5484D)
 val CallBackgroundTop = Color(0xFF14213D)
 val CallBackgroundBottom = Color(0xFF07111F)
+val BrandBackground = Color(0xFF0F172A)
+val BrandGold = Color(0xFFD4AF37)
 
 private val LightColors = lightColorScheme(
     primary = Color(0xFF315EA8),

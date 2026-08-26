@@ -1,5 +1,6 @@
 package org.tinitalk.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,6 +69,8 @@ import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.data.Contact
 import org.tinitalk.permissions.AppPermissionsState
+import org.tinitalk.ui.theme.BrandBackground
+import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
 import org.tinitalk.ui.theme.CallRejectRed
 
@@ -566,15 +569,16 @@ private fun AppMark(size: androidx.compose.ui.unit.Dp) {
     Surface(
         modifier = Modifier.size(size),
         shape = RoundedCornerShape(size / 3f),
-        color = MaterialTheme.colorScheme.primary,
-        shadowElevation = 3.dp,
+        color = BrandBackground,
+        border = BorderStroke(1.dp, BrandGold.copy(alpha = 0.55f)),
+        shadowElevation = 2.dp,
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 painter = painterResource(R.drawable.ic_call),
                 contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(size * 0.52f),
+                tint = BrandGold,
+                modifier = Modifier.size(size * 0.46f),
             )
         }
     }
