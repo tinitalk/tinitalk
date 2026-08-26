@@ -21,6 +21,22 @@ class ContactRepositoryTest {
     }
 
     @Test
+    fun trimsManualCredentialsBeforeAuthenticatingAndSaving() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        var captured: Session? = null
+        val repo = ContactRepository(store) { url, login, token ->
+            captured = Session(url, login, token)
+            FakeApiClient(profile = Profile("alex", "Alex"))
+        }
+
+        repo.signIn(" https://tinitalk.example.com/ ", " alex ", " token\n")
+
+        val expected = Session("https://tinitalk.example.com", "alex", "token")
+        assertEquals(expected, captured)
+        assertEquals(expected, store.load())
+    }
+
+    @Test
     fun invalidTokenClearsSession() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         store.save(Session("https://host", "alice", "old"))
@@ -29,6 +45,17 @@ class ContactRepositoryTest {
         val result = runCatching { repo.signIn("https://host", "alice", "bad") }
 
         assertEquals(true, result.isFailure)
+        assertNull(store.load())
+    }
+
+    @Test
+    fun signOutClearsSavedSession() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token"))
+        val repo = ContactRepository(store) { _, _, _ -> FakeApiClient() }
+
+        repo.signOut()
+
         assertNull(store.load())
     }
 }

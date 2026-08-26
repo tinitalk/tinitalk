@@ -163,6 +163,7 @@ class MainActivity : ComponentActivity() {
                 }
             })
         }
+        addLogoutButton()
     }
 
     private fun showError(error: Throwable) {
@@ -170,6 +171,18 @@ class MainActivity : ComponentActivity() {
             status.text = error.message ?: "Connection failed"
             contacts.removeAllViews()
         }
+    }
+
+    private fun signOut() {
+        repository.signOut()
+        contactItems = emptyList()
+        incomingInvite = null
+        signedIn = false
+        pushRegistrationStarted = false
+        muted = false
+        sessionControls.visibility = View.VISIBLE
+        status.text = "Not connected"
+        contacts.removeAllViews()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -339,6 +352,14 @@ class MainActivity : ComponentActivity() {
         contacts.addView(Button(this).apply {
             text = "Refresh"
             setOnClickListener { refreshPermissions() }
+        })
+        if (signedIn) addLogoutButton()
+    }
+
+    private fun addLogoutButton() {
+        contacts.addView(Button(this).apply {
+            text = "Logout"
+            setOnClickListener { signOut() }
         })
     }
 
