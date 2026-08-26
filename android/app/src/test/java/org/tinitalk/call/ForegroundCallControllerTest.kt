@@ -449,7 +449,8 @@ class ForegroundCallControllerTest {
 
         val restart = event("rtc.restart")
         controller.onSignalEvent(activeSnapshot(), restart)
-        controller.onSignalEvent(activeSnapshot(), event("rtc.ice", iceCandidate("candidate:stale")))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.ice", iceCandidate("candidate:stale", "previous-restart")))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.ice", iceCandidate("candidate:legacy")))
         controller.onSignalEvent(activeSnapshot(), event("rtc.ice", iceCandidate("candidate:fresh", restart.id)))
         controller.onSignalEvent(
             activeSnapshot(),
@@ -457,7 +458,7 @@ class ForegroundCallControllerTest {
         )
         localIce(IceCandidateData("audio", 0, "candidate:local-fresh"))
 
-        assertEquals(listOf("candidate:fresh"), media.remoteCandidates.map { it.candidate })
+        assertEquals(listOf("candidate:legacy", "candidate:fresh"), media.remoteCandidates.map { it.candidate })
         assertEquals(restart.id, signal.sent.last().payload["restart_id"].asString)
     }
 

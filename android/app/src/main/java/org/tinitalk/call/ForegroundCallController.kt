@@ -85,7 +85,8 @@ class ForegroundCallController(
                 session?.beginRemoteDescription()
             }
             "rtc.ice" -> {
-                if (event.payload.restartID() != remoteIceGeneration) return
+                val generation = event.payload.restartID()
+                if (generation != null && generation != remoteIceGeneration) return
                 val candidate = IceCandidateData(
                     sdpMid = event.payload["sdp_mid"].asString,
                     sdpMLineIndex = event.payload["sdp_mline_index"].asInt,
