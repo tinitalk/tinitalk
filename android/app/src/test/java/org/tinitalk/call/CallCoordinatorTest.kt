@@ -82,6 +82,17 @@ class CallCoordinatorTest {
         assertEquals(CallPhase.Ended, coordinator.snapshot().phase)
     }
 
+    @Test
+    fun finishResetsCoordinatorOnlyAfterEndedState() {
+        val coordinator = CallCoordinator("alice", FakeSignalClient(), FixedIds())
+        coordinator.startCall("bob")
+        coordinator.fail()
+
+        coordinator.finish()
+
+        assertEquals(CallSnapshot(), coordinator.snapshot())
+    }
+
     private fun event(type: String, seq: Long): SequencedSignalEvent =
         SequencedSignalEvent(
             SignalEvent(

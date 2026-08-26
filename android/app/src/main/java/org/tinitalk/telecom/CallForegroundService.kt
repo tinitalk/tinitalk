@@ -52,12 +52,20 @@ class CallForegroundService : Service() {
 
     override fun onDestroy() {
         val snapshot = coordinator?.snapshot()
-        media?.close()
-        socket?.close()
-        httpClient?.dispatcher?.executorService?.shutdownNow()
-        httpClient?.connectionPool?.evictAll()
-        if (snapshot?.callId != null && snapshot.phase != CallPhase.Ended) {
-            CallServiceState.publish(snapshot.copy(phase = CallPhase.Ended))
+        val unexpected = !finishing
+        if (unexpected && connected && snapshot?.phase == CallPhase.Active) {
+            runCatching { coordinator?.hangUp() }
+        }
+        runCatching { socket?.close() }
+        runCatching { media?.close() }
+        runCatching { httpClient?.dispatcher?.executorService?.shutdownNow() }
+        runCatching { httpClient?.connectionPool?.evictAll() }
+        if (unexpected) {
+            val terminal = coordinator?.snapshot() ?: snapshot
+            if (terminal?.callId != null) {
+                runCatching { CallServiceState.publish(terminal.copy(phase = CallPhase.Ended)) }
+                runCatching { CallServiceState.reset() }
+            }
         }
         media = null
         socket = null
@@ -172,10 +180,15 @@ class CallForegroundService : Service() {
         if (finishing) return
         finishing = true
         val snapshot = coordinator?.snapshot()
+        val callId = snapshot?.callId
         media?.close()
         IncomingCallNotifier(this).cancel()
-        snapshot?.callId?.let { IncomingCallController().clear(this, it) }
-        snapshot?.callId?.let(telecom::cancel)
+        callId?.let { IncomingCallController().clear(this, it) }
+        callId?.let(telecom::cancel)
+        if (snapshot?.phase == CallPhase.Ended) {
+            coordinator?.finish()
+            publish()
+        }
         stopSelf()
     }
 

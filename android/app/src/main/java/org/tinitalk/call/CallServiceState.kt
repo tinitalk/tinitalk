@@ -23,4 +23,6 @@ object CallServiceState {
         current = snapshot
         listeners.forEach { it(snapshot) }
     }
+
+    fun reset() = publish(CallSnapshot())
 }
