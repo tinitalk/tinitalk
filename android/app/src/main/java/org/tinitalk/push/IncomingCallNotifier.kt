@@ -24,6 +24,7 @@ class IncomingCallNotifier(private val context: Context) {
     fun show(invite: IncomingInvite) {
         ensureChannel()
         val controller = IncomingCallController()
+        if (controller.isTerminal(context, invite.callId)) return
         controller.save(context, invite)
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(context, ChannelId)

@@ -26,6 +26,24 @@ class IncomingCallController {
         return true
     }
 
+    fun rememberTerminal(context: Context, callId: String, nowMillis: Long = System.currentTimeMillis()) {
+        val prefs = terminalPrefs(context)
+        val updated = TerminalCallTombstones.remember(
+            prefs.getStringSet(TerminalEntries, emptySet()).orEmpty(),
+            callId,
+            nowMillis,
+        )
+        prefs.edit().putStringSet(TerminalEntries, updated).commit()
+    }
+
+    fun isTerminal(context: Context, callId: String, nowMillis: Long = System.currentTimeMillis()): Boolean {
+        val prefs = terminalPrefs(context)
+        val stored = prefs.getStringSet(TerminalEntries, emptySet()).orEmpty()
+        val pruned = TerminalCallTombstones.prune(stored, nowMillis)
+        if (pruned != stored) prefs.edit().putStringSet(TerminalEntries, pruned).apply()
+        return TerminalCallTombstones.contains(pruned, callId, nowMillis)
+    }
+
     fun load(context: Context): PendingIncomingCall? {
         val prefs = prefs(context)
         val callId = prefs.getString(ExtraCallId, null) ?: return null
@@ -100,6 +118,8 @@ class IncomingCallController {
         const val ActionReject = "org.tinitalk.action.REJECT_CALL"
 
         private const val Store = "incoming_call"
+        private const val TerminalStore = "terminal_calls"
+        private const val TerminalEntries = "entries"
         private const val ExtraCallId = "call_id"
         private const val ExtraCaller = "caller"
         private const val ExtraExpiresAt = "expires_at"
@@ -121,6 +141,9 @@ class IncomingCallController {
         private fun prefs(context: Context) =
             context.getSharedPreferences(Store, Context.MODE_PRIVATE)
 
+        private fun terminalPrefs(context: Context) =
+            context.getSharedPreferences(TerminalStore, Context.MODE_PRIVATE)
+
         private fun pendingFlags() = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
         private fun intent(context: Context, target: Class<*>, action: String, invite: IncomingInvite): Intent =
@@ -131,6 +154,34 @@ class IncomingCallController {
                 .putExtra(ExtraExpiresAt, invite.expiresAt.toString())
                 .putExtra(ExtraLastSeq, invite.lastSeq)
     }
+}
+
+internal object TerminalCallTombstones {
+    private const val TtlMillis = 120_000L
+    private const val Limit = 16
+    private const val Separator = '\t'
+
+    fun remember(stored: Set<String>, callId: String, nowMillis: Long): Set<String> {
+        val entries = decode(stored, nowMillis).associateByTo(mutableMapOf()) { it.callId }
+        entries[callId] = Entry(callId, nowMillis + TtlMillis)
+        return encode(entries.values.sortedByDescending { it.expiresAtMillis }.take(Limit))
+    }
+
+    fun contains(stored: Set<String>, callId: String, nowMillis: Long): Boolean =
+        decode(stored, nowMillis).any { it.callId == callId }
+
+    fun prune(stored: Set<String>, nowMillis: Long): Set<String> = encode(decode(stored, nowMillis))
+
+    private fun decode(stored: Set<String>, nowMillis: Long): List<Entry> = stored.mapNotNull { value ->
+        val expiresAt = value.substringBefore(Separator).toLongOrNull() ?: return@mapNotNull null
+        val callId = value.substringAfter(Separator, "")
+        if (callId.isEmpty() || expiresAt <= nowMillis) null else Entry(callId, expiresAt)
+    }
+
+    private fun encode(entries: Collection<Entry>): Set<String> =
+        entries.mapTo(linkedSetOf()) { "${it.expiresAtMillis}$Separator${it.callId}" }
+
+    private data class Entry(val callId: String, val expiresAtMillis: Long)
 }
 
 data class PendingIncomingCall(val invite: IncomingInvite, val action: String?)

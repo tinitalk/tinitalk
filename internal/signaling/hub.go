@@ -26,13 +26,24 @@ type ICEConfigProvider interface {
 }
 
 type Hub struct {
-	mu           sync.Mutex
-	notifier     Notifier
-	iceConfig    ICEConfigProvider
-	clients      map[string]map[*Client]struct{}
-	calls        map[string]*call
-	activeByUser map[string]string
-	now          func() time.Time
+	mu            sync.Mutex
+	notifier      Notifier
+	iceConfig     ICEConfigProvider
+	clients       map[string]map[*Client]struct{}
+	calls         map[string]*call
+	activeByUser  map[string]string
+	now           func() time.Time
+	notifications []notification
+	notifying     bool
+}
+
+const notificationQueueLimit = 64
+
+type notification struct {
+	caller string
+	callee string
+	event  DeliveredEvent
+	cancel bool
 }
 
 func NewHub(notifier Notifier) *Hub {
@@ -159,7 +170,7 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 		h.deliverICEConfig(c, event.ID)
 	}
 	if event.Type == "call.accept" || event.Type == "call.reject" || event.Type == "call.cancel" {
-		go h.notifier.CancelCall(c.callee, delivered)
+		h.enqueueNotification(notification{callee: c.callee, event: delivered, cancel: true})
 	}
 	if endsCall(event.Type) {
 		h.end(c)
@@ -262,7 +273,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 	incoming.SentAt = h.now().UnixMilli()
 	delivered := h.next(c, incoming, payload.CalleeID)
 	h.deliver(payload.CalleeID, delivered)
-	go h.notifier.IncomingCall(sender, payload.CalleeID, delivered)
+	h.enqueueNotification(notification{caller: sender, callee: payload.CalleeID, event: delivered})
 	return nil
 }
 
@@ -320,11 +331,62 @@ func (h *Hub) Sweep() int {
 		delivered := h.next(c, event, c.caller, c.callee)
 		h.deliver(c.caller, delivered)
 		h.deliver(c.callee, delivered)
-		go h.notifier.CancelCall(c.callee, delivered)
+		h.enqueueNotification(notification{callee: c.callee, event: delivered, cancel: true})
 		h.end(c)
 		expired++
 	}
 	return expired
+}
+
+func (h *Hub) enqueueNotification(next notification) {
+	for i := range h.notifications {
+		if h.notifications[i].event.CallID != next.event.CallID {
+			continue
+		}
+		if next.cancel {
+			h.notifications[i] = next
+		}
+		return
+	}
+	if len(h.notifications) >= notificationQueueLimit {
+		if !next.cancel {
+			return
+		}
+		for i := range h.notifications {
+			if !h.notifications[i].cancel {
+				h.notifications = append(h.notifications[:i], h.notifications[i+1:]...)
+				break
+			}
+		}
+		if len(h.notifications) >= notificationQueueLimit {
+			return
+		}
+	}
+	h.notifications = append(h.notifications, next)
+	if h.notifying {
+		return
+	}
+	h.notifying = true
+	go h.runNotifications()
+}
+
+func (h *Hub) runNotifications() {
+	for {
+		h.mu.Lock()
+		if len(h.notifications) == 0 {
+			h.notifying = false
+			h.mu.Unlock()
+			return
+		}
+		next := h.notifications[0]
+		h.notifications = h.notifications[1:]
+		h.mu.Unlock()
+		if next.cancel {
+			h.notifier.CancelCall(next.callee, next.event)
+		} else {
+			h.notifier.IncomingCall(next.caller, next.callee, next.event)
+		}
+	}
 }
 
 func (h *Hub) Run(ctx context.Context) {

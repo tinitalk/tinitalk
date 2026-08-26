@@ -560,6 +560,35 @@ func TestHubDoesNotWaitForIncomingCallNotification(t *testing.T) {
 	close(notifier.release)
 }
 
+func TestHubKeepsIncomingAndCancelNotificationsOrdered(t *testing.T) {
+	notifier := &orderedNotifier{events: make(chan string, 2), releaseIncoming: make(chan struct{})}
+	hub := NewHub(notifier)
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a91011", "018f7d51-40a1-7bb5-a2d0-7e47f9181011", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-notifier.events; got != "incoming" {
+		t.Fatalf("first notification = %q", got)
+	}
+	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a91012", start.CallID, "call.cancel", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-notifier.events:
+		t.Fatalf("notification overtook blocked incoming: %q", got)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(notifier.releaseIncoming)
+	select {
+	case got := <-notifier.events:
+		if got != "cancel" {
+			t.Fatalf("second notification = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel notification was not delivered")
+	}
+}
+
 func event(id, callID, typ string, payload map[string]any) protocol.Event {
 	raw, _ := json.Marshal(payload)
 	return protocol.Event{
@@ -648,3 +677,17 @@ func (n *blockingNotifier) IncomingCall(string, string, DeliveredEvent) {
 }
 
 func (n *blockingNotifier) CancelCall(string, DeliveredEvent) {}
+
+type orderedNotifier struct {
+	events          chan string
+	releaseIncoming chan struct{}
+}
+
+func (n *orderedNotifier) IncomingCall(string, string, DeliveredEvent) {
+	n.events <- "incoming"
+	<-n.releaseIncoming
+}
+
+func (n *orderedNotifier) CancelCall(string, DeliveredEvent) {
+	n.events <- "cancel"
+}

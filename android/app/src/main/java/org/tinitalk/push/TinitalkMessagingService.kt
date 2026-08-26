@@ -21,11 +21,13 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this), token)
     }
 
+    @Synchronized
     override fun onMessageReceived(message: RemoteMessage) {
         val notifier = IncomingCallNotifier(this)
         val cancellation = IncomingPushPayload.cancellation(message.data)
         if (cancellation != null) {
             val incoming = IncomingCallController()
+            incoming.rememberTerminal(this, cancellation.callId)
             if (cancellation.shouldDismiss(incoming.load(this)?.invite?.callId, CallServiceState.snapshot())) {
                 TelecomCallController(AndroidTelecomRegistrar(this)).cancel(cancellation.callId)
                 notifier.cancel()
@@ -35,6 +37,7 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         }
         val invite = IncomingPushPayload.parse(message.data) ?: return
         val incoming = IncomingCallController()
+        if (incoming.isTerminal(this, invite.callId)) return
         incoming.save(this, invite)
         TelecomCallController(AndroidTelecomRegistrar(this)).addIncoming(invite, TelecomCallCallbacks(
             onAnswer = { incoming.answerFromTelecom(this, invite) },

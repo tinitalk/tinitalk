@@ -2,6 +2,7 @@ package org.tinitalk.push
 
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSnapshot
+import org.tinitalk.telecom.TerminalCallTombstones
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -65,5 +66,14 @@ class IncomingPushPayloadTest {
         val cancel = CallCancellation("old-call", "call.cancel")
 
         assertFalse(cancel.shouldDismiss("new-call", CallSnapshot(CallPhase.Ringing, "new-call")))
+    }
+
+    @Test
+    fun terminalBeforeInviteSuppressesOnlyMatchingCallUntilExpiry() {
+        val remembered = TerminalCallTombstones.remember(emptySet(), "call-1", nowMillis = 1_000)
+
+        assertTrue(TerminalCallTombstones.contains(remembered, "call-1", nowMillis = 1_001))
+        assertFalse(TerminalCallTombstones.contains(remembered, "call-2", nowMillis = 1_001))
+        assertFalse(TerminalCallTombstones.contains(remembered, "call-1", nowMillis = 121_001))
     }
 }
