@@ -175,7 +175,7 @@ class CallActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         activityStarted = true
-        dismissIncomingOverlay()
+        showIncomingCallFullScreen()
         updateProximity()
         handler.removeCallbacks(inviteMonitor)
         if (incomingInvite != null) handler.post(inviteMonitor)
@@ -183,6 +183,7 @@ class CallActivity : ComponentActivity() {
 
     override fun onStop() {
         activityStarted = false
+        restoreIncomingCallNotification()
         updateProximity()
         handler.removeCallbacks(inviteMonitor)
         super.onStop()
@@ -192,7 +193,7 @@ class CallActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         applyIntent(intent)
-        dismissIncomingOverlay()
+        showIncomingCallFullScreen()
     }
 
     override fun onDestroy() {
@@ -284,10 +285,20 @@ class CallActivity : ComponentActivity() {
         )
     }
 
-    private fun dismissIncomingOverlay() {
+    private fun showIncomingCallFullScreen() {
+        val invite = incomingInvite ?: return
         if (shouldDismissIncomingOverlay(activityStarted, visibleCallState())) {
-            IncomingCallNotifier(this).cancel()
+            IncomingCallNotifier(this).fullScreenShown(invite)
         }
+    }
+
+    private fun restoreIncomingCallNotification() {
+        val invite = incomingInvite ?: return
+        val stillRinging = terminalActionKey != invite.callId &&
+            incomingController.load(this)?.invite?.callId == invite.callId &&
+            invite.expiresAt.isAfter(Instant.now()) &&
+            visibleCallState().phase == CallPhase.Ringing
+        if (stillRinging) IncomingCallNotifier(this).fullScreenHidden(invite)
     }
 
     companion object {

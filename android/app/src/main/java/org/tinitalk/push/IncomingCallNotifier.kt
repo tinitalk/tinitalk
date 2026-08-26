@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
 import org.tinitalk.CallActivity
@@ -34,6 +35,47 @@ internal class IncomingCallPresentation(
     fun present(invite: IncomingInvite) {
         showNotification(invite)
         openFullScreen(invite)
+    }
+}
+
+internal class IncomingCallAlertHandoff(
+    private val startRingtone: (IncomingInvite) -> Unit,
+    private val dismissNotification: () -> Unit,
+) {
+    fun fullScreenShown(invite: IncomingInvite) {
+        startRingtone(invite)
+        dismissNotification()
+    }
+}
+
+private object IncomingRingtone {
+    private var callId: String? = null
+    private var ringtone: Ringtone? = null
+
+    @Synchronized
+    fun start(context: Context, invite: IncomingInvite) {
+        if (callId == invite.callId && ringtone?.isPlaying == true) return
+        stop()
+
+        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE) ?: return
+        val next = RingtoneManager.getRingtone(context.applicationContext, uri) ?: return
+        next.audioAttributes = AudioAttributes.Builder()
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) next.isLooping = true
+
+        callId = invite.callId
+        ringtone = next
+        runCatching { next.play() }.onFailure { stop(invite.callId) }
+    }
+
+    @Synchronized
+    fun stop(expectedCallId: String? = null) {
+        if (expectedCallId != null && callId != expectedCallId) return
+        runCatching { ringtone?.stop() }
+        ringtone = null
+        callId = null
     }
 }
 
@@ -122,6 +164,23 @@ class IncomingCallNotifier(private val context: Context) {
     }
 
     fun cancel() {
+        dismissNotification()
+        IncomingRingtone.stop()
+    }
+
+    fun fullScreenShown(invite: IncomingInvite) {
+        IncomingCallAlertHandoff(
+            startRingtone = { IncomingRingtone.start(context, it) },
+            dismissNotification = ::dismissNotification,
+        ).fullScreenShown(invite)
+    }
+
+    fun fullScreenHidden(invite: IncomingInvite) {
+        IncomingRingtone.stop(invite.callId)
+        show(invite)
+    }
+
+    private fun dismissNotification() {
         context.getSystemService(NotificationManager::class.java).cancel(NotificationId)
     }
 
