@@ -113,15 +113,16 @@ class IncomingPushPayloadTest {
     }
 
     @Test
-    fun fullScreenStartsItsRingtoneBeforeRemovingNotification() {
+    fun fullScreenStartsVibrationAndRingtoneBeforeRemovingNotification() {
         val steps = mutableListOf<String>()
         val invite = IncomingInvite("call-1", "Alice", Instant.parse("2026-08-26T10:00:30Z"))
 
         IncomingCallAlertHandoff(
+            startVibration = { steps += "vibration" },
             startRingtone = { steps += "ringtone" },
             dismissNotification = { steps += "dismiss" },
         ).fullScreenShown(invite)
 
-        assertEquals(listOf("ringtone", "dismiss"), steps)
+        assertEquals(listOf("vibration", "ringtone", "dismiss"), steps)
     }
 }

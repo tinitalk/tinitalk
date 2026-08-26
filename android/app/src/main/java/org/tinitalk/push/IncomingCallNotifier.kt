@@ -11,6 +11,11 @@ import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import org.tinitalk.CallActivity
 import org.tinitalk.MainActivity
 import org.tinitalk.R
@@ -39,13 +44,64 @@ internal class IncomingCallForegroundPresentation(
 }
 
 internal class IncomingCallAlertHandoff(
+    private val startVibration: (IncomingInvite) -> Unit,
     private val startRingtone: (IncomingInvite) -> Unit,
     private val dismissNotification: () -> Unit,
 ) {
     fun fullScreenShown(invite: IncomingInvite) {
+        startVibration(invite)
         startRingtone(invite)
         dismissNotification()
     }
+}
+
+private object IncomingVibration {
+    private val pattern = longArrayOf(0, 700, 500, 700, 1_500)
+    private val handler = Handler(Looper.getMainLooper())
+    private var callId: String? = null
+    private var vibrator: Vibrator? = null
+    private var stopTask: Runnable? = null
+
+    @Synchronized
+    fun start(context: Context, invite: IncomingInvite) {
+        if (callId == invite.callId) return
+        stop()
+
+        val next = getVibrator(context.applicationContext) ?: return
+        if (!next.hasVibrator()) return
+
+        callId = invite.callId
+        vibrator = next
+        val task = Runnable { stop(invite.callId) }
+        stopTask = task
+        handler.postDelayed(
+            task,
+            Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0),
+        )
+        runCatching {
+            next.vibrate(VibrationEffect.createWaveform(pattern, 0))
+        }.onFailure {
+            stop(invite.callId)
+        }
+    }
+
+    @Synchronized
+    fun stop(expectedCallId: String? = null) {
+        if (expectedCallId != null && callId != expectedCallId) return
+        stopTask?.let(handler::removeCallbacks)
+        stopTask = null
+        runCatching { vibrator?.cancel() }
+        vibrator = null
+        callId = null
+    }
+
+    @Suppress("DEPRECATION")
+    private fun getVibrator(context: Context): Vibrator? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
 }
 
 private object IncomingRingtone {
@@ -90,6 +146,7 @@ class IncomingCallNotifier(private val context: Context) {
         val controller = IncomingCallController()
         if (controller.isTerminal(context, invite.callId)) return null
         controller.save(context, invite)
+        IncomingVibration.start(context, invite)
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(context, ChannelId)
         } else {
@@ -169,11 +226,13 @@ class IncomingCallNotifier(private val context: Context) {
 
     fun cancel() {
         dismissNotification()
+        IncomingVibration.stop()
         IncomingRingtone.stop()
     }
 
     fun fullScreenShown(invite: IncomingInvite) {
         IncomingCallAlertHandoff(
+            startVibration = { IncomingVibration.start(context, it) },
             startRingtone = { IncomingRingtone.start(context, it) },
             dismissNotification = ::dismissNotification,
         ).fullScreenShown(invite)
