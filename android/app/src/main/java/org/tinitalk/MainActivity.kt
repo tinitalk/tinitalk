@@ -30,6 +30,7 @@ import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.push.DeviceRegistrar
+import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainScreenState
@@ -53,6 +54,7 @@ class MainActivity : ComponentActivity() {
     private var loginResetKey by mutableIntStateOf(0)
     private var pushRegistrationStarted = false
     private var historyLoadGeneration = 0
+    private var historyVisible = false
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread { callUiState = state }
     }
@@ -84,6 +86,7 @@ class MainActivity : ComponentActivity() {
                     onRefreshPermissions = ::refreshPermissions,
                     onCall = ::startCall,
                     onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
+                    onContactsVisible = { historyVisible = false },
                     onHistoryVisible = ::showHistory,
                     onLoadMoreHistory = ::loadMoreHistory,
                     onRetryHistory = ::retryHistory,
@@ -153,10 +156,12 @@ class MainActivity : ComponentActivity() {
                 errorMessage = null,
             )
             refreshPermissions()
+            refreshMissedCount()
         }
     }
 
     private fun showHistory() {
+        historyVisible = true
         loadHistory(reset = true)
     }
 
@@ -172,16 +177,19 @@ class MainActivity : ComponentActivity() {
         if (!screenState.signedIn) return
         val before: Long
         val generation: Int
+        val badgeRefreshId: Long
         if (reset) {
             if (screenState.historyLoading) return
             historyLoadGeneration++
             generation = historyLoadGeneration
             before = 0
+            badgeRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
             screenState = screenState.copy(historyLoading = true, historyErrorMessage = null)
         } else {
             before = screenState.historyNextBefore
             if (before == 0L || screenState.historyLoading || screenState.historyLoadingMore) return
             generation = historyLoadGeneration
+            badgeRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
             screenState = screenState.copy(historyLoadingMore = true, historyErrorMessage = null)
         }
         Thread {
@@ -190,6 +198,10 @@ class MainActivity : ComponentActivity() {
                     if (page == null) return@onSuccess
                     runOnUiThread {
                         if (!screenState.signedIn || generation != historyLoadGeneration) return@runOnUiThread
+                        val unreadMissedCount = IncomingCallNotifier(this).updateMissedCount(
+                            page.unreadMissedCount,
+                            badgeRefreshId,
+                        )
                         val combined = if (reset) {
                             page.items
                         } else {
@@ -203,7 +215,7 @@ class MainActivity : ComponentActivity() {
                             historyNextBefore = page.nextBefore,
                             historyLatestId = page.latestId,
                             historyErrorMessage = null,
-                            unreadMissedCount = page.unreadMissedCount,
+                            unreadMissedCount = unreadMissedCount,
                         )
                     }
                     if (reset && page.latestId > 0) {
@@ -211,7 +223,7 @@ class MainActivity : ComponentActivity() {
                             .onSuccess {
                                 runOnUiThread {
                                     if (generation == historyLoadGeneration) {
-                                        screenState = screenState.copy(unreadMissedCount = 0)
+                                        refreshMissedCount()
                                     }
                                 }
                             }
@@ -261,6 +273,8 @@ class MainActivity : ComponentActivity() {
     private fun signOut() {
         repository.signOut()
         historyLoadGeneration++
+        historyVisible = false
+        IncomingCallNotifier(this).clearMissedCount()
         pushRegistrationStarted = false
         loginResetKey++
         screenState = MainScreenState(
@@ -272,6 +286,28 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshPermissions()
+        if (historyVisible) showHistory() else refreshMissedCount()
+    }
+
+    private fun refreshMissedCount() {
+        if (!screenState.signedIn) return
+        val generation = historyLoadGeneration
+        val badgeRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
+        Thread {
+            runCatching { repository.loadCallHistory(limit = 1) }
+                .onSuccess { page ->
+                    if (page == null) return@onSuccess
+                    runOnUiThread {
+                        if (!screenState.signedIn || generation != historyLoadGeneration) return@runOnUiThread
+                        val unreadMissedCount = IncomingCallNotifier(this).updateMissedCount(
+                            page.unreadMissedCount,
+                            badgeRefreshId,
+                        )
+                        screenState = screenState.copy(unreadMissedCount = unreadMissedCount)
+                    }
+                }
+                .onFailure { if (it is ApiException && it.code == 401) showError(it) }
+        }.start()
     }
 
     override fun onDestroy() {

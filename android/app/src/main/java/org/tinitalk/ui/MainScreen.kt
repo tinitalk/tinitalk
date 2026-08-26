@@ -33,6 +33,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -116,6 +118,7 @@ fun MainScreen(
     onRefreshPermissions: () -> Unit,
     onCall: (Contact) -> Unit,
     onOpenCall: () -> Unit,
+    onContactsVisible: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
@@ -137,6 +140,7 @@ fun MainScreen(
             ongoingCall = ongoingCall,
             onCall = onCall,
             onOpenCall = onOpenCall,
+            onContactsVisible = onContactsVisible,
             onHistoryVisible = onHistoryVisible,
             onLoadMoreHistory = onLoadMoreHistory,
             onRetryHistory = onRetryHistory,
@@ -388,6 +392,7 @@ private fun HomeScreen(
     ongoingCall: CallUiState?,
     onCall: (Contact) -> Unit,
     onOpenCall: () -> Unit,
+    onContactsVisible: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
@@ -396,7 +401,7 @@ private fun HomeScreen(
     val pagerState = rememberPagerState(pageCount = { 2 })
     val scope = rememberCoroutineScope()
     LaunchedEffect(pagerState.currentPage) {
-        if (pagerState.currentPage == 1) onHistoryVisible()
+        if (pagerState.currentPage == 1) onHistoryVisible() else onContactsVisible()
     }
     AppPage(onSignOut = onSignOut) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -439,11 +444,19 @@ private fun HomeScreen(
                     selected = pagerState.currentPage == 1,
                     onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
                     icon = {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_history),
-                            contentDescription = null,
-                            modifier = Modifier.size(24.dp),
-                        )
+                        BadgedBox(
+                            badge = {
+                                historyBadgeText(state.unreadMissedCount)?.let { count ->
+                                    Badge { Text(count) }
+                                }
+                            },
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_history),
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
                     },
                     label = { Text("История") },
                 )

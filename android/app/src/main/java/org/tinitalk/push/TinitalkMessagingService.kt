@@ -6,6 +6,7 @@ import org.tinitalk.call.CallAudioState
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.IncomingCallController
@@ -31,12 +32,11 @@ class TinitalkMessagingService : FirebaseMessagingService() {
             val pending = incoming.load(this)?.invite
             val snapshot = CallServiceState.snapshot()
             if (cancellation.shouldDismiss(pending?.callId, snapshot)) {
-                if (pending != null && cancellation.shouldShowMissed(pending.callId, snapshot)) {
-                    notifier.showMissed(pending)
-                }
+                val missed = pending?.takeIf { cancellation.shouldShowMissed(it.callId, snapshot) }
                 TelecomCallController(AndroidTelecomRegistrar(this)).cancel(cancellation.callId)
                 notifier.cancel()
                 incoming.clear(this, cancellation.callId)
+                missed?.let { refreshMissedCount(notifier, it) }
             }
             return
         }
@@ -54,6 +54,17 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         if (!IncomingCallForegroundService.show(this, invite)) {
             notifier.show(invite)
             incoming.openScreen(this, invite)
+        }
+    }
+
+    private fun refreshMissedCount(notifier: IncomingCallNotifier, latest: IncomingInvite) {
+        val refreshId = notifier.beginMissedCountRefresh()
+        val store = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+        val page = runCatching { ContactRepository(store).loadCallHistory(limit = 1) }.getOrNull()
+        if (page != null) {
+            notifier.updateMissedCount(page.unreadMissedCount, refreshId, latest)
+        } else {
+            notifier.showMissedIfAbsent(latest)
         }
     }
 }

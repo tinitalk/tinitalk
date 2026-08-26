@@ -6,6 +6,12 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+fun historyBadgeText(count: Int): String? = when {
+    count <= 0 -> null
+    count > 99 -> "99+"
+    else -> count.toString()
+}
+
 fun historyStatus(item: CallHistoryItem): String {
     if (item.outcome == "completed") return "Разговор · ${historyDuration(item.durationSeconds)}"
     if (item.outcome == "interrupted") return "Связь прервалась · ${historyDuration(item.durationSeconds)}"

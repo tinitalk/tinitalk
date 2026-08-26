@@ -1,0 +1,44 @@
+package org.tinitalk.push
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class MissedBadgeCounterTest {
+    @Test
+    fun ignoresAStaleCountAfterANewerCallWasRecorded() {
+        val counter = MissedBadgeCounter()
+        val staleRequest = counter.beginRefresh()
+        val latestRequest = counter.beginRefresh()
+
+        assertTrue(counter.update(latestRequest, count = 2).applied)
+        val stale = counter.update(staleRequest, count = 0)
+
+        assertFalse(stale.applied)
+        assertEquals(2, stale.count)
+    }
+
+    @Test
+    fun latePreMarkResponseCannotRestoreAReadBadge() {
+        val counter = MissedBadgeCounter()
+        val beforeMark = counter.beginRefresh()
+        val afterMark = counter.beginRefresh()
+
+        assertEquals(0, counter.update(afterMark, count = 0).count)
+        val late = counter.update(beforeMark, count = 2)
+
+        assertFalse(late.applied)
+        assertEquals(0, late.count)
+    }
+
+    @Test
+    fun failedNewerRefreshStillInvalidatesAnOlderResponse() {
+        val counter = MissedBadgeCounter()
+        val oldRequest = counter.beginRefresh()
+        counter.beginRefresh()
+
+        assertFalse(counter.update(oldRequest, count = 3).applied)
+        assertEquals(0, counter.update(oldRequest, count = 3).count)
+    }
+}

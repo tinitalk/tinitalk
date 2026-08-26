@@ -33,6 +33,31 @@ data class IncomingInvite(
     val lastSeq: Long = 0,
 )
 
+internal data class MissedBadgeUpdate(val applied: Boolean, val count: Int)
+
+internal class MissedBadgeCounter {
+    private var nextRefreshId = 0L
+    private var count = 0
+
+    @Synchronized
+    fun beginRefresh(): Long = ++nextRefreshId
+
+    @Synchronized
+    fun update(refreshId: Long, count: Int): MissedBadgeUpdate {
+        if (refreshId < nextRefreshId) return MissedBadgeUpdate(false, this.count)
+        this.count = count.coerceAtLeast(0)
+        return MissedBadgeUpdate(true, this.count)
+    }
+
+    @Synchronized
+    fun reset() {
+        nextRefreshId++
+        count = 0
+    }
+}
+
+private val MissedBadges = MissedBadgeCounter()
+
 internal class IncomingCallForegroundPresentation(
     private val enterForeground: (IncomingInvite) -> Unit,
     private val openFullScreen: (IncomingInvite) -> Unit,
@@ -190,8 +215,34 @@ class IncomingCallNotifier(private val context: Context) {
     }
 
     fun showMissed(invite: IncomingInvite) {
+        publishMissedCount(1, invite)
+    }
+
+    fun showMissedIfAbsent(invite: IncomingInvite) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (manager.activeNotifications.none { it.id == MissedNotificationId }) showMissed(invite)
+    }
+
+    fun beginMissedCountRefresh(): Long = MissedBadges.beginRefresh()
+
+    fun updateMissedCount(count: Int, refreshId: Long, latest: IncomingInvite? = null): Int {
+        val update = MissedBadges.update(refreshId, count)
+        if (update.applied) publishMissedCount(update.count, latest)
+        return update.count
+    }
+
+    fun clearMissedCount() {
+        MissedBadges.reset()
+        publishMissedCount(0, null)
+    }
+
+    private fun publishMissedCount(count: Int, latest: IncomingInvite?) {
         ensureMissedChannel()
         val manager = context.getSystemService(NotificationManager::class.java)
+        if (count <= 0) {
+            manager.cancel(MissedNotificationId)
+            return
+        }
         val openApp = PendingIntent.getActivity(
             context,
             0,
@@ -207,16 +258,23 @@ class IncomingCallNotifier(private val context: Context) {
         }
         builder
             .setSmallIcon(R.drawable.ic_call)
-            .setContentTitle("Пропущенный звонок")
-            .setContentText(invite.caller.ifEmpty { "TiniTalk" })
+            .setContentTitle(if (count == 1) "Пропущенный звонок" else "Пропущенные звонки")
+            .setContentText(
+                latest?.caller?.takeIf { count == 1 && it.isNotBlank() }
+                    ?: "$count ${missedCallsWord(count)}",
+            )
             .setCategory(Notification.CATEGORY_MISSED_CALL)
             .setContentIntent(openApp)
-            .setAutoCancel(true)
-        invite.callerLogin?.takeIf(String::isNotBlank)?.let { login ->
+            .setAutoCancel(false)
+            .setOngoing(true)
+            .setNumber(count)
+            .setBadgeIconType(Notification.BADGE_ICON_SMALL)
+            .setOnlyAlertOnce(true)
+        latest?.callerLogin?.takeIf { count == 1 && it.isNotBlank() }?.let { login ->
             val redial = PendingIntent.getActivity(
                 context,
-                invite.callId.hashCode(),
-                CallActivity.redialIntent(context, login, invite.caller.ifBlank { login }),
+                latest.callId.hashCode(),
+                CallActivity.redialIntent(context, login, latest.caller.ifBlank { login }),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             builder.addAction(Notification.Action.Builder(R.drawable.ic_call, "Перезвонить", redial).build())
@@ -260,6 +318,7 @@ class IncomingCallNotifier(private val context: Context) {
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             enableVibration(true)
             setSound(ringtone, audio)
+            setShowBadge(false)
         }
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
@@ -267,8 +326,20 @@ class IncomingCallNotifier(private val context: Context) {
     private fun ensureMissedChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(MissedChannelId, "Пропущенные звонки", NotificationManager.IMPORTANCE_DEFAULT),
+            NotificationChannel(MissedChannelId, "Пропущенные звонки", NotificationManager.IMPORTANCE_LOW).apply {
+                setShowBadge(true)
+            },
         )
+    }
+
+    private fun missedCallsWord(count: Int): String {
+        val lastTwo = count % 100
+        if (lastTwo in 11..14) return "пропущенных вызовов"
+        return when (count % 10) {
+            1 -> "пропущенный вызов"
+            2, 3, 4 -> "пропущенных вызова"
+            else -> "пропущенных вызовов"
+        }
     }
 
     private fun canUseFullScreenIntent(): Boolean {
@@ -278,7 +349,7 @@ class IncomingCallNotifier(private val context: Context) {
 
     companion object {
         private const val ChannelId = "incoming_calls_v2"
-        private const val MissedChannelId = "missed_calls"
+        private const val MissedChannelId = "missed_calls_v2"
         internal const val NotificationId = 11
         private const val MissedNotificationId = 12
     }

@@ -4,6 +4,7 @@ import org.tinitalk.data.CallHistoryItem
 import java.time.Instant
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class HistoryPresentationTest {
@@ -49,6 +50,14 @@ class HistoryPresentationTest {
         assertEquals("Вчера", historyDayLabel(Instant.parse("2026-08-25T20:05:00Z").epochSecond, now, zone))
         assertEquals("20 августа", historyDayLabel(Instant.parse("2026-08-20T09:00:00Z").epochSecond, now, zone))
         assertEquals("12:15", historyTime(Instant.parse("2026-08-26T09:15:00Z").epochSecond, zone))
+    }
+
+    @Test
+    fun formatsUnreadBadgeWithoutOverflowingTheTab() {
+        assertNull(historyBadgeText(0))
+        assertEquals("7", historyBadgeText(7))
+        assertEquals("99", historyBadgeText(99))
+        assertEquals("99+", historyBadgeText(100))
     }
 
     private fun item(direction: String, outcome: String, duration: Long = 0) =
