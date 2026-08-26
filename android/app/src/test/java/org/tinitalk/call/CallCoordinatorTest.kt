@@ -8,6 +8,35 @@ import org.junit.Test
 
 class CallCoordinatorTest {
     @Test
+    fun advertisesCrossedCallsAndAdoptsCanonicalCallId() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("alice", signal, FixedIds())
+        coordinator.startCall("bob")
+
+        assertTrue(signal.sent.single().payload["supports_cross_call"].asBoolean)
+
+        val canonical = "018f7d51-40a1-7bb5-a2d0-7e47f9182000"
+        val payload = JsonObject().apply {
+            addProperty("crossed", true)
+            addProperty("offerer", false)
+        }
+        coordinator.onEvent(
+            SequencedSignalEvent(
+                SignalEvent(
+                    "018f7d51-3f90-7e63-b657-4a83a6a92000",
+                    canonical,
+                    "call.accept",
+                    1787666400000,
+                    payload,
+                ),
+                2,
+            ),
+        )
+
+        assertEquals(CallSnapshot(CallPhase.Active, canonical, 2), coordinator.snapshot())
+    }
+
+    @Test
     fun startsAcceptsRejectsAndIgnoresOldEvents() {
         val signal = FakeSignalClient()
         val coordinator = CallCoordinator("alice", signal, ids = FixedIds())

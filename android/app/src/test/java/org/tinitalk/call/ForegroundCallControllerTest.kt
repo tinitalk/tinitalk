@@ -50,6 +50,29 @@ class ForegroundCallControllerTest {
     }
 
     @Test
+    fun crossedAnswererWaitsForOfferInsteadOfCreatingOne() {
+        val signal = CapturingSignalClient()
+        val media = FakeMediaSession(answer = "local-answer")
+        val controller = ForegroundCallController(signal, { _, _, _, _ -> media }, ids)
+        val accept = JsonObject().apply {
+            addProperty("crossed", true)
+            addProperty("offerer", false)
+        }
+
+        controller.onSignalEvent(activeSnapshot(), event("call.accept", accept))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+
+        assertTrue(signal.sent.isEmpty())
+
+        val offer = JsonObject().apply { addProperty("sdp", "remote-offer") }
+        controller.onSignalEvent(activeSnapshot(), event("rtc.offer", offer))
+
+        assertEquals("remote-offer", media.acceptedOffer)
+        assertEquals("rtc.answer", signal.sent.single().type)
+        assertEquals("local-answer", signal.sent.single().payload["sdp"].asString)
+    }
+
+    @Test
     fun calleeWaitsForIceConfigBeforeAnsweringOffer() {
         val signal = CapturingSignalClient()
         val media = FakeMediaSession(answer = "local-answer")

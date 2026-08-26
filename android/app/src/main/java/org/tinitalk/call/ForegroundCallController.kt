@@ -45,8 +45,9 @@ class ForegroundCallController(
     fun onSignalEvent(snapshot: CallSnapshot, event: SignalEvent) {
         when (event.type) {
             "call.accept" -> if (snapshot.phase == CallPhase.Active) {
-                acceptedCallId = event.callId
-                startOfferWhenReady(event.callId)
+                val offerer = !event.payload.has("offerer") || event.payload["offerer"].asBoolean
+                acceptedCallId = event.callId.takeIf { offerer }
+                if (offerer) startOfferWhenReady(event.callId)
             }
             "rtc.offer" -> {
                 if (configuredCallId == event.callId) {

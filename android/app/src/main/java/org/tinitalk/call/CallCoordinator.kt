@@ -34,7 +34,10 @@ class CallCoordinator(
     fun startCall(callee: String) {
         require(callee != self) { "cannot call self" }
         val callId = ids.nextCallId()
-        val payload = JsonObject().apply { addProperty("callee_id", callee) }
+        val payload = JsonObject().apply {
+            addProperty("callee_id", callee)
+            addProperty("supports_cross_call", true)
+        }
         signal.send(event(callId, "call.start", payload))
         machine.transition(CallPhase.Connecting, callId)
     }
