@@ -2,6 +2,8 @@ package org.tinitalk.ui
 
 import java.util.Locale
 
+fun contactDisplayName(displayName: String): String = displayName.trim().ifEmpty { "Без имени" }
+
 fun contactInitial(displayName: String, login: String, locale: Locale = Locale.getDefault()): String {
     val value = displayName.trim().ifEmpty { login.trim() }.ifEmpty { "?" }
     val end = value.offsetByCodePoints(0, 1)

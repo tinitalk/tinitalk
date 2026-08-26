@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -22,7 +23,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,7 +37,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -382,19 +382,13 @@ private fun ContactsScreen(
                     )
                 }
             } else {
-                Surface(
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 1.dp,
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        itemsIndexed(contacts, key = { _, contact -> contact.login }) { index, contact ->
-                            ContactRow(contact, onCall, enabled = ongoingCall == null)
-                            if (index < contacts.lastIndex) {
-                                HorizontalDivider(modifier = Modifier.padding(start = 86.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                            }
-                        }
+                    items(contacts, key = { contact -> contact.login }) { contact ->
+                        ContactRow(contact, onCall, enabled = ongoingCall == null)
                     }
                 }
             }
@@ -462,64 +456,67 @@ private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
 @Composable
 private fun ContactRow(contact: Contact, onCall: (Contact) -> Unit, enabled: Boolean) {
     val avatarColors = listOf(
-        Color(0xFF315EA8),
-        Color(0xFF6D4C9F),
-        Color(0xFF287D78),
-        Color(0xFFB05A44),
-        Color(0xFF5F6F3A),
-        Color(0xFF8A5268),
+        Color(0xFF394A67),
+        Color(0xFF514464),
+        Color(0xFF30514D),
+        Color(0xFF60443B),
+        Color(0xFF4E5337),
+        Color(0xFF593F4C),
     )
+    val name = contactDisplayName(contact.displayName)
     val avatarColor = avatarColors[contactColorIndex(contact.login, avatarColors.size)]
-    Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 78.dp).padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    val description = if (enabled) "Позвонить: $name" else "Сначала завершите текущий звонок"
+    Surface(
+        onClick = { onCall(contact) },
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = description },
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.78f)),
     ) {
-        Box(
-            modifier = Modifier.size(52.dp).clip(CircleShape).background(avatarColor),
-            contentAlignment = Alignment.Center,
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 82.dp).padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Surface(
+                modifier = Modifier.size(52.dp),
+                shape = CircleShape,
+                color = avatarColor,
+                border = BorderStroke(1.dp, BrandGold.copy(alpha = 0.22f)),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        contactInitial(name, ""),
+                        color = Color(0xFFF6E8C0),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Spacer(Modifier.width(16.dp))
             Text(
-                contactInitial(contact.displayName, contact.login),
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        Spacer(Modifier.width(18.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                contact.displayName.ifBlank { contact.login },
-                style = MaterialTheme.typography.titleMedium,
+                name,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                contact.login,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        IconButton(
-            onClick = { onCall(contact) },
-            enabled = enabled,
-            modifier = Modifier
-                .size(54.dp)
-                .background(CallAnswerGreen.copy(alpha = if (enabled) 1f else 0.35f), CircleShape),
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_call),
-                contentDescription = if (enabled) {
-                    "Позвонить: ${contact.displayName.ifBlank { contact.login }}"
-                } else {
-                    "Сначала завершите текущий звонок"
-                },
-                tint = Color.White,
-                modifier = Modifier.size(25.dp),
-            )
+            Spacer(Modifier.width(12.dp))
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = if (enabled) 1f else 0.28f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_call),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = if (enabled) 1f else 0.55f),
+                    modifier = Modifier.size(23.dp),
+                )
+            }
         }
     }
 }

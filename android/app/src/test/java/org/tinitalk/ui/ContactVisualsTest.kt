@@ -19,4 +19,9 @@ class ContactVisualsTest {
     fun paletteSelectionIsStable() {
         assertEquals(0, contactColorIndex("anna", 6))
     }
+
+    @Test
+    fun displayNameDoesNotExposeLoginWhenNameIsMissing() {
+        assertEquals("Без имени", contactDisplayName("  "))
+    }
 }
