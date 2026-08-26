@@ -21,6 +21,24 @@ class ContactRepositoryTest {
     }
 
     @Test
+    fun sortsContactsByDisplayNameInsteadOfLogin() {
+        val repo = ContactRepository(AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())) { _, _, _ ->
+            FakeApiClient(
+                profile = Profile("self", "Я"),
+                contacts = listOf(
+                    Contact("anna", "Яна"),
+                    Contact("maria", "мария"),
+                    Contact("zoe", "Анна"),
+                ),
+            )
+        }
+
+        val contacts = repo.signIn("https://host", "self", "token")
+
+        assertEquals(listOf("Анна", "мария", "Яна"), contacts.map(Contact::displayName))
+    }
+
+    @Test
     fun trimsManualCredentialsBeforeAuthenticatingAndSaving() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         var captured: Session? = null

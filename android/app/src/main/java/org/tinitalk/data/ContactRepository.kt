@@ -10,7 +10,9 @@ class ContactRepository(
         val api = apiFactory(session.url, session.login, session.token)
         return try {
             val profile = api.me()
-            val contacts = api.contacts().filterNot { it.login == profile.login }
+            val contacts = api.contacts()
+                .filterNot { it.login == profile.login }
+                .sortedWith(contactOrder)
             authStore.save(session)
             contacts
         } catch (e: ApiException) {
@@ -24,7 +26,9 @@ class ContactRepository(
         val api = apiFactory(session.url, session.login, session.token)
         return try {
             val profile = api.me()
-            api.contacts().filterNot { it.login == profile.login }
+            api.contacts()
+                .filterNot { it.login == profile.login }
+                .sortedWith(contactOrder)
         } catch (e: ApiException) {
             if (e.code == 401) authStore.clear()
             throw e
@@ -35,3 +39,6 @@ class ContactRepository(
         authStore.clear()
     }
 }
+
+private val contactOrder = compareBy<Contact, String>(String.CASE_INSENSITIVE_ORDER) { it.displayName.trim() }
+    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.login }
