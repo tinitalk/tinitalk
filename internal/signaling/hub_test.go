@@ -52,6 +52,73 @@ func TestHubReportsBusyCallee(t *testing.T) {
 	}
 }
 
+func TestHubMergesSupportedCrossedCalls(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	first := event(uuid(1301), uuid(1302), "call.start", map[string]any{
+		"callee_id": "bob", "supports_cross_call": true,
+	})
+	if err := hub.Handle("alice", first); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+
+	reverse := event(uuid(1303), uuid(1304), "call.start", map[string]any{
+		"callee_id": "alice", "supports_cross_call": true,
+	})
+	if err := hub.Handle("bob", reverse); err != nil {
+		t.Fatal(err)
+	}
+
+	assertCrossedAccept(t, next(t, alice), first.CallID, true)
+	assertCrossedAccept(t, next(t, bob), first.CallID, false)
+	if got := next(t, alice); got.Type != "rtc.config" || got.CallID != first.CallID {
+		t.Fatalf("alice config = %+v", got)
+	}
+	if got := next(t, bob); got.Type != "rtc.config" || got.CallID != first.CallID {
+		t.Fatalf("bob config = %+v", got)
+	}
+	for _, user := range []string{"alice", "bob"} {
+		if got, err := hub.ActiveCall(user); err != nil || got != first.CallID {
+			t.Fatalf("ActiveCall(%q) = %q, %v", user, got, err)
+		}
+	}
+}
+
+func TestHubKeepsUnsupportedCrossedCallsBusy(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	bob := hub.Connect("bob")
+	first := event(uuid(1311), uuid(1312), "call.start", map[string]any{
+		"callee_id": "bob", "supports_cross_call": true,
+	})
+	if err := hub.Handle("alice", first); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+
+	err := hub.Handle("bob", event(uuid(1313), uuid(1314), "call.start", map[string]any{
+		"callee_id": "alice",
+	}))
+	if !errors.Is(err, ErrCalleeBusy) {
+		t.Fatalf("Handle() error = %v, want ErrCalleeBusy", err)
+	}
+}
+
+func assertCrossedAccept(t *testing.T, got DeliveredEvent, callID string, offerer bool) {
+	t.Helper()
+	var payload struct {
+		Crossed bool `json:"crossed"`
+		Offerer bool `json:"offerer"`
+	}
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != "call.accept" || got.CallID != callID || !payload.Crossed || payload.Offerer != offerer {
+		t.Fatalf("accept = %+v, payload = %+v", got, payload)
+	}
+}
+
 func TestHubUsesServerTimeForIncomingCall(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	now := time.Unix(1787666400, 0)

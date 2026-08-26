@@ -123,10 +123,9 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := s.hub.Handle(user, event); err != nil {
-			failure := map[string]string{"error": err.Error()}
+			failure := map[string]string{"error": err.Error(), "call_id": event.CallID}
 			if errors.Is(err, signaling.ErrCalleeBusy) {
 				failure["code"] = "busy"
-				failure["call_id"] = event.CallID
 			}
 			_ = writeJSON(failure)
 			continue

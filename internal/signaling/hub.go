@@ -279,11 +279,9 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 		}
 		return errors.New("call already exists")
 	}
-	if _, ok := h.activeByUser[sender]; ok {
-		return errors.New("sender already has an active call")
-	}
 	var payload struct {
-		CalleeID string `json:"callee_id"`
+		CalleeID          string `json:"callee_id"`
+		SupportsCrossCall bool   `json:"supports_cross_call"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return err
@@ -294,18 +292,35 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 	if payload.CalleeID == sender {
 		return errors.New("cannot call yourself")
 	}
+	if callID, ok := h.activeByUser[sender]; ok {
+		existing := h.calls[callID]
+		if existing != nil {
+			if _, seen := existing.seen[event.ID]; seen {
+				return nil
+			}
+			if existing.state == callRinging &&
+				existing.caller == payload.CalleeID &&
+				existing.callee == sender &&
+				existing.supportsCrossCall && payload.SupportsCrossCall {
+				h.acceptCrossed(existing, event)
+				return nil
+			}
+		}
+		return ErrCalleeBusy
+	}
 	if _, ok := h.activeByUser[payload.CalleeID]; ok {
 		return ErrCalleeBusy
 	}
 	c := &call{
-		id:           event.CallID,
-		caller:       sender,
-		callee:       payload.CalleeID,
-		seen:         map[string]struct{}{},
-		offlineSince: map[string]time.Time{},
-		nextSeq:      1,
-		startedAt:    h.now(),
-		state:        callRinging,
+		id:                event.CallID,
+		caller:            sender,
+		callee:            payload.CalleeID,
+		seen:              map[string]struct{}{},
+		offlineSince:      map[string]time.Time{},
+		nextSeq:           1,
+		startedAt:         h.now(),
+		state:             callRinging,
+		supportsCrossCall: payload.SupportsCrossCall,
 	}
 	c.remember(event.ID)
 	h.calls[event.CallID] = c
@@ -319,6 +334,28 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 	h.deliver(payload.CalleeID, delivered)
 	h.enqueueNotification(notification{caller: sender, callee: payload.CalleeID, event: delivered})
 	return nil
+}
+
+func (h *Hub) acceptCrossed(c *call, source protocol.Event) {
+	c.remember(source.ID)
+	c.state = callActive
+	for _, participant := range []string{c.caller, c.callee} {
+		if !h.hasOnlineClient(participant) {
+			c.offlineSince[participant] = h.now()
+		}
+	}
+	accept := source
+	accept.CallID = c.id
+	accept.Type = "call.accept"
+	accept.SentAt = h.now().UnixMilli()
+	accept.Payload = json.RawMessage(`{"crossed":true,"offerer":true}`)
+	callerEvent := h.next(c, accept, c.caller)
+	h.deliver(c.caller, callerEvent)
+	accept.Payload = json.RawMessage(`{"crossed":true,"offerer":false}`)
+	calleeEvent := h.next(c, accept, c.callee)
+	h.deliver(c.callee, calleeEvent)
+	h.deliverICEConfig(c, "")
+	h.enqueueNotification(notification{callee: c.callee, event: calleeEvent, cancel: true})
 }
 
 func (h *Hub) ExpireWaiting() int {

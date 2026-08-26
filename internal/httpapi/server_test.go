@@ -108,6 +108,24 @@ func TestSocketRoutesCallEvents(t *testing.T) {
 	if incoming["type"] != "call.incoming" || incoming["seq"].(float64) != 1 {
 		t.Fatalf("incoming = %+v", incoming)
 	}
+
+	missingCallID := "018f7d51-40a1-7bb5-a2d0-7e47f9180399"
+	if err := alice.WriteJSON(map[string]any{
+		"id":      "018f7d51-3f90-7e63-b657-4a83a6a90399",
+		"call_id": missingCallID,
+		"type":    "call.accept",
+		"sent_at": 1787666400000,
+		"payload": map[string]any{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var failure map[string]any
+	if err := alice.ReadJSON(&failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure["error"] != "call not found" || failure["call_id"] != missingCallID {
+		t.Fatalf("failure = %+v", failure)
+	}
 }
 
 func TestSocketRejectsConnectionAbovePerUserLimit(t *testing.T) {
