@@ -58,6 +58,9 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	defer s.hub.Disconnect(client)
+	if !s.hub.Connected(client) {
+		return
+	}
 	var writeMu sync.Mutex
 	writeJSON := func(value any) error {
 		writeMu.Lock()
@@ -76,6 +79,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		_ = conn.Close()
 	}()
 
 	conn.SetReadLimit(protocol.MaxEventBytes)

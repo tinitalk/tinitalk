@@ -27,6 +27,7 @@ type call struct {
 	endedAt      time.Time
 	iceWindowAt  time.Time
 	iceCount     int
+	lastRestart  time.Time
 	offlineSince map[string]time.Time
 	state        callState
 }

@@ -66,7 +66,10 @@ func (h *Hub) SetICEConfigProvider(provider ICEConfigProvider) {
 }
 
 func (h *Hub) Connect(user string) *Client {
-	client, _ := h.ConnectChecked(user)
+	client, err := h.ConnectChecked(user)
+	if err != nil || !h.Connected(client) {
+		return nil
+	}
 	return client
 }
 
@@ -81,31 +84,63 @@ func (h *Hub) ConnectChecked(user string) (*Client, error) {
 		h.clients[user] = map[*Client]struct{}{}
 	}
 	h.clients[user][client] = struct{}{}
-	if callID, ok := h.activeByUser[user]; ok {
+	return client, nil
+}
+
+func (h *Hub) Connected(client *Client) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if client == nil || client.closed {
+		return false
+	}
+	if _, ok := h.clients[client.user][client]; !ok {
+		return false
+	}
+	client.online = true
+	if callID, ok := h.activeByUser[client.user]; ok {
 		if c := h.calls[callID]; c != nil && c.state == callActive {
-			delete(c.offlineSince, user)
+			delete(c.offlineSince, client.user)
 		}
 	}
-	return client, nil
+	return true
 }
 
 func (h *Hub) Disconnect(client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if client.closed {
+	h.disconnectLocked(client)
+}
+
+func (h *Hub) disconnectLocked(client *Client) {
+	if client == nil || client.closed {
 		return
 	}
+	wasOnline := client.online
 	client.closed = true
 	delete(h.clients[client.user], client)
 	if len(h.clients[client.user]) == 0 {
 		delete(h.clients, client.user)
+	}
+	if !h.hasOnlineClient(client.user) {
 		if callID, ok := h.activeByUser[client.user]; ok {
 			if c := h.calls[callID]; c != nil && c.state == callActive {
-				c.offlineSince[client.user] = h.now()
+				_, alreadyOffline := c.offlineSince[client.user]
+				if wasOnline || !alreadyOffline {
+					c.offlineSince[client.user] = h.now()
+				}
 			}
 		}
 	}
 	close(client.inbox)
+}
+
+func (h *Hub) hasOnlineClient(user string) bool {
+	for client := range h.clients[user] {
+		if client.online && !client.closed {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Hub) SetNow(now func() time.Time) {
@@ -153,6 +188,11 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 			return err
 		}
 	}
+	if event.Type == "rtc.restart" {
+		if err := h.checkRestartRate(c); err != nil {
+			return err
+		}
+	}
 	c.remember(event.ID)
 	recipient := c.other(sender)
 	delivered := h.next(c, event, recipient)
@@ -160,7 +200,7 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	if event.Type == "call.accept" {
 		c.state = callActive
 		for _, participant := range []string{c.caller, c.callee} {
-			if len(h.clients[participant]) == 0 {
+			if !h.hasOnlineClient(participant) {
 				c.offlineSince[participant] = h.now()
 			}
 		}
@@ -415,6 +455,15 @@ func (h *Hub) checkICERate(c *call) error {
 	return nil
 }
 
+func (h *Hub) checkRestartRate(c *call) error {
+	now := h.now()
+	if !c.lastRestart.IsZero() && now.Sub(c.lastRestart) < RestartMinInterval {
+		return errors.New("ICE restart requested too often")
+	}
+	c.lastRestart = now
+	return nil
+}
+
 func (h *Hub) next(c *call, event protocol.Event, recipients ...string) DeliveredEvent {
 	delivered := DeliveredEvent{Event: event, Seq: c.nextSeq}
 	c.nextSeq++
@@ -429,6 +478,7 @@ func (h *Hub) deliver(user string, event DeliveredEvent) {
 		select {
 		case client.inbox <- event:
 		default:
+			h.disconnectLocked(client)
 		}
 	}
 }
@@ -463,7 +513,18 @@ func (c *call) validateTransition(sender, eventType string) error {
 			return errors.New("event is not allowed before call acceptance")
 		}
 	}
-	if eventType == "call.end" || eventType == "rtc.offer" || eventType == "rtc.answer" || eventType == "rtc.ice" || eventType == "rtc.restart" {
+	switch eventType {
+	case "call.end", "rtc.ice":
+		return nil
+	case "rtc.offer", "rtc.restart":
+		if sender != c.caller {
+			return errors.New("only caller can send this event")
+		}
+		return nil
+	case "rtc.answer":
+		if sender != c.callee {
+			return errors.New("only callee can answer")
+		}
 		return nil
 	}
 	return errors.New("event is not allowed for active call")

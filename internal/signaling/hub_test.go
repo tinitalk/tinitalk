@@ -333,7 +333,7 @@ func TestHubKeepsActiveCallBeforeDisconnectGrace(t *testing.T) {
 	}
 }
 
-func TestHubReconnectClearsActiveDisconnectGrace(t *testing.T) {
+func TestHubSuccessfulReconnectClearsActiveDisconnectGrace(t *testing.T) {
 	now := time.Unix(2_000, 0)
 	hub := NewHub(NoopNotifier{})
 	hub.SetNow(func() time.Time { return now })
@@ -342,8 +342,12 @@ func TestHubReconnectClearsActiveDisconnectGrace(t *testing.T) {
 	start := activeCall(t, hub, alice, bob, 1221)
 
 	hub.Disconnect(bob)
-	if _, err := hub.ConnectChecked("bob"); err != nil {
+	reconnected, err := hub.ConnectChecked("bob")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !hub.Connected(reconnected) {
+		t.Fatal("Connected() = false")
 	}
 	now = now.Add(30*time.Second + time.Millisecond)
 	if got := hub.Sweep(); got != 0 {
@@ -351,6 +355,28 @@ func TestHubReconnectClearsActiveDisconnectGrace(t *testing.T) {
 	}
 	if got, err := hub.ActiveCall("alice"); err != nil || got != start.CallID {
 		t.Fatalf("ActiveCall(alice) = %q, %v; want %q, nil", got, err, start.CallID)
+	}
+}
+
+func TestHubFailedConnectionReservationDoesNotResetDisconnectGrace(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	_ = activeCall(t, hub, alice, bob, 1226)
+
+	hub.Disconnect(bob)
+	now = now.Add(20 * time.Second)
+	reserved, err := hub.ConnectChecked("bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.Disconnect(reserved)
+	now = now.Add(10*time.Second + time.Millisecond)
+
+	if got := hub.Sweep(); got != 1 {
+		t.Fatalf("Sweep() = %d, want 1", got)
 	}
 }
 
@@ -533,6 +559,60 @@ func TestHubRejectsSelfCallAndInvalidTransitions(t *testing.T) {
 	}
 	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a90904", start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"})); err == nil {
 		t.Fatal("ICE before acceptance error = nil")
+	}
+}
+
+func TestHubEnforcesNegotiationRolesAndRestartInterval(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := activeCall(t, hub, alice, bob, 1251)
+
+	if err := hub.Handle("bob", event(uuid(1254), start.CallID, "rtc.offer", map[string]any{"sdp": "offer"})); err == nil {
+		t.Fatal("callee offer error = nil")
+	}
+	if err := hub.Handle("alice", event(uuid(1255), start.CallID, "rtc.answer", map[string]any{"sdp": "answer"})); err == nil {
+		t.Fatal("caller answer error = nil")
+	}
+	if err := hub.Handle("bob", event(uuid(1256), start.CallID, "rtc.restart", map[string]any{})); err == nil {
+		t.Fatal("callee restart error = nil")
+	}
+
+	if err := hub.Handle("alice", event(uuid(1257), start.CallID, "rtc.restart", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Handle("alice", event(uuid(1258), start.CallID, "rtc.restart", map[string]any{})); err == nil {
+		t.Fatal("immediate restart error = nil")
+	}
+	now = now.Add(10 * time.Second)
+	if err := hub.Handle("alice", event(uuid(1259), start.CallID, "rtc.restart", map[string]any{})); err != nil {
+		t.Fatalf("restart after interval: %v", err)
+	}
+}
+
+func TestHubDisconnectsSlowClientAndRetainsReplay(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := activeCall(t, hub, alice, bob, 1261)
+	for i := 0; i < ReplayLimit; i++ {
+		bob.inbox <- DeliveredEvent{}
+	}
+
+	if err := hub.Handle("alice", event(uuid(1264), start.CallID, "call.end", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	if !bob.closed {
+		t.Fatal("slow client remained connected")
+	}
+	replayed, err := hub.Resume("bob", start.CallID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) == 0 || replayed[len(replayed)-1].Type != "call.end" {
+		t.Fatalf("terminal replay = %+v", replayed)
 	}
 }
 

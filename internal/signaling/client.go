@@ -11,12 +11,13 @@ type Client struct {
 	user   string
 	inbox  chan DeliveredEvent
 	closed bool
+	online bool
 }
 
 func (c *Client) TryNext() (DeliveredEvent, bool) {
 	select {
-	case event := <-c.inbox:
-		return event, true
+	case event, ok := <-c.inbox:
+		return event, ok
 	default:
 		return DeliveredEvent{}, false
 	}
