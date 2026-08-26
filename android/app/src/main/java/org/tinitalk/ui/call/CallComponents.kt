@@ -162,10 +162,11 @@ internal fun RoundCallAction(
         Text(
             text = label,
             color = Color.White.copy(alpha = if (enabled) 1f else 0.52f),
-            fontSize = 15.sp,
+            fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Center,
-            maxLines = 2,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
