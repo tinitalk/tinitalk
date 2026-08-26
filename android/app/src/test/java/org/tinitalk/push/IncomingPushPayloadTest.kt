@@ -98,4 +98,17 @@ class IncomingPushPayloadTest {
         assertFalse(TerminalCallTombstones.contains(remembered, "call-2", nowMillis = 1_001))
         assertFalse(TerminalCallTombstones.contains(remembered, "call-1", nowMillis = 121_001))
     }
+
+    @Test
+    fun incomingCallNotificationIsFollowedByFullScreenLaunch() {
+        val steps = mutableListOf<String>()
+        val invite = IncomingInvite("call-1", "Alice", Instant.parse("2026-08-26T10:00:30Z"))
+
+        IncomingCallPresentation(
+            showNotification = { steps += "notification" },
+            openFullScreen = { steps += "full_screen" },
+        ).present(invite)
+
+        assertEquals(listOf("notification", "full_screen"), steps)
+    }
 }

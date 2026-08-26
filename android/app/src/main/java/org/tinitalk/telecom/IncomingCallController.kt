@@ -1,8 +1,11 @@
 package org.tinitalk.telecom
 
 import android.app.PendingIntent
+import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.Bundle
 import org.tinitalk.CallActivity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
@@ -67,9 +70,26 @@ class IncomingCallController {
             context,
             invite.callId.hashCode(),
             intent(context, CallActivity::class.java, action, invite)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_NO_USER_ACTION,
+                ),
             pendingFlags(),
+            activityOptions(creator = true),
         )
+
+    fun openScreen(context: Context, invite: IncomingInvite) {
+        runCatching {
+            val pending = activityIntent(context, ActionIncoming, invite)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                pending.send(context, 0, null, null, null, null, activityOptions(creator = false))
+            } else {
+                pending.send()
+            }
+        }
+    }
 
     fun actionIntent(context: Context, action: String, invite: IncomingInvite): PendingIntent =
         PendingIntent.getBroadcast(
@@ -155,6 +175,24 @@ class IncomingCallController {
             context.getSharedPreferences(TerminalStore, Context.MODE_PRIVATE)
 
         private fun pendingFlags() = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+
+        private fun activityOptions(creator: Boolean): Bundle? {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
+            val options = ActivityOptions.makeBasic()
+            return if (creator) {
+                options.setPendingIntentCreatorBackgroundActivityStartMode(backgroundStartMode()).toBundle()
+            } else {
+                options.setPendingIntentBackgroundActivityStartMode(backgroundStartMode()).toBundle()
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        private fun backgroundStartMode(): Int =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
+            } else {
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            }
 
         private fun intent(context: Context, target: Class<*>, action: String, invite: IncomingInvite): Intent =
             Intent(context, target)

@@ -51,6 +51,9 @@ class TinitalkMessagingService : FirebaseMessagingService() {
             onInactive = { CallForegroundService.telecomInactive(this, invite.callId) },
             onEndpointsChanged = { state -> CallAudioState.publish(invite.callId, state) },
         ))
-        notifier.show(invite)
+        IncomingCallPresentation(
+            showNotification = notifier::show,
+            openFullScreen = { incoming.openScreen(this, it) },
+        ).present(invite)
     }
 }

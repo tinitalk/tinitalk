@@ -27,6 +27,16 @@ data class IncomingInvite(
     val lastSeq: Long = 0,
 )
 
+internal class IncomingCallPresentation(
+    private val showNotification: (IncomingInvite) -> Unit,
+    private val openFullScreen: (IncomingInvite) -> Unit,
+) {
+    fun present(invite: IncomingInvite) {
+        showNotification(invite)
+        openFullScreen(invite)
+    }
+}
+
 class IncomingCallNotifier(private val context: Context) {
     fun show(invite: IncomingInvite) {
         ensureChannel()
