@@ -48,6 +48,7 @@ fun ActiveCallScreen(
     onEnd: () -> Unit,
 ) {
     var routePickerVisible by remember { mutableStateOf(false) }
+    val directRoute = directAudioRoute(currentEndpoint, availableEndpoints)
     val status = when (connectionHealth) {
         ConnectionHealth.Connecting -> "Соединяемся…"
         ConnectionHealth.Reconnecting -> "Восстанавливаем связь…"
@@ -87,10 +88,20 @@ fun ActiveCallScreen(
             RoundCallAction(
                 label = "Звук",
                 modifier = Modifier.weight(1f),
-                contentDescription = "Выбрать устройство звука. Сейчас: ${audioEndpointLabel(currentEndpoint)}",
+                contentDescription = when (directRoute?.type) {
+                    CallEndpointCompat.TYPE_SPEAKER -> "Включить громкую связь"
+                    CallEndpointCompat.TYPE_EARPIECE -> "Выключить громкую связь"
+                    else -> "Выбрать устройство звука. Сейчас: ${audioEndpointLabel(currentEndpoint)}"
+                },
                 color = Color(0xFF33465F),
                 enabled = availableEndpoints.isNotEmpty(),
-                onClick = { routePickerVisible = true },
+                onClick = {
+                    if (directRoute != null) {
+                        onSelectEndpoint(directRoute)
+                    } else {
+                        routePickerVisible = true
+                    }
+                },
                 iconResource = audioEndpointIcon(currentEndpoint),
             )
             RoundCallAction(
@@ -149,6 +160,17 @@ fun ActiveCallScreen(
             Spacer(Modifier.navigationBarsPadding().height(12.dp))
         }
     }
+}
+
+internal fun directAudioRoute(current: AudioEndpoint?, available: List<AudioEndpoint>): AudioEndpoint? {
+    val phoneRouteTypes = setOf(CallEndpointCompat.TYPE_EARPIECE, CallEndpointCompat.TYPE_SPEAKER)
+    if (available.size != 2 || available.map { it.type }.toSet() != phoneRouteTypes) return null
+    val nextType = if (current?.type == CallEndpointCompat.TYPE_SPEAKER) {
+        CallEndpointCompat.TYPE_EARPIECE
+    } else {
+        CallEndpointCompat.TYPE_SPEAKER
+    }
+    return available.firstOrNull { it.type == nextType }
 }
 
 private fun audioEndpointLabel(endpoint: AudioEndpoint?): String = when (endpoint?.type) {
