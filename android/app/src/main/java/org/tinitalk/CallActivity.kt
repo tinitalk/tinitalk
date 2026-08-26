@@ -159,6 +159,15 @@ class CallActivity : ComponentActivity() {
                         OutgoingCallScreen(
                             callee = peerName,
                             status = if (visibleState.phase == CallPhase.Ringing) "Ждём ответа…" else "Пробуем связаться…",
+                            muted = visibleState.muted,
+                            currentEndpoint = visibleState.currentAudioEndpoint,
+                            availableEndpoints = visibleState.availableAudioEndpoints,
+                            onMute = { CallForegroundService.mute(this, it) },
+                            onSelectEndpoint = { endpoint ->
+                                visibleState.callId?.let { callId ->
+                                    CallForegroundService.selectAudioEndpoint(this, callId, endpoint.id)
+                                }
+                            },
                             onCancel = { endCall(visibleState) },
                         )
                     }

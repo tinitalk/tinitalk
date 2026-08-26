@@ -48,7 +48,6 @@ fun ActiveCallScreen(
     onEnd: () -> Unit,
 ) {
     var routePickerVisible by remember { mutableStateOf(false) }
-    val directRoute = directAudioRoute(currentEndpoint, availableEndpoints)
     val status = when (connectionHealth) {
         ConnectionHealth.Connecting -> "Соединяемся…"
         ConnectionHealth.Reconnecting -> "Восстанавливаем связь…"
@@ -77,32 +76,17 @@ fun ActiveCallScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            RoundCallAction(
-                label = "Микрофон",
+            MuteCallAction(
+                muted = muted,
                 modifier = Modifier.weight(1f),
-                contentDescription = if (muted) "Включить микрофон" else "Выключить микрофон",
-                color = if (muted) Color(0xFF55708F) else Color(0xFF33465F),
-                onClick = { onMute(!muted) },
-                iconResource = if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
+                onMute = onMute,
             )
-            RoundCallAction(
-                label = "Звук",
+            AudioRouteAction(
+                currentEndpoint = currentEndpoint,
+                availableEndpoints = availableEndpoints,
                 modifier = Modifier.weight(1f),
-                contentDescription = when (directRoute?.type) {
-                    CallEndpointCompat.TYPE_SPEAKER -> "Включить громкую связь"
-                    CallEndpointCompat.TYPE_EARPIECE -> "Выключить громкую связь"
-                    else -> "Выбрать устройство звука. Сейчас: ${audioEndpointLabel(currentEndpoint)}"
-                },
-                color = Color(0xFF33465F),
-                enabled = availableEndpoints.isNotEmpty(),
-                onClick = {
-                    if (directRoute != null) {
-                        onSelectEndpoint(directRoute)
-                    } else {
-                        routePickerVisible = true
-                    }
-                },
-                iconResource = audioEndpointIcon(currentEndpoint),
+                onSelectEndpoint = onSelectEndpoint,
+                onShowPicker = { routePickerVisible = true },
             )
             RoundCallAction(
                 label = "Завершить",
@@ -115,50 +99,111 @@ fun ActiveCallScreen(
         Spacer(Modifier.height(18.dp))
     }
 
-    if (routePickerVisible) {
-        ModalBottomSheet(
-            onDismissRequest = { routePickerVisible = false },
-        ) {
-            Text(
-                text = "Куда выводить звук",
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-            availableEndpoints.forEach { endpoint ->
-                val selected = endpoint.id == currentEndpoint?.id
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            routePickerVisible = false
-                            onSelectEndpoint(endpoint)
-                        }
-                        .padding(PaddingValues(horizontal = 24.dp, vertical = 16.dp)),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painter = painterResource(audioEndpointIcon(endpoint)),
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp),
-                    )
-                    Column(modifier = Modifier.weight(1f).padding(start = 18.dp)) {
-                        Text(audioEndpointLabel(endpoint), style = MaterialTheme.typography.titleMedium)
-                        if (selected) {
-                            Text(
-                                text = "Используется сейчас",
-                                color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
+    AudioRoutePicker(
+        visible = routePickerVisible,
+        currentEndpoint = currentEndpoint,
+        availableEndpoints = availableEndpoints,
+        onDismiss = { routePickerVisible = false },
+        onSelectEndpoint = onSelectEndpoint,
+    )
+}
+
+@Composable
+internal fun MuteCallAction(
+    muted: Boolean,
+    modifier: Modifier = Modifier,
+    onMute: (Boolean) -> Unit,
+) {
+    RoundCallAction(
+        label = "Микрофон",
+        modifier = modifier,
+        contentDescription = if (muted) "Включить микрофон" else "Выключить микрофон",
+        color = if (muted) Color(0xFF55708F) else Color(0xFF33465F),
+        onClick = { onMute(!muted) },
+        iconResource = if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
+    )
+}
+
+@Composable
+internal fun AudioRouteAction(
+    currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
+    modifier: Modifier = Modifier,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onShowPicker: () -> Unit,
+) {
+    val directRoute = directAudioRoute(currentEndpoint, availableEndpoints)
+    RoundCallAction(
+        label = "Звук",
+        modifier = modifier,
+        contentDescription = when (directRoute?.type) {
+            CallEndpointCompat.TYPE_SPEAKER -> "Включить громкую связь"
+            CallEndpointCompat.TYPE_EARPIECE -> "Выключить громкую связь"
+            else -> "Выбрать устройство звука. Сейчас: ${audioEndpointLabel(currentEndpoint)}"
+        },
+        color = Color(0xFF33465F),
+        enabled = availableEndpoints.isNotEmpty(),
+        onClick = {
+            if (directRoute != null) {
+                onSelectEndpoint(directRoute)
+            } else {
+                onShowPicker()
+            }
+        },
+        iconResource = audioEndpointIcon(currentEndpoint),
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun AudioRoutePicker(
+    visible: Boolean,
+    currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
+    onDismiss: () -> Unit,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+) {
+    if (!visible) return
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            text = "Куда выводить звук",
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        availableEndpoints.forEach { endpoint ->
+            val selected = endpoint.id == currentEndpoint?.id
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        onDismiss()
+                        onSelectEndpoint(endpoint)
                     }
+                    .padding(PaddingValues(horizontal = 24.dp, vertical = 16.dp)),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    painter = painterResource(audioEndpointIcon(endpoint)),
+                    contentDescription = null,
+                    modifier = Modifier.size(28.dp),
+                )
+                Column(modifier = Modifier.weight(1f).padding(start = 18.dp)) {
+                    Text(audioEndpointLabel(endpoint), style = MaterialTheme.typography.titleMedium)
                     if (selected) {
-                        Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "Используется сейчас",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
+                if (selected) {
+                    Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                }
             }
-            Spacer(Modifier.navigationBarsPadding().height(12.dp))
         }
+        Spacer(Modifier.navigationBarsPadding().height(12.dp))
     }
 }
 

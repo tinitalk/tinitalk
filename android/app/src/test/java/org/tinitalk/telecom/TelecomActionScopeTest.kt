@@ -34,12 +34,17 @@ class TelecomActionScopeTest {
     }
 
     @Test
-    fun acceptsOnlyCurrentActiveCallForSelection() {
+    fun acceptsAudioSelectionDuringCurrentOutgoingAndActiveCall() {
+        val connecting = CallSnapshot(CallPhase.Connecting, "call-1", 4)
+        val ringing = CallSnapshot(CallPhase.Ringing, "call-1", 4)
         val active = CallSnapshot(CallPhase.Active, "call-1", 4)
 
         assertTrue(TelecomActionScope.acceptsCallback(active, null, null, "call-1", "call-1", Instant.parse("2026-08-26T10:00:00Z")))
+        assertTrue(TelecomActionScope.acceptsSelection(connecting, "call-1"))
+        assertTrue(TelecomActionScope.acceptsSelection(ringing, "call-1"))
         assertTrue(TelecomActionScope.acceptsSelection(active, "call-1"))
-        assertFalse(TelecomActionScope.acceptsSelection(active, "other-call"))
+        assertFalse(TelecomActionScope.acceptsSelection(connecting, "other-call"))
+        assertFalse(TelecomActionScope.acceptsSelection(CallSnapshot(CallPhase.Ended, "call-1", 4), "call-1"))
     }
 
     @Test
