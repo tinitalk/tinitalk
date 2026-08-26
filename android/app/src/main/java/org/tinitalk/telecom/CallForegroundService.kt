@@ -142,6 +142,7 @@ class CallForegroundService : Service() {
                     newMedia.onSignalEvent(newCoordinator.snapshot(), incoming.event)
                 }
                 if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
+                    newMedia.setActive(true)
                     telecom.setActive(incoming.event.callId)
                 }
                 publish()
@@ -181,6 +182,7 @@ class CallForegroundService : Service() {
                 call.restoreIncoming(invite.callId, invite.lastSeq)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
+                if (call.snapshot().phase == CallPhase.Active) media?.setActive(true)
                 IncomingCallNotifier(this).cancel()
                 IncomingCallController().clear(this, invite.callId)
             }

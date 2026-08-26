@@ -181,6 +181,8 @@ class WebRtcAudioSession private constructor(
 
     private fun applyAudioTrackState() {
         audioTrack.setEnabled(WebRtcPolicy.audioTrackEnabled(active, muted))
+        audioDeviceModule.setMicrophoneMute(WebRtcPolicy.microphoneMuted(active, muted))
+        audioDeviceModule.setSpeakerMute(WebRtcPolicy.speakerMuted(active))
     }
 
     private fun onIceConnectionState(state: PeerConnection.IceConnectionState) {
