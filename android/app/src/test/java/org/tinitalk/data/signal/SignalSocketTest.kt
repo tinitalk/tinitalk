@@ -69,6 +69,48 @@ class SignalSocketTest {
             client.shutdown()
         }
     }
+
+    @Test
+    fun reportsServerErrorEnvelope() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().withWebSocketUpgrade(SendingWebSocketListener("""{"error":"call not found"}""")))
+            server.start()
+            val client = OkHttpClient()
+            lateinit var socket: SignalSocket
+            socket = SignalSocket(client, Session(server.url("/").toString(), "alice", "token"))
+            val error = LinkedBlockingQueue<String>()
+
+            socket.connect(
+                onEvent = { throw AssertionError("unexpected signal event") },
+                onError = {
+                    error.add(it)
+                    socket.close()
+                },
+            )
+
+            assertEquals("call not found", error.poll(2, TimeUnit.SECONDS))
+            socket.close()
+            client.shutdown()
+        }
+    }
+
+    @Test
+    fun reconnectsAfterNormalWebSocketClose() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().withWebSocketUpgrade(ClosingWebSocketListener()))
+            server.enqueue(MockResponse().withWebSocketUpgrade(CapturingWebSocketListener()))
+            server.start()
+            val client = OkHttpClient()
+            val socket = SignalSocket(client, Session(server.url("/").toString(), "alice", "token"))
+            val opens = CountDownLatch(2)
+
+            socket.connect(onEvent = {}, onOpen = { opens.countDown() })
+
+            assertTrue(opens.await(3, TimeUnit.SECONDS))
+            socket.close()
+            client.shutdown()
+        }
+    }
 }
 
 private fun OkHttpClient.shutdown() {
@@ -86,7 +128,33 @@ private class CapturingWebSocketListener : WebSocketListener() {
         messages += text
         webSocket.close(1000, "ok")
     }
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        webSocket.close(code, reason)
+    }
     fun awaitOpen() {
         opened.poll(2, TimeUnit.SECONDS)
+    }
+}
+
+private class SendingWebSocketListener(private val text: String) : WebSocketListener() {
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+        webSocket.send(text)
+    }
+
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        webSocket.close(code, reason)
+    }
+}
+
+private class ClosingWebSocketListener : WebSocketListener() {
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+        Thread {
+            Thread.sleep(50)
+            webSocket.close(1000, "restart")
+        }.start()
+    }
+
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        webSocket.close(code, reason)
     }
 }

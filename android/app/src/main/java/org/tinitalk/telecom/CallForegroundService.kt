@@ -106,6 +106,11 @@ class CallForegroundService : Service() {
                 if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallSoon()
             },
             onDisconnected = { connected = false },
+            onError = {
+                newCoordinator.fail()
+                publish()
+                finishCall()
+            },
         )
         return true
     }

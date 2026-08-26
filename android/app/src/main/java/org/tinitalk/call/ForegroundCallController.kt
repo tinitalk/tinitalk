@@ -23,6 +23,7 @@ class ForegroundCallController(
     private var acceptedCallId: String? = null
     private var offerStartedCallId: String? = null
     private var pendingOffer: SignalEvent? = null
+    private val pendingIce = ArrayDeque<Pair<String, IceCandidateData>>()
 
     fun onSignalEvent(snapshot: CallSnapshot, event: SignalEvent) {
         when (event.type) {
@@ -49,13 +50,19 @@ class ForegroundCallController(
             "rtc.answer" -> session?.let { media ->
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
             }
-            "rtc.ice" -> session?.let { media ->
+            "rtc.ice" -> {
                 val candidate = IceCandidateData(
                     sdpMid = event.payload["sdp_mid"].asString,
                     sdpMLineIndex = event.payload["sdp_mline_index"].asInt,
                     candidate = event.payload["candidate"].asString,
                 )
-                runBlockingLite { media.addIceCandidate(candidate) }
+                val media = session
+                if (media != null && callId == event.callId) {
+                    runBlockingLite { media.addIceCandidate(candidate) }
+                } else {
+                    if (pendingIce.size == SignalEvent.EVENT_BUFFER_LIMIT) pendingIce.removeFirst()
+                    pendingIce.addLast(event.callId to candidate)
+                }
             }
             "call.reject", "call.cancel", "call.end", "call.expire" -> close()
         }
@@ -74,6 +81,7 @@ class ForegroundCallController(
         acceptedCallId = null
         offerStartedCallId = null
         pendingOffer = null
+        pendingIce.clear()
         if (media != null) runBlockingLite { media.close() }
     }
 
@@ -94,14 +102,19 @@ class ForegroundCallController(
         if (current != null && callId == nextCallId) return current
         if (current != null) close()
         callId = nextCallId
-        return mediaFactory(
+        val created = mediaFactory(
             nextCallId,
             iceServers,
             { candidate -> sendIce(nextCallId, candidate) },
             { restartIce(nextCallId) },
-        ).also {
-            session = it
+        )
+        session = created
+        val queued = pendingIce.filter { it.first == nextCallId }.map { it.second }
+        pendingIce.removeAll { it.first == nextCallId }
+        if (queued.isNotEmpty()) runBlockingLite {
+            queued.forEach { created.addIceCandidate(it) }
         }
+        return created
     }
 
     private fun restartIce(nextCallId: String) {

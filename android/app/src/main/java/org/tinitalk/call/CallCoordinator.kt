@@ -61,6 +61,13 @@ class CallCoordinator(
         machine.reset()
     }
 
+    fun fail() {
+        val current = machine.snapshot()
+        if (current.phase != CallPhase.Ended) {
+            machine.transition(CallPhase.Ended, current.callId)
+        }
+    }
+
     fun resume() {
         val callId = machine.snapshot().callId ?: return
         val payload = JsonObject().apply { addProperty("last_seq", machine.snapshot().lastSeq) }

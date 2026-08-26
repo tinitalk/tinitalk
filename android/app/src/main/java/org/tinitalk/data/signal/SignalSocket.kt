@@ -16,7 +16,7 @@ class SignalSocket(
 	private val session: Session,
 	private val backoff: ReconnectBackoff = ReconnectBackoff(),
 ) : SignalClient {
-	private var socket: WebSocket? = null
+	@Volatile private var socket: WebSocket? = null
 	@Volatile private var closed = false
 	@Volatile private var opened = false
 	private val pending = ArrayDeque<String>()
@@ -25,8 +25,19 @@ class SignalSocket(
 		onEvent: (SequencedSignalEvent) -> Unit,
 		onOpen: () -> Unit = {},
 		onDisconnected: () -> Unit = {},
+		onError: (String) -> Unit = {},
 	) {
 		closed = false
+		open(onEvent, onOpen, onDisconnected, onError)
+	}
+
+	private fun open(
+		onEvent: (SequencedSignalEvent) -> Unit,
+		onOpen: () -> Unit,
+		onDisconnected: () -> Unit,
+		onError: (String) -> Unit,
+	) {
+		if (closed) return
 		opened = false
 		val request = Request.Builder()
 			.url(socketUrl())
@@ -36,6 +47,7 @@ class SignalSocket(
 			override fun onOpen(webSocket: WebSocket, response: Response) {
 				backoff.reset()
 				synchronized(pending) {
+					if (closed || socket !== webSocket) return
 					pending.forEach(webSocket::send)
 					pending.clear()
 					opened = true
@@ -44,21 +56,51 @@ class SignalSocket(
 			}
 
 			override fun onMessage(webSocket: WebSocket, text: String) {
-				val json = JsonParser.parseString(text).asJsonObject
-				val seq = json.remove("seq")?.asLong ?: 0L
-				onEvent(SequencedSignalEvent(SignalEvent.decode(json.toString()), seq))
+				if (closed || socket !== webSocket) return
+				try {
+					val json = JsonParser.parseString(text).asJsonObject
+					json["error"]?.asString?.let {
+						onError(it)
+						return
+					}
+					val seq = json.remove("seq")?.asLong ?: 0L
+					onEvent(SequencedSignalEvent(SignalEvent.decode(json.toString()), seq))
+				} catch (_: Exception) {
+					onError("invalid server event")
+				}
 			}
 
 			override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-				if (closed) return
-				synchronized(pending) { opened = false }
-				onDisconnected()
-				Thread {
-					Thread.sleep(backoff.nextDelayMillis())
-					if (!closed) connect(onEvent, onOpen, onDisconnected)
-				}.start()
+				reconnect(webSocket, onEvent, onOpen, onDisconnected, onError)
+			}
+
+			override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+				webSocket.close(code, reason)
+			}
+
+			override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+				reconnect(webSocket, onEvent, onOpen, onDisconnected, onError)
 			}
 		})
+	}
+
+	private fun reconnect(
+		webSocket: WebSocket,
+		onEvent: (SequencedSignalEvent) -> Unit,
+		onOpen: () -> Unit,
+		onDisconnected: () -> Unit,
+		onError: (String) -> Unit,
+	) {
+		synchronized(pending) {
+			if (closed || socket !== webSocket) return
+			opened = false
+			socket = null
+		}
+		onDisconnected()
+		Thread {
+			Thread.sleep(backoff.nextDelayMillis())
+			if (!closed) open(onEvent, onOpen, onDisconnected, onError)
+		}.start()
 	}
 
     override fun send(event: SignalEvent) {

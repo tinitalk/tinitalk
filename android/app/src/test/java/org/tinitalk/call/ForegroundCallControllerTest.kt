@@ -126,6 +126,24 @@ class ForegroundCallControllerTest {
         assertEquals("restart-offer", signal.sent.single().payload["sdp"].asString)
     }
 
+    @Test
+    fun keepsRemoteIceCandidateThatArrivesBeforeOffer() {
+        val media = FakeMediaSession()
+        val controller = ForegroundCallController(CapturingSignalClient(), { _, _, _, _ -> media }, ids)
+        val candidate = JsonObject().apply {
+            addProperty("sdp_mid", "audio")
+            addProperty("sdp_mline_index", 0)
+            addProperty("candidate", "candidate:early")
+        }
+        val offer = JsonObject().apply { addProperty("sdp", "remote-offer") }
+
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.ice", candidate))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.offer", offer))
+
+        assertEquals(listOf("candidate:early"), media.remoteCandidates.map { it.candidate })
+    }
+
     private fun activeSnapshot(): CallSnapshot = CallSnapshot(CallPhase.Active, callId, 1)
 
     private fun event(type: String, payload: JsonObject = JsonObject()): SignalEvent =
@@ -146,6 +164,7 @@ class ForegroundCallControllerTest {
     ) : MediaSession {
         var acceptedOffer: String? = null
         var closed = false
+        val remoteCandidates = mutableListOf<IceCandidateData>()
 
         override suspend fun createOffer(): String = offer
         override suspend fun acceptOffer(sdp: String): String {
@@ -153,7 +172,9 @@ class ForegroundCallControllerTest {
             return answer
         }
         override suspend fun setAnswer(sdp: String) = Unit
-        override suspend fun addIceCandidate(candidate: IceCandidateData) = Unit
+        override suspend fun addIceCandidate(candidate: IceCandidateData) {
+            remoteCandidates += candidate
+        }
         override suspend fun restartIce(): String = offer
         override fun setMuted(muted: Boolean) = Unit
         override suspend fun close() {
