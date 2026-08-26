@@ -18,14 +18,20 @@
         android:supportsRtl="true">
         <activity
             android:name=".MainActivity"
-            android:exported="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".CallActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:theme="@style/CallTheme"
+            android:turnScreenOn="true" />
         <service
             android:name=".telecom.CallForegroundService"
             android:exported="false"

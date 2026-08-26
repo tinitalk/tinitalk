@@ -14,7 +14,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import org.tinitalk.BuildConfig
-import org.tinitalk.MainActivity
+import org.tinitalk.CallActivity
 import org.tinitalk.R
 import org.tinitalk.call.CallCoordinator
 import org.tinitalk.call.CallAudioState
@@ -206,6 +206,7 @@ class CallForegroundService : Service() {
         var endReason: CallEndReason? = null
         when (intent.action) {
             ActionStart -> {
+                if (call.snapshot().phase != CallPhase.Idle) return
                 CallServiceState.publish(call.snapshot())
                 CallUiStateStore.reset()
                 CallAudioState.reset()
@@ -378,7 +379,7 @@ class CallForegroundService : Service() {
         val content = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            CallActivity.ongoingIntent(this),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val hangUp = PendingIntent.getService(

@@ -4,4 +4,13 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:colorAccent">#276EF1</item>
     </style>
+
+    <style name="CallTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">#07111F</item>
+        <item name="android:statusBarColor">#14213D</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>

@@ -3,7 +3,7 @@ package org.tinitalk.telecom
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import org.tinitalk.MainActivity
+import org.tinitalk.CallActivity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import java.time.Instant
@@ -64,7 +64,7 @@ class IncomingCallController {
         PendingIntent.getActivity(
             context,
             invite.callId.hashCode(),
-            intent(context, MainActivity::class.java, action, invite)
+            intent(context, CallActivity::class.java, action, invite)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             pendingFlags(),
         )

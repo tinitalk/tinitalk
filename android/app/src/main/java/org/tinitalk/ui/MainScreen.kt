@@ -1,7 +1,6 @@
 package org.tinitalk.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,7 +50,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -64,13 +62,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
-import org.tinitalk.call.CallPhase
 import org.tinitalk.data.Contact
 import org.tinitalk.permissions.AppPermissionsState
-import org.tinitalk.telecom.AudioEndpoint
 import org.tinitalk.ui.theme.CallAnswerGreen
-import org.tinitalk.ui.theme.CallBackgroundBottom
-import org.tinitalk.ui.theme.CallBackgroundTop
 import org.tinitalk.ui.theme.CallRejectRed
 
 data class MainScreenState(
@@ -82,18 +76,9 @@ data class MainScreenState(
     val errorMessage: String? = null,
 )
 
-data class CallPanelState(
-    val phase: CallPhase,
-    val peerName: String,
-    val muted: Boolean = false,
-    val currentEndpoint: AudioEndpoint? = null,
-    val availableEndpoints: List<AudioEndpoint> = emptyList(),
-)
-
 @Composable
 fun MainScreen(
     state: MainScreenState,
-    call: CallPanelState?,
     loginResetKey: Int,
     onSignIn: (url: String, login: String, token: String) -> Unit,
     onRequestNotifications: () -> Unit,
@@ -102,22 +87,9 @@ fun MainScreen(
     onRefreshPermissions: () -> Unit,
     onCall: (Contact) -> Unit,
     onSignOut: () -> Unit,
-    onAnswer: () -> Unit,
-    onReject: () -> Unit,
-    onEndCall: () -> Unit,
-    onMute: (Boolean) -> Unit,
-    onSelectEndpoint: (AudioEndpoint) -> Unit,
 ) {
     when {
         state.restoring -> LoadingScreen()
-        call != null -> CallPanel(
-            state = call,
-            onAnswer = onAnswer,
-            onReject = onReject,
-            onEndCall = onEndCall,
-            onMute = onMute,
-            onSelectEndpoint = onSelectEndpoint,
-        )
         !state.signedIn -> LoginScreen(loginResetKey, state.signingIn, state.errorMessage, onSignIn)
         !state.permissions.allRequiredGranted -> PermissionsScreen(
             permissions = state.permissions,
@@ -503,107 +475,6 @@ private fun AppPage(onSignOut: () -> Unit, content: @Composable () -> Unit) {
             },
             dismissButton = { TextButton(onClick = { logoutDialog = false }) { Text("Отмена") } },
         )
-    }
-}
-
-@Composable
-private fun CallPanel(
-    state: CallPanelState,
-    onAnswer: () -> Unit,
-    onReject: () -> Unit,
-    onEndCall: () -> Unit,
-    onMute: (Boolean) -> Unit,
-    onSelectEndpoint: (AudioEndpoint) -> Unit,
-) {
-    val status = when (state.phase) {
-        CallPhase.Ringing -> "Входящий звонок"
-        CallPhase.Connecting -> "Соединяемся…"
-        CallPhase.Active -> "Идёт разговор"
-        CallPhase.Ended -> "Звонок завершён"
-        CallPhase.Idle -> ""
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(CallBackgroundTop, CallBackgroundBottom)))
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(status, color = Color.White.copy(alpha = 0.78f), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(42.dp))
-        Box(
-            modifier = Modifier.size(112.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                contactInitial(state.peerName, state.peerName),
-                color = Color.White,
-                fontSize = 42.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        Spacer(Modifier.height(24.dp))
-        Text(
-            state.peerName,
-            color = Color.White,
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Bold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.weight(1f))
-        when (state.phase) {
-            CallPhase.Ringing -> Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) {
-                CallAction("Отклонить", CallRejectRed, onReject)
-                CallAction("Ответить", CallAnswerGreen, onAnswer)
-            }
-            CallPhase.Connecting -> CallAction("Отменить", CallRejectRed, onEndCall)
-            CallPhase.Active -> {
-                state.currentEndpoint?.let {
-                    Text("Звук: ${it.name}", color = Color.White.copy(alpha = 0.76f))
-                    Spacer(Modifier.height(10.dp))
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    CallAction(if (state.muted) "Включить звук" else "Без звука", Color(0xFF3B4B63)) {
-                        onMute(!state.muted)
-                    }
-                    CallAction("Завершить", CallRejectRed, onEndCall)
-                }
-                val alternatives = state.availableEndpoints.filter { it.id != state.currentEndpoint?.id }
-                if (alternatives.isNotEmpty()) {
-                    Spacer(Modifier.height(18.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        alternatives.forEach { endpoint ->
-                            OutlinedButton(onClick = { onSelectEndpoint(endpoint) }) {
-                                Text(endpoint.name, color = Color.White)
-                            }
-                        }
-                    }
-                }
-            }
-            else -> Unit
-        }
-        Spacer(Modifier.height(28.dp))
-    }
-}
-
-@Composable
-private fun CallAction(label: String, color: Color, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier.height(58.dp),
-        shape = RoundedCornerShape(22.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = color),
-    ) {
-        Text(label, fontWeight = FontWeight.SemiBold)
     }
 }
 

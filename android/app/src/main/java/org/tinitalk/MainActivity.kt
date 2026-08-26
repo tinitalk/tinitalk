@@ -18,12 +18,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
-import org.tinitalk.call.CallAudioState
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallServiceState
-import org.tinitalk.call.CallSnapshot
-import org.tinitalk.call.CallUiState
-import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.ApiException
 import org.tinitalk.data.AuthStore
@@ -32,19 +28,13 @@ import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.push.DeviceRegistrar
-import org.tinitalk.push.IncomingCallNotifier
-import org.tinitalk.push.IncomingInvite
-import org.tinitalk.telecom.AudioEndpointState
 import org.tinitalk.telecom.CallForegroundService
-import org.tinitalk.telecom.IncomingCallController
-import org.tinitalk.ui.CallPanelState
 import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.theme.TiniTalkTheme
 import java.net.MalformedURLException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
-import java.time.Instant
 
 class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -56,98 +46,38 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var repository: ContactRepository
     private lateinit var authStore: AuthStore
-    private val incomingController = IncomingCallController()
     private var screenState by mutableStateOf(MainScreenState())
-    private var callSnapshot by mutableStateOf(CallSnapshot())
-    private var callUiState by mutableStateOf(CallUiState())
-    private var audioEndpoints by mutableStateOf(AudioEndpointState())
-    private var incomingInvite by mutableStateOf<IncomingInvite?>(null)
     private var loginResetKey by mutableIntStateOf(0)
     private var pushRegistrationStarted = false
-    private var handledIncomingAction: String? = null
-
-    private val callObserver: (CallSnapshot) -> Unit = { snapshot ->
-        runOnUiThread {
-            callSnapshot = snapshot
-            if (snapshot.phase == CallPhase.Ended) incomingInvite = null
-        }
-    }
-    private val callUiObserver: (CallUiState) -> Unit = { state ->
-        runOnUiThread { callUiState = state }
-    }
-    private val audioEndpointObserver: (AudioEndpointState) -> Unit = { state ->
-        runOnUiThread { audioEndpoints = state }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         repository = ContactRepository(authStore)
-        callSnapshot = CallServiceState.snapshot()
-        callUiState = CallUiStateStore.snapshot()
-        audioEndpoints = CallAudioState.snapshot()
-
         setContent {
             TiniTalkTheme {
-                val callPanel = currentCallPanel()
                 SideEffect {
                     WindowCompat.getInsetsController(window, window.decorView).apply {
-                        isAppearanceLightStatusBars = callPanel == null
-                        isAppearanceLightNavigationBars = callPanel == null
+                        isAppearanceLightStatusBars = true
+                        isAppearanceLightNavigationBars = true
                     }
                 }
                 MainScreen(
                     state = screenState,
-                    call = callPanel,
                     loginResetKey = loginResetKey,
                     onSignIn = ::loadContacts,
                     onRequestNotifications = ::requestNotificationPermission,
                     onRequestMicrophone = ::requestMicrophonePermission,
                     onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
                     onRefreshPermissions = ::refreshPermissions,
-                    onCall = { contact ->
-                        CallForegroundService.startOutgoing(this, contact.login, contact.displayName)
-                    },
+                    onCall = ::startCall,
                     onSignOut = ::signOut,
-                    onAnswer = { incomingInvite?.let { incomingController.answer(this, it) } },
-                    onReject = { incomingInvite?.let { incomingController.reject(this, it) } },
-                    onEndCall = { CallForegroundService.end(this) },
-                    onMute = { muted -> CallForegroundService.mute(this, muted) },
-                    onSelectEndpoint = { endpoint ->
-                        callSnapshot.callId?.let { callId ->
-                            CallForegroundService.selectAudioEndpoint(this, callId, endpoint.id)
-                        }
-                    },
                 )
             }
         }
-
-        CallServiceState.observe(callObserver)
-        CallUiStateStore.observe(callUiObserver)
-        CallAudioState.observe(audioEndpointObserver)
         refreshPermissions()
         restoreContacts()
-    }
-
-    private fun currentCallPanel(): CallPanelState? {
-        if (!screenState.signedIn || !screenState.permissions.allRequiredGranted) return null
-        val invite = incomingInvite?.takeIf { it.expiresAt.isAfter(Instant.now()) }
-        val phase = if (callSnapshot.phase == CallPhase.Idle && invite != null) {
-            CallPhase.Ringing
-        } else {
-            callSnapshot.phase
-        }
-        if (phase == CallPhase.Idle) return null
-        return CallPanelState(
-            phase = phase,
-            peerName = invite?.caller?.ifEmpty { "TiniTalk" }
-                ?: callUiState.peer?.displayName
-                ?: "TiniTalk",
-            muted = callUiState.muted,
-            currentEndpoint = audioEndpoints.current,
-            availableEndpoints = audioEndpoints.available,
-        )
     }
 
     private fun restoreContacts() {
@@ -176,6 +106,16 @@ class MainActivity : ComponentActivity() {
                 .onSuccess(::showContacts)
                 .onFailure(::showError)
         }.start()
+    }
+
+    private fun startCall(contact: Contact) {
+        val currentCall = CallServiceState.snapshot()
+        if (currentCall.phase != CallPhase.Idle && currentCall.phase != CallPhase.Ended) {
+            startActivity(CallActivity.ongoingIntent(this))
+            return
+        }
+        CallForegroundService.startOutgoing(this, contact.login, contact.displayName)
+        startActivity(CallActivity.outgoingIntent(this, contact.login, contact.displayName))
     }
 
     private fun showContacts(contacts: List<Contact>) {
@@ -215,8 +155,6 @@ class MainActivity : ComponentActivity() {
 
     private fun signOut() {
         repository.signOut()
-        incomingInvite = null
-        handledIncomingAction = null
         pushRegistrationStarted = false
         loginResetKey++
         screenState = MainScreenState(
@@ -225,42 +163,9 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        if (screenState.permissions.allRequiredGranted) handleIncomingIntent(intent)
-    }
-
-    private fun handleIncomingIntent(intent: Intent?) {
-        val pending = incomingController.load(this)
-        val invite = IncomingCallController.inviteFrom(intent) ?: pending?.invite ?: return
-        if (!invite.expiresAt.isAfter(Instant.now())) {
-            incomingController.clear(this, invite.callId)
-            IncomingCallNotifier(this).cancel()
-            if (incomingInvite?.callId == invite.callId) incomingInvite = null
-            return
-        }
-        incomingInvite = invite
-        val action = intent?.action ?: pending?.action ?: IncomingCallController.ActionIncoming
-        val actionKey = "${invite.callId}:$action"
-        if (handledIncomingAction == actionKey) return
-        handledIncomingAction = actionKey
-        when (action) {
-            IncomingCallController.ActionAnswer -> incomingController.answer(this, invite)
-            IncomingCallController.ActionReject -> incomingController.reject(this, invite)
-        }
-    }
-
     override fun onResume() {
         super.onResume()
         refreshPermissions()
-    }
-
-    override fun onDestroy() {
-        CallServiceState.removeObserver(callObserver)
-        CallUiStateStore.removeObserver(callUiObserver)
-        CallAudioState.removeObserver(audioEndpointObserver)
-        super.onDestroy()
     }
 
     private fun refreshPermissions() {
@@ -281,7 +186,6 @@ class MainActivity : ComponentActivity() {
         screenState = screenState.copy(permissions = permissions)
         if (screenState.signedIn && permissions.allRequiredGranted) {
             registerPushToken()
-            handleIncomingIntent(intent)
         }
     }
 
