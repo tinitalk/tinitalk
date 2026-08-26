@@ -43,8 +43,8 @@ class CallForegroundService : Service() {
     private var coordinator: CallCoordinator? = null
     private var media: ForegroundCallController? = null
     private var connected = false
-    @Volatile private var finishing = false
-    @Volatile private var statsPolling = false
+    private var finishing = false
+    private var statsPolling = false
     private val statsTask = object : Runnable {
         override fun run() {
             if (!statsPolling) return
@@ -75,6 +75,7 @@ class CallForegroundService : Service() {
     private val telecom by lazy { TelecomCallController(AndroidTelecomRegistrar(this)) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (finishing) return START_NOT_STICKY
         ensureChannel()
         startForeground(NotificationId, notification())
         if (intent == null || !ensureRuntime()) {
@@ -99,13 +100,13 @@ class CallForegroundService : Service() {
         runCatching { httpClient?.dispatcher?.executorService?.shutdownNow() }
         runCatching { httpClient?.connectionPool?.evictAll() }
         CallAudioState.reset()
-        if (unexpected) {
-            val terminal = coordinator?.snapshot() ?: snapshot
-            if (terminal?.callId != null) {
-                runCatching { CallServiceState.publish(terminal.copy(phase = CallPhase.Ended)) }
-                runCatching { CallServiceState.reset() }
-            }
+        val terminal = coordinator?.snapshot() ?: snapshot
+        if (terminal?.callId != null) {
+            if (terminal.phase != CallPhase.Ended) runCatching { coordinator?.fail() }
+            coordinator?.snapshot()?.let(CallServiceState::publish)
+            runCatching { coordinator?.finish() }
         }
+        CallServiceState.reset()
         media = null
         socket = null
         httpClient = null
@@ -138,26 +139,44 @@ class CallForegroundService : Service() {
         media = newMedia
         newSocket.connect(
             onEvent = { incoming ->
-                if (newCoordinator.onEvent(incoming)) {
-                    newMedia.onSignalEvent(newCoordinator.snapshot(), incoming.event)
+                handler.post {
+                    if (socket !== newSocket || finishing) return@post
+                    if (newCoordinator.onEvent(incoming)) {
+                        newMedia.onSignalEvent(newCoordinator.snapshot(), incoming.event)
+                    }
+                    if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
+                        newMedia.setActive(true)
+                        telecom.setActive(incoming.event.callId) { success ->
+                            if (!success) {
+                                val snapshot = CallServiceState.snapshot()
+                                if (snapshot.callId == incoming.event.callId && snapshot.phase == CallPhase.Active) end(this)
+                            }
+                        }
+                    }
+                    publish()
+                    if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCall()
                 }
-                if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
-                    newMedia.setActive(true)
-                    telecom.setActive(incoming.event.callId)
-                }
-                publish()
-                if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCall()
             },
             onOpen = {
-                connected = true
-                newCoordinator.resume()
-                if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallSoon()
+                handler.post {
+                    if (socket !== newSocket || finishing) return@post
+                    connected = true
+                    newCoordinator.resume()
+                    if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallSoon()
+                }
             },
-            onDisconnected = { connected = false },
+            onDisconnected = {
+                handler.post {
+                    if (socket === newSocket) connected = false
+                }
+            },
             onError = {
-                newCoordinator.fail()
-                publish()
-                finishCall()
+                handler.post {
+                    if (socket !== newSocket || finishing) return@post
+                    newCoordinator.fail()
+                    publish()
+                    finishCall()
+                }
             },
         )
         return true
@@ -214,10 +233,6 @@ class CallForegroundService : Service() {
                 if (!acceptsTelecomCallback(call, intent)) return
                 media?.setActive(false)
             }
-            ActionEndpointsChanged -> {
-                if (!acceptsTelecomCallback(call, intent)) return
-                AudioEndpointStateCodec.decode(intent.getStringExtra(ExtraAudioEndpoints))?.let(CallAudioState::publish)
-            }
             ActionSelectEndpoint -> {
                 val callId = intent.getStringExtra(ExtraCallId) ?: return
                 if (!TelecomActionScope.acceptsSelection(call.snapshot(), callId)) return
@@ -266,10 +281,6 @@ class CallForegroundService : Service() {
         IncomingCallNotifier(this).cancel()
         callId?.let { IncomingCallController().clear(this, it) }
         callId?.let(telecom::cancel)
-        if (snapshot?.phase == CallPhase.Ended) {
-            coordinator?.finish()
-            publish()
-        }
         stopSelf()
     }
 
@@ -277,7 +288,7 @@ class CallForegroundService : Service() {
         onDisconnect = onDisconnect,
         onActive = { telecomActive(this, callId) },
         onInactive = { telecomInactive(this, callId) },
-        onEndpointsChanged = { state -> endpointsChanged(this, callId, state) },
+        onEndpointsChanged = CallAudioState::publish,
     )
 
     private fun acceptsTelecomCallback(call: CallCoordinator, intent: Intent): Boolean {
@@ -348,13 +359,11 @@ class CallForegroundService : Service() {
         const val ActionMute = "org.tinitalk.action.MUTE_CALL"
         const val ActionTelecomActive = "org.tinitalk.action.TELECOM_ACTIVE"
         const val ActionTelecomInactive = "org.tinitalk.action.TELECOM_INACTIVE"
-        const val ActionEndpointsChanged = "org.tinitalk.action.TELECOM_ENDPOINTS_CHANGED"
         const val ActionSelectEndpoint = "org.tinitalk.action.SELECT_AUDIO_ENDPOINT"
         private const val ExtraCallee = "callee"
         private const val ExtraMuted = "muted"
         private const val ExtraCallId = "call_id"
         private const val ExtraEndpointId = "endpoint_id"
-        private const val ExtraAudioEndpoints = "audio_endpoints"
         const val ChannelId = "calls"
         const val NotificationId = 10
         private const val SignalFlushTimeoutMillis = 5_000L
@@ -373,21 +382,15 @@ class CallForegroundService : Service() {
         }
 
         fun telecomActive(context: Context, callId: String) {
+            val snapshot = CallServiceState.snapshot()
+            if (snapshot.callId != callId || snapshot.phase != CallPhase.Active) return
             start(context, Intent(context, CallForegroundService::class.java).setAction(ActionTelecomActive).putExtra(ExtraCallId, callId))
         }
 
         fun telecomInactive(context: Context, callId: String) {
+            val snapshot = CallServiceState.snapshot()
+            if (snapshot.callId != callId || snapshot.phase != CallPhase.Active) return
             start(context, Intent(context, CallForegroundService::class.java).setAction(ActionTelecomInactive).putExtra(ExtraCallId, callId))
-        }
-
-        fun endpointsChanged(context: Context, callId: String, state: AudioEndpointState) {
-            start(
-                context,
-                Intent(context, CallForegroundService::class.java)
-                    .setAction(ActionEndpointsChanged)
-                    .putExtra(ExtraCallId, callId)
-                    .putExtra(ExtraAudioEndpoints, AudioEndpointStateCodec.encode(state)),
-            )
         }
 
         fun selectAudioEndpoint(context: Context, callId: String, endpointId: String) {

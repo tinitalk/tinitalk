@@ -2,6 +2,7 @@ package org.tinitalk.push
 
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import org.tinitalk.call.CallAudioState
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
@@ -40,7 +41,7 @@ class TinitalkMessagingService : FirebaseMessagingService() {
             onDisconnect = { incoming.disconnectFromTelecom(this, invite) },
             onActive = { CallForegroundService.telecomActive(this, invite.callId) },
             onInactive = { CallForegroundService.telecomInactive(this, invite.callId) },
-            onEndpointsChanged = { state -> CallForegroundService.endpointsChanged(this, invite.callId, state) },
+            onEndpointsChanged = CallAudioState::publish,
         ))
         notifier.show(invite)
     }

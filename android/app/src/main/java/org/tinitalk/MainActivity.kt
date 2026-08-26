@@ -256,7 +256,8 @@ class MainActivity : ComponentActivity() {
             CallPhase.Ended -> {
                 incomingInvite = null
                 muted = false
-                renderContacts()
+                status.text = "Ending call..."
+                contacts.removeAllViews()
             }
         }
     }

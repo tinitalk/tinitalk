@@ -60,8 +60,9 @@ class IncomingCallController {
         )
 
     fun answer(context: Context, invite: IncomingInvite) {
-        TelecomCallController(AndroidTelecomRegistrar(context)).answer(invite.callId)
-        answerFromTelecom(context, invite)
+        TelecomCallController(AndroidTelecomRegistrar(context)).answer(invite.callId) { success ->
+            if (success) answerFromTelecom(context, invite) else reject(context, invite)
+        }
     }
 
     fun answerFromTelecom(context: Context, invite: IncomingInvite) {

@@ -23,6 +23,7 @@ class TelecomCallControllerTest {
         val controller = TelecomCallController(registrar)
         val invite = IncomingInvite("call-1", "Alice", Instant.parse("2026-08-26T10:00:30Z"))
         var answered = false
+        var answerSucceeded = false
         var disconnected = false
 
         controller.addIncoming(invite, TelecomCallCallbacks(
@@ -31,11 +32,12 @@ class TelecomCallControllerTest {
         ))
         registrar.onAnswer?.invoke()
         registrar.onDisconnect?.invoke()
-        controller.answer("call-1")
+        controller.answer("call-1") { answerSucceeded = it }
         controller.reject("call-1")
 
         assertEquals(invite, registrar.invite)
         assertTrue(answered)
+        assertTrue(answerSucceeded)
         assertTrue(disconnected)
         assertEquals("call-1", registrar.answeredCall)
         assertEquals("call-1", registrar.rejectedCall)
@@ -46,14 +48,16 @@ class TelecomCallControllerTest {
         val registrar = FakeTelecomRegistrar()
         val controller = TelecomCallController(registrar)
         var disconnected = false
+        var activationSucceeded = false
 
         controller.addOutgoing("call-2", "Bob", TelecomCallCallbacks(onDisconnect = { disconnected = true }))
         registrar.outgoingDisconnect?.invoke()
-        controller.setActive("call-2")
+        controller.setActive("call-2") { activationSucceeded = it }
 
         assertEquals("call-2", registrar.outgoingCallId)
         assertEquals("Bob", registrar.outgoingDisplayName)
         assertTrue(disconnected)
+        assertTrue(activationSucceeded)
         assertEquals("call-2", registrar.activeCall)
     }
 
@@ -131,16 +135,18 @@ class TelecomCallControllerTest {
             onEndpointsChanged = callbacks.onEndpointsChanged
         }
 
-        override fun answer(callId: String) {
+        override fun answer(callId: String, onResult: (Boolean) -> Unit) {
             answeredCall = callId
+            onResult(true)
         }
 
         override fun reject(callId: String) {
             rejectedCall = callId
         }
 
-        override fun setActive(callId: String) {
+        override fun setActive(callId: String, onResult: (Boolean) -> Unit) {
             activeCall = callId
+            onResult(true)
         }
 
         override fun selectEndpoint(callId: String, endpointId: String) {

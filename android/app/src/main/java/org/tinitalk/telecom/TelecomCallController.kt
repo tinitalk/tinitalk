@@ -5,6 +5,7 @@ import android.net.Uri
 import android.telecom.DisconnectCause
 import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlScope
+import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallsManager
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
@@ -18,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 enum class TelecomCapabilities {
@@ -43,9 +45,9 @@ interface TelecomRegistrar {
     fun register(capabilities: TelecomCapabilities)
     fun addIncoming(invite: IncomingInvite, callbacks: TelecomCallCallbacks)
     fun addOutgoing(callId: String, displayName: String, callbacks: TelecomCallCallbacks)
-    fun answer(callId: String)
+    fun answer(callId: String, onResult: (Boolean) -> Unit = {})
     fun reject(callId: String)
-    fun setActive(callId: String)
+    fun setActive(callId: String, onResult: (Boolean) -> Unit = {})
     fun selectEndpoint(callId: String, endpointId: String)
     fun cancel(callId: String)
 }
@@ -63,11 +65,11 @@ class TelecomCallController(private val registrar: TelecomRegistrar) {
         registrar.addOutgoing(callId, displayName, callbacks)
     }
 
-    fun answer(callId: String) = registrar.answer(callId)
+    fun answer(callId: String, onResult: (Boolean) -> Unit = {}) = registrar.answer(callId, onResult)
 
     fun reject(callId: String) = registrar.reject(callId)
 
-    fun setActive(callId: String) = registrar.setActive(callId)
+    fun setActive(callId: String, onResult: (Boolean) -> Unit = {}) = registrar.setActive(callId, onResult)
 
     fun selectEndpoint(callId: String, endpointId: String) = registrar.selectEndpoint(callId, endpointId)
 
@@ -119,8 +121,10 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                 launch {
                     delay(Duration.between(Instant.now(), it).toMillis().coerceAtLeast(0))
                     TelecomSessions.disconnect(callId, DisconnectCause.MISSED)
+                    onFailure()
                 }
             }
+            TelecomSessions.setExpiry(callId, expiry)
             try {
                 callsManager.addCall(
                     CallAttributesCompat(
@@ -130,7 +134,10 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                         callType = CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
                         callCapabilities = 0,
                     ),
-                    onAnswer = { callbacks.onAnswer() },
+                    onAnswer = {
+                        TelecomSessions.cancelExpiry(callId)
+                        callbacks.onAnswer()
+                    },
                     onDisconnect = { callbacks.onDisconnect() },
                     onSetActive = { callbacks.onActive() },
                     onSetInactive = { callbacks.onInactive() },
@@ -155,9 +162,14 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
         }
     }
 
-    override fun answer(callId: String) {
+    override fun answer(callId: String, onResult: (Boolean) -> Unit) {
         TelecomSessions.scope.launch {
-            TelecomSessions.control(callId)?.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)
+            val success = runCatching {
+                TelecomSessions.control(callId)
+                    ?.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL) is CallControlResult.Success
+            }.getOrDefault(false)
+            if (success) TelecomSessions.cancelExpiry(callId)
+            onResult(success)
         }
     }
 
@@ -167,9 +179,12 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
         }
     }
 
-    override fun setActive(callId: String) {
+    override fun setActive(callId: String, onResult: (Boolean) -> Unit) {
         TelecomSessions.scope.launch {
-            TelecomSessions.control(callId)?.setActive()
+            val success = runCatching {
+                TelecomSessions.control(callId)?.setActive() is CallControlResult.Success
+            }.getOrDefault(false)
+            onResult(success)
         }
     }
 
@@ -196,6 +211,7 @@ private fun androidx.core.telecom.CallEndpointCompat.toAudioEndpoint() =
 private object TelecomSessions {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val sessions = ConcurrentHashMap<String, CompletableDeferred<CallControlScope>>()
+    private val expiries = ConcurrentHashMap<String, Job>()
 
     fun prepare(callId: String): CompletableDeferred<CallControlScope>? {
         val session = CompletableDeferred<CallControlScope>()
@@ -209,7 +225,16 @@ private object TelecomSessions {
         control(callId)?.disconnect(DisconnectCause(cause))
     }
 
+    fun setExpiry(callId: String, expiry: Job?) {
+        if (expiry != null) expiries.put(callId, expiry)?.cancel()
+    }
+
+    fun cancelExpiry(callId: String) {
+        expiries.remove(callId)?.cancel()
+    }
+
     fun remove(callId: String, session: CompletableDeferred<CallControlScope>) {
+        cancelExpiry(callId)
         sessions.remove(callId, session)
     }
 }
