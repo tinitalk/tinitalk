@@ -36,6 +36,10 @@
             android:name=".telecom.CallForegroundService"
             android:exported="false"
             android:foregroundServiceType="phoneCall" />
+        <service
+            android:name=".push.IncomingCallForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall" />
         <receiver
             android:name=".telecom.CallActionReceiver"
             android:exported="false" />

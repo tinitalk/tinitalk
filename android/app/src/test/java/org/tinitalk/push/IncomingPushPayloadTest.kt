@@ -100,16 +100,16 @@ class IncomingPushPayloadTest {
     }
 
     @Test
-    fun incomingCallNotificationIsFollowedByFullScreenLaunch() {
+    fun incomingCallEntersForegroundBeforeFullScreenLaunch() {
         val steps = mutableListOf<String>()
         val invite = IncomingInvite("call-1", "Alice", Instant.parse("2026-08-26T10:00:30Z"))
 
-        IncomingCallPresentation(
-            showNotification = { steps += "notification" },
+        IncomingCallForegroundPresentation(
+            enterForeground = { steps += "foreground" },
             openFullScreen = { steps += "full_screen" },
         ).present(invite)
 
-        assertEquals(listOf("notification", "full_screen"), steps)
+        assertEquals(listOf("foreground", "full_screen"), steps)
     }
 
     @Test

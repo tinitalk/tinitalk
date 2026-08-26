@@ -28,12 +28,12 @@ data class IncomingInvite(
     val lastSeq: Long = 0,
 )
 
-internal class IncomingCallPresentation(
-    private val showNotification: (IncomingInvite) -> Unit,
+internal class IncomingCallForegroundPresentation(
+    private val enterForeground: (IncomingInvite) -> Unit,
     private val openFullScreen: (IncomingInvite) -> Unit,
 ) {
     fun present(invite: IncomingInvite) {
-        showNotification(invite)
+        enterForeground(invite)
         openFullScreen(invite)
     }
 }
@@ -81,9 +81,14 @@ private object IncomingRingtone {
 
 class IncomingCallNotifier(private val context: Context) {
     fun show(invite: IncomingInvite) {
+        val notification = buildIncomingNotification(invite) ?: return
+        context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
+    }
+
+    internal fun buildIncomingNotification(invite: IncomingInvite): Notification? {
         ensureChannel()
         val controller = IncomingCallController()
-        if (controller.isTerminal(context, invite.callId)) return
+        if (controller.isTerminal(context, invite.callId)) return null
         controller.save(context, invite)
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(context, ChannelId)
@@ -124,8 +129,7 @@ class IncomingCallNotifier(private val context: Context) {
                 .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
                 .setVibrate(longArrayOf(0, 500, 500, 500))
         }
-        val notification = builder.build()
-        context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
+        return builder.build()
     }
 
     fun showMissed(invite: IncomingInvite) {
@@ -181,6 +185,7 @@ class IncomingCallNotifier(private val context: Context) {
     }
 
     private fun dismissNotification() {
+        IncomingCallForegroundService.stop(context)
         context.getSystemService(NotificationManager::class.java).cancel(NotificationId)
     }
 
@@ -212,11 +217,11 @@ class IncomingCallNotifier(private val context: Context) {
         return context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
     }
 
-    private companion object {
-        const val ChannelId = "incoming_calls_v2"
-        const val MissedChannelId = "missed_calls"
-        const val NotificationId = 11
-        const val MissedNotificationId = 12
+    companion object {
+        private const val ChannelId = "incoming_calls_v2"
+        private const val MissedChannelId = "missed_calls"
+        internal const val NotificationId = 11
+        private const val MissedNotificationId = 12
     }
 }
 

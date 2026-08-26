@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import org.tinitalk.CallActivity
+import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import java.time.Instant
@@ -69,27 +70,19 @@ class IncomingCallController {
         PendingIntent.getActivity(
             context,
             invite.callId.hashCode(),
-            intent(context, CallActivity::class.java, action, invite)
-                .addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        Intent.FLAG_ACTIVITY_NO_USER_ACTION,
-                ),
+            callActivityIntent(context, action, invite),
             pendingFlags(),
-            activityOptions(creator = true),
+            activityOptions(),
         )
 
     fun openScreen(context: Context, invite: IncomingInvite) {
         runCatching {
-            val pending = activityIntent(context, ActionIncoming, invite)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                pending.send(context, 0, null, null, null, null, activityOptions(creator = false))
-            } else {
-                pending.send()
-            }
+            context.startActivity(callActivityIntent(context, ActionIncoming, invite))
         }
     }
+
+    fun presentationIntent(context: Context, invite: IncomingInvite): Intent =
+        intent(context, IncomingCallForegroundService::class.java, IncomingCallForegroundService.ActionShow, invite)
 
     fun actionIntent(context: Context, action: String, invite: IncomingInvite): PendingIntent =
         PendingIntent.getBroadcast(
@@ -176,14 +169,11 @@ class IncomingCallController {
 
         private fun pendingFlags() = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
-        private fun activityOptions(creator: Boolean): Bundle? {
+        private fun activityOptions(): Bundle? {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
-            val options = ActivityOptions.makeBasic()
-            return if (creator) {
-                options.setPendingIntentCreatorBackgroundActivityStartMode(backgroundStartMode()).toBundle()
-            } else {
-                options.setPendingIntentBackgroundActivityStartMode(backgroundStartMode()).toBundle()
-            }
+            return ActivityOptions.makeBasic()
+                .setPendingIntentCreatorBackgroundActivityStartMode(backgroundStartMode())
+                .toBundle()
         }
 
         @Suppress("DEPRECATION")
@@ -202,6 +192,15 @@ class IncomingCallController {
                 .putExtra(ExtraCallerLogin, invite.callerLogin)
                 .putExtra(ExtraExpiresAt, invite.expiresAt.toString())
                 .putExtra(ExtraLastSeq, invite.lastSeq)
+
+        private fun callActivityIntent(context: Context, action: String, invite: IncomingInvite): Intent =
+            intent(context, CallActivity::class.java, action, invite)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_NO_USER_ACTION,
+                )
     }
 }
 
