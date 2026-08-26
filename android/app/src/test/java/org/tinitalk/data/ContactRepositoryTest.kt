@@ -76,11 +76,27 @@ class ContactRepositoryTest {
 
         assertNull(store.load())
     }
+
+    @Test
+    fun loadsCallHistoryUsingSavedSession() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token"))
+        val expected = CallHistoryPage(
+            items = listOf(CallHistoryItem(7, "bob", "Bob", "outgoing", "completed", 1787740200, 65)),
+            nextBefore = 5,
+            latestId = 7,
+            unreadMissedCount = 1,
+        )
+        val repo = ContactRepository(store) { _, _, _ -> FakeApiClient(callHistory = expected) }
+
+        assertEquals(expected, repo.loadCallHistory())
+    }
 }
 
 private class FakeApiClient(
     private val profile: Profile = Profile("alice", "Alice"),
     private val contacts: List<Contact> = emptyList(),
+    private val callHistory: CallHistoryPage = CallHistoryPage(emptyList(), 0, 0, 0),
     private val error: RuntimeException? = null,
 ) : HouseholdApi {
     override fun me(): Profile {
@@ -92,6 +108,10 @@ private class FakeApiClient(
         error?.let { throw it }
         return contacts
     }
+
+    override fun calls(limit: Int, before: Long): CallHistoryPage = callHistory
+
+    override fun markCallsRead(throughId: Long) = Unit
 
     override fun putDevice(deviceId: String, fcmToken: String) = Unit
 }

@@ -34,6 +34,7 @@ import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.WebRtcAudioSession
 import org.tinitalk.media.ConnectionHealthClassifier
+import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
 import java.time.Instant
@@ -167,6 +168,9 @@ class CallForegroundService : Service() {
                     onIceRestartNeeded = onIceRestartNeeded,
                     onConnectionStateChanged = { state ->
                         handler.post {
+                            if (!finishing && state == MediaConnectionState.Connected) {
+                                newCoordinator.mediaConnected()
+                            }
                             val callId = newCoordinator.snapshot().callId
                             if (!finishing && callId != null && CallUiStateStore.snapshot().callId == callId) {
                                 connectionHealthClassifier.reset()

@@ -35,6 +35,7 @@ data class SignalEvent(
             "call.incoming",
             "call.ringing",
             "call.accept",
+            "call.connected",
             "call.reject",
             "call.cancel",
             "call.end",

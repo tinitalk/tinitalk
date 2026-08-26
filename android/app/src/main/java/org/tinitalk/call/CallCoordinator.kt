@@ -28,6 +28,7 @@ class CallCoordinator(
     private val ids: EventIds = UuidEventIds(),
 ) {
     private val machine = CallStateMachine()
+    private var connectedCallId: String? = null
 
     fun snapshot(): CallSnapshot = machine.snapshot()
 
@@ -60,8 +61,17 @@ class CallCoordinator(
         sendTerminal("call.end")
     }
 
+    fun mediaConnected() {
+        val current = machine.snapshot()
+        val callId = current.callId ?: return
+        if (current.phase != CallPhase.Active || connectedCallId == callId) return
+        signal.send(event(callId, "call.connected", JsonObject()))
+        connectedCallId = callId
+    }
+
     fun finish() {
         machine.reset()
+        connectedCallId = null
     }
 
     fun fail() {

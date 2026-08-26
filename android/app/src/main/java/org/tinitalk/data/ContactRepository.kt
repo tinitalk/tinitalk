@@ -35,6 +35,26 @@ class ContactRepository(
         }
     }
 
+    fun loadCallHistory(before: Long = 0, limit: Int = 50): CallHistoryPage? {
+        val session = authStore.load() ?: return null
+        return try {
+            apiFactory(session.url, session.login, session.token).calls(limit, before)
+        } catch (e: ApiException) {
+            if (e.code == 401) authStore.clear()
+            throw e
+        }
+    }
+
+    fun markCallHistoryRead(throughId: Long) {
+        val session = authStore.load() ?: return
+        try {
+            apiFactory(session.url, session.login, session.token).markCallsRead(throughId)
+        } catch (e: ApiException) {
+            if (e.code == 401) authStore.clear()
+            throw e
+        }
+    }
+
     fun signOut() {
         authStore.clear()
     }

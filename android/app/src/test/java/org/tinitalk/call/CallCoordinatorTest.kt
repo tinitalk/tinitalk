@@ -84,6 +84,20 @@ class CallCoordinatorTest {
     }
 
     @Test
+    fun reportsEstablishedMediaConnectionOnlyOnce() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("alice", signal, ids = FixedIds())
+        coordinator.startCall("bob")
+        coordinator.onEvent(event("call.accept", seq = 1))
+
+        coordinator.mediaConnected()
+        coordinator.mediaConnected()
+
+        assertEquals(listOf("call.start", "call.connected"), signal.sent.map { it.type })
+        signal.sent.last().encode()
+    }
+
+    @Test
     fun resumesAfterReconnectFromLastSequence() {
         val signal = FakeSignalClient()
         val coordinator = CallCoordinator("alice", signal, ids = FixedIds())
