@@ -23,7 +23,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -49,6 +51,8 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -108,6 +112,7 @@ data class MainScreenState(
 @Composable
 fun MainScreen(
     state: MainScreenState,
+    contactNameUpdate: ContactNameUpdateState,
     ongoingCall: CallUiState?,
     loginResetKey: Int,
     defaultServerUrl: String,
@@ -117,6 +122,8 @@ fun MainScreen(
     onRequestFullScreenCalls: () -> Unit,
     onRefreshPermissions: () -> Unit,
     onCall: (Contact) -> Unit,
+    onRenameContact: (login: String, customName: String?) -> Unit,
+    onRenameHandled: () -> Unit,
     onOpenCall: () -> Unit,
     onContactsVisible: () -> Unit,
     onHistoryVisible: () -> Unit,
@@ -137,8 +144,11 @@ fun MainScreen(
         )
         else -> HomeScreen(
             state = state,
+            contactNameUpdate = contactNameUpdate,
             ongoingCall = ongoingCall,
             onCall = onCall,
+            onRenameContact = onRenameContact,
+            onRenameHandled = onRenameHandled,
             onOpenCall = onOpenCall,
             onContactsVisible = onContactsVisible,
             onHistoryVisible = onHistoryVisible,
@@ -389,8 +399,11 @@ private fun PermissionItem(
 @Composable
 private fun HomeScreen(
     state: MainScreenState,
+    contactNameUpdate: ContactNameUpdateState,
     ongoingCall: CallUiState?,
     onCall: (Contact) -> Unit,
+    onRenameContact: (login: String, customName: String?) -> Unit,
+    onRenameHandled: () -> Unit,
     onOpenCall: () -> Unit,
     onContactsVisible: () -> Unit,
     onHistoryVisible: () -> Unit,
@@ -399,74 +412,113 @@ private fun HomeScreen(
     onSignOut: () -> Unit,
 ) {
     val pagerState = rememberPagerState(pageCount = { 2 })
+    val contactsListState = rememberLazyListState()
+    val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var selectedContactLogin by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedContact = state.contacts.firstOrNull { it.login == selectedContactLogin }
+
+    LaunchedEffect(selectedContactLogin, state.contacts) {
+        val login = selectedContactLogin ?: return@LaunchedEffect
+        if (state.contacts.none { it.login == login }) {
+            selectedContactLogin = null
+            scope.launch { snackbarHostState.showSnackbar("Контакт больше недоступен") }
+        }
+    }
     LaunchedEffect(pagerState.currentPage) {
         if (pagerState.currentPage == 1) onHistoryVisible() else onContactsVisible()
     }
-    AppPage(onSignOut = onSignOut) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            if (ongoingCall != null) {
-                OngoingCallBanner(ongoingCall, onOpenCall)
-            }
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            ) { page ->
-                if (page == 0) {
-                    ContactsPage(state.contacts, ongoingCall, onCall)
-                } else {
-                    HistoryScreen(
-                        items = state.history,
-                        loaded = state.historyLoaded,
-                        loading = state.historyLoading,
-                        loadingMore = state.historyLoadingMore,
-                        nextBefore = state.historyNextBefore,
-                        errorMessage = state.historyErrorMessage,
-                        onLoadMore = onLoadMoreHistory,
-                        onRetry = onRetryHistory,
-                    )
-                }
-            }
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                NavigationBarItem(
-                    selected = pagerState.currentPage == 0,
-                    onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
-                    icon = {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_contacts),
-                            contentDescription = null,
-                            modifier = Modifier.size(24.dp),
-                        )
-                    },
-                    label = { Text("Контакты") },
-                )
-                NavigationBarItem(
-                    selected = pagerState.currentPage == 1,
-                    onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
-                    icon = {
-                        BadgedBox(
-                            badge = {
-                                historyBadgeText(state.unreadMissedCount)?.let { count ->
-                                    Badge { Text(count) }
-                                }
-                            },
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_history),
-                                contentDescription = null,
-                                modifier = Modifier.size(24.dp),
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (selectedContact != null) {
+            ContactScreen(
+                contact = selectedContact,
+                nameUpdate = contactNameUpdate,
+                ongoingCall = ongoingCall,
+                onBack = { selectedContactLogin = null },
+                onCall = onCall,
+                onOpenCall = onOpenCall,
+                onRename = { customName -> onRenameContact(selectedContact.login, customName) },
+                onRenameHandled = onRenameHandled,
+            )
+        } else {
+            AppPage(onSignOut = onSignOut) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (ongoingCall != null) {
+                        OngoingCallBanner(ongoingCall, onOpenCall)
+                    }
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    ) { page ->
+                        if (page == 0) {
+                            ContactsPage(
+                                contacts = state.contacts,
+                                listState = contactsListState,
+                                onContactSelected = { selectedContactLogin = it.login },
+                            )
+                        } else {
+                            HistoryScreen(
+                                items = state.history,
+                                loaded = state.historyLoaded,
+                                loading = state.historyLoading,
+                                loadingMore = state.historyLoadingMore,
+                                nextBefore = state.historyNextBefore,
+                                errorMessage = state.historyErrorMessage,
+                                onLoadMore = onLoadMoreHistory,
+                                onRetry = onRetryHistory,
                             )
                         }
-                    },
-                    label = { Text("История") },
-                )
+                    }
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                        NavigationBarItem(
+                            selected = pagerState.currentPage == 0,
+                            onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                            icon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_contacts),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp),
+                                )
+                            },
+                            label = { Text("Контакты") },
+                        )
+                        NavigationBarItem(
+                            selected = pagerState.currentPage == 1,
+                            onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                            icon = {
+                                BadgedBox(
+                                    badge = {
+                                        historyBadgeText(state.unreadMissedCount)?.let { count ->
+                                            Badge { Text(count) }
+                                        }
+                                    },
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_history),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                }
+                            },
+                            label = { Text("История") },
+                        )
+                    }
+                }
             }
         }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+        )
     }
 }
 
 @Composable
-private fun ContactsPage(contacts: List<Contact>, ongoingCall: CallUiState?, onCall: (Contact) -> Unit) {
+private fun ContactsPage(
+    contacts: List<Contact>,
+    listState: LazyListState,
+    onContactSelected: (Contact) -> Unit,
+) {
     if (contacts.isEmpty()) {
         Column(
             modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -483,12 +535,13 @@ private fun ContactsPage(contacts: List<Contact>, ongoingCall: CallUiState?, onC
         }
     } else {
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(contacts, key = { contact -> contact.login }) { contact ->
-                ContactRow(contact, onCall, enabled = ongoingCall == null)
+                ContactRow(contact, onContactSelected)
             }
         }
     }
@@ -552,22 +605,16 @@ private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
 }
 
 @Composable
-private fun ContactRow(contact: Contact, onCall: (Contact) -> Unit, enabled: Boolean) {
+private fun ContactRow(contact: Contact, onOpen: (Contact) -> Unit) {
     val avatarColors = listOf(
-        Color(0xFF394A67),
-        Color(0xFF514464),
-        Color(0xFF30514D),
-        Color(0xFF60443B),
-        Color(0xFF4E5337),
-        Color(0xFF593F4C),
+        Color(0xFF394A67), Color(0xFF514464), Color(0xFF30514D),
+        Color(0xFF60443B), Color(0xFF4E5337), Color(0xFF593F4C),
     )
     val name = contactDisplayName(contact.displayName)
     val avatarColor = avatarColors[contactColorIndex(contact.login, avatarColors.size)]
-    val description = if (enabled) "Позвонить: $name" else "Сначала завершите текущий звонок"
     Surface(
-        onClick = { onCall(contact) },
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth().semantics { contentDescription = description },
+        onClick = { onOpen(contact) },
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Открыть контакт: $name" },
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.78f)),
@@ -605,13 +652,13 @@ private fun ContactRow(contact: Contact, onCall: (Contact) -> Unit, enabled: Boo
                 modifier = Modifier
                     .size(48.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = if (enabled) 1f else 0.28f)),
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_call),
+                    painter = painterResource(R.drawable.ic_chevron_right),
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = if (enabled) 1f else 0.55f),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(23.dp),
                 )
             }

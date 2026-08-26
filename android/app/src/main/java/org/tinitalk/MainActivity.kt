@@ -11,6 +11,8 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -34,12 +36,14 @@ import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainScreenState
+import org.tinitalk.ui.ContactNameViewModel
 import org.tinitalk.ui.theme.TiniTalkTheme
 import java.net.MalformedURLException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
 class MainActivity : ComponentActivity() {
+    private val contactNameViewModel by viewModels<ContactNameViewModel>()
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { refreshPermissions() }
@@ -66,6 +70,14 @@ class MainActivity : ComponentActivity() {
         repository = ContactRepository(authStore)
         setContent {
             TiniTalkTheme(darkTheme = true) {
+                val contactNameUpdate = contactNameViewModel.state
+                val visibleScreenState = screenState.withContactUpdates(contactNameViewModel.updatedContacts)
+                LaunchedEffect(contactNameUpdate.authExpired) {
+                    if (contactNameUpdate.authExpired) {
+                        contactNameViewModel.reset()
+                        showError(ApiException(401, "unauthorized"))
+                    }
+                }
                 SideEffect {
                     WindowCompat.getInsetsController(window, window.decorView).apply {
                         isAppearanceLightStatusBars = false
@@ -73,7 +85,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 MainScreen(
-                    state = screenState,
+                    state = visibleScreenState,
+                    contactNameUpdate = contactNameUpdate,
                     ongoingCall = callUiState.takeIf {
                         it.phase != CallPhase.Idle && it.phase != CallPhase.Ended
                     },
@@ -85,6 +98,10 @@ class MainActivity : ComponentActivity() {
                     onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
                     onRefreshPermissions = ::refreshPermissions,
                     onCall = ::startCall,
+                    onRenameContact = { login, customName ->
+                        contactNameViewModel.rename(repository, login, customName)
+                    },
+                    onRenameHandled = contactNameViewModel::clearResult,
                     onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
                     onContactsVisible = { historyVisible = false },
                     onHistoryVisible = ::showHistory,
@@ -119,6 +136,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadContacts(url: String, login: String, token: String) {
+        contactNameViewModel.reset()
         screenState = screenState.copy(signingIn = true, errorMessage = null)
         Thread {
             runCatching { repository.signIn(url, login, token) }
@@ -272,6 +290,7 @@ class MainActivity : ComponentActivity() {
 
     private fun signOut() {
         repository.signOut()
+        contactNameViewModel.reset()
         historyLoadGeneration++
         historyVisible = false
         IncomingCallNotifier(this).clearMissedCount()
@@ -372,4 +391,20 @@ class MainActivity : ComponentActivity() {
         pushRegistrationStarted = true
         DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this))
     }
+}
+
+private fun MainScreenState.withContactUpdates(updates: Map<String, Contact>): MainScreenState {
+    if (updates.isEmpty()) return this
+    val contacts = contacts
+        .map { updates[it.login] ?: it }
+        .sortedWith(
+            compareBy<Contact, String>(String.CASE_INSENSITIVE_ORDER) { it.displayName.trim() }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.login },
+        )
+    return copy(
+        contacts = contacts,
+        history = history.map { item ->
+            updates[item.peerLogin]?.let { item.copy(peerName = it.displayName) } ?: item
+        },
+    )
 }
