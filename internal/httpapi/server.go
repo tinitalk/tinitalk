@@ -58,6 +58,8 @@ func (s *Server) routes() {
 	s.mux.Handle("/api/me", s.requireAuth(http.HandlerFunc(s.profile)))
 	s.mux.Handle("/api/contacts", s.requireAuth(http.HandlerFunc(s.contacts)))
 	s.mux.Handle("/api/device", s.requireAuth(http.HandlerFunc(s.device)))
+	s.mux.Handle("/api/calls", s.requireAuth(http.HandlerFunc(s.calls)))
+	s.mux.Handle("/api/calls/read", s.requireAuth(http.HandlerFunc(s.readCalls)))
 	s.mux.Handle("/api/socket", s.requireAuth(http.HandlerFunc(s.socket)))
 }
 
