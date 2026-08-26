@@ -1,8 +1,12 @@
 # TiniTalk
 
-Self-hosted Android audio calls for a small household. The server is a single Go binary with HTTPS/WSS signaling, SQLite state, FCM wake-ups, and embedded TURN fallback.
+Self-hosted Android-аудиозвонки для небольшой семьи. Сервер - один Go-бинарник:
+HTTPS/WSS-сигналинг, SQLite-состояние, FCM-пробуждение входящих звонков и
+встроенный TURN fallback.
 
-Five useful commands:
+## Быстрый старт
+
+Пять основных команд:
 
 ```bash
 make server
@@ -12,9 +16,116 @@ sudo -u tinitalk tinitalk user add --data-dir /var/lib/tinitalk alice "Alice"
 make client
 ```
 
-The same Make targets work from Windows and WSL. In WSL, the server uses the Linux Go toolchain while the Android build reuses the Windows JDK and Android SDK through WSL interop. Override `JAVA17` or `WINDOWS_CMD` if they are installed elsewhere. On native Linux, Gradle uses `JAVA_HOME` and the Android SDK from the environment.
+Те же Make target'ы работают из Windows и WSL. В WSL сервер собирается Linux
+Go toolchain'ом, а Android-сборка использует Windows JDK и Android SDK через
+WSL interop. Если JDK или `cmd.exe` лежат нестандартно, переопредели `JAVA17`
+или `WINDOWS_CMD`. На обычном Linux Gradle использует `JAVA_HOME` и Android SDK
+из окружения.
 
-Obtain the certificate with Certbot and copy the current pair where the service can read it:
+## Firebase-файлы
+
+Для полноценного FCM нужны два разных JSON-файла из одного Firebase project:
+
+- `google-services.json` - клиентский Android-конфиг для APK.
+- `firebase-service-account.json` - серверный ключ service account для отправки
+  FCM push через HTTP v1 API.
+
+Это разные файлы. `google-services.json` не содержит `private_key` и не подходит
+для сервера. Service account JSON содержит `type: "service_account"`,
+`project_id`, `client_email` и `private_key`.
+
+### Как открыть Firebase Console
+
+1. Открой в браузере:
+
+```text
+https://console.firebase.google.com/
+```
+
+2. Войди в Google-аккаунт.
+3. Если Firebase project для TiniTalk уже есть, кликни по нему.
+4. Если проекта еще нет, нажми `Create a project` / `Создать проект` и пройди
+   мастер создания. Google Analytics можно включить или пропустить - для
+   TiniTalk это не принципиально.
+5. Внутри проекта нажми шестеренку рядом с `Project Overview`.
+6. Выбери `Project settings`.
+
+Дальше в `Project settings` есть две нужные вкладки:
+
+```text
+General          -> для google-services.json
+Service accounts -> для firebase-service-account.json
+```
+
+### Android google-services.json
+
+Нужен, чтобы Android-приложение могло получить FCM registration token.
+
+Как получить:
+
+1. Открой `Project settings` -> `General`.
+2. В блоке `Your apps` нажми Android-иконку или выбери уже созданное Android
+   app.
+3. Если добавляешь новое Android app, Android package name должен быть:
+
+```text
+org.tinitalk
+```
+
+4. Нажми `Register app`.
+5. Скачай `google-services.json`.
+6. Положи файл сюда:
+
+```text
+android/app/google-services.json
+```
+
+После этого собирай APK:
+
+```bash
+make client
+```
+
+Файл `android/app/google-services.json` игнорируется Git'ом. APK без него
+соберется, но FCM-пробуждение из фона работать не будет.
+
+### Server firebase-service-account.json
+
+Нужен серверу, чтобы отправлять FCM push при входящем звонке.
+
+Как получить:
+
+1. Открой тот же Firebase project.
+2. Открой `Project settings` -> `Service accounts`.
+3. Нажми `Generate new private key`.
+4. Подтверди `Generate key`.
+5. Сохрани скачанный JSON как, например:
+
+```text
+firebase-service-account.json
+```
+
+Не коммить этот файл. В нем есть приватный ключ.
+
+На сервере передай этот файл при первой инициализации:
+
+```bash
+sudo -u tinitalk tinitalk init \
+  --data-dir /var/lib/tinitalk \
+  --fcm-service-account firebase-service-account.json
+```
+
+`tinitalk init` сохраняет содержимое service account в SQLite state, поэтому
+сам JSON-файл после успешной инициализации можно удалить с сервера.
+
+Если запустить `tinitalk init` без `--fcm-service-account`, звонки будут
+работать только когда приложение уже активно или само подключено к серверу;
+FCM-пробуждение телефона из фона будет недоступно.
+
+## Сертификат
+
+Получи сертификат через Certbot и скопируй актуальную пару туда, где сервис
+`tinitalk` сможет ее читать:
 
 ```bash
 sudo certbot certonly --standalone -d calls.example.com
@@ -23,9 +134,12 @@ sudo install -o tinitalk -g tinitalk -m 0644 /etc/letsencrypt/live/calls.example
 sudo install -o tinitalk -g tinitalk -m 0600 /etc/letsencrypt/live/calls.example.com/privkey.pem /var/lib/tinitalk/tls/privkey.pem
 ```
 
-Use the same two `install` commands as a Certbot deploy hook after renewal. TiniTalk reads the files on every new TLS connection and starts using the renewed pair without a restart. If renewal temporarily exposes an incomplete pair, the last valid certificate remains active.
+Эти же две команды `install` стоит добавить в Certbot deploy hook после
+renewal. TiniTalk читает TLS-файлы на каждом новом TLS-соединении и начинает
+использовать обновленную пару без рестарта. Если renewal временно откроет
+неполную пару, последняя валидная пара останется активной.
 
-Run the server:
+## Запуск сервера
 
 ```bash
 tinitalk serve --data-dir /var/lib/tinitalk --addr :443 \
@@ -37,7 +151,8 @@ tinitalk serve --data-dir /var/lib/tinitalk --addr :443 \
   --turn-tls-addr :5349
 ```
 
-For unattended startup, replace the example hostname and IP in `deploy/tinitalk.service`, then install it:
+Для запуска через systemd замени example hostname и IP в
+`deploy/tinitalk.service`, затем установи unit:
 
 ```bash
 sudo install -m 0644 deploy/tinitalk.service /etc/systemd/system/tinitalk.service
@@ -45,7 +160,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tinitalk
 ```
 
-Diagnostics and backup:
+## Диагностика и backup
 
 ```bash
 tinitalk doctor --data-dir /var/lib/tinitalk --host calls.example.com --addr :443 --turn-addr :3478 --turn-tls-addr :5349
@@ -53,20 +168,41 @@ tinitalk backup --data-dir /var/lib/tinitalk --out /var/backups/tinitalk/state-$
 make check
 ```
 
-VPS notes:
+## Заметки по VPS
 
-- Open TCP 80 for Certbot standalone renewal, TCP 443 for HTTPS/WSS, TCP/UDP 3478 and TCP 5349 for TURN, and UDP 49160-49200 for relayed media.
-- Point the DNS `A` record at the VPS before requesting the certificate.
-- Keep `/var/lib/tinitalk/state.db` owned by `tinitalk:tinitalk` and mode `0600`.
-- Do not commit Firebase service-account JSON, `state.db`, APKs, or built binaries.
-- For updates: stop the service, replace `/usr/local/bin/tinitalk`, run `doctor` as root while the low ports are free, then start the service.
-- To restore: stop service, copy a verified backup to `/var/lib/tinitalk/state.db`, fix ownership/mode, start service, run `doctor`.
+- DNS `A` record должен указывать на VPS до выпуска сертификата.
+- `/var/lib/tinitalk/state.db` должен принадлежать `tinitalk:tinitalk` и иметь
+  mode `0600`.
+- Не коммить Firebase service account JSON, `state.db`, APK и собранные
+  бинарники.
+- Для обновления: останови сервис, замени `/usr/local/bin/tinitalk`, запусти
+  `doctor` от root пока низкие порты свободны, затем снова запусти сервис.
+- Для восстановления: останови сервис, скопируй проверенный backup в
+  `/var/lib/tinitalk/state.db`, поправь owner/mode, запусти сервис и выполни
+  `doctor`.
 
-Android notes:
+## Заметки по Android
 
-- Register Android app ID `org.tinitalk` in the same Firebase project, then place its downloaded config at `android/app/google-services.json` before `make client`. The file is ignored by Git. An APK built without it works only while the app is already running; FCM wake-up is unavailable.
-- Install `dist/tinitalk-debug.apk`, open the app once, sign in, and complete the microphone, notification, and full-screen incoming-call permission screen.
-- Build the relay-only diagnostic APK with `make client GRADLE_ARGS=-PtinitalkForceRelay=true`; rebuild normally afterward.
-- Test both direct media and forced TURN relay from the real networks you care about.
-- During an active call, inspect the redacted WebRTC diagnostics with `adb logcat -s TiniTalkCall`.
-- A forced-relay run is accepted only when `local_candidate_type` or `remote_candidate_type` is `relay`; these logs contain no IP addresses or credentials.
+- Перед `make client` положи Firebase Android config в
+  `android/app/google-services.json`.
+- Установи `dist/tinitalk-debug.apk`, открой приложение один раз, войди и выдай
+  разрешения на микрофон, уведомления и full-screen incoming calls.
+- Relay-only диагностический APK собирается так:
+
+```bash
+make client GRADLE_ARGS=-PtinitalkForceRelay=true
+```
+
+После диагностики пересобери обычный APK.
+
+- Проверь и прямой media path, и принудительный TURN relay из реальных сетей,
+  которые важны.
+- Во время активного звонка смотри redacted WebRTC diagnostics:
+
+```bash
+adb logcat -s TiniTalkCall
+```
+
+- Forced-relay прогон считается успешным только если
+  `local_candidate_type` или `remote_candidate_type` равен `relay`; эти логи не
+  содержат IP-адреса или credentials.
