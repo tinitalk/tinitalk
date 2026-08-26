@@ -1,17 +1,9 @@
 package state
 
-func (db *DB) migrate() error {
-	var version int
-	if err := db.sql.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		return err
-	}
-	if version > schemaVersion {
-		return newerSchemaError(version)
-	}
-	if version == schemaVersion {
-		return nil
-	}
-	statements := []string{
+import "fmt"
+
+var schemaMigrations = [][]string{
+	{
 		`CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 		`CREATE TABLE secrets(key TEXT PRIMARY KEY, value BLOB NOT NULL)`,
 		`CREATE TABLE users(
@@ -41,17 +33,59 @@ func (db *DB) migrate() error {
 			value BLOB NOT NULL,
 			updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 		)`,
-		`PRAGMA user_version = 1`,
-	}
-	tx, err := db.sql.Begin()
-	if err != nil {
+	},
+	{
+		`CREATE TABLE call_history(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			call_id TEXT NOT NULL UNIQUE,
+			caller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			callee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			stage INTEGER NOT NULL DEFAULT 0,
+			outcome INTEGER NOT NULL DEFAULT 0,
+			started_at INTEGER NOT NULL,
+			connected_at INTEGER,
+			ended_at INTEGER,
+			CHECK(caller_id <> callee_id)
+		)`,
+		`CREATE INDEX call_history_by_caller ON call_history(caller_id, id DESC)`,
+		`CREATE INDEX call_history_by_callee ON call_history(callee_id, id DESC)`,
+		`CREATE TABLE call_history_reads(
+			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			through_id INTEGER NOT NULL DEFAULT 0
+		)`,
+	},
+}
+
+func (db *DB) migrate() error {
+	var version int
+	if err := db.sql.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	for _, statement := range statements {
-		if _, err := tx.Exec(statement); err != nil {
+	if version > schemaVersion {
+		return newerSchemaError(version)
+	}
+	if version == schemaVersion {
+		return nil
+	}
+	for version < schemaVersion {
+		tx, err := db.sql.Begin()
+		if err != nil {
+			return err
+		}
+		for _, statement := range schemaMigrations[version] {
+			if _, err := tx.Exec(statement); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+		}
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version+1)); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		version++
 	}
-	return tx.Commit()
+	return nil
 }
