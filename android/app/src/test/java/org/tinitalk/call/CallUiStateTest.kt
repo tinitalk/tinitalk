@@ -48,4 +48,17 @@ class CallUiStateTest {
         assertEquals("new-call", CallUiStateStore.snapshot().callId)
         assertTrue(CallUiStateStore.reset("new-call"))
     }
+
+    @Test
+    fun cancelledOutgoingCallIsNotTurnedBackIntoConnecting() {
+        val ended = CallUiState(
+            callId = "call-1",
+            peer = CallPeer("Bob", "bob"),
+            direction = CallDirection.Outgoing,
+            phase = CallPhase.Ended,
+            endReason = CallEndReason.Cancelled,
+        )
+
+        assertEquals(CallPhase.Ended, outgoingVisibleState(ended, "bob", "Bob").phase)
+    }
 }

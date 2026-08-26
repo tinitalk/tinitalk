@@ -101,6 +101,16 @@ fun formatCallDuration(durationMillis: Long): String {
     }
 }
 
+internal fun outgoingVisibleState(state: CallUiState, login: String, displayName: String): CallUiState {
+    val belongsToCurrentCall = state.direction == CallDirection.Outgoing && state.peer?.login == login
+    if (state.phase != CallPhase.Idle && belongsToCurrentCall) return state
+    return CallUiState(
+        peer = CallPeer(displayName.ifBlank { login }, login),
+        direction = CallDirection.Outgoing,
+        phase = CallPhase.Connecting,
+    )
+}
+
 object CallUiStateStore {
     private val listeners = CopyOnWriteArraySet<(CallUiState) -> Unit>()
 

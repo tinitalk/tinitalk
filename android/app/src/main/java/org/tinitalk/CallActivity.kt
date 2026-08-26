@@ -31,6 +31,7 @@ import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.ConnectionHealth
+import org.tinitalk.call.outgoingVisibleState
 import org.tinitalk.push.IncomingInvite
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
@@ -236,19 +237,7 @@ class CallActivity : ComponentActivity() {
             )
         }
         val login = outgoingLogin
-        if (login != null && (
-                callState.phase == CallPhase.Idle ||
-                    callState.phase == CallPhase.Ended ||
-                    callState.direction != CallDirection.Outgoing ||
-                    callState.peer?.login != login
-                )
-        ) {
-            return CallUiState(
-                peer = CallPeer(outgoingName.orEmpty().ifBlank { login }, login),
-                direction = CallDirection.Outgoing,
-                phase = CallPhase.Connecting,
-            )
-        }
+        if (login != null) return outgoingVisibleState(callState, login, outgoingName.orEmpty())
         return callState
     }
 
