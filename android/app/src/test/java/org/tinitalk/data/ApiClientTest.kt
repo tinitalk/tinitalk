@@ -7,6 +7,20 @@ import org.junit.Test
 
 class ApiClientTest {
     @Test
+    fun loadsContactsFromServerWithoutPersonalNameFields() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""[{"login":"bob","display_name":"Bob"}]"""))
+        server.start()
+        try {
+            val contacts = UrlConnectionApiClient(server.url("/").toString(), "alice", "token").contacts()
+
+            assertEquals(listOf(Contact("bob", "Bob", "Bob", null)), contacts)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun loadsCallHistoryPageFromServerContract() {
         val server = MockWebServer()
         server.enqueue(
@@ -31,7 +45,7 @@ class ApiClientTest {
         )
         server.start()
         try {
-            val page = UrlConnectionApiClient(server.url("/").toString(), "bob", "token").calls()
+            val page = UrlConnectionApiClient(server.url("/").toString(), "bob", "token").calls(peerLogin = "alice")
 
             assertEquals(1, page.items.size)
             assertEquals(CallHistoryItem(7, "alice", "Alice", "incoming", "cancelled_after_ringing", 1787740200, 0), page.items.single())
@@ -39,7 +53,7 @@ class ApiClientTest {
             assertEquals(7, page.latestId)
             assertEquals(1, page.unreadMissedCount)
             val request = server.takeRequest()
-            assertEquals("/api/calls?limit=50&before=0", request.path)
+            assertEquals("/api/calls?limit=50&before=0&peer=alice", request.path)
             assertEquals("Basic Ym9iOnRva2Vu", request.getHeader("Authorization"))
         } finally {
             server.shutdown()
@@ -49,15 +63,49 @@ class ApiClientTest {
     @Test
     fun marksCallHistoryReadThroughRequestedItem() {
         val server = MockWebServer()
-        server.enqueue(MockResponse().setResponseCode(204))
+        server.enqueue(MockResponse().setBody("""{"unread_missed_count":3}"""))
         server.start()
         try {
-            UrlConnectionApiClient(server.url("/").toString(), "bob", "token").markCallsRead(42)
+            val unread = UrlConnectionApiClient(server.url("/").toString(), "bob", "token")
+                .markCallsRead(42, peerLogin = "alice")
 
             val request = server.takeRequest()
+            assertEquals(3, unread)
             assertEquals("PUT", request.method)
             assertEquals("/api/calls/read", request.path)
-            assertEquals("{\"through_id\":42}", request.body.readUtf8())
+            assertEquals("{\"through_id\":42,\"peer_login\":\"alice\"}", request.body.readUtf8())
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun updatesAndResetsPersonalContactName() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"login":"bob","display_name":"Мама","default_display_name":"Bob","custom_name":"Мама"}""",
+            ),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                """{"login":"bob","display_name":"Bob","default_display_name":"Bob","custom_name":null}""",
+            ),
+        )
+        server.start()
+        try {
+            val api = UrlConnectionApiClient(server.url("/").toString(), "alice", "token")
+
+            val renamed = api.updateContactName("bob", "Мама")
+            val renameRequest = server.takeRequest()
+            val reset = api.updateContactName("bob", null)
+            val resetRequest = server.takeRequest()
+
+            assertEquals(Contact("bob", "Мама", "Bob", "Мама"), renamed)
+            assertEquals("/api/contacts/bob/name", renameRequest.path)
+            assertEquals("{\"custom_name\":\"Мама\"}", renameRequest.body.readUtf8())
+            assertEquals(Contact("bob", "Bob", "Bob", null), reset)
+            assertEquals("{\"custom_name\":null}", resetRequest.body.readUtf8())
         } finally {
             server.shutdown()
         }

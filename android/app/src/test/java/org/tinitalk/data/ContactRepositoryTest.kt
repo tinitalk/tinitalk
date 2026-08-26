@@ -87,9 +87,26 @@ class ContactRepositoryTest {
             latestId = 7,
             unreadMissedCount = 1,
         )
-        val repo = ContactRepository(store) { _, _, _ -> FakeApiClient(callHistory = expected) }
+        val api = FakeApiClient(callHistory = expected)
+        val repo = ContactRepository(store) { _, _, _ -> api }
 
-        assertEquals(expected, repo.loadCallHistory())
+        assertEquals(expected, repo.loadCallHistory(peerLogin = "bob"))
+        assertEquals("bob", api.requestedPeer)
+    }
+
+    @Test
+    fun updatesContactAndMarksOnlyItsHistoryRead() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token"))
+        val updated = Contact("bob", "Мама", "Bob", "Мама")
+        val api = FakeApiClient(updatedContact = updated, unreadAfterRead = 2)
+        val repo = ContactRepository(store) { _, _, _ -> api }
+
+        assertEquals(updated, repo.updateContactName("bob", "Мама"))
+        assertEquals(2, repo.markCallHistoryRead(42, peerLogin = "bob"))
+        assertEquals("bob", api.updatedLogin)
+        assertEquals("Мама", api.updatedName)
+        assertEquals("bob", api.readPeer)
     }
 }
 
@@ -97,8 +114,15 @@ private class FakeApiClient(
     private val profile: Profile = Profile("alice", "Alice"),
     private val contacts: List<Contact> = emptyList(),
     private val callHistory: CallHistoryPage = CallHistoryPage(emptyList(), 0, 0, 0),
+    private val updatedContact: Contact = Contact("bob", "Bob"),
+    private val unreadAfterRead: Int = 0,
     private val error: RuntimeException? = null,
 ) : HouseholdApi {
+    var requestedPeer: String? = null
+    var updatedLogin: String? = null
+    var updatedName: String? = null
+    var readPeer: String? = null
+
     override fun me(): Profile {
         error?.let { throw it }
         return profile
@@ -109,9 +133,21 @@ private class FakeApiClient(
         return contacts
     }
 
-    override fun calls(limit: Int, before: Long): CallHistoryPage = callHistory
+    override fun updateContactName(login: String, customName: String?): Contact {
+        updatedLogin = login
+        updatedName = customName
+        return updatedContact
+    }
 
-    override fun markCallsRead(throughId: Long) = Unit
+    override fun calls(limit: Int, before: Long, peerLogin: String?): CallHistoryPage {
+        requestedPeer = peerLogin
+        return callHistory
+    }
+
+    override fun markCallsRead(throughId: Long, peerLogin: String?): Int {
+        readPeer = peerLogin
+        return unreadAfterRead
+    }
 
     override fun putDevice(deviceId: String, fcmToken: String) = Unit
 }
