@@ -669,6 +669,40 @@ func TestHubKeepsIncomingAndCancelNotificationsOrdered(t *testing.T) {
 	}
 }
 
+func TestHubKeepsCancelForInFlightIncomingWhenQueueIsFull(t *testing.T) {
+	notifier := &saturatedNotifier{
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+		cancelled: make(chan struct{}),
+	}
+	hub := NewHub(notifier)
+	callA := DeliveredEvent{Event: protocol.Event{CallID: "call-a"}}
+	enqueue := func(next notification) {
+		hub.mu.Lock()
+		hub.enqueueNotification(next)
+		hub.mu.Unlock()
+	}
+
+	enqueue(notification{caller: "alice", callee: "bob", event: callA})
+	select {
+	case <-notifier.started:
+	case <-time.After(time.Second):
+		t.Fatal("incoming notification did not start")
+	}
+	for i := 0; i < notificationQueueLimit; i++ {
+		event := DeliveredEvent{Event: protocol.Event{CallID: fmt.Sprintf("queued-%d", i)}}
+		enqueue(notification{callee: "bob", event: event, cancel: true})
+	}
+	enqueue(notification{callee: "bob", event: callA, cancel: true})
+	close(notifier.release)
+
+	select {
+	case <-notifier.cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("cancel for in-flight incoming was dropped")
+	}
+}
+
 func event(id, callID, typ string, payload map[string]any) protocol.Event {
 	raw, _ := json.Marshal(payload)
 	return protocol.Event{
@@ -770,4 +804,21 @@ func (n *orderedNotifier) IncomingCall(string, string, DeliveredEvent) {
 
 func (n *orderedNotifier) CancelCall(string, DeliveredEvent) {
 	n.events <- "cancel"
+}
+
+type saturatedNotifier struct {
+	started   chan struct{}
+	release   chan struct{}
+	cancelled chan struct{}
+}
+
+func (n *saturatedNotifier) IncomingCall(string, string, DeliveredEvent) {
+	close(n.started)
+	<-n.release
+}
+
+func (n *saturatedNotifier) CancelCall(_ string, event DeliveredEvent) {
+	if event.CallID == "call-a" {
+		close(n.cancelled)
+	}
 }

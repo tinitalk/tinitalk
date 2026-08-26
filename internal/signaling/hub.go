@@ -393,6 +393,9 @@ func (h *Hub) enqueueNotification(next notification) {
 			return
 		}
 		for i := range h.notifications {
+			if i == 0 && h.notifying {
+				continue
+			}
 			if !h.notifications[i].cancel {
 				h.notifications = append(h.notifications[:i], h.notifications[i+1:]...)
 				break
@@ -419,13 +422,24 @@ func (h *Hub) runNotifications() {
 			return
 		}
 		next := h.notifications[0]
+		h.mu.Unlock()
+		h.sendNotification(next)
+
+		h.mu.Lock()
+		if h.notifications[0].cancel != next.cancel {
+			h.mu.Unlock()
+			continue
+		}
 		h.notifications = h.notifications[1:]
 		h.mu.Unlock()
-		if next.cancel {
-			h.notifier.CancelCall(next.callee, next.event)
-		} else {
-			h.notifier.IncomingCall(next.caller, next.callee, next.event)
-		}
+	}
+}
+
+func (h *Hub) sendNotification(next notification) {
+	if next.cancel {
+		h.notifier.CancelCall(next.callee, next.event)
+	} else {
+		h.notifier.IncomingCall(next.caller, next.callee, next.event)
 	}
 }
 
