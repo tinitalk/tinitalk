@@ -14,6 +14,10 @@ class DeviceRegistrar(
         tokenProvider { token -> register(deviceId, token) }
     }
 
+    fun register(deviceId: String, token: String) {
+        register.invoke(deviceId, token)
+    }
+
     companion object {
         fun forSession(context: Context, session: Session): DeviceRegistrar {
             @Suppress("DEPRECATION")

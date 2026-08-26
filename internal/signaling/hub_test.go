@@ -280,6 +280,24 @@ func TestHubDeliversToEveryConnectionForUser(t *testing.T) {
 	}
 }
 
+func TestHubSupportsThreeConcurrentCallsAcrossSixUsers(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	clients := map[string]*Client{}
+	for _, login := range []string{"alice", "bob", "carol", "dave", "erin", "frank"} {
+		clients[login] = hub.Connect(login)
+	}
+	pairs := [][2]string{{"alice", "bob"}, {"carol", "dave"}, {"erin", "frank"}}
+	for i, pair := range pairs {
+		callID := uuid(200 + i)
+		if err := hub.Handle(pair[0], event(uuid(100+i), callID, "call.start", map[string]any{"callee_id": pair[1]})); err != nil {
+			t.Fatal(err)
+		}
+		if incoming := next(t, clients[pair[1]]); incoming.CallID != callID || incoming.Type != "call.incoming" {
+			t.Fatalf("incoming = %+v", incoming)
+		}
+	}
+}
+
 func TestHubReplayContainsOnlyEventsAddressedToUser(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	hub.SetICEConfigProvider(fakeICEConfig{})

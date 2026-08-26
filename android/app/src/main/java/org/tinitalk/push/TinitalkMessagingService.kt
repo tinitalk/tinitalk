@@ -14,7 +14,7 @@ class TinitalkMessagingService : FirebaseMessagingService() {
     @Suppress("DEPRECATION")
     override fun onNewToken(token: String) {
         val session = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher()).load() ?: return
-        DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this))
+        DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this), token)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {

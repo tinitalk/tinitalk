@@ -20,12 +20,21 @@ func TestDoctorRedactsSecretsAndReportsChecks(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := Run(&out, "doctor", "--data-dir", dir, "--addr", "127.0.0.1:0", "--turn-addr", "127.0.0.1:0"); err != nil {
+	if err := Run(&out, "doctor", "--data-dir", dir, "--addr", "127.0.0.1:0", "--turn-addr", "127.0.0.1:0", "--turn-tls-addr", "127.0.0.1:0"); err != nil {
 		t.Fatal(err)
 	}
 
 	got := out.String()
-	for _, want := range []string{"database.integrity: ok", "database.foreign_keys: ok", "users.count: 1", "turn.secret: ok"} {
+	for _, want := range []string{
+		"database.integrity: ok",
+		"database.foreign_keys: ok",
+		"users.count: 1",
+		"turn.secret: ok",
+		"fcm.access: missing",
+		"port.turn_udp: free",
+		"port.turn_tcp: free",
+		"port.turn_tls: free",
+	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("doctor output = %q, want %q", got, want)
 		}

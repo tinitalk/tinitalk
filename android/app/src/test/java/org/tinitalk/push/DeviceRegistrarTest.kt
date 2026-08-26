@@ -21,4 +21,22 @@ class DeviceRegistrarTest {
         assertEquals("device-1", savedDevice)
         assertEquals("fcm-token", savedToken)
     }
+
+    @Test
+    fun registersTokenReceivedFromFirebaseCallback() {
+        var savedDevice = ""
+        var savedToken = ""
+        val registrar = DeviceRegistrar(
+            tokenProvider = { error("current token must not be fetched") },
+            register = { deviceId, token ->
+                savedDevice = deviceId
+                savedToken = token
+            },
+        )
+
+        registrar.register("device-1", "rotated-token")
+
+        assertEquals("device-1", savedDevice)
+        assertEquals("rotated-token", savedToken)
+    }
 }

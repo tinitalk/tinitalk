@@ -35,10 +35,18 @@ tinitalk serve --data-dir /var/lib/tinitalk --addr :443 \
   --turn-tls-addr :5349
 ```
 
+For unattended startup, replace the example hostname and IP in `deploy/tinitalk.service`, then install it:
+
+```bash
+sudo install -m 0644 deploy/tinitalk.service /etc/systemd/system/tinitalk.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now tinitalk
+```
+
 Diagnostics and backup:
 
 ```bash
-tinitalk doctor --data-dir /var/lib/tinitalk --host calls.example.com --addr :443 --turn-addr :3478
+tinitalk doctor --data-dir /var/lib/tinitalk --host calls.example.com --addr :443 --turn-addr :3478 --turn-tls-addr :5349
 tinitalk backup --data-dir /var/lib/tinitalk --out /var/backups/tinitalk/state-$(date +%F).db
 make check
 ```
@@ -49,7 +57,7 @@ VPS notes:
 - Point the DNS `A` record at the VPS before requesting the certificate.
 - Keep `/var/lib/tinitalk/state.db` owned by `tinitalk:tinitalk` and mode `0600`.
 - Do not commit Firebase service-account JSON, `state.db`, APKs, or built binaries.
-- For updates: stop service, replace `/usr/local/bin/tinitalk`, run `doctor`, start service.
+- For updates: stop the service, replace `/usr/local/bin/tinitalk`, run `doctor` as root while the low ports are free, then start the service.
 - To restore: stop service, copy a verified backup to `/var/lib/tinitalk/state.db`, fix ownership/mode, start service, run `doctor`.
 
 Android notes:

@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ func runDoctor(w io.Writer, args []string) error {
 	host := ""
 	addr := ":8080"
 	turnAddr := ":3478"
+	turnTLSAddr := ":5349"
 	for len(rest) > 0 {
 		switch rest[0] {
 		case "--host":
@@ -40,8 +42,14 @@ func runDoctor(w io.Writer, args []string) error {
 			}
 			turnAddr = rest[1]
 			rest = rest[2:]
+		case "--turn-tls-addr":
+			if len(rest) < 2 {
+				return errors.New("--turn-tls-addr requires a value")
+			}
+			turnTLSAddr = rest[1]
+			rest = rest[2:]
 		default:
-			return errors.New("usage: tinitalk doctor --data-dir DIR [--host HOST] [--addr ADDR] [--turn-addr ADDR]")
+			return errors.New("usage: tinitalk doctor --data-dir DIR [--host HOST] [--addr ADDR] [--turn-addr ADDR] [--turn-tls-addr ADDR]")
 		}
 	}
 	db, err := state.OpenDir(dataDir)
@@ -75,13 +83,25 @@ func runDoctor(w io.Writer, args []string) error {
 	}
 	if len(fcmServiceAccount) == 0 {
 		_, _ = fmt.Fprintln(w, "fcm.project: missing")
+		_, _ = fmt.Fprintln(w, "fcm.access: missing")
 	} else if project, err := notify.ProjectIDFromServiceAccount(fcmServiceAccount); err != nil {
 		_, _ = fmt.Fprintln(w, "fcm.project: invalid")
+		_, _ = fmt.Fprintln(w, "fcm.access: invalid")
 	} else {
 		_, _ = fmt.Fprintf(w, "fcm.project: %s\n", project)
+		bearer, err := notify.BearerTokenFromServiceAccount(context.Background(), fcmServiceAccount)
+		if err != nil {
+			_, _ = fmt.Fprintln(w, "fcm.access: invalid")
+		} else if _, err := bearer(); err != nil {
+			_, _ = fmt.Fprintln(w, "fcm.access: error")
+		} else {
+			_, _ = fmt.Fprintln(w, "fcm.access: ok")
+		}
 	}
 	_, _ = fmt.Fprintf(w, "port.http: %s\n", tcpPortStatus(addr))
 	_, _ = fmt.Fprintf(w, "port.turn_udp: %s\n", udpPortStatus(turnAddr))
+	_, _ = fmt.Fprintf(w, "port.turn_tcp: %s\n", tcpPortStatus(turnAddr))
+	_, _ = fmt.Fprintf(w, "port.turn_tls: %s\n", tcpPortStatus(turnTLSAddr))
 	if host != "" {
 		ips, err := net.LookupHost(host)
 		if err != nil {
