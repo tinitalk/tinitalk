@@ -8,6 +8,25 @@ import java.time.Instant
 
 class TelecomCallControllerTest {
     @Test
+    fun cachesEndpointsForSelectionWithoutAnotherFlowEmission() {
+        val cache = EndpointCache<String>()
+        cache.update("call-1", listOf("earpiece", "speaker"))
+
+        assertEquals("speaker", cache.find("call-1", "speaker") { it })
+    }
+
+    @Test
+    fun pendingCallActionFinishesReceiverOnlyOnce() {
+        var finishes = 0
+        val pending = PendingCallAction { finishes++ }
+
+        pending.finish()
+        pending.finish()
+
+        assertEquals(1, finishes)
+    }
+
+    @Test
     fun registersAudioOnlyCapabilities() {
         val registrar = FakeTelecomRegistrar()
         val controller = TelecomCallController(registrar)

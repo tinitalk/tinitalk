@@ -77,10 +77,16 @@ class IncomingCallController {
             pendingFlags(),
         )
 
-    fun answer(context: Context, invite: IncomingInvite) {
-        TelecomCallController(AndroidTelecomRegistrar(context)).answer(invite.callId) { success ->
-            if (success) answerFromTelecom(context, invite) else reject(context, invite)
-        }
+    fun answer(context: Context, invite: IncomingInvite, onComplete: () -> Unit = {}) {
+        runCatching {
+            TelecomCallController(AndroidTelecomRegistrar(context)).answer(invite.callId) { success ->
+                try {
+                    if (success) answerFromTelecom(context, invite) else reject(context, invite)
+                } finally {
+                    onComplete()
+                }
+            }
+        }.onFailure { onComplete() }
     }
 
     fun answerFromTelecom(context: Context, invite: IncomingInvite) {

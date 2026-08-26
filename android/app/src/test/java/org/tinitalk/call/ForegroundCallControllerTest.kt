@@ -434,6 +434,52 @@ class ForegroundCallControllerTest {
         assertEquals(1, media.remoteDescriptionsPrepared)
     }
 
+    @Test
+    fun remoteRestartDropsCandidatesFromPreviousGeneration() {
+        val signal = CapturingSignalClient()
+        val media = FakeMediaSession()
+        lateinit var localIce: (IceCandidateData) -> Unit
+        val controller = ForegroundCallController(signal, { _, _, callback, _ ->
+            localIce = callback
+            media
+        }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.offer", JsonObject().apply { addProperty("sdp", "initial-offer") }))
+        signal.sent.clear()
+
+        val restart = event("rtc.restart")
+        controller.onSignalEvent(activeSnapshot(), restart)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.ice", iceCandidate("candidate:stale")))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.ice", iceCandidate("candidate:fresh", restart.id)))
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.config", iceConfig("fresh-user", "fresh-pass", Instant.ofEpochMilli(120_000L), restart.id)),
+        )
+        localIce(IceCandidateData("audio", 0, "candidate:local-fresh"))
+
+        assertEquals(listOf("candidate:fresh"), media.remoteCandidates.map { it.candidate })
+        assertEquals(restart.id, signal.sent.last().payload["restart_id"].asString)
+    }
+
+    @Test
+    fun retriesPendingRestartAfterSignalReconnect() {
+        val signal = CapturingSignalClient()
+        lateinit var restart: () -> Unit
+        val controller = ForegroundCallController(signal, { _, _, _, callback ->
+            restart = callback
+            FakeMediaSession()
+        }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        signal.sent.clear()
+
+        restart()
+        controller.onSignalConnected()
+
+        assertEquals(listOf("rtc.restart", "rtc.restart"), signal.sent.map { it.type })
+        assertEquals(signal.sent.first().id, signal.sent.last().id)
+    }
+
     private fun activeSnapshot(): CallSnapshot = CallSnapshot(CallPhase.Active, callId, 1)
 
     private fun event(type: String, payload: JsonObject = JsonObject()): SignalEvent =
@@ -456,6 +502,13 @@ class ForegroundCallControllerTest {
     private fun iceServer(expiry: JsonElement? = null): JsonObject = JsonObject().apply {
         add("urls", JsonArray().apply { add("turn:relay.example.com:3478?transport=udp") })
         if (expiry != null) add("expires_at", expiry)
+    }
+
+    private fun iceCandidate(candidate: String, restartID: String? = null): JsonObject = JsonObject().apply {
+        addProperty("sdp_mid", "audio")
+        addProperty("sdp_mline_index", 0)
+        addProperty("candidate", candidate)
+        restartID?.let { addProperty("restart_id", it) }
     }
 
     private class CapturingSignalClient : SignalClient {

@@ -34,6 +34,9 @@ class ForegroundCallController(
     private var offerStartedCallId: String? = null
     private var restartRequestedCallId: String? = null
     private var restartRequestID: String? = null
+    private var pendingRestart: SignalEvent? = null
+    @Volatile private var localIceGeneration: String? = null
+    private var remoteIceGeneration: String? = null
     private var credentialRefreshTask: CancellableTask? = null
     private var pendingOffer: SignalEvent? = null
     private val pendingIce = ArrayDeque<Pair<String, IceCandidateData>>()
@@ -55,6 +58,7 @@ class ForegroundCallController(
             "rtc.config" -> {
                 iceServers = event.payload.parseIceServers()
                 configuredCallId = event.callId
+                event.payload.restartID()?.let { localIceGeneration = it }
                 session?.takeIf { callId == event.callId }?.let { media ->
                     runBlockingLite { media.updateIceServers(iceServers) }
                 }
@@ -62,6 +66,7 @@ class ForegroundCallController(
                     val offer = runBlockingLite { ensureSession(event.callId).restartIce() }
                     restartRequestedCallId = null
                     restartRequestID = null
+                    pendingRestart = null
                     sendSdp(event.callId, "rtc.offer", offer)
                 } else {
                     startOfferWhenReady(event.callId)
@@ -75,8 +80,12 @@ class ForegroundCallController(
             "rtc.answer" -> session?.let { media ->
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
             }
-            "rtc.restart" -> session?.beginRemoteDescription()
+            "rtc.restart" -> {
+                remoteIceGeneration = event.id
+                session?.beginRemoteDescription()
+            }
             "rtc.ice" -> {
+                if (event.payload.restartID() != remoteIceGeneration) return
                 val candidate = IceCandidateData(
                     sdpMid = event.payload["sdp_mid"].asString,
                     sdpMLineIndex = event.payload["sdp_mline_index"].asInt,
@@ -128,6 +137,9 @@ class ForegroundCallController(
         offerStartedCallId = null
         restartRequestedCallId = null
         restartRequestID = null
+        pendingRestart = null
+        localIceGeneration = null
+        remoteIceGeneration = null
         pendingOffer = null
         pendingIce.clear()
         active = false
@@ -173,11 +185,18 @@ class ForegroundCallController(
     private fun isCurrentSession(candidate: MediaSession): Boolean = session === candidate
 
     @Synchronized
+    fun onSignalConnected() {
+        pendingRestart?.let(signal::send)
+    }
+
+    @Synchronized
     private fun restartIce(nextCallId: String) {
         if (offerStartedCallId != nextCallId || callId != nextCallId || restartRequestedCallId == nextCallId) return
         val restart = event(nextCallId, "rtc.restart", JsonObject())
         restartRequestedCallId = nextCallId
         restartRequestID = restart.id
+        pendingRestart = restart
+        remoteIceGeneration = restart.id
         signal.send(restart)
     }
 
@@ -222,6 +241,7 @@ class ForegroundCallController(
             addProperty("sdp_mid", candidate.sdpMid)
             addProperty("sdp_mline_index", candidate.sdpMLineIndex)
             addProperty("candidate", candidate.candidate)
+            localIceGeneration?.let { addProperty("restart_id", it) }
         }
         signal.send(event(callId, "rtc.ice", payload))
     }

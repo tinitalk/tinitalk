@@ -168,6 +168,7 @@ class CallForegroundService : Service() {
                 handler.post {
                     if (socket !== newSocket || finishing) return@post
                     connected = true
+                    newMedia.onSignalConnected()
                     newCoordinator.resume()
                     if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallSoon()
                 }

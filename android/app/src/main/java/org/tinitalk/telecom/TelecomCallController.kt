@@ -18,7 +18,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -145,6 +144,7 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                     session.complete(this)
                     launch {
                         combine(currentCallEndpoint, availableEndpoints) { current, available ->
+                            TelecomSessions.updateEndpoints(callId, available)
                             AudioEndpointState(
                                 current = current.toAudioEndpoint(),
                                 available = available.map { it.toAudioEndpoint() },
@@ -191,9 +191,7 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
     override fun selectEndpoint(callId: String, endpointId: String) {
         TelecomSessions.scope.launch {
             val control = TelecomSessions.control(callId) ?: return@launch
-            control.availableEndpoints
-                .first()
-                .firstOrNull { it.identifier.toString() == endpointId }
+            TelecomSessions.endpoint(callId, endpointId)
                 ?.let { endpoint -> control.requestEndpointChange(endpoint) }
         }
     }
@@ -208,10 +206,26 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
 private fun androidx.core.telecom.CallEndpointCompat.toAudioEndpoint() =
     AudioEndpoint(identifier.toString(), name.toString(), type)
 
+internal class EndpointCache<T> {
+    private val values = ConcurrentHashMap<String, List<T>>()
+
+    fun update(callId: String, endpoints: List<T>) {
+        values[callId] = endpoints.toList()
+    }
+
+    fun find(callId: String, endpointId: String, identifier: (T) -> String): T? =
+        values[callId]?.firstOrNull { identifier(it) == endpointId }
+
+    fun remove(callId: String) {
+        values.remove(callId)
+    }
+}
+
 private object TelecomSessions {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val sessions = ConcurrentHashMap<String, CompletableDeferred<CallControlScope>>()
     private val expiries = ConcurrentHashMap<String, Job>()
+    private val endpoints = EndpointCache<androidx.core.telecom.CallEndpointCompat>()
 
     fun prepare(callId: String): CompletableDeferred<CallControlScope>? {
         val session = CompletableDeferred<CallControlScope>()
@@ -233,8 +247,16 @@ private object TelecomSessions {
         expiries.remove(callId)?.cancel()
     }
 
+    fun updateEndpoints(callId: String, available: List<androidx.core.telecom.CallEndpointCompat>) {
+        endpoints.update(callId, available)
+    }
+
+    fun endpoint(callId: String, endpointId: String): androidx.core.telecom.CallEndpointCompat? =
+        endpoints.find(callId, endpointId) { it.identifier.toString() }
+
     fun remove(callId: String, session: CompletableDeferred<CallControlScope>) {
         cancelExpiry(callId)
+        endpoints.remove(callId)
         sessions.remove(callId, session)
     }
 }
