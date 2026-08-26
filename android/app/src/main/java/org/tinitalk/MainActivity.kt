@@ -176,7 +176,7 @@ class MainActivity : ComponentActivity() {
         val pending = incomingController.load(this)
         val invite = IncomingCallController.inviteFrom(intent) ?: pending?.invite ?: return
         if (!invite.expiresAt.isAfter(java.time.Instant.now())) {
-            incomingController.clear(this)
+            incomingController.clear(this, invite.callId)
             IncomingCallNotifier(this).cancel()
             return
         }

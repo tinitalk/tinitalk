@@ -59,6 +59,15 @@ func TestNotifierSendsCallCancellation(t *testing.T) {
 	}
 }
 
+func TestCancelMessageIncludesSignalingEventType(t *testing.T) {
+	msg := CancelMessage("project", "token", signaling.DeliveredEvent{
+		Event: protocol.Event{CallID: "call-1", Type: "call.accept"},
+	}, 30*time.Second)
+	if got := msg.Message.Data["call_event"]; got != "call.accept" {
+		t.Fatalf("call_event = %q", got)
+	}
+}
+
 func TestProjectIDFromServiceAccount(t *testing.T) {
 	project, err := ProjectIDFromServiceAccount([]byte(`{"project_id":"example-project"}`))
 	if err != nil {

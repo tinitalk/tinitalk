@@ -7,6 +7,8 @@ import android.app.Person
 import android.content.Context
 import android.os.Build
 import org.tinitalk.R
+import org.tinitalk.call.CallPhase
+import org.tinitalk.call.CallSnapshot
 import org.tinitalk.telecom.IncomingCallController
 import java.time.Instant
 import java.time.Duration
@@ -97,6 +99,21 @@ object IncomingPushPayload {
             expiresAt = expiresAt,
             lastSeq = data["last_seq"]?.toLongOrNull() ?: 0,
         )
+    }
+
+    fun cancellation(data: Map<String, String>): CallCancellation? {
+        if (data["type"] != "call_cancel") return null
+        val callId = data["call_id"].orEmpty()
+        if (callId.isEmpty()) return null
+        return CallCancellation(callId, data["call_event"].orEmpty())
+    }
+}
+
+data class CallCancellation(val callId: String, val eventType: String) {
+    fun shouldDismiss(pendingCallId: String?, snapshot: CallSnapshot): Boolean {
+        if (pendingCallId != callId) return false
+        return eventType != "call.accept" ||
+            snapshot.callId != callId || snapshot.phase != CallPhase.Active
     }
 }
 

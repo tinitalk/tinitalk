@@ -19,8 +19,11 @@ class IncomingCallController {
             .apply()
     }
 
-    fun clear(context: Context) {
+    fun clear(context: Context, callId: String): Boolean {
+        val pending = load(context) ?: return false
+        if (pending.invite.callId != callId) return false
         prefs(context).edit().clear().apply()
+        return true
     }
 
     fun load(context: Context): PendingIncomingCall? {

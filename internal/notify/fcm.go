@@ -124,8 +124,9 @@ func CancelMessage(_ string, token string, event signaling.DeliveredEvent, ttl t
 	var request WakeRequest
 	request.Message.Token = token
 	request.Message.Data = map[string]string{
-		"type":    "call_cancel",
-		"call_id": event.CallID,
+		"type":       "call_cancel",
+		"call_id":    event.CallID,
+		"call_event": event.Type,
 	}
 	request.Message.Android.Priority = "HIGH"
 	request.Message.Android.TTL = ttl.String()

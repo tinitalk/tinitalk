@@ -2,11 +2,12 @@ package org.tinitalk.push
 
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import org.tinitalk.call.CallServiceState
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SharedPreferencesKeyValueStore
-import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.AndroidTelecomRegistrar
+import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.TelecomCallController
 
 @Suppress("OVERRIDE_DEPRECATION")
@@ -19,12 +20,14 @@ class TinitalkMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val notifier = IncomingCallNotifier(this)
-        if (IncomingPushPayload.action(message.data) == PushAction.Cancel) {
-            message.data["call_id"]?.let {
-                TelecomCallController(AndroidTelecomRegistrar(this)).cancel(it)
+        val cancellation = IncomingPushPayload.cancellation(message.data)
+        if (cancellation != null) {
+            val incoming = IncomingCallController()
+            if (cancellation.shouldDismiss(incoming.load(this)?.invite?.callId, CallServiceState.snapshot())) {
+                TelecomCallController(AndroidTelecomRegistrar(this)).cancel(cancellation.callId)
+                notifier.cancel()
+                incoming.clear(this, cancellation.callId)
             }
-            notifier.cancel()
-            IncomingCallController().clear(this)
             return
         }
         val invite = IncomingPushPayload.parse(message.data) ?: return

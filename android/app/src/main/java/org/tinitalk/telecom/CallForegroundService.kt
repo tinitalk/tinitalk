@@ -133,13 +133,14 @@ class CallForegroundService : Service() {
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
                 IncomingCallNotifier(this).cancel()
-                IncomingCallController().clear(this)
+                IncomingCallController().clear(this, invite.callId)
             }
             ActionReject -> {
                 invite ?: return
                 call.restoreIncoming(invite.callId, invite.lastSeq)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.reject()
+                IncomingCallController().clear(this, invite.callId)
             }
             ActionDisconnect -> {
                 invite?.let { call.restoreIncoming(it.callId, it.lastSeq) }
@@ -170,10 +171,11 @@ class CallForegroundService : Service() {
     private fun finishCall() {
         if (finishing) return
         finishing = true
+        val snapshot = coordinator?.snapshot()
         media?.close()
         IncomingCallNotifier(this).cancel()
-        IncomingCallController().clear(this)
-        coordinator?.snapshot()?.callId?.let(telecom::cancel)
+        snapshot?.callId?.let { IncomingCallController().clear(this, it) }
+        snapshot?.callId?.let(telecom::cancel)
         stopSelf()
     }
 

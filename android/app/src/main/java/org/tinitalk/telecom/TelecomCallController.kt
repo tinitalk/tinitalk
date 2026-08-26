@@ -72,7 +72,7 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
             expiresAt = invite.expiresAt,
             onFailure = {
                 IncomingCallNotifier(context).cancel()
-                IncomingCallController().clear(context)
+                IncomingCallController().clear(context, invite.callId)
             },
         )
     }
