@@ -32,6 +32,8 @@ import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.call.outgoingVisibleState
+import org.tinitalk.call.shouldDismissIncomingOverlay
+import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
@@ -173,6 +175,7 @@ class CallActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         activityStarted = true
+        dismissIncomingOverlay()
         updateProximity()
         handler.removeCallbacks(inviteMonitor)
         if (incomingInvite != null) handler.post(inviteMonitor)
@@ -189,6 +192,7 @@ class CallActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         applyIntent(intent)
+        dismissIncomingOverlay()
     }
 
     override fun onDestroy() {
@@ -278,6 +282,12 @@ class CallActivity : ComponentActivity() {
                 connected &&
                 earpiece,
         )
+    }
+
+    private fun dismissIncomingOverlay() {
+        if (shouldDismissIncomingOverlay(activityStarted, visibleCallState())) {
+            IncomingCallNotifier(this).cancel()
+        }
     }
 
     companion object {

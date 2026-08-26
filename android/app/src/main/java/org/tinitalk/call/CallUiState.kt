@@ -111,6 +111,9 @@ internal fun outgoingVisibleState(state: CallUiState, login: String, displayName
     )
 }
 
+internal fun shouldDismissIncomingOverlay(activityVisible: Boolean, state: CallUiState): Boolean =
+    activityVisible && state.direction == CallDirection.Incoming && state.phase == CallPhase.Ringing
+
 object CallUiStateStore {
     private val listeners = CopyOnWriteArraySet<(CallUiState) -> Unit>()
 

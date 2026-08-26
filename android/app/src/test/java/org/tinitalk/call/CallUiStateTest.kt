@@ -61,4 +61,14 @@ class CallUiStateTest {
 
         assertEquals(CallPhase.Ended, outgoingVisibleState(ended, "bob", "Bob").phase)
     }
+
+    @Test
+    fun visibleIncomingCallScreenDismissesOnlyItsSystemOverlay() {
+        val incoming = CallUiState(direction = CallDirection.Incoming, phase = CallPhase.Ringing)
+        val outgoing = CallUiState(direction = CallDirection.Outgoing, phase = CallPhase.Ringing)
+
+        assertTrue(shouldDismissIncomingOverlay(activityVisible = true, incoming))
+        assertFalse(shouldDismissIncomingOverlay(activityVisible = false, incoming))
+        assertFalse(shouldDismissIncomingOverlay(activityVisible = true, outgoing))
+    }
 }
