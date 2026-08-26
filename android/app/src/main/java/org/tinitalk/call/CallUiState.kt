@@ -114,6 +114,40 @@ internal fun outgoingVisibleState(state: CallUiState, login: String, displayName
 internal fun shouldDismissIncomingOverlay(activityVisible: Boolean, state: CallUiState): Boolean =
     activityVisible && state.direction == CallDirection.Incoming && state.phase == CallPhase.Ringing
 
+internal enum class CallScreenAction {
+    Answer,
+    Reject,
+    End,
+}
+
+internal class CallScreenActionGate {
+    private var locked: Lock? = null
+
+    fun lock(action: CallScreenAction, callKey: String): Boolean {
+        if (locked?.callKey == callKey) return false
+        locked = Lock(action, callKey)
+        return true
+    }
+
+    fun onCallState(state: CallUiState) {
+        val current = locked ?: return
+        if (current.action == CallScreenAction.Answer &&
+            current.callKey == state.callId &&
+            state.phase == CallPhase.Active
+        ) {
+            locked = null
+        }
+    }
+
+    fun reset() {
+        locked = null
+    }
+
+    fun isLocked(callKey: String): Boolean = locked?.callKey == callKey
+
+    private data class Lock(val action: CallScreenAction, val callKey: String)
+}
+
 object CallUiStateStore {
     private val listeners = CopyOnWriteArraySet<(CallUiState) -> Unit>()
 

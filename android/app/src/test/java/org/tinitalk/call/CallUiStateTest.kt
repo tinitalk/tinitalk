@@ -71,4 +71,19 @@ class CallUiStateTest {
         assertFalse(shouldDismissIncomingOverlay(activityVisible = false, incoming))
         assertFalse(shouldDismissIncomingOverlay(activityVisible = true, outgoing))
     }
+
+    @Test
+    fun activeIncomingCallReleasesAnswerLockButKeepsHangupLock() {
+        val gate = CallScreenActionGate()
+
+        assertTrue(gate.lock(CallScreenAction.Answer, "call-1"))
+        assertFalse(gate.lock(CallScreenAction.Answer, "call-1"))
+        assertFalse(gate.lock(CallScreenAction.Reject, "call-1"))
+
+        gate.onCallState(CallUiState(callId = "call-1", phase = CallPhase.Active))
+
+        assertTrue(gate.lock(CallScreenAction.End, "call-1"))
+        gate.onCallState(CallUiState(callId = "call-1", phase = CallPhase.Active))
+        assertFalse(gate.lock(CallScreenAction.End, "call-1"))
+    }
 }

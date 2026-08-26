@@ -27,6 +27,8 @@ import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallPhase
+import org.tinitalk.call.CallScreenAction
+import org.tinitalk.call.CallScreenActionGate
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
@@ -53,14 +55,15 @@ class CallActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var proximityController: ProximityController
     private var activityStarted = false
+    private val actionGate = CallScreenActionGate()
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
     private var incomingInvite by mutableStateOf<IncomingInvite?>(null)
     private var outgoingLogin by mutableStateOf<String?>(null)
     private var outgoingName by mutableStateOf<String?>(null)
-    private var terminalActionKey: String? = null
 
     private val callObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread {
+            actionGate.onCallState(state)
             callState = state
             updateProximity()
         }
@@ -206,7 +209,7 @@ class CallActivity : ComponentActivity() {
     private fun applyIntent(intent: Intent?) {
         val invite = IncomingCallController.inviteFrom(intent)
         if (invite != null) {
-            if (incomingInvite?.callId != invite.callId) terminalActionKey = null
+            if (incomingInvite?.callId != invite.callId) actionGate.reset()
             incomingInvite = invite
             outgoingLogin = null
             outgoingName = null
@@ -222,7 +225,7 @@ class CallActivity : ComponentActivity() {
             outgoingName = null
             return
         }
-        if (outgoingLogin != login) terminalActionKey = null
+        if (outgoingLogin != login) actionGate.reset()
         outgoingLogin = login
         outgoingName = intent.getStringExtra(ExtraOutgoingName).orEmpty().ifBlank { login }
         incomingInvite = null
@@ -247,12 +250,12 @@ class CallActivity : ComponentActivity() {
     }
 
     private fun answer(invite: IncomingInvite) {
-        if (!lockTerminalAction(invite.callId)) return
+        if (!actionGate.lock(CallScreenAction.Answer, invite.callId)) return
         incomingController.answer(this, invite)
     }
 
     private fun reject(invite: IncomingInvite) {
-        if (!lockTerminalAction(invite.callId)) return
+        if (!actionGate.lock(CallScreenAction.Reject, invite.callId)) return
         incomingController.reject(this, invite)
     }
 
@@ -261,14 +264,8 @@ class CallActivity : ComponentActivity() {
             ?: outgoingLogin?.let { "outgoing:$it" }
             ?: state.callId
             ?: return
-        if (!lockTerminalAction(actionKey)) return
+        if (!actionGate.lock(CallScreenAction.End, actionKey)) return
         CallForegroundService.end(this)
-    }
-
-    private fun lockTerminalAction(key: String): Boolean {
-        if (terminalActionKey == key) return false
-        terminalActionKey = key
-        return true
     }
 
     private fun updateProximity() {
@@ -294,7 +291,7 @@ class CallActivity : ComponentActivity() {
 
     private fun restoreIncomingCallNotification() {
         val invite = incomingInvite ?: return
-        val stillRinging = terminalActionKey != invite.callId &&
+        val stillRinging = !actionGate.isLocked(invite.callId) &&
             incomingController.load(this)?.invite?.callId == invite.callId &&
             invite.expiresAt.isAfter(Instant.now()) &&
             visibleCallState().phase == CallPhase.Ringing
