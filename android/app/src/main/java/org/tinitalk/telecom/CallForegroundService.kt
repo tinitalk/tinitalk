@@ -53,12 +53,12 @@ class CallForegroundService : Service() {
     private var finishing = false
     private var statsPolling = false
     private var callNetworkLock: CallNetworkLock? = null
-    private lateinit var outgoingCallTones: OutgoingCallToneController
+    private lateinit var callTones: CallToneController
     private val connectionHealthClassifier = ConnectionHealthClassifier()
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         handler.post {
             if (!finishing) {
-                outgoingCallTones.update(state)
+                callTones.update(state)
                 if (state.phase != CallPhase.Idle) {
                     getSystemService(NotificationManager::class.java).notify(NotificationId, notification(state))
                 }
@@ -95,7 +95,7 @@ class CallForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        outgoingCallTones = OutgoingCallToneController(handler)
+        callTones = CallToneController(handler)
         CallUiStateStore.observe(callUiObserver)
     }
 
@@ -116,7 +116,7 @@ class CallForegroundService : Service() {
         val unexpected = !finishing
         finishing = true
         CallUiStateStore.removeObserver(callUiObserver)
-        outgoingCallTones.close()
+        callTones.close()
         stopStatsPolling()
         callNetworkLock?.close()
         callNetworkLock = null
@@ -189,7 +189,7 @@ class CallForegroundService : Service() {
                     } catch (_: Exception) {
                         newCoordinator.fail()
                         publish()
-                        finishCall()
+                        finishCallSoon()
                         return@post
                     }
                     if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
@@ -202,7 +202,7 @@ class CallForegroundService : Service() {
                         }
                     }
                     publish(incoming.event.endReason())
-                    if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCall()
+                    if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallSoon()
                 }
             },
             onOpen = {
@@ -224,7 +224,7 @@ class CallForegroundService : Service() {
                     if (socket !== newSocket || finishing) return@post
                     newCoordinator.fail()
                     publish(CallEndReason.Failed)
-                    finishCall()
+                    finishCallSoon()
                 }
             },
         )
@@ -371,7 +371,7 @@ class CallForegroundService : Service() {
     }
 
     private fun finishCallSoon() {
-        handler.postDelayed({ finishCall() }, 300)
+        handler.postDelayed({ finishCall() }, FinishToneDelayMillis)
     }
 
     private fun finishCall() {
@@ -488,6 +488,7 @@ class CallForegroundService : Service() {
         const val ChannelId = "calls"
         const val NotificationId = 10
         private const val SignalFlushTimeoutMillis = 5_000L
+        private const val FinishToneDelayMillis = 450L
         private const val EndedStateLifetimeMillis = 1_000L
         private const val CallLogTag = "TiniTalkCall"
         fun startOutgoing(context: Context, callee: String, displayName: String = callee) {
