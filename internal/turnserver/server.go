@@ -3,9 +3,11 @@ package turnserver
 import (
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"sync"
 
+	"github.com/pion/logging"
 	"github.com/pion/turn/v5"
 )
 
@@ -58,15 +60,17 @@ func Start(config Config) (*Server, error) {
 	server, err := turn.NewServer(turn.ServerConfig{
 		Realm: config.Realm,
 		AuthHandler: func(ra *turn.RequestAttributes) (string, []byte, bool) {
-			if !config.Issuer.ValidUsername(ra.Username) {
+			login, ok := config.Issuer.Login(ra.Username)
+			if !ok {
 				return "", nil, false
 			}
-			return ra.Username, turn.GenerateAuthKey(ra.Username, config.Realm, config.Issuer.Password(ra.Username)), true
+			return login, turn.GenerateAuthKey(ra.Username, config.Realm, config.Issuer.Password(ra.Username)), true
 		},
 		QuotaHandler:      func(username, _ string, _ net.Addr) bool { return limiter.Allow(username) },
 		EventHandler:      limiter.EventHandler(),
 		PacketConnConfigs: packetConfigs,
 		ListenerConfigs:   listenerConfigs,
+		LoggerFactory:     privateLoggerFactory(),
 	})
 	if err != nil {
 		closeAll(packetClosers)
@@ -74,6 +78,13 @@ func Start(config Config) (*Server, error) {
 		return nil, err
 	}
 	return &Server{turn: server}, nil
+}
+
+func privateLoggerFactory() logging.LoggerFactory {
+	return &logging.DefaultLoggerFactory{
+		Writer:          io.Discard,
+		DefaultLogLevel: logging.LogLevelDisabled,
+	}
 }
 
 func (s *Server) AllocationCount() int {

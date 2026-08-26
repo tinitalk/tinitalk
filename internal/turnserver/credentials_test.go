@@ -26,6 +26,22 @@ func TestTemporaryCredentialsUseHMACAndExpire(t *testing.T) {
 	}
 }
 
+func TestCredentialLoginIsStableAndRejectsInvalidUsernames(t *testing.T) {
+	issuer := CredentialIssuer{Now: func() time.Time { return time.Unix(1_000, 0) }}
+
+	for _, username := range []string{"1060:alice", "1120:alice"} {
+		login, ok := issuer.Login(username)
+		if !ok || login != "alice" {
+			t.Fatalf("Login(%q) = %q, %v", username, login, ok)
+		}
+	}
+	for _, username := range []string{"", "1060", "invalid:alice", "999:alice", "1060:"} {
+		if login, ok := issuer.Login(username); ok {
+			t.Fatalf("Login(%q) = %q, true", username, login)
+		}
+	}
+}
+
 func TestICEConfigPayloadContainsTemporaryTurnCredentials(t *testing.T) {
 	issuer := CredentialIssuer{
 		Secret: []byte("secret"),

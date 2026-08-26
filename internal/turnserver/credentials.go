@@ -47,18 +47,20 @@ func (i CredentialIssuer) Valid(username, password string) bool {
 }
 
 func (i CredentialIssuer) ValidUsername(username string) bool {
-	if username == "" {
-		return false
+	_, ok := i.Login(username)
+	return ok
+}
+
+func (i CredentialIssuer) Login(username string) (string, bool) {
+	expiresText, login, ok := strings.Cut(username, ":")
+	if !ok || login == "" {
+		return "", false
 	}
-	parts := strings.SplitN(username, ":", 2)
-	if len(parts) != 2 {
-		return false
-	}
-	expires, err := strconv.ParseInt(parts[0], 10, 64)
+	expires, err := strconv.ParseInt(expiresText, 10, 64)
 	if err != nil || i.now().Unix() > expires {
-		return false
+		return "", false
 	}
-	return true
+	return login, true
 }
 
 func (i CredentialIssuer) Password(username string) string {
