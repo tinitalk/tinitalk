@@ -34,6 +34,7 @@ type Hub struct {
 	activeByUser  map[string]string
 	now           func() time.Time
 	notifications []notification
+	reservedWake  map[string]struct{}
 	notifying     bool
 }
 
@@ -55,6 +56,7 @@ func NewHub(notifier Notifier) *Hub {
 		clients:      map[string]map[*Client]struct{}{},
 		calls:        map[string]*call{},
 		activeByUser: map[string]string{},
+		reservedWake: map[string]struct{}{},
 		now:          time.Now,
 	}
 }
@@ -330,6 +332,7 @@ func (h *Hub) Sweep() int {
 		if c.state == callEnded {
 			if now.Sub(c.endedAt) > TerminalRetention {
 				delete(h.calls, callID)
+				delete(h.reservedWake, callID)
 			}
 			continue
 		}
@@ -402,6 +405,20 @@ func (h *Hub) enqueueNotification(next notification) {
 			}
 		}
 		if len(h.notifications) >= notificationQueueLimit {
+			if _, protected := h.reservedWake[next.event.CallID]; !protected {
+				return
+			}
+			for i := range h.notifications {
+				if i == 0 && h.notifying {
+					continue
+				}
+				if _, reserved := h.reservedWake[h.notifications[i].event.CallID]; !reserved {
+					h.notifications = append(h.notifications[:i], h.notifications[i+1:]...)
+					break
+				}
+			}
+		}
+		if len(h.notifications) >= notificationQueueLimit {
 			return
 		}
 	}
@@ -422,10 +439,23 @@ func (h *Hub) runNotifications() {
 			return
 		}
 		next := h.notifications[0]
+		if !next.cancel {
+			if _, reserved := h.reservedWake[next.event.CallID]; !reserved {
+				if len(h.reservedWake) >= notificationQueueLimit {
+					h.notifications = h.notifications[1:]
+					h.mu.Unlock()
+					continue
+				}
+				h.reservedWake[next.event.CallID] = struct{}{}
+			}
+		}
 		h.mu.Unlock()
 		h.sendNotification(next)
 
 		h.mu.Lock()
+		if next.cancel {
+			delete(h.reservedWake, next.event.CallID)
+		}
 		if h.notifications[0].cancel != next.cancel {
 			h.mu.Unlock()
 			continue

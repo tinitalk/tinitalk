@@ -703,6 +703,47 @@ func TestHubKeepsCancelForInFlightIncomingWhenQueueIsFull(t *testing.T) {
 	}
 }
 
+func TestHubKeepsCancelForDeliveredIncomingWhenQueueIsFull(t *testing.T) {
+	notifier := &deliveredThenBlockedNotifier{
+		firstDelivered: make(chan struct{}),
+		secondStarted:  make(chan struct{}),
+		releaseSecond:  make(chan struct{}),
+		cancelled:      make(chan struct{}),
+	}
+	hub := NewHub(notifier)
+	enqueue := func(next notification) {
+		hub.mu.Lock()
+		hub.enqueueNotification(next)
+		hub.mu.Unlock()
+	}
+	callA := DeliveredEvent{Event: protocol.Event{CallID: "call-a"}}
+
+	enqueue(notification{caller: "alice", callee: "bob", event: callA})
+	select {
+	case <-notifier.firstDelivered:
+	case <-time.After(time.Second):
+		t.Fatal("first incoming was not delivered")
+	}
+	enqueue(notification{caller: "carol", callee: "dave", event: DeliveredEvent{Event: protocol.Event{CallID: "call-b"}}})
+	select {
+	case <-notifier.secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second incoming did not start")
+	}
+	for i := 0; i < notificationQueueLimit; i++ {
+		event := DeliveredEvent{Event: protocol.Event{CallID: fmt.Sprintf("unsent-%d", i)}}
+		enqueue(notification{callee: "bob", event: event, cancel: true})
+	}
+	enqueue(notification{callee: "bob", event: callA, cancel: true})
+	close(notifier.releaseSecond)
+
+	select {
+	case <-notifier.cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("cancel for delivered incoming was dropped")
+	}
+}
+
 func event(id, callID, typ string, payload map[string]any) protocol.Event {
 	raw, _ := json.Marshal(payload)
 	return protocol.Event{
@@ -810,6 +851,29 @@ type saturatedNotifier struct {
 	started   chan struct{}
 	release   chan struct{}
 	cancelled chan struct{}
+}
+
+type deliveredThenBlockedNotifier struct {
+	firstDelivered chan struct{}
+	secondStarted  chan struct{}
+	releaseSecond  chan struct{}
+	cancelled      chan struct{}
+}
+
+func (n *deliveredThenBlockedNotifier) IncomingCall(_ string, _ string, event DeliveredEvent) {
+	switch event.CallID {
+	case "call-a":
+		close(n.firstDelivered)
+	case "call-b":
+		close(n.secondStarted)
+		<-n.releaseSecond
+	}
+}
+
+func (n *deliveredThenBlockedNotifier) CancelCall(_ string, event DeliveredEvent) {
+	if event.CallID == "call-a" {
+		close(n.cancelled)
+	}
 }
 
 func (n *saturatedNotifier) IncomingCall(string, string, DeliveredEvent) {
