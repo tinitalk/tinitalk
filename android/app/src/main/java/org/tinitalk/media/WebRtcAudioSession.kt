@@ -20,6 +20,7 @@ class WebRtcAudioSession private constructor(
     iceServers: List<IceServerData>,
     private val onLocalIceCandidate: (IceCandidateData) -> Unit,
     private val onIceRestartNeeded: () -> Unit,
+    private val onConnectionStateChanged: (MediaConnectionState) -> Unit,
     private val forceRelay: Boolean,
 ) : MediaSession {
     private val iceQueue = IceQueue()
@@ -198,6 +199,16 @@ class WebRtcAudioSession private constructor(
 
     private fun onIceConnectionState(state: PeerConnection.IceConnectionState) {
         if (closed) return
+        val connectionState = when (state) {
+            PeerConnection.IceConnectionState.NEW,
+            PeerConnection.IceConnectionState.CHECKING -> MediaConnectionState.Connecting
+            PeerConnection.IceConnectionState.CONNECTED,
+            PeerConnection.IceConnectionState.COMPLETED -> MediaConnectionState.Connected
+            PeerConnection.IceConnectionState.DISCONNECTED -> MediaConnectionState.Disconnected
+            PeerConnection.IceConnectionState.FAILED -> MediaConnectionState.Failed
+            PeerConnection.IceConnectionState.CLOSED -> MediaConnectionState.Closed
+        }
+        onConnectionStateChanged(connectionState)
         when (state) {
             PeerConnection.IceConnectionState.DISCONNECTED -> restartGate.onDisconnected(onIceRestartNeeded)
             PeerConnection.IceConnectionState.FAILED -> restartGate.onFailed(onIceRestartNeeded)
@@ -237,7 +248,15 @@ class WebRtcAudioSession private constructor(
             forceRelay: Boolean = false,
             onLocalIceCandidate: (IceCandidateData) -> Unit = {},
             onIceRestartNeeded: () -> Unit = {},
-        ): WebRtcAudioSession = WebRtcAudioSession(context, iceServers, onLocalIceCandidate, onIceRestartNeeded, forceRelay)
+            onConnectionStateChanged: (MediaConnectionState) -> Unit = {},
+        ): WebRtcAudioSession = WebRtcAudioSession(
+            context,
+            iceServers,
+            onLocalIceCandidate,
+            onIceRestartNeeded,
+            onConnectionStateChanged,
+            forceRelay,
+        )
 
         @Synchronized
         private fun prepareFactory(context: Context) {

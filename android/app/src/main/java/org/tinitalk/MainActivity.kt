@@ -159,7 +159,7 @@ class MainActivity : ComponentActivity() {
             contacts.addView(Button(this).apply {
                 text = "Call ${contact.displayName}"
                 setOnClickListener {
-                    CallForegroundService.startOutgoing(this@MainActivity, contact.login)
+                    CallForegroundService.startOutgoing(this@MainActivity, contact.login, contact.displayName)
                 }
             })
         }

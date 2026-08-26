@@ -18,8 +18,12 @@ import org.tinitalk.MainActivity
 import org.tinitalk.R
 import org.tinitalk.call.CallCoordinator
 import org.tinitalk.call.CallAudioState
+import org.tinitalk.call.CallDirection
+import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallPhase
+import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallServiceState
+import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
@@ -128,6 +132,14 @@ class CallForegroundService : Service() {
                     forceRelay = BuildConfig.FORCE_RELAY,
                     onLocalIceCandidate = onLocalIce,
                     onIceRestartNeeded = onIceRestartNeeded,
+                    onConnectionStateChanged = { state ->
+                        handler.post {
+                            val callId = newCoordinator.snapshot().callId
+                            if (!finishing && callId != null && CallUiStateStore.snapshot().callId == callId) {
+                                CallUiStateStore.onMediaConnection(state)
+                            }
+                        }
+                    },
                 )
             },
         )
@@ -158,7 +170,7 @@ class CallForegroundService : Service() {
                             }
                         }
                     }
-                    publish()
+                    publish(incoming.event.endReason())
                     if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCall()
                 }
             },
@@ -180,7 +192,7 @@ class CallForegroundService : Service() {
                 handler.post {
                     if (socket !== newSocket || finishing) return@post
                     newCoordinator.fail()
-                    publish()
+                    publish(CallEndReason.Failed)
                     finishCall()
                 }
             },
@@ -191,19 +203,34 @@ class CallForegroundService : Service() {
     private fun handle(intent: Intent) {
         val call = coordinator ?: return
         val invite = IncomingCallController.inviteFrom(intent)
+        var endReason: CallEndReason? = null
         when (intent.action) {
             ActionStart -> {
                 CallServiceState.publish(call.snapshot())
+                CallUiStateStore.reset()
                 CallAudioState.reset()
                 val callee = intent.getStringExtra(ExtraCallee) ?: return
+                val displayName = intent.getStringExtra(ExtraDisplayName).orEmpty().ifEmpty { callee }
                 call.startCall(callee)
                 call.snapshot().callId?.let { callId ->
-                    telecom.addOutgoing(callId, callee, telecomCallbacks(callId) { end(this) })
+                    CallUiStateStore.begin(
+                        callId,
+                        CallPeer(displayName = displayName, login = callee),
+                        CallDirection.Outgoing,
+                        CallPhase.Connecting,
+                    )
+                    telecom.addOutgoing(callId, displayName, telecomCallbacks(callId) { end(this) })
                 }
             }
             ActionAnswer -> {
                 invite ?: return
                 if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callId != invite.callId) return
+                CallUiStateStore.begin(
+                    invite.callId,
+                    CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }),
+                    CallDirection.Incoming,
+                    CallPhase.Ringing,
+                )
                 call.restoreIncoming(invite.callId, invite.lastSeq)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
@@ -214,23 +241,49 @@ class CallForegroundService : Service() {
             ActionReject -> {
                 invite ?: return
                 if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callId != invite.callId) return
+                CallUiStateStore.begin(
+                    invite.callId,
+                    CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }),
+                    CallDirection.Incoming,
+                    CallPhase.Ringing,
+                )
                 call.restoreIncoming(invite.callId, invite.lastSeq)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.reject()
+                endReason = CallEndReason.Rejected
                 IncomingCallController().clear(this, invite.callId)
             }
             ActionDisconnect -> {
                 invite?.let { call.restoreIncoming(it.callId, it.lastSeq) }
                 if (invite != null && call.snapshot().callId != invite.callId) return
-                if (call.snapshot().phase == CallPhase.Active) call.hangUp() else if (call.snapshot().phase == CallPhase.Ringing) call.reject()
+                if (call.snapshot().phase == CallPhase.Active) {
+                    call.hangUp()
+                    endReason = CallEndReason.LocalHangup
+                } else if (call.snapshot().phase == CallPhase.Ringing) {
+                    call.reject()
+                    endReason = CallEndReason.Rejected
+                }
             }
             ActionEnd -> when (call.snapshot().phase) {
-                CallPhase.Active -> call.hangUp()
-                CallPhase.Connecting -> call.cancel()
-                CallPhase.Ringing -> call.reject()
+                CallPhase.Active -> {
+                    call.hangUp()
+                    endReason = CallEndReason.LocalHangup
+                }
+                CallPhase.Connecting -> {
+                    call.cancel()
+                    endReason = CallEndReason.Cancelled
+                }
+                CallPhase.Ringing -> {
+                    call.reject()
+                    endReason = CallEndReason.Rejected
+                }
                 else -> Unit
             }
-            ActionMute -> media?.setMuted(intent.getBooleanExtra(ExtraMuted, false))
+            ActionMute -> {
+                val muted = intent.getBooleanExtra(ExtraMuted, false)
+                media?.setMuted(muted)
+                CallUiStateStore.setMuted(muted)
+            }
             ActionTelecomActive -> {
                 if (!acceptsTelecomCallback(call, intent)) return
                 media?.setActive(true)
@@ -245,15 +298,16 @@ class CallForegroundService : Service() {
                 intent.getStringExtra(ExtraEndpointId)?.let { telecom.selectEndpoint(callId, it) }
             }
         }
-        publish()
+        publish(endReason)
         if (call.snapshot().phase == CallPhase.Ended) {
             if (connected) finishCallSoon() else handler.postDelayed({ finishCall() }, SignalFlushTimeoutMillis)
         }
     }
 
-    private fun publish() {
+    private fun publish(endReason: CallEndReason? = null) {
         coordinator?.snapshot()?.let { snapshot ->
             CallServiceState.publish(snapshot)
+            CallUiStateStore.sync(snapshot, endReason)
             handler.post(::updateStatsPolling)
         }
     }
@@ -372,6 +426,7 @@ class CallForegroundService : Service() {
         const val ActionTelecomInactive = "org.tinitalk.action.TELECOM_INACTIVE"
         const val ActionSelectEndpoint = "org.tinitalk.action.SELECT_AUDIO_ENDPOINT"
         private const val ExtraCallee = "callee"
+        private const val ExtraDisplayName = "display_name"
         private const val ExtraMuted = "muted"
         private const val ExtraCallId = "call_id"
         private const val ExtraEndpointId = "endpoint_id"
@@ -379,8 +434,14 @@ class CallForegroundService : Service() {
         const val NotificationId = 10
         private const val SignalFlushTimeoutMillis = 5_000L
         private const val CallLogTag = "TiniTalkCall"
-        fun startOutgoing(context: Context, callee: String) {
-            start(context, Intent(context, CallForegroundService::class.java).setAction(ActionStart).putExtra(ExtraCallee, callee))
+        fun startOutgoing(context: Context, callee: String, displayName: String = callee) {
+            start(
+                context,
+                Intent(context, CallForegroundService::class.java)
+                    .setAction(ActionStart)
+                    .putExtra(ExtraCallee, callee)
+                    .putExtra(ExtraDisplayName, displayName),
+            )
         }
 
         fun end(context: Context) {
@@ -417,4 +478,12 @@ class CallForegroundService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
         }
     }
+}
+
+private fun org.tinitalk.data.signal.SignalEvent.endReason(): CallEndReason? = when (type) {
+    "call.reject" -> CallEndReason.Rejected
+    "call.cancel" -> CallEndReason.Cancelled
+    "call.end" -> CallEndReason.RemoteHangup
+    "call.expire" -> CallEndReason.TimedOut
+    else -> null
 }

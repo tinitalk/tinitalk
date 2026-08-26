@@ -10,6 +10,7 @@
 *.keystore
 *.jks
 *.log
+*.hprof
 
 /android/.gradle/
 /android/local.properties

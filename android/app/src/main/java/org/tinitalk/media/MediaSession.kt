@@ -15,6 +15,14 @@ data class IceServerData(
     val expiresAt: Instant? = null,
 )
 
+enum class MediaConnectionState {
+    Connecting,
+    Connected,
+    Disconnected,
+    Failed,
+    Closed,
+}
+
 interface MediaSession {
     suspend fun createOffer(): String
     suspend fun acceptOffer(sdp: String): String
