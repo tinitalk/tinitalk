@@ -223,7 +223,9 @@ class CallForegroundService : Service() {
             onError = { failure ->
                 handler.post {
                     if (socket !== newSocket || finishing) return@post
-                    val reason = signalingFailureEndReason(failure, newCoordinator.snapshot().callId)
+                    val current = newCoordinator.snapshot()
+                    val activeCallId = current.callId.takeIf { current.phase != CallPhase.Ended }
+                    val reason = signalingFailureEndReason(failure, activeCallId) ?: return@post
                     newCoordinator.fail()
                     publish(reason)
                     if (reason == CallEndReason.Busy) {
@@ -548,12 +550,11 @@ class CallForegroundService : Service() {
     }
 }
 
-internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: String?): CallEndReason =
-    if (failure.code == "busy" && failure.callId != null && failure.callId == currentCallId) {
-        CallEndReason.Busy
-    } else {
-        CallEndReason.Failed
-    }
+internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: String?): CallEndReason? = when {
+    currentCallId == null -> null
+    failure.code == "busy" && failure.callId == currentCallId -> CallEndReason.Busy
+    else -> CallEndReason.Failed
+}
 
 private fun org.tinitalk.data.signal.SignalEvent.endReason(): CallEndReason? = when (type) {
     "call.reject" -> CallEndReason.Rejected

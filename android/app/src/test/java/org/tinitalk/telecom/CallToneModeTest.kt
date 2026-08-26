@@ -7,6 +7,7 @@ import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.data.signal.SignalFailure
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class CallToneModeTest {
@@ -40,5 +41,10 @@ class CallToneModeTest {
 
         assertEquals(CallEndReason.Busy, signalingFailureEndReason(busy, "call-1"))
         assertEquals(CallEndReason.Failed, signalingFailureEndReason(busy, "call-2"))
+    }
+
+    @Test
+    fun ignoresSignalingFailureWithoutActiveCall() {
+        assertNull(signalingFailureEndReason(SignalFailure("call not found"), null))
     }
 }
