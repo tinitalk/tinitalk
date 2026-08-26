@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
     private var callUiState by mutableStateOf(CallUiStateStore.snapshot())
     private var loginResetKey by mutableIntStateOf(0)
     private var pushRegistrationStarted = false
+    private var historyLoadGeneration = 0
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread { callUiState = state }
     }
@@ -83,6 +84,9 @@ class MainActivity : ComponentActivity() {
                     onRefreshPermissions = ::refreshPermissions,
                     onCall = ::startCall,
                     onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
+                    onHistoryVisible = ::showHistory,
+                    onLoadMoreHistory = ::loadMoreHistory,
+                    onRetryHistory = ::retryHistory,
                     onSignOut = ::signOut,
                 )
             }
@@ -132,15 +136,104 @@ class MainActivity : ComponentActivity() {
 
     private fun showContacts(contacts: List<Contact>) {
         runOnUiThread {
+            historyLoadGeneration++
             screenState = screenState.copy(
                 restoring = false,
                 signingIn = false,
                 signedIn = true,
                 contacts = contacts,
+                history = emptyList(),
+                historyLoaded = false,
+                historyLoading = false,
+                historyLoadingMore = false,
+                historyNextBefore = 0,
+                historyLatestId = 0,
+                historyErrorMessage = null,
+                unreadMissedCount = 0,
                 errorMessage = null,
             )
             refreshPermissions()
         }
+    }
+
+    private fun showHistory() {
+        loadHistory(reset = true)
+    }
+
+    private fun loadMoreHistory() {
+        loadHistory(reset = false)
+    }
+
+    private fun retryHistory() {
+        loadHistory(reset = screenState.history.isEmpty() || screenState.historyNextBefore == 0L)
+    }
+
+    private fun loadHistory(reset: Boolean) {
+        if (!screenState.signedIn) return
+        val before: Long
+        val generation: Int
+        if (reset) {
+            if (screenState.historyLoading) return
+            historyLoadGeneration++
+            generation = historyLoadGeneration
+            before = 0
+            screenState = screenState.copy(historyLoading = true, historyErrorMessage = null)
+        } else {
+            before = screenState.historyNextBefore
+            if (before == 0L || screenState.historyLoading || screenState.historyLoadingMore) return
+            generation = historyLoadGeneration
+            screenState = screenState.copy(historyLoadingMore = true, historyErrorMessage = null)
+        }
+        Thread {
+            runCatching { repository.loadCallHistory(before = before) }
+                .onSuccess { page ->
+                    if (page == null) return@onSuccess
+                    runOnUiThread {
+                        if (!screenState.signedIn || generation != historyLoadGeneration) return@runOnUiThread
+                        val combined = if (reset) {
+                            page.items
+                        } else {
+                            (screenState.history + page.items).distinctBy { it.id }
+                        }
+                        screenState = screenState.copy(
+                            history = combined,
+                            historyLoaded = true,
+                            historyLoading = false,
+                            historyLoadingMore = false,
+                            historyNextBefore = page.nextBefore,
+                            historyLatestId = page.latestId,
+                            historyErrorMessage = null,
+                            unreadMissedCount = page.unreadMissedCount,
+                        )
+                    }
+                    if (reset && page.latestId > 0) {
+                        runCatching { repository.markCallHistoryRead(page.latestId) }
+                            .onSuccess {
+                                runOnUiThread {
+                                    if (generation == historyLoadGeneration) {
+                                        screenState = screenState.copy(unreadMissedCount = 0)
+                                    }
+                                }
+                            }
+                            .onFailure { if (it is ApiException && it.code == 401) showError(it) }
+                    }
+                }
+                .onFailure { error ->
+                    if (error is ApiException && error.code == 401) {
+                        showError(error)
+                    } else {
+                        runOnUiThread {
+                            if (generation != historyLoadGeneration) return@runOnUiThread
+                            screenState = screenState.copy(
+                                historyLoaded = true,
+                                historyLoading = false,
+                                historyLoadingMore = false,
+                                historyErrorMessage = "Не удалось загрузить историю. Проверьте соединение.",
+                            )
+                        }
+                    }
+                }
+        }.start()
     }
 
     private fun showError(error: Throwable) {
@@ -167,6 +260,7 @@ class MainActivity : ComponentActivity() {
 
     private fun signOut() {
         repository.signOut()
+        historyLoadGeneration++
         pushRegistrationStarted = false
         loginResetKey++
         screenState = MainScreenState(

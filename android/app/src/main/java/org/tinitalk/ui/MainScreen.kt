@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,15 +42,19 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,18 +77,28 @@ import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
+import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.Contact
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.ui.theme.BrandBackground
 import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
 import org.tinitalk.ui.theme.CallRejectRed
+import kotlinx.coroutines.launch
 
 data class MainScreenState(
     val restoring: Boolean = true,
     val signingIn: Boolean = false,
     val signedIn: Boolean = false,
     val contacts: List<Contact> = emptyList(),
+    val history: List<CallHistoryItem> = emptyList(),
+    val historyLoaded: Boolean = false,
+    val historyLoading: Boolean = false,
+    val historyLoadingMore: Boolean = false,
+    val historyNextBefore: Long = 0,
+    val historyLatestId: Long = 0,
+    val historyErrorMessage: String? = null,
+    val unreadMissedCount: Int = 0,
     val permissions: AppPermissionsState = AppPermissionsState(),
     val errorMessage: String? = null,
 )
@@ -100,6 +116,9 @@ fun MainScreen(
     onRefreshPermissions: () -> Unit,
     onCall: (Contact) -> Unit,
     onOpenCall: () -> Unit,
+    onHistoryVisible: () -> Unit,
+    onLoadMoreHistory: () -> Unit,
+    onRetryHistory: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     when {
@@ -113,7 +132,16 @@ fun MainScreen(
             onRefresh = onRefreshPermissions,
             onSignOut = onSignOut,
         )
-        else -> ContactsScreen(state.contacts, ongoingCall, onCall, onOpenCall, onSignOut)
+        else -> HomeScreen(
+            state = state,
+            ongoingCall = ongoingCall,
+            onCall = onCall,
+            onOpenCall = onOpenCall,
+            onHistoryVisible = onHistoryVisible,
+            onLoadMoreHistory = onLoadMoreHistory,
+            onRetryHistory = onRetryHistory,
+            onSignOut = onSignOut,
+        )
     }
 }
 
@@ -355,42 +383,99 @@ private fun PermissionItem(
 }
 
 @Composable
-private fun ContactsScreen(
-    contacts: List<Contact>,
+private fun HomeScreen(
+    state: MainScreenState,
     ongoingCall: CallUiState?,
     onCall: (Contact) -> Unit,
     onOpenCall: () -> Unit,
+    onHistoryVisible: () -> Unit,
+    onLoadMoreHistory: () -> Unit,
+    onRetryHistory: () -> Unit,
     onSignOut: () -> Unit,
 ) {
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(pagerState.currentPage) {
+        if (pagerState.currentPage == 1) onHistoryVisible()
+    }
     AppPage(onSignOut = onSignOut) {
         Column(modifier = Modifier.fillMaxSize()) {
             if (ongoingCall != null) {
                 OngoingCallBanner(ongoingCall, onOpenCall)
             }
-            if (contacts.isEmpty()) {
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(32.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text("Контактов пока нет", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Добавьте абонентов в настройках сервера.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            ) { page ->
+                if (page == 0) {
+                    ContactsPage(state.contacts, ongoingCall, onCall)
+                } else {
+                    HistoryScreen(
+                        items = state.history,
+                        loaded = state.historyLoaded,
+                        loading = state.historyLoading,
+                        loadingMore = state.historyLoadingMore,
+                        nextBefore = state.historyNextBefore,
+                        errorMessage = state.historyErrorMessage,
+                        onLoadMore = onLoadMoreHistory,
+                        onRetry = onRetryHistory,
                     )
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(contacts, key = { contact -> contact.login }) { contact ->
-                        ContactRow(contact, onCall, enabled = ongoingCall == null)
-                    }
-                }
+            }
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                NavigationBarItem(
+                    selected = pagerState.currentPage == 0,
+                    onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                    icon = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_contacts),
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    },
+                    label = { Text("Контакты") },
+                )
+                NavigationBarItem(
+                    selected = pagerState.currentPage == 1,
+                    onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                    icon = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_history),
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    },
+                    label = { Text("История") },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContactsPage(contacts: List<Contact>, ongoingCall: CallUiState?, onCall: (Contact) -> Unit) {
+    if (contacts.isEmpty()) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(32.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("Контактов пока нет", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Добавьте абонентов в настройках сервера.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(contacts, key = { contact -> contact.login }) { contact ->
+                ContactRow(contact, onCall, enabled = ongoingCall == null)
             }
         }
     }
