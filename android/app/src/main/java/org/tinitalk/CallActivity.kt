@@ -37,6 +37,7 @@ import org.tinitalk.call.outgoingVisibleState
 import org.tinitalk.call.shouldDismissIncomingOverlay
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
+import org.tinitalk.push.IncomingRingingAcknowledger
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.ProximityController
@@ -56,6 +57,7 @@ class CallActivity : ComponentActivity() {
     private lateinit var proximityController: ProximityController
     private var activityStarted = false
     private val actionGate = CallScreenActionGate()
+    private lateinit var ringingAcknowledger: IncomingRingingAcknowledger
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
     private var incomingInvite by mutableStateOf<IncomingInvite?>(null)
     private var outgoingLogin by mutableStateOf<String?>(null)
@@ -65,6 +67,9 @@ class CallActivity : ComponentActivity() {
         runOnUiThread {
             actionGate.onCallState(state)
             callState = state
+            if (incomingInvite?.callId == state.callId && state.phase != CallPhase.Ringing) {
+                ringingAcknowledger.stop()
+            }
             updateProximity()
         }
     }
@@ -87,6 +92,7 @@ class CallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         proximityController = ProximityController(this)
+        ringingAcknowledger = IncomingRingingAcknowledger(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -151,7 +157,7 @@ class CallActivity : ComponentActivity() {
                     visibleState.phase == CallPhase.Ringing || visibleState.phase == CallPhase.Connecting -> {
                         OutgoingCallScreen(
                             callee = peerName,
-                            status = if (visibleState.phase == CallPhase.Ringing) "Звоним…" else "Соединяемся…",
+                            status = if (visibleState.phase == CallPhase.Ringing) "Ждём ответа…" else "Пробуем связаться…",
                             onCancel = { endCall(visibleState) },
                         )
                     }
@@ -201,6 +207,7 @@ class CallActivity : ComponentActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(inviteMonitor)
+        ringingAcknowledger.close()
         proximityController.close()
         CallUiStateStore.removeObserver(callObserver)
         super.onDestroy()
@@ -273,12 +280,12 @@ class CallActivity : ComponentActivity() {
         val connected = callState.connectionHealth == ConnectionHealth.Good ||
             callState.connectionHealth == ConnectionHealth.Poor
         val earpiece = callState.currentAudioEndpoint?.type == CallEndpointCompat.TYPE_EARPIECE
+        val outgoingDial = callState.direction == CallDirection.Outgoing &&
+            (callState.phase == CallPhase.Connecting || callState.phase == CallPhase.Ringing)
+        val activeConversation = callState.phase == CallPhase.Active &&
+            callState.connectedAtElapsedMs != null && connected
         proximityController.setEnabled(
-            activityStarted &&
-                callState.phase == CallPhase.Active &&
-                callState.connectedAtElapsedMs != null &&
-                connected &&
-                earpiece,
+            activityStarted && earpiece && (outgoingDial || activeConversation),
         )
     }
 
@@ -286,6 +293,7 @@ class CallActivity : ComponentActivity() {
         val invite = incomingInvite ?: return
         if (shouldDismissIncomingOverlay(activityStarted, visibleCallState())) {
             IncomingCallNotifier(this).fullScreenShown(invite)
+            ringingAcknowledger.acknowledge(invite)
         }
     }
 

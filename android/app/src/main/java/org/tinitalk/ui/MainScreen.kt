@@ -388,10 +388,11 @@ private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
     val status = when {
         state.connectionHealth == ConnectionHealth.Reconnecting -> "Восстанавливаем связь…"
         state.connectionHealth == ConnectionHealth.Poor -> "Слабая сеть"
-        state.connectionHealth == ConnectionHealth.Connecting -> "Соединяемся…"
+        state.phase == CallPhase.Active && state.connectionHealth == ConnectionHealth.Connecting -> "Соединяемся…"
         state.phase == CallPhase.Active -> "Идёт разговор"
         state.direction == CallDirection.Incoming -> "Входящий звонок"
-        else -> "Соединяемся…"
+        state.phase == CallPhase.Ringing -> "Ждём ответа…"
+        else -> "Пробуем связаться…"
     }
     Surface(
         onClick = onOpen,

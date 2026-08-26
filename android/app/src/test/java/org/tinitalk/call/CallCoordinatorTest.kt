@@ -40,8 +40,18 @@ class CallCoordinatorTest {
         coordinator.accept()
 
         assertEquals(CallPhase.Active, coordinator.snapshot().phase)
-        assertEquals(listOf("call.resume", "call.accept"), signal.sent.map { it.type })
-        assertEquals(1L, signal.sent.first().payload["last_seq"].asLong)
+        assertEquals(listOf("call.ringing", "call.resume", "call.accept"), signal.sent.map { it.type })
+        assertEquals(1L, signal.sent[1].payload["last_seq"].asLong)
+    }
+
+    @Test
+    fun outgoingCallBecomesRingingAfterTheOtherPhoneAcknowledgesIt() {
+        val coordinator = CallCoordinator("alice", FakeSignalClient(), ids = FixedIds())
+        coordinator.startCall("bob")
+
+        coordinator.onEvent(event("call.ringing", seq = 1))
+
+        assertEquals(CallPhase.Ringing, coordinator.snapshot().phase)
     }
 
     @Test

@@ -79,6 +79,9 @@ class CallCoordinator(
             machine.transition(CallPhase.Ringing, callId)
         }
         machine.recordSeq(lastSeq)
+        if (machine.snapshot().phase == CallPhase.Ringing) {
+            signal.send(event(callId, "call.ringing", JsonObject()))
+        }
     }
 
     fun onEvent(incoming: SequencedSignalEvent): Boolean {
@@ -86,7 +89,9 @@ class CallCoordinator(
         machine.recordSeq(incoming.seq)
         when (incoming.event.type) {
             "call.incoming" -> machine.transition(CallPhase.Ringing, incoming.event.callId)
-            "call.ringing" -> if (machine.snapshot().phase == CallPhase.Connecting) Unit else machine.transition(CallPhase.Ringing, incoming.event.callId)
+            "call.ringing" -> if (machine.snapshot().phase == CallPhase.Connecting) {
+                machine.transition(CallPhase.Ringing, incoming.event.callId)
+            }
             "call.accept" -> machine.transition(CallPhase.Active, incoming.event.callId)
             "call.reject", "call.cancel", "call.end", "call.expire" -> machine.transition(CallPhase.Ended, incoming.event.callId)
         }

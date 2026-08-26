@@ -53,11 +53,15 @@ class CallForegroundService : Service() {
     private var finishing = false
     private var statsPolling = false
     private var callNetworkLock: CallNetworkLock? = null
+    private lateinit var outgoingCallTones: OutgoingCallToneController
     private val connectionHealthClassifier = ConnectionHealthClassifier()
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         handler.post {
-            if (!finishing && state.phase != CallPhase.Idle) {
-                getSystemService(NotificationManager::class.java).notify(NotificationId, notification(state))
+            if (!finishing) {
+                outgoingCallTones.update(state)
+                if (state.phase != CallPhase.Idle) {
+                    getSystemService(NotificationManager::class.java).notify(NotificationId, notification(state))
+                }
             }
         }
     }
@@ -91,6 +95,7 @@ class CallForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
+        outgoingCallTones = OutgoingCallToneController(handler)
         CallUiStateStore.observe(callUiObserver)
     }
 
@@ -108,12 +113,14 @@ class CallForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        val unexpected = !finishing
+        finishing = true
         CallUiStateStore.removeObserver(callUiObserver)
+        outgoingCallTones.close()
         stopStatsPolling()
         callNetworkLock?.close()
         callNetworkLock = null
         val snapshot = coordinator?.snapshot()
-        val unexpected = !finishing
         if (unexpected && connected && snapshot?.phase == CallPhase.Active) {
             runCatching { coordinator?.hangUp() }
         }
@@ -301,7 +308,10 @@ class CallForegroundService : Service() {
                     call.cancel()
                     endReason = CallEndReason.Cancelled
                 }
-                CallPhase.Ringing -> {
+                CallPhase.Ringing -> if (CallUiStateStore.snapshot().direction == CallDirection.Outgoing) {
+                    call.cancel()
+                    endReason = CallEndReason.Cancelled
+                } else {
                     call.reject()
                     endReason = CallEndReason.Rejected
                 }
@@ -418,8 +428,8 @@ class CallForegroundService : Service() {
         )
         val peerName = state.peer?.displayName?.takeIf(String::isNotBlank) ?: "TiniTalk"
         val status = when (state.phase) {
-            CallPhase.Ringing -> "Входящий звонок"
-            CallPhase.Connecting -> "Соединяемся…"
+            CallPhase.Ringing -> if (state.direction == CallDirection.Outgoing) "Ждём ответа…" else "Входящий звонок"
+            CallPhase.Connecting -> "Пробуем связаться…"
             CallPhase.Active -> if (state.muted) "Микрофон выключен" else "Звонок идёт"
             CallPhase.Ended -> "Звонок завершён"
             CallPhase.Idle -> "Звонок"
