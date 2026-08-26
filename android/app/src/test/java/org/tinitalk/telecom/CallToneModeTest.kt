@@ -36,11 +36,15 @@ class CallToneModeTest {
     }
 
     @Test
-    fun mapsOnlyMatchingBusyFailureToBusyReason() {
+    fun ignoresFailuresForDiscardedCallId() {
         val busy = SignalFailure("callee already has an active call", "busy", "call-1")
 
         assertEquals(CallEndReason.Busy, signalingFailureEndReason(busy, "call-1"))
-        assertEquals(CallEndReason.Failed, signalingFailureEndReason(busy, "call-2"))
+        assertNull(signalingFailureEndReason(busy, "call-2"))
+        assertEquals(
+            CallEndReason.Failed,
+            signalingFailureEndReason(SignalFailure("socket failed"), "call-2"),
+        )
     }
 
     @Test

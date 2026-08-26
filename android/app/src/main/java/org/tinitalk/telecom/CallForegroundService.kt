@@ -53,6 +53,8 @@ class CallForegroundService : Service() {
     private var connected = false
     private var finishing = false
     private var statsPolling = false
+    private var telecomCallId: String? = null
+    private var outgoingPeer: CallPeer? = null
     private var callNetworkLock: CallNetworkLock? = null
     private lateinit var callTones: CallToneController
     private val connectionHealthClassifier = ConnectionHealthClassifier()
@@ -194,11 +196,31 @@ class CallForegroundService : Service() {
                         return@post
                     }
                     if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
+                        if (incoming.event.payload["crossed"]?.asBoolean == true) {
+                            outgoingPeer?.let { peer ->
+                                CallUiStateStore.begin(incoming.event.callId, peer, CallDirection.Outgoing, CallPhase.Active)
+                                CallUiStateStore.setAudioEndpoints(incoming.event.callId, CallAudioState.snapshot())
+                            }
+                            IncomingCallController().apply {
+                                rememberTerminal(this@CallForegroundService, incoming.event.callId)
+                                clear(this@CallForegroundService, incoming.event.callId)
+                            }
+                            IncomingCallNotifier(this@CallForegroundService).cancel()
+                            telecomCallId?.takeIf { it != incoming.event.callId }?.let {
+                                telecom.cancel(incoming.event.callId)
+                            }
+                        }
                         newMedia.setActive(true)
-                        telecom.setActive(incoming.event.callId) { success ->
+                        val localCallId = telecomCallId ?: incoming.event.callId
+                        telecom.setActive(localCallId) { success ->
                             if (!success) {
                                 val snapshot = CallServiceState.snapshot()
-                                if (snapshot.callId == incoming.event.callId && snapshot.phase == CallPhase.Active) end(this)
+                                if (snapshot.callId == incoming.event.callId &&
+                                    snapshot.phase == CallPhase.Active &&
+                                    telecomCallId == localCallId
+                                ) {
+                                    end(this)
+                                }
                             }
                         }
                     }
@@ -254,9 +276,12 @@ class CallForegroundService : Service() {
                 val displayName = intent.getStringExtra(ExtraDisplayName).orEmpty().ifEmpty { callee }
                 call.startCall(callee)
                 call.snapshot().callId?.let { callId ->
+                    val peer = CallPeer(displayName = displayName, login = callee)
+                    telecomCallId = callId
+                    outgoingPeer = peer
                     CallUiStateStore.begin(
                         callId,
-                        CallPeer(displayName = displayName, login = callee),
+                        peer,
                         CallDirection.Outgoing,
                         CallPhase.Connecting,
                     )
@@ -266,6 +291,7 @@ class CallForegroundService : Service() {
             ActionAnswer -> {
                 invite ?: return
                 if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callId != invite.callId) return
+                telecomCallId = invite.callId
                 connectionHealthClassifier.reset()
                 CallUiStateStore.begin(
                     invite.callId,
@@ -284,6 +310,7 @@ class CallForegroundService : Service() {
             ActionReject -> {
                 invite ?: return
                 if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callId != invite.callId) return
+                telecomCallId = invite.callId
                 CallUiStateStore.begin(
                     invite.callId,
                     CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }, login = invite.callerLogin),
@@ -297,7 +324,11 @@ class CallForegroundService : Service() {
                 IncomingCallController().clear(this, invite.callId)
             }
             ActionDisconnect -> {
-                invite?.let { call.restoreIncoming(it.callId, it.lastSeq) }
+                if (invite != null) {
+                    if (telecomCallId != null && telecomCallId != invite.callId) return
+                    telecomCallId = invite.callId
+                    call.restoreIncoming(invite.callId, invite.lastSeq)
+                }
                 if (invite != null && call.snapshot().callId != invite.callId) return
                 if (call.snapshot().phase == CallPhase.Active) {
                     call.hangUp()
@@ -331,17 +362,23 @@ class CallForegroundService : Service() {
                 CallUiStateStore.setMuted(muted)
             }
             ActionTelecomActive -> {
-                if (!acceptsTelecomCallback(call, intent)) return
+                if (!acceptsTelecomCallback(call, intent)) {
+                    if (call.snapshot().phase == CallPhase.Idle) stopSelf()
+                    return
+                }
                 media?.setActive(true)
             }
             ActionTelecomInactive -> {
-                if (!acceptsTelecomCallback(call, intent)) return
+                if (!acceptsTelecomCallback(call, intent)) {
+                    if (call.snapshot().phase == CallPhase.Idle) stopSelf()
+                    return
+                }
                 media?.setActive(false)
             }
             ActionSelectEndpoint -> {
                 val callId = intent.getStringExtra(ExtraCallId) ?: return
-                if (!TelecomActionScope.acceptsSelection(call.snapshot(), callId)) return
-                intent.getStringExtra(ExtraEndpointId)?.let { telecom.selectEndpoint(callId, it) }
+                val localCallId = TelecomActionScope.telecomCallForSelection(call.snapshot(), callId, telecomCallId) ?: return
+                intent.getStringExtra(ExtraEndpointId)?.let { telecom.selectEndpoint(localCallId, it) }
             }
         }
         publish(endReason)
@@ -396,7 +433,7 @@ class CallForegroundService : Service() {
         media?.close()
         IncomingCallNotifier(this).cancel()
         callId?.let { IncomingCallController().clear(this, it) }
-        callId?.let(telecom::cancel)
+        (telecomCallId ?: callId)?.let(telecom::cancel)
         stopSelf()
     }
 
@@ -404,7 +441,7 @@ class CallForegroundService : Service() {
         onDisconnect = onDisconnect,
         onActive = { telecomActive(this, callId) },
         onInactive = { telecomInactive(this, callId) },
-        onEndpointsChanged = { state -> CallAudioState.publish(callId, state) },
+        onEndpointsChanged = { state -> CallAudioState.publish(coordinator?.snapshot()?.callId ?: callId, state) },
     )
 
     private fun acceptsTelecomCallback(call: CallCoordinator, intent: Intent): Boolean {
@@ -414,6 +451,7 @@ class CallForegroundService : Service() {
             call.snapshot(),
             pending?.callId,
             pending?.expiresAt,
+            telecomCallId,
             callId,
             Instant.now(),
         )
@@ -523,14 +561,10 @@ class CallForegroundService : Service() {
         }
 
         fun telecomActive(context: Context, callId: String) {
-            val snapshot = CallServiceState.snapshot()
-            if (snapshot.callId != callId || snapshot.phase != CallPhase.Active) return
             start(context, Intent(context, CallForegroundService::class.java).setAction(ActionTelecomActive).putExtra(ExtraCallId, callId))
         }
 
         fun telecomInactive(context: Context, callId: String) {
-            val snapshot = CallServiceState.snapshot()
-            if (snapshot.callId != callId || snapshot.phase != CallPhase.Active) return
             start(context, Intent(context, CallForegroundService::class.java).setAction(ActionTelecomInactive).putExtra(ExtraCallId, callId))
         }
 
@@ -552,7 +586,8 @@ class CallForegroundService : Service() {
 
 internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: String?): CallEndReason? = when {
     currentCallId == null -> null
-    failure.code == "busy" && failure.callId == currentCallId -> CallEndReason.Busy
+    failure.callId != null && failure.callId != currentCallId -> null
+    failure.code == "busy" -> CallEndReason.Busy
     else -> CallEndReason.Failed
 }
 

@@ -9,12 +9,16 @@ internal object TelecomActionScope {
         snapshot: CallSnapshot,
         pendingIncomingCallId: String?,
         pendingExpiresAt: Instant?,
-        callId: String,
+        localTelecomCallId: String?,
+        callbackCallId: String,
         now: Instant,
     ): Boolean =
-        (snapshot.phase != CallPhase.Idle && snapshot.phase != CallPhase.Ended && snapshot.callId == callId) ||
-            (snapshot.phase == CallPhase.Idle && pendingIncomingCallId == callId && pendingExpiresAt?.isAfter(now) == true)
+        (snapshot.phase != CallPhase.Idle && snapshot.phase != CallPhase.Ended && localTelecomCallId == callbackCallId) ||
+            (snapshot.phase == CallPhase.Idle && pendingIncomingCallId == callbackCallId && pendingExpiresAt?.isAfter(now) == true)
 
     fun acceptsSelection(snapshot: CallSnapshot, callId: String): Boolean =
         snapshot.phase == CallPhase.Active && snapshot.callId == callId
+
+    fun telecomCallForSelection(snapshot: CallSnapshot, callId: String, localTelecomCallId: String?): String? =
+        localTelecomCallId?.takeIf { acceptsSelection(snapshot, callId) }
 }
