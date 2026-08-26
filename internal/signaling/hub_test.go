@@ -82,6 +82,50 @@ func TestHubSendsICEConfigToParticipantsAfterAccept(t *testing.T) {
 	}
 }
 
+func TestHubRefreshesICEConfigAfterRestart(t *testing.T) {
+	provider := &generationalICEConfig{}
+	hub := NewHub(NoopNotifier{})
+	hub.SetICEConfigProvider(provider)
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+
+	start := event("018f7d51-3f90-7e63-b657-4a83a6a90611", "018f7d51-40a1-7bb5-a2d0-7e47f9180611", "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	if err := hub.Handle("bob", event("018f7d51-3f90-7e63-b657-4a83a6a90612", start.CallID, "call.accept", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice) // call.accept
+	initialAlice := next(t, alice)
+	initialBob := next(t, bob)
+	if initialAlice.Type != "rtc.config" || initialBob.Type != "rtc.config" {
+		t.Fatalf("initial configs = %+v, %+v", initialAlice, initialBob)
+	}
+
+	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a90613", start.CallID, "rtc.restart", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, bob); got.Type != "rtc.restart" {
+		t.Fatalf("callee restart = %+v", got)
+	}
+	refreshedAlice := next(t, alice)
+	refreshedBob := next(t, bob)
+	if refreshedAlice.Type != "rtc.config" || refreshedBob.Type != "rtc.config" {
+		t.Fatalf("refreshed configs = %+v, %+v", refreshedAlice, refreshedBob)
+	}
+	if configRestartID(t, refreshedAlice.Event) != "018f7d51-3f90-7e63-b657-4a83a6a90613" || configRestartID(t, refreshedBob.Event) != "018f7d51-3f90-7e63-b657-4a83a6a90613" {
+		t.Fatalf("restart correlation = %s/%s", refreshedAlice.Payload, refreshedBob.Payload)
+	}
+	if refreshedAlice.Seq <= initialAlice.Seq || refreshedBob.Seq <= initialBob.Seq {
+		t.Fatalf("config sequences did not advance: initial=%d/%d refreshed=%d/%d", initialAlice.Seq, initialBob.Seq, refreshedAlice.Seq, refreshedBob.Seq)
+	}
+	if configGeneration(t, refreshedAlice.Event) <= configGeneration(t, initialAlice.Event) || configGeneration(t, refreshedBob.Event) <= configGeneration(t, initialBob.Event) {
+		t.Fatalf("configs were not refreshed: initial=%s/%s refreshed=%s/%s", initialAlice.Payload, initialBob.Payload, refreshedAlice.Payload, refreshedBob.Payload)
+	}
+}
+
 func TestHubSendsEmptyICEConfigWhenTURNIsDisabled(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alice := hub.Connect("alice")
@@ -560,6 +604,37 @@ type fakeICEConfig struct{}
 
 func (fakeICEConfig) ICEConfig(callID, user string) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(`{"user":%q,"call_id":%q}`, user, callID))
+}
+
+type generationalICEConfig struct {
+	generation int
+}
+
+func (p *generationalICEConfig) ICEConfig(callID, user string) json.RawMessage {
+	p.generation++
+	return json.RawMessage(fmt.Sprintf(`{"generation":%d,"user":%q}`, p.generation, user))
+}
+
+func configGeneration(t *testing.T, event protocol.Event) int {
+	t.Helper()
+	var payload struct {
+		Generation int `json:"generation"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload.Generation
+}
+
+func configRestartID(t *testing.T, event protocol.Event) string {
+	t.Helper()
+	var payload struct {
+		RestartID string `json:"restart_id"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload.RestartID
 }
 
 type blockingNotifier struct {

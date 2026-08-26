@@ -27,6 +27,7 @@ class MediaSessionContractTest {
         override suspend fun setAnswer(sdp: String) = Unit
         override suspend fun addIceCandidate(candidate: IceCandidateData) = Unit
         override suspend fun restartIce(): String = ""
+        override suspend fun updateIceServers(servers: List<IceServerData>) = Unit
         override fun setMuted(muted: Boolean) = Unit
 
         override suspend fun close() {

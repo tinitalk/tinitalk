@@ -153,7 +153,10 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 				c.offlineSince[participant] = h.now()
 			}
 		}
-		h.deliverICEConfig(c)
+		h.deliverICEConfig(c, "")
+	}
+	if event.Type == "rtc.restart" {
+		h.deliverICEConfig(c, event.ID)
 	}
 	if event.Type == "call.accept" || event.Type == "call.reject" || event.Type == "call.cancel" {
 		go h.notifier.CancelCall(c.callee, delivered)
@@ -164,11 +167,14 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	return nil
 }
 
-func (h *Hub) deliverICEConfig(c *call) {
+func (h *Hub) deliverICEConfig(c *call, restartID string) {
 	for _, participant := range []string{c.caller, c.callee} {
 		payload := json.RawMessage(`{"ice_servers":[]}`)
 		if h.iceConfig != nil {
 			payload = h.iceConfig.ICEConfig(c.id, participant)
+		}
+		if restartID != "" {
+			payload = withRestartID(payload, restartID)
 		}
 		event := protocol.Event{
 			ID:      rtcConfigID(c.id, participant),
@@ -179,6 +185,23 @@ func (h *Hub) deliverICEConfig(c *call) {
 		}
 		h.deliver(participant, h.next(c, event, participant))
 	}
+}
+
+func withRestartID(payload json.RawMessage, restartID string) json.RawMessage {
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &config); err != nil {
+		return payload
+	}
+	encodedID, err := json.Marshal(restartID)
+	if err != nil {
+		return payload
+	}
+	config["restart_id"] = encodedID
+	updated, err := json.Marshal(config)
+	if err != nil {
+		return payload
+	}
+	return updated
 }
 
 func (h *Hub) Resume(user, callID string, lastSeq uint64) ([]DeliveredEvent, error) {

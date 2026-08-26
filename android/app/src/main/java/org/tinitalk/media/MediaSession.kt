@@ -21,6 +21,7 @@ interface MediaSession {
     suspend fun setAnswer(sdp: String)
     suspend fun addIceCandidate(candidate: IceCandidateData)
     suspend fun restartIce(): String
+    suspend fun updateIceServers(servers: List<IceServerData>)
     fun setMuted(muted: Boolean)
     suspend fun close()
 }

@@ -20,7 +20,7 @@ class WebRtcAudioSession private constructor(
     iceServers: List<IceServerData>,
     private val onLocalIceCandidate: (IceCandidateData) -> Unit,
     private val onIceRestartNeeded: () -> Unit,
-    forceRelay: Boolean,
+    private val forceRelay: Boolean,
 ) : MediaSession {
     private val iceQueue = IceQueue()
     private val factory: PeerConnectionFactory
@@ -43,13 +43,9 @@ class WebRtcAudioSession private constructor(
             .setAudioDeviceModule(audioDeviceModule)
             .createPeerConnectionFactory()
 
-        val config = PeerConnection.RTCConfiguration(iceServers.map { it.toWebRtc() })
-        config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-        config.iceTransportsType = WebRtcPolicy.iceTransport(forceRelay)
-
         peerConnection = requireNotNull(
             factory.createPeerConnection(
-                config,
+                rtcConfiguration(iceServers),
                 PeerConnectionObserver(
                     onLocalIceCandidate = onLocalIceCandidate,
                     onConnectionChange = { state -> onIceConnectionState(state) },
@@ -94,6 +90,11 @@ class WebRtcAudioSession private constructor(
         ensureOpen()
         peerConnection.restartIce()
         return createOffer()
+    }
+
+    override suspend fun updateIceServers(servers: List<IceServerData>) {
+        ensureOpen()
+        check(peerConnection.setConfiguration(rtcConfiguration(servers))) { "failed to update ICE servers" }
     }
 
     override fun setMuted(muted: Boolean) {
@@ -163,6 +164,12 @@ class WebRtcAudioSession private constructor(
             else -> Unit
         }
     }
+
+    private fun rtcConfiguration(iceServers: List<IceServerData>) =
+        PeerConnection.RTCConfiguration(iceServers.map { it.toWebRtc() }).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            iceTransportsType = WebRtcPolicy.iceTransport(forceRelay)
+        }
 
     private fun IceServerData.toWebRtc(): PeerConnection.IceServer {
         val builder = PeerConnection.IceServer.builder(urls)

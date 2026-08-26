@@ -5,6 +5,9 @@ import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
 import org.tinitalk.media.MediaSession
+import org.tinitalk.media.CancellableTask
+import org.tinitalk.media.ExecutorTaskScheduler
+import org.tinitalk.media.TaskScheduler
 import java.time.Instant
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.EmptyCoroutineContext
@@ -12,10 +15,13 @@ import kotlin.coroutines.startCoroutine
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+internal const val CredentialRefreshLeadMillis = 60_000L
+
 class ForegroundCallController(
     private val signal: SignalClient,
     private val mediaFactory: (String, List<IceServerData>, (IceCandidateData) -> Unit, () -> Unit) -> MediaSession,
     private val ids: EventIds = UuidEventIds(),
+    private val scheduler: TaskScheduler = ExecutorTaskScheduler(),
 ) {
     private var session: MediaSession? = null
     private var callId: String? = null
@@ -23,9 +29,13 @@ class ForegroundCallController(
     private var configuredCallId: String? = null
     private var acceptedCallId: String? = null
     private var offerStartedCallId: String? = null
+    private var restartRequestedCallId: String? = null
+    private var restartRequestID: String? = null
+    private var credentialRefreshTask: CancellableTask? = null
     private var pendingOffer: SignalEvent? = null
     private val pendingIce = ArrayDeque<Pair<String, IceCandidateData>>()
 
+    @Synchronized
     fun onSignalEvent(snapshot: CallSnapshot, event: SignalEvent) {
         when (event.type) {
             "call.accept" -> if (snapshot.phase == CallPhase.Active) {
@@ -42,7 +52,18 @@ class ForegroundCallController(
             "rtc.config" -> {
                 iceServers = event.payload.parseIceServers()
                 configuredCallId = event.callId
-                startOfferWhenReady(event.callId)
+                session?.takeIf { callId == event.callId }?.let { media ->
+                    runBlockingLite { media.updateIceServers(iceServers) }
+                }
+                if (restartRequestedCallId == event.callId && restartRequestID == event.payload.restartID()) {
+                    val offer = runBlockingLite { ensureSession(event.callId).restartIce() }
+                    restartRequestedCallId = null
+                    restartRequestID = null
+                    sendSdp(event.callId, "rtc.offer", offer)
+                } else {
+                    startOfferWhenReady(event.callId)
+                }
+                scheduleCredentialRefresh(event.callId)
                 pendingOffer?.takeIf { it.callId == event.callId }?.let {
                     pendingOffer = null
                     answerOffer(it)
@@ -73,7 +94,11 @@ class ForegroundCallController(
         session?.setMuted(muted)
     }
 
+    @Synchronized
     fun close() {
+        credentialRefreshTask?.cancel()
+        credentialRefreshTask = null
+        scheduler.close()
         val media = session
         session = null
         callId = null
@@ -81,6 +106,8 @@ class ForegroundCallController(
         configuredCallId = null
         acceptedCallId = null
         offerStartedCallId = null
+        restartRequestedCallId = null
+        restartRequestID = null
         pendingOffer = null
         pendingIce.clear()
         if (media != null) runBlockingLite { media.close() }
@@ -118,11 +145,22 @@ class ForegroundCallController(
         return created
     }
 
+    @Synchronized
     private fun restartIce(nextCallId: String) {
-        if (offerStartedCallId != nextCallId || callId != nextCallId) return
-        val media = session ?: return
-        val offer = runBlockingLite { media.restartIce() }
-        sendSdp(nextCallId, "rtc.offer", offer)
+        if (offerStartedCallId != nextCallId || callId != nextCallId || restartRequestedCallId == nextCallId) return
+        val restart = event(nextCallId, "rtc.restart", JsonObject())
+        restartRequestedCallId = nextCallId
+        restartRequestID = restart.id
+        signal.send(restart)
+    }
+
+    private fun scheduleCredentialRefresh(nextCallId: String) {
+        credentialRefreshTask?.cancel()
+        credentialRefreshTask = null
+        if (acceptedCallId != nextCallId) return
+        val expiresAt = iceServers.mapNotNull { it.expiresAt }.minOrNull() ?: return
+        val delayMillis = (expiresAt.toEpochMilli() - ids.nowMillis() - CredentialRefreshLeadMillis).coerceAtLeast(0L)
+        credentialRefreshTask = scheduler.schedule(delayMillis) { restartIce(nextCallId) }
     }
 
     private fun JsonObject.parseIceServers(): List<IceServerData> {
@@ -143,6 +181,9 @@ class ForegroundCallController(
             )
         }
     }
+
+    private fun JsonObject.restartID(): String? =
+        get("restart_id")?.takeIf { it.isJsonPrimitive }?.asString
 
     private fun sendSdp(callId: String, type: String, sdp: String) {
         val payload = JsonObject().apply { addProperty("sdp", sdp) }
