@@ -2,6 +2,7 @@ package turnserver
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 )
@@ -26,7 +27,11 @@ func TestTemporaryCredentialsUseHMACAndExpire(t *testing.T) {
 }
 
 func TestICEConfigPayloadContainsTemporaryTurnCredentials(t *testing.T) {
-	issuer := CredentialIssuer{Secret: []byte("secret"), TTL: time.Minute, Now: func() time.Time { return time.Unix(1000, 0) }}
+	issuer := CredentialIssuer{
+		Secret: []byte("secret"),
+		TTL:    10 * time.Minute,
+		Now:    func() time.Time { return time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC) },
+	}
 	provider := ICEConfigProvider{
 		PublicHost: "calls.example.com",
 		Realm:      "calls.example.com",
@@ -40,6 +45,7 @@ func TestICEConfigPayloadContainsTemporaryTurnCredentials(t *testing.T) {
 			URLs       []string `json:"urls"`
 			Username   string   `json:"username"`
 			Credential string   `json:"credential"`
+			ExpiresAt  string   `json:"expires_at"`
 		} `json:"ice_servers"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
@@ -49,10 +55,19 @@ func TestICEConfigPayloadContainsTemporaryTurnCredentials(t *testing.T) {
 		t.Fatalf("servers = %+v", payload.Servers)
 	}
 	got := payload.Servers[0]
-	if got.URLs[0] != "stun:calls.example.com:3478" || got.URLs[1] != "turn:calls.example.com:3478?transport=udp" || got.URLs[2] != "turns:calls.example.com:5349?transport=tcp" {
+	wantURLs := []string{
+		"stun:calls.example.com:3478",
+		"turn:calls.example.com:3478?transport=udp",
+		"turn:calls.example.com:3478?transport=tcp",
+		"turns:calls.example.com:5349?transport=tcp",
+	}
+	if !slices.Equal(got.URLs, wantURLs) {
 		t.Fatalf("urls = %+v", got.URLs)
 	}
-	if got.Username != "1060:alice" || got.Credential == "" {
+	if got.Username != "1787739000:alice" || got.Credential == "" {
 		t.Fatalf("credential = %+v", got)
+	}
+	if got.ExpiresAt != "2026-08-26T10:10:00Z" {
+		t.Fatalf("expires_at = %q", got.ExpiresAt)
 	}
 }

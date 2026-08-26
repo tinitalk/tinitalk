@@ -1,5 +1,7 @@
 package org.tinitalk.media
 
+import java.time.Instant
+
 data class IceCandidateData(
     val sdpMid: String,
     val sdpMLineIndex: Int,
@@ -10,6 +12,7 @@ data class IceServerData(
     val urls: List<String>,
     val username: String = "",
     val password: String = "",
+    val expiresAt: Instant? = null,
 )
 
 interface MediaSession {

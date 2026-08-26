@@ -1,7 +1,10 @@
 package org.tinitalk.call
 
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
+import com.google.gson.JsonNull
 import com.google.gson.JsonObject
+import com.google.gson.JsonPrimitive
 import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
@@ -9,6 +12,7 @@ import org.tinitalk.media.MediaSession
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 
 class ForegroundCallControllerTest {
     private val ids = object : EventIds {
@@ -94,6 +98,7 @@ class ForegroundCallControllerTest {
                     add("urls", JsonArray().apply { add("turn:relay.example.com:3478?transport=udp") })
                     addProperty("username", "user")
                     addProperty("credential", "pass")
+                    addProperty("expires_at", "2026-08-26T10:10:00Z")
                 })
             })
         }
@@ -102,9 +107,37 @@ class ForegroundCallControllerTest {
         controller.onSignalEvent(activeSnapshot(), event("call.accept"))
 
         assertEquals(
-            listOf(IceServerData(listOf("turn:relay.example.com:3478?transport=udp"), "user", "pass")),
+            listOf(IceServerData(
+                listOf("turn:relay.example.com:3478?transport=udp"),
+                "user",
+                "pass",
+                Instant.parse("2026-08-26T10:10:00Z"),
+            )),
             capturedServers,
         )
+    }
+
+    @Test
+    fun ignoresMissingAndInvalidIceServerExpiries() {
+        var capturedServers = emptyList<IceServerData>()
+        val controller = ForegroundCallController(CapturingSignalClient(), { _, servers, _, _ ->
+            capturedServers = servers
+            FakeMediaSession()
+        }, ids)
+        val config = JsonObject().apply {
+            add("ice_servers", JsonArray().apply {
+                add(iceServer())
+                add(iceServer(JsonNull.INSTANCE))
+                add(iceServer(JsonPrimitive("not-a-timestamp")))
+                add(iceServer(JsonObject()))
+                add(iceServer(JsonArray()))
+            })
+        }
+
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", config))
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+
+        assertEquals(listOf(null, null, null, null, null), capturedServers.map { it.expiresAt })
     }
 
     @Test
@@ -180,6 +213,11 @@ class ForegroundCallControllerTest {
         SignalEvent("00000000-0000-0000-0000-000000000001", callId, type, 10L, payload)
 
     private fun emptyIceConfig() = JsonObject().apply { add("ice_servers", JsonArray()) }
+
+    private fun iceServer(expiry: JsonElement? = null): JsonObject = JsonObject().apply {
+        add("urls", JsonArray().apply { add("turn:relay.example.com:3478?transport=udp") })
+        if (expiry != null) add("expires_at", expiry)
+    }
 
     private class CapturingSignalClient : SignalClient {
         val sent = mutableListOf<SignalEvent>()

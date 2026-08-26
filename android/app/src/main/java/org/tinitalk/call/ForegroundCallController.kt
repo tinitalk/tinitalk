@@ -5,6 +5,7 @@ import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
 import org.tinitalk.media.MediaSession
+import java.time.Instant
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.startCoroutine
@@ -133,6 +134,12 @@ class ForegroundCallController(
                 urls = urls,
                 username = server.get("username")?.asString.orEmpty(),
                 password = server.get("credential")?.asString.orEmpty(),
+                expiresAt = runCatching {
+                    server.get("expires_at")
+                        ?.takeIf { it.isJsonPrimitive }
+                        ?.asString
+                        ?.let { value -> Instant.parse(value) }
+                }.getOrNull(),
             )
         }
     }
