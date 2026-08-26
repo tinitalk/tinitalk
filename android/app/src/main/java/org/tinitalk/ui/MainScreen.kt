@@ -5,13 +5,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -51,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -131,6 +135,7 @@ private fun LoadingScreen() {
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun LoginScreen(
     resetKey: Int,
     defaultServerUrl: String,
@@ -145,32 +150,41 @@ private fun LoginScreen(
     val serverReady = url.trim().matches(Regex("https?://.+", RegexOption.IGNORE_CASE))
     val canSubmit = !loading && serverReady && login.isNotBlank() && token.isNotBlank()
     val submit = { if (canSubmit) onSignIn(url, login, token) }
+    val keyboardVisible = WindowInsets.isImeVisible
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF111D30), MaterialTheme.colorScheme.background),
+                    ),
+                )
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 28.dp),
-            contentAlignment = Alignment.Center,
+                .padding(horizontal = 24.dp, vertical = if (keyboardVisible) 12.dp else 28.dp),
+            contentAlignment = Alignment.TopCenter,
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                horizontalAlignment = Alignment.Start,
             ) {
-                AppMark(88.dp)
-                Spacer(Modifier.height(22.dp))
-                Text("TiniTalk", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "Звонки для своих",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(36.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AppMark(52.dp)
+                    Spacer(Modifier.width(14.dp))
+                    Column {
+                        Text("TiniTalk", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Звонки для своих",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(if (keyboardVisible) 16.dp else 28.dp))
                 OutlinedTextField(
                     value = login,
                     onValueChange = { login = it },
@@ -180,7 +194,7 @@ private fun LoginScreen(
                     enabled = !loading,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 )
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = token,
                     onValueChange = { token = it },
@@ -192,7 +206,7 @@ private fun LoginScreen(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { submit() }),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(4.dp))
                 TextButton(
                     onClick = { serverExpanded = !serverExpanded },
                     enabled = !loading,
@@ -237,12 +251,12 @@ private fun LoginScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(22.dp))
+                Spacer(Modifier.height(if (keyboardVisible) 12.dp else 20.dp))
                 Button(
                     onClick = submit,
                     enabled = canSubmit,
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(16.dp),
                 ) {
                     if (loading) {
                         CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)

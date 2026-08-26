@@ -62,11 +62,11 @@ class MainActivity : ComponentActivity() {
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         repository = ContactRepository(authStore)
         setContent {
-            TiniTalkTheme {
+            TiniTalkTheme(darkTheme = true) {
                 SideEffect {
                     WindowCompat.getInsetsController(window, window.decorView).apply {
-                        isAppearanceLightStatusBars = true
-                        isAppearanceLightNavigationBars = true
+                        isAppearanceLightStatusBars = false
+                        isAppearanceLightNavigationBars = false
                     }
                 }
                 MainScreen(
