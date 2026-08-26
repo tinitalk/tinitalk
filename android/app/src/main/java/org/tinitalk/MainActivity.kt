@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
                         it.phase != CallPhase.Idle && it.phase != CallPhase.Ended
                     },
                     loginResetKey = loginResetKey,
+                    defaultServerUrl = BuildConfig.SERVER_URL,
                     onSignIn = ::loadContacts,
                     onRequestNotifications = ::requestNotificationPermission,
                     onRequestMicrophone = ::requestMicrophonePermission,

@@ -8,6 +8,11 @@ if (file("google-services.json").isFile) {
     apply(plugin = "com.google.gms.google-services")
 }
 
+val tinitalkServerUrl = providers.gradleProperty("tinitalkServerUrl")
+    .getOrElse("https://tinitalk.example.com")
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+
 android {
     namespace = "org.tinitalk"
     compileSdk = 36
@@ -20,6 +25,7 @@ android {
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
+        buildConfigField("String", "SERVER_URL", "\"$tinitalkServerUrl\"")
     }
 
     buildFeatures {

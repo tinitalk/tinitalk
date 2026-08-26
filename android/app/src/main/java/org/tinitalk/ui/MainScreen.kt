@@ -85,6 +85,7 @@ fun MainScreen(
     state: MainScreenState,
     ongoingCall: CallUiState?,
     loginResetKey: Int,
+    defaultServerUrl: String,
     onSignIn: (url: String, login: String, token: String) -> Unit,
     onRequestNotifications: () -> Unit,
     onRequestMicrophone: () -> Unit,
@@ -96,7 +97,7 @@ fun MainScreen(
 ) {
     when {
         state.restoring -> LoadingScreen()
-        !state.signedIn -> LoginScreen(loginResetKey, state.signingIn, state.errorMessage, onSignIn)
+        !state.signedIn -> LoginScreen(loginResetKey, defaultServerUrl, state.signingIn, state.errorMessage, onSignIn)
         !state.permissions.allRequiredGranted -> PermissionsScreen(
             permissions = state.permissions,
             onRequestNotifications = onRequestNotifications,
@@ -129,13 +130,14 @@ private fun LoadingScreen() {
 @Composable
 private fun LoginScreen(
     resetKey: Int,
+    defaultServerUrl: String,
     loading: Boolean,
     errorMessage: String?,
     onSignIn: (String, String, String) -> Unit,
 ) {
     var login by rememberSaveable(resetKey) { mutableStateOf("") }
     var token by rememberSaveable(resetKey) { mutableStateOf("") }
-    var url by rememberSaveable(resetKey) { mutableStateOf("https://") }
+    var url by rememberSaveable(resetKey, defaultServerUrl) { mutableStateOf(defaultServerUrl) }
     var serverExpanded by rememberSaveable(resetKey) { mutableStateOf(false) }
     val serverReady = url.trim().matches(Regex("https?://.+", RegexOption.IGNORE_CASE))
     val canSubmit = !loading && serverReady && login.isNotBlank() && token.isNotBlank()

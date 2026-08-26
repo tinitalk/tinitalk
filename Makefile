@@ -1,5 +1,7 @@
 GOARCH ?= amd64
 GRADLE_ARGS ?=
+SERVER_URL ?= https://tinitalk.example.com
+CLIENT_GRADLE_ARGS = -PtinitalkServerUrl=$(SERVER_URL) $(GRADLE_ARGS)
 
 .PHONY: server client test check clean
 
@@ -9,7 +11,7 @@ SHELL := cmd.exe
 JAVA17 ?= C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot
 CREATE_DIST = if not exist dist mkdir dist
 BUILD_SERVER = set CGO_ENABLED=0&& set GOOS=linux&& set GOARCH=$(GOARCH)&& go build -trimpath -buildvcs=false -ldflags "-s -w" -o dist/tinitalk-linux-$(GOARCH) ./cmd/tinitalk
-BUILD_CLIENT = cd android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest assembleDebug $(GRADLE_ARGS)
+BUILD_CLIENT = cd android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest assembleDebug $(CLIENT_GRADLE_ARGS)
 TEST_CLIENT = cd android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest
 COPY_CLIENT = copy /Y android\app\build\outputs\apk\debug\app-debug.apk dist\tinitalk-debug.apk >NUL
 CLEAN_DIST = if exist dist rmdir /S /Q dist
@@ -23,10 +25,10 @@ ifneq ($(WSL_DISTRO_NAME),)
 WINDOWS_CMD ?= /mnt/c/Windows/System32/cmd.exe
 WINDOWS_ROOT := $(shell wslpath -w "$(CURDIR)")
 JAVA17 ?= C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot
-BUILD_CLIENT = $(WINDOWS_CMD) /D /C "cd /D $(WINDOWS_ROOT)\android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest assembleDebug $(GRADLE_ARGS)"
+BUILD_CLIENT = $(WINDOWS_CMD) /D /C "cd /D $(WINDOWS_ROOT)\android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest assembleDebug $(CLIENT_GRADLE_ARGS)"
 TEST_CLIENT = $(WINDOWS_CMD) /D /C "cd /D $(WINDOWS_ROOT)\android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest"
 else
-BUILD_CLIENT = cd android && ./gradlew testDebugUnitTest assembleDebug $(GRADLE_ARGS)
+BUILD_CLIENT = cd android && ./gradlew testDebugUnitTest assembleDebug $(CLIENT_GRADLE_ARGS)
 TEST_CLIENT = cd android && ./gradlew testDebugUnitTest
 endif
 endif

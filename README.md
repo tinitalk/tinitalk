@@ -185,6 +185,16 @@ make check
 
 - Перед `make client` положи Firebase Android config в
   `android/app/google-services.json`.
+- По умолчанию экран входа использует `https://tinitalk.example.com`. Другой
+  адрес можно зашить в APK при сборке:
+
+```bash
+make client SERVER_URL=https://talk.example.com
+```
+
+  При прямом запуске Gradle используй
+  `-PtinitalkServerUrl=https://talk.example.com`. Адрес по-прежнему можно
+  изменить вручную в настройках сервера на экране входа.
 - Установи `dist/tinitalk-debug.apk`, открой приложение один раз, войди и выдай
   разрешения на микрофон, уведомления и full-screen incoming calls.
 - Relay-only диагностический APK собирается так:
