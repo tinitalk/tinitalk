@@ -25,5 +25,13 @@ object CallAudioState {
         listeners.forEach { it(state) }
     }
 
-    fun reset() = publish(AudioEndpointState())
+    fun publish(callId: String, state: AudioEndpointState) {
+        publish(state)
+        CallUiStateStore.setAudioEndpoints(callId, state)
+    }
+
+    fun reset() {
+        publish(AudioEndpointState())
+        CallUiStateStore.clearAudioEndpoints()
+    }
 }

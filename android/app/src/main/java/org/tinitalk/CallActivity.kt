@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,19 +16,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.core.view.WindowCompat
+import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
+import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.push.IncomingInvite
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
+import org.tinitalk.telecom.ProximityController
 import org.tinitalk.ui.call.ActiveCallScreen
 import org.tinitalk.ui.call.EndedCallScreen
 import org.tinitalk.ui.call.IncomingCallScreen
@@ -41,6 +47,8 @@ import kotlinx.coroutines.delay
 class CallActivity : ComponentActivity() {
     private val incomingController = IncomingCallController()
     private val handler = Handler(Looper.getMainLooper())
+    private lateinit var proximityController: ProximityController
+    private var activityStarted = false
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
     private var incomingInvite by mutableStateOf<IncomingInvite?>(null)
     private var outgoingLogin by mutableStateOf<String?>(null)
@@ -48,7 +56,10 @@ class CallActivity : ComponentActivity() {
     private var terminalActionKey: String? = null
 
     private val callObserver: (CallUiState) -> Unit = { state ->
-        runOnUiThread { callState = state }
+        runOnUiThread {
+            callState = state
+            updateProximity()
+        }
     }
 
     private val inviteMonitor = object : Runnable {
@@ -68,6 +79,7 @@ class CallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        proximityController = ProximityController(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -97,13 +109,23 @@ class CallActivity : ComponentActivity() {
                     ?: incomingInvite?.caller?.takeIf { it.isNotBlank() }
                     ?: outgoingName?.takeIf { it.isNotBlank() }
                     ?: "TiniTalk"
+                val durationText = rememberDurationText(visibleState)
 
                 when {
                     visibleState.phase == CallPhase.Ended -> EndedCallScreen(peerName)
                     visibleState.phase == CallPhase.Active -> ActiveCallScreen(
                         peerName = peerName,
+                        durationText = durationText,
                         muted = visibleState.muted,
+                        connectionHealth = visibleState.connectionHealth,
+                        currentEndpoint = visibleState.currentAudioEndpoint,
+                        availableEndpoints = visibleState.availableAudioEndpoints,
                         onMute = { CallForegroundService.mute(this, it) },
+                        onSelectEndpoint = { endpoint ->
+                            visibleState.callId?.let { callId ->
+                                CallForegroundService.selectAudioEndpoint(this, callId, endpoint.id)
+                            }
+                        },
                         onEnd = { endCall(visibleState) },
                     )
                     visibleState.direction == CallDirection.Incoming && visibleState.phase == CallPhase.Ringing -> {
@@ -148,11 +170,15 @@ class CallActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        activityStarted = true
+        updateProximity()
         handler.removeCallbacks(inviteMonitor)
         if (incomingInvite != null) handler.post(inviteMonitor)
     }
 
     override fun onStop() {
+        activityStarted = false
+        updateProximity()
         handler.removeCallbacks(inviteMonitor)
         super.onStop()
     }
@@ -165,6 +191,7 @@ class CallActivity : ComponentActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(inviteMonitor)
+        proximityController.close()
         CallUiStateStore.removeObserver(callObserver)
         super.onDestroy()
     }
@@ -237,6 +264,20 @@ class CallActivity : ComponentActivity() {
         return true
     }
 
+    private fun updateProximity() {
+        if (!::proximityController.isInitialized) return
+        val connected = callState.connectionHealth == ConnectionHealth.Good ||
+            callState.connectionHealth == ConnectionHealth.Poor
+        val earpiece = callState.currentAudioEndpoint?.type == CallEndpointCompat.TYPE_EARPIECE
+        proximityController.setEnabled(
+            activityStarted &&
+                callState.phase == CallPhase.Active &&
+                callState.connectedAtElapsedMs != null &&
+                connected &&
+                earpiece,
+        )
+    }
+
     companion object {
         private const val ExtraOutgoingLogin = "outgoing_login"
         private const val ExtraOutgoingName = "outgoing_name"
@@ -262,4 +303,20 @@ private fun EmptyCallSurface() {
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(CallBackgroundTop, CallBackgroundBottom))),
     )
+}
+
+@androidx.compose.runtime.Composable
+private fun rememberDurationText(state: CallUiState): String {
+    var nowElapsedMs by remember(state.callId, state.connectedAtElapsedMs) {
+        mutableLongStateOf(SystemClock.elapsedRealtime())
+    }
+    LaunchedEffect(state.callId, state.phase, state.connectedAtElapsedMs) {
+        val connectedAt = state.connectedAtElapsedMs ?: return@LaunchedEffect
+        while (state.phase == CallPhase.Active) {
+            nowElapsedMs = SystemClock.elapsedRealtime()
+            val elapsed = (nowElapsedMs - connectedAt).coerceAtLeast(0L)
+            delay(1_000L - elapsed % 1_000L)
+        }
+    }
+    return state.durationText(nowElapsedMs) ?: "00:00"
 }

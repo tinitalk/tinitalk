@@ -20,6 +20,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallServiceState
+import org.tinitalk.call.CallUiState
+import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.ApiException
 import org.tinitalk.data.AuthStore
@@ -47,8 +49,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var repository: ContactRepository
     private lateinit var authStore: AuthStore
     private var screenState by mutableStateOf(MainScreenState())
+    private var callUiState by mutableStateOf(CallUiStateStore.snapshot())
     private var loginResetKey by mutableIntStateOf(0)
     private var pushRegistrationStarted = false
+    private val callUiObserver: (CallUiState) -> Unit = { state ->
+        runOnUiThread { callUiState = state }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,6 +71,9 @@ class MainActivity : ComponentActivity() {
                 }
                 MainScreen(
                     state = screenState,
+                    ongoingCall = callUiState.takeIf {
+                        it.phase != CallPhase.Idle && it.phase != CallPhase.Ended
+                    },
                     loginResetKey = loginResetKey,
                     onSignIn = ::loadContacts,
                     onRequestNotifications = ::requestNotificationPermission,
@@ -72,10 +81,12 @@ class MainActivity : ComponentActivity() {
                     onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
                     onRefreshPermissions = ::refreshPermissions,
                     onCall = ::startCall,
+                    onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
                     onSignOut = ::signOut,
                 )
             }
         }
+        CallUiStateStore.observe(callUiObserver)
         refreshPermissions()
         restoreContacts()
     }
@@ -166,6 +177,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshPermissions()
+    }
+
+    override fun onDestroy() {
+        CallUiStateStore.removeObserver(callUiObserver)
+        super.onDestroy()
     }
 
     private fun refreshPermissions() {

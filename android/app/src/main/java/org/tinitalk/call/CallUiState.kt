@@ -2,6 +2,8 @@ package org.tinitalk.call
 
 import android.os.SystemClock
 import org.tinitalk.media.MediaConnectionState
+import org.tinitalk.telecom.AudioEndpoint
+import org.tinitalk.telecom.AudioEndpointState
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -42,6 +44,8 @@ data class CallUiState(
     val connectedAtElapsedMs: Long? = null,
     val endedAtElapsedMs: Long? = null,
     val muted: Boolean = false,
+    val currentAudioEndpoint: AudioEndpoint? = null,
+    val availableAudioEndpoints: List<AudioEndpoint> = emptyList(),
     val connectionHealth: ConnectionHealth = ConnectionHealth.None,
     val endReason: CallEndReason? = null,
 ) {
@@ -114,6 +118,7 @@ object CallUiStateStore {
         listeners -= listener
     }
 
+    @Synchronized
     fun begin(callId: String, peer: CallPeer, direction: CallDirection, phase: CallPhase) {
         publish(
             CallUiState(
@@ -130,6 +135,7 @@ object CallUiStateStore {
         )
     }
 
+    @Synchronized
     fun sync(snapshot: CallSnapshot, endReason: CallEndReason? = null) {
         val now = SystemClock.elapsedRealtime()
         val base = current.takeIf { it.callId == snapshot.callId } ?: CallUiState(callId = snapshot.callId)
@@ -150,14 +156,41 @@ object CallUiStateStore {
         publish(next)
     }
 
+    @Synchronized
     fun onMediaConnection(state: MediaConnectionState) {
         publish(current.onMediaConnection(state, SystemClock.elapsedRealtime()))
     }
 
+    @Synchronized
     fun setMuted(muted: Boolean) {
         publish(current.copy(muted = muted))
     }
 
+    @Synchronized
+    fun setAudioEndpoints(callId: String, endpoints: AudioEndpointState) {
+        val state = current
+        if (state.callId != callId) return
+        publish(
+            state.copy(
+                currentAudioEndpoint = endpoints.current,
+                availableAudioEndpoints = endpoints.available,
+            ),
+        )
+    }
+
+    @Synchronized
+    fun clearAudioEndpoints() {
+        publish(current.copy(currentAudioEndpoint = null, availableAudioEndpoints = emptyList()))
+    }
+
+    @Synchronized
+    fun setConnectionHealth(callId: String, health: ConnectionHealth) {
+        val state = current
+        if (state.callId != callId || state.phase != CallPhase.Active) return
+        publish(state.copy(connectionHealth = health))
+    }
+
+    @Synchronized
     fun reset() {
         publish(CallUiState())
     }

@@ -30,6 +30,7 @@ import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.media.WebRtcAudioSession
+import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
 import java.time.Instant
@@ -50,6 +51,7 @@ class CallForegroundService : Service() {
     private var finishing = false
     private var statsPolling = false
     private var callNetworkLock: CallNetworkLock? = null
+    private val connectionHealthClassifier = ConnectionHealthClassifier()
     private val statsTask = object : Runnable {
         override fun run() {
             if (!statsPolling) return
@@ -65,6 +67,9 @@ class CallForegroundService : Service() {
                             snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
                         if (stillActive && media === currentMedia) {
                             Log.i(CallLogTag, CallDiagnostics.format(stats))
+                            val currentHealth = CallUiStateStore.snapshot().connectionHealth
+                            val health = connectionHealthClassifier.update(stats, currentHealth)
+                            CallUiStateStore.setConnectionHealth(activeCallId, health)
                         }
                     }
                 }
@@ -136,6 +141,7 @@ class CallForegroundService : Service() {
                         handler.post {
                             val callId = newCoordinator.snapshot().callId
                             if (!finishing && callId != null && CallUiStateStore.snapshot().callId == callId) {
+                                connectionHealthClassifier.reset()
                                 CallUiStateStore.onMediaConnection(state)
                             }
                         }
@@ -207,6 +213,7 @@ class CallForegroundService : Service() {
         when (intent.action) {
             ActionStart -> {
                 if (call.snapshot().phase != CallPhase.Idle) return
+                connectionHealthClassifier.reset()
                 CallServiceState.publish(call.snapshot())
                 CallUiStateStore.reset()
                 CallAudioState.reset()
@@ -226,12 +233,14 @@ class CallForegroundService : Service() {
             ActionAnswer -> {
                 invite ?: return
                 if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callId != invite.callId) return
+                connectionHealthClassifier.reset()
                 CallUiStateStore.begin(
                     invite.callId,
                     CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }),
                     CallDirection.Incoming,
                     CallPhase.Ringing,
                 )
+                CallUiStateStore.setAudioEndpoints(invite.callId, CallAudioState.snapshot())
                 call.restoreIncoming(invite.callId, invite.lastSeq)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
@@ -330,6 +339,7 @@ class CallForegroundService : Service() {
         statsPolling = false
         handler.removeCallbacks(statsTask)
         callNetworkLock?.setActive(false)
+        connectionHealthClassifier.reset()
     }
 
     private fun finishCallSoon() {
@@ -354,7 +364,7 @@ class CallForegroundService : Service() {
         onDisconnect = onDisconnect,
         onActive = { telecomActive(this, callId) },
         onInactive = { telecomInactive(this, callId) },
-        onEndpointsChanged = CallAudioState::publish,
+        onEndpointsChanged = { state -> CallAudioState.publish(callId, state) },
     )
 
     private fun acceptsTelecomCallback(call: CallCoordinator, intent: Intent): Boolean {

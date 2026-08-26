@@ -45,6 +45,8 @@ import org.tinitalk.ui.theme.CallBackgroundTop
 internal fun CallScreenSurface(
     status: String,
     peerName: String,
+    detail: String? = null,
+    statusColor: Color = Color.White.copy(alpha = 0.76f),
     pulsingAvatar: Boolean = false,
     footer: @Composable ColumnScope.() -> Unit,
 ) {
@@ -83,7 +85,7 @@ internal fun CallScreenSurface(
         ) {
             Text(
                 text = status,
-                color = Color.White.copy(alpha = 0.76f),
+                color = statusColor,
                 style = MaterialTheme.typography.titleMedium,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
@@ -114,6 +116,15 @@ internal fun CallScreenSurface(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (detail != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = detail,
+                    color = Color.White.copy(alpha = 0.78f),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
             Spacer(Modifier.weight(1f))
             footer()
         }
@@ -125,17 +136,24 @@ internal fun RoundCallAction(
     label: String,
     color: Color,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    contentDescription: String = label,
+    enabled: Boolean = true,
     iconRotation: Float = 0f,
     iconResource: Int = R.drawable.ic_call,
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         IconButton(
             onClick = onClick,
-            modifier = Modifier.size(72.dp).clip(CircleShape).background(color),
+            enabled = enabled,
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(if (enabled) color else color.copy(alpha = 0.42f)),
         ) {
             Icon(
                 painter = painterResource(iconResource),
-                contentDescription = label,
+                contentDescription = contentDescription,
                 tint = Color.White,
                 modifier = Modifier.size(31.dp).graphicsLayer(rotationZ = iconRotation),
             )
@@ -143,10 +161,11 @@ internal fun RoundCallAction(
         Spacer(Modifier.height(10.dp))
         Text(
             text = label,
-            color = Color.White,
+            color = Color.White.copy(alpha = if (enabled) 1f else 0.52f),
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Center,
+            maxLines = 2,
         )
     }
 }

@@ -62,6 +62,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
+import org.tinitalk.call.CallDirection
+import org.tinitalk.call.CallPhase
+import org.tinitalk.call.CallUiState
+import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.data.Contact
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.ui.theme.CallAnswerGreen
@@ -79,6 +83,7 @@ data class MainScreenState(
 @Composable
 fun MainScreen(
     state: MainScreenState,
+    ongoingCall: CallUiState?,
     loginResetKey: Int,
     onSignIn: (url: String, login: String, token: String) -> Unit,
     onRequestNotifications: () -> Unit,
@@ -86,6 +91,7 @@ fun MainScreen(
     onRequestFullScreenCalls: () -> Unit,
     onRefreshPermissions: () -> Unit,
     onCall: (Contact) -> Unit,
+    onOpenCall: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     when {
@@ -99,7 +105,7 @@ fun MainScreen(
             onRefresh = onRefreshPermissions,
             onSignOut = onSignOut,
         )
-        else -> ContactsScreen(state.contacts, onCall, onSignOut)
+        else -> ContactsScreen(state.contacts, ongoingCall, onCall, onOpenCall, onSignOut)
     }
 }
 
@@ -330,34 +336,45 @@ private fun PermissionItem(
 }
 
 @Composable
-private fun ContactsScreen(contacts: List<Contact>, onCall: (Contact) -> Unit, onSignOut: () -> Unit) {
+private fun ContactsScreen(
+    contacts: List<Contact>,
+    ongoingCall: CallUiState?,
+    onCall: (Contact) -> Unit,
+    onOpenCall: () -> Unit,
+    onSignOut: () -> Unit,
+) {
     AppPage(onSignOut = onSignOut) {
-        if (contacts.isEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(32.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text("Контактов пока нет", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Добавьте абонентов в настройках сервера.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (ongoingCall != null) {
+                OngoingCallBanner(ongoingCall, onOpenCall)
             }
-        } else {
-            Surface(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 1.dp,
-            ) {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    itemsIndexed(contacts, key = { _, contact -> contact.login }) { index, contact ->
-                        ContactRow(contact, onCall)
-                        if (index < contacts.lastIndex) {
-                            HorizontalDivider(modifier = Modifier.padding(start = 86.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            if (contacts.isEmpty()) {
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(32.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Контактов пока нет", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Добавьте абонентов в настройках сервера.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                Surface(
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 1.dp,
+                ) {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        itemsIndexed(contacts, key = { _, contact -> contact.login }) { index, contact ->
+                            ContactRow(contact, onCall, enabled = ongoingCall == null)
+                            if (index < contacts.lastIndex) {
+                                HorizontalDivider(modifier = Modifier.padding(start = 86.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                            }
                         }
                     }
                 }
@@ -367,7 +384,63 @@ private fun ContactsScreen(contacts: List<Contact>, onCall: (Contact) -> Unit, o
 }
 
 @Composable
-private fun ContactRow(contact: Contact, onCall: (Contact) -> Unit) {
+private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
+    val status = when {
+        state.connectionHealth == ConnectionHealth.Reconnecting -> "Восстанавливаем связь…"
+        state.connectionHealth == ConnectionHealth.Poor -> "Слабая сеть"
+        state.connectionHealth == ConnectionHealth.Connecting -> "Соединяемся…"
+        state.phase == CallPhase.Active -> "Идёт разговор"
+        state.direction == CallDirection.Incoming -> "Входящий звонок"
+        else -> "Соединяемся…"
+    }
+    Surface(
+        onClick = onOpen,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        tonalElevation = 2.dp,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(CallAnswerGreen),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_call),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(23.dp),
+                )
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = state.peer?.displayName?.ifBlank { "TiniTalk" } ?: "TiniTalk",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
+                )
+            }
+            Text(
+                text = "Открыть",
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContactRow(contact: Contact, onCall: (Contact) -> Unit, enabled: Boolean) {
     val avatarColors = listOf(
         Color(0xFF315EA8),
         Color(0xFF6D4C9F),
@@ -412,11 +485,18 @@ private fun ContactRow(contact: Contact, onCall: (Contact) -> Unit) {
         }
         IconButton(
             onClick = { onCall(contact) },
-            modifier = Modifier.size(54.dp).background(CallAnswerGreen, CircleShape),
+            enabled = enabled,
+            modifier = Modifier
+                .size(54.dp)
+                .background(CallAnswerGreen.copy(alpha = if (enabled) 1f else 0.35f), CircleShape),
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_call),
-                contentDescription = "Позвонить: ${contact.displayName.ifBlank { contact.login }}",
+                contentDescription = if (enabled) {
+                    "Позвонить: ${contact.displayName.ifBlank { contact.login }}"
+                } else {
+                    "Сначала завершите текущий звонок"
+                },
                 tint = Color.White,
                 modifier = Modifier.size(25.dp),
             )
