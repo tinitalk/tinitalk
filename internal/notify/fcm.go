@@ -26,7 +26,7 @@ type DeviceToken struct {
 
 type TokenStore interface {
 	TokensForUser(login string) ([]DeviceToken, error)
-	DisplayName(login string) (string, error)
+	ContactDisplayName(owner, contact string) (string, error)
 	DisableToken(token string) error
 }
 
@@ -54,8 +54,8 @@ func (s DBTokenStore) DisableToken(token string) error {
 	return s.DB.DisableToken(token)
 }
 
-func (s DBTokenStore) DisplayName(login string) (string, error) {
-	return s.DB.DisplayName(login)
+func (s DBTokenStore) ContactDisplayName(owner, contact string) (string, error) {
+	return s.DB.ContactDisplayName(owner, contact)
 }
 
 type FCMNotifier struct {
@@ -69,7 +69,7 @@ func NewFCMNotifier(store TokenStore, sender Sender, project string) *FCMNotifie
 }
 
 func (n *FCMNotifier) IncomingCall(caller, callee string, event signaling.DeliveredEvent) {
-	name, err := n.store.DisplayName(caller)
+	name, err := n.store.ContactDisplayName(callee, caller)
 	if err != nil || name == "" {
 		name = caller
 	}

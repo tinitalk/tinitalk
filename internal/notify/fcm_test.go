@@ -33,7 +33,7 @@ func TestWakeMessageUsesHighPriorityAndShortTTL(t *testing.T) {
 }
 
 func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
-	store := &fakeTokenStore{tokens: []DeviceToken{{Token: "bad-token"}}, displayName: "Alice"}
+	store := &fakeTokenStore{tokens: []DeviceToken{{Token: "bad-token"}}, displayName: "Мама"}
 	sender := &fakeSender{err: ErrInvalidRegistration}
 	notifier := NewFCMNotifier(store, sender, "project-1")
 
@@ -45,8 +45,11 @@ func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
 	if store.disabled != "bad-token" {
 		t.Fatalf("disabled = %q", store.disabled)
 	}
-	if sender.last.Message.Data["caller"] != "Alice" {
+	if sender.last.Message.Data["caller"] != "Мама" {
 		t.Fatalf("caller = %q", sender.last.Message.Data["caller"])
+	}
+	if store.nameOwner != "bob" || store.nameContact != "alice" {
+		t.Fatalf("name lookup = owner %q, contact %q", store.nameOwner, store.nameContact)
 	}
 	if sender.last.Message.Data["caller_login"] != "alice" {
 		t.Fatalf("caller_login = %q", sender.last.Message.Data["caller_login"])
@@ -88,10 +91,16 @@ type fakeTokenStore struct {
 	tokens      []DeviceToken
 	disabled    string
 	displayName string
+	nameOwner   string
+	nameContact string
 }
 
 func (s *fakeTokenStore) TokensForUser(string) ([]DeviceToken, error) { return s.tokens, nil }
-func (s *fakeTokenStore) DisplayName(string) (string, error)          { return s.displayName, nil }
+func (s *fakeTokenStore) ContactDisplayName(owner, contact string) (string, error) {
+	s.nameOwner = owner
+	s.nameContact = contact
+	return s.displayName, nil
+}
 func (s *fakeTokenStore) DisableToken(token string) error {
 	s.disabled = token
 	return nil

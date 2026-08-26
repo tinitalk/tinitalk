@@ -138,6 +138,9 @@ func TestUnreadMissedRowsAreRemovedAfterHistoryIsRead(t *testing.T) {
 func TestCallHistoryPagesNewestFirstAndCountsMissed(t *testing.T) {
 	db := openCallHistoryTestDB(t)
 	defer db.Close()
+	if err := db.SetContactName("bob", "alice", "Мама"); err != nil {
+		t.Fatal(err)
+	}
 	older := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Hour)
 
@@ -171,7 +174,7 @@ func TestCallHistoryPagesNewestFirstAndCountsMissed(t *testing.T) {
 		t.Fatalf("first page items = %d, want 1", len(page.Items))
 	}
 	latest := page.Items[0]
-	if latest.CallID != "talked" || latest.Direction != CallDirectionIncoming || latest.PeerLogin != "alice" || latest.PeerName != "Alice" {
+	if latest.CallID != "talked" || latest.Direction != CallDirectionIncoming || latest.PeerLogin != "alice" || latest.PeerName != "Мама" {
 		t.Fatalf("latest item = %+v", latest)
 	}
 	if !latest.StartedAt.Equal(newer) || latest.DurationSeconds != 120 || latest.Outcome != CallOutcomeCompleted {

@@ -51,6 +51,59 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	}
 }
 
+func TestContactNamesArePersonalAndResettable(t *testing.T) {
+	db, tokens := testDB(t)
+	server := NewServer(db, Options{AllowInsecureLoopback: true})
+
+	renamed := request(t, server, http.MethodPut, "/api/contacts/bob/name", []byte(`{"custom_name":"  Мама  "}`), "alice", tokens["alice"])
+	if renamed.Code != http.StatusOK {
+		t.Fatalf("rename status = %d, body %s", renamed.Code, renamed.Body.String())
+	}
+	var contact struct {
+		Login              string  `json:"login"`
+		DisplayName        string  `json:"display_name"`
+		DefaultDisplayName string  `json:"default_display_name"`
+		CustomName         *string `json:"custom_name"`
+	}
+	if err := json.Unmarshal(renamed.Body.Bytes(), &contact); err != nil {
+		t.Fatal(err)
+	}
+	if contact.Login != "bob" || contact.DisplayName != "Мама" || contact.DefaultDisplayName != "Bob" || contact.CustomName == nil || *contact.CustomName != "Мама" {
+		t.Fatalf("renamed contact = %+v", contact)
+	}
+
+	aliceContacts := request(t, server, http.MethodGet, "/api/contacts", nil, "alice", tokens["alice"])
+	if aliceContacts.Code != http.StatusOK {
+		t.Fatalf("alice contacts status = %d, body %s", aliceContacts.Code, aliceContacts.Body.String())
+	}
+	if !bytes.Contains(aliceContacts.Body.Bytes(), []byte(`"display_name":"Мама"`)) {
+		t.Fatalf("alice contacts = %s, want personal name", aliceContacts.Body.String())
+	}
+	bobContacts := request(t, server, http.MethodGet, "/api/contacts", nil, "bob", tokens["bob"])
+	if bobContacts.Code != http.StatusOK {
+		t.Fatalf("bob contacts status = %d, body %s", bobContacts.Code, bobContacts.Body.String())
+	}
+	if bytes.Contains(bobContacts.Body.Bytes(), []byte(`"display_name":"Мама"`)) {
+		t.Fatalf("bob contacts leaked alice's personal name: %s", bobContacts.Body.String())
+	}
+
+	reset := request(t, server, http.MethodPut, "/api/contacts/bob/name", []byte(`{"custom_name":null}`), "alice", tokens["alice"])
+	if reset.Code != http.StatusOK {
+		t.Fatalf("reset status = %d, body %s", reset.Code, reset.Body.String())
+	}
+	if err := json.Unmarshal(reset.Body.Bytes(), &contact); err != nil {
+		t.Fatal(err)
+	}
+	if contact.DisplayName != "Bob" || contact.CustomName != nil {
+		t.Fatalf("reset contact = %+v", contact)
+	}
+
+	invalid := request(t, server, http.MethodPut, "/api/contacts/bob/name", []byte(`{"custom_name":"   "}`), "alice", tokens["alice"])
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("blank name status = %d, want 400", invalid.Code)
+	}
+}
+
 func TestUnauthorizedCredentialsReturn401(t *testing.T) {
 	db, tokens := testDB(t)
 	server := NewServer(db, Options{AllowInsecureLoopback: true})

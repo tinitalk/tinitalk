@@ -211,16 +211,19 @@ func (db *DB) CallHistory(login string, before int64, limit int) (CallHistoryPag
 	}
 
 	rows, err := db.sql.Query(`
-		SELECT h.id, h.call_id, h.caller_id, peer.login, peer.display_name,
+		SELECT h.id, h.call_id, h.caller_id, peer.login,
+			COALESCE(personal.custom_name, peer.display_name),
 			h.outcome, h.started_at, h.connected_at, h.ended_at
 		FROM call_history h
 		JOIN users peer ON peer.id = CASE WHEN h.caller_id = ? THEN h.callee_id ELSE h.caller_id END
+		LEFT JOIN user_contacts personal
+			ON personal.owner_user_id = ? AND personal.contact_user_id = peer.id
 		WHERE h.ended_at IS NOT NULL
 			AND (h.caller_id = ? OR h.callee_id = ?)
 			AND (? = 0 OR h.id < ?)
 		ORDER BY h.id DESC
 		LIMIT ?
-	`, userID, userID, userID, before, before, limit+1)
+	`, userID, userID, userID, userID, before, before, limit+1)
 	if err != nil {
 		return page, err
 	}

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 	"unicode/utf8"
@@ -11,6 +12,40 @@ type Contact struct {
 	DisplayName        string
 	DefaultDisplayName string
 	CustomName         string
+}
+
+func (db *DB) ContactForUser(owner, login string) (Contact, error) {
+	ownerID, err := db.userID(owner)
+	if err != nil {
+		return Contact{}, err
+	}
+	var contact Contact
+	err = db.sql.QueryRow(`
+		SELECT contact.login,
+			COALESCE(uc.custom_name, contact.display_name),
+			contact.display_name,
+			COALESCE(uc.custom_name, '')
+		FROM user_contacts uc
+		JOIN users contact ON contact.id = uc.contact_user_id
+		WHERE uc.owner_user_id = ? AND contact.login = ? AND contact.disabled = 0
+	`, ownerID, login).Scan(&contact.Login, &contact.DisplayName, &contact.DefaultDisplayName, &contact.CustomName)
+	return contact, err
+}
+
+func (db *DB) ContactDisplayName(owner, login string) (string, error) {
+	var name string
+	err := db.sql.QueryRow(`
+		SELECT COALESCE(personal.custom_name, contact.display_name)
+		FROM users owner, users contact
+		LEFT JOIN user_contacts personal
+			ON personal.owner_user_id = owner.id AND personal.contact_user_id = contact.id
+		WHERE owner.login = ? AND owner.disabled = 0
+			AND contact.login = ? AND contact.disabled = 0
+	`, owner, login).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errors.New("contact not found")
+	}
+	return name, err
 }
 
 func (db *DB) ContactsForUser(owner string) ([]Contact, error) {

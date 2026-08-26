@@ -42,6 +42,9 @@ func TestPersonalContactsUseIndependentCustomNames(t *testing.T) {
 	if got := contactByLogin(t, iraContacts, "anna"); got.DisplayName != "Бабушка" || got.DefaultDisplayName != "Анна" || got.CustomName != "Бабушка" {
 		t.Fatalf("ira's anna = %+v, want personal name Бабушка", got)
 	}
+	if name, err := db.ContactDisplayName("gran", "anna"); err != nil || name != "Мама" {
+		t.Fatalf("gran's resolved anna = %q, %v, want Мама", name, err)
+	}
 
 	if err := db.SetContactName("gran", "anna", ""); err != nil {
 		t.Fatal(err)
@@ -52,6 +55,9 @@ func TestPersonalContactsUseIndependentCustomNames(t *testing.T) {
 	}
 	if got := contactByLogin(t, granContacts, "anna"); got.DisplayName != "Анна" || got.CustomName != "" {
 		t.Fatalf("gran's reset anna = %+v, want default name Анна", got)
+	}
+	if name, err := db.ContactDisplayName("gran", "anna"); err != nil || name != "Анна" {
+		t.Fatalf("gran's reset resolved anna = %q, %v, want Анна", name, err)
 	}
 }
 
