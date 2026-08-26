@@ -38,6 +38,7 @@ class WebRtcAudioSession private constructor(
     init {
         prepareFactory(context.applicationContext)
         audioDeviceModule = JavaAudioDeviceModule.builder(context.applicationContext)
+            .setUseLowLatency(WebRtcPolicy.useLowLatencyAudio)
             .setUseHardwareAcousticEchoCanceler(true)
             .setUseHardwareNoiseSuppressor(true)
             .createAudioDeviceModule()
@@ -198,11 +199,11 @@ class WebRtcAudioSession private constructor(
     private fun onIceConnectionState(state: PeerConnection.IceConnectionState) {
         if (closed) return
         when (state) {
-            PeerConnection.IceConnectionState.DISCONNECTED,
-            PeerConnection.IceConnectionState.FAILED -> restartGate.onState(true, onIceRestartNeeded)
+            PeerConnection.IceConnectionState.DISCONNECTED -> restartGate.onDisconnected(onIceRestartNeeded)
+            PeerConnection.IceConnectionState.FAILED -> restartGate.onFailed(onIceRestartNeeded)
             PeerConnection.IceConnectionState.CONNECTED,
             PeerConnection.IceConnectionState.COMPLETED,
-            PeerConnection.IceConnectionState.CLOSED -> restartGate.onState(false, onIceRestartNeeded)
+            PeerConnection.IceConnectionState.CLOSED -> restartGate.onConnected()
             else -> Unit
         }
     }

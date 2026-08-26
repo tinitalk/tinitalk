@@ -7,14 +7,25 @@ object OpusSdp {
         val lines = sdp.lines().toMutableList()
         val fmtpIndex = lines.indexOfFirst { it.startsWith(fmtpPrefix) }
         if (fmtpIndex >= 0) {
-            lines[fmtpIndex] = withOption(withOption(lines[fmtpIndex], "useinbandfec=1"), "usedtx=1")
+            lines[fmtpIndex] = withFecWithoutDtx(lines[fmtpIndex], fmtpPrefix)
         } else {
             val rtpIndex = lines.indexOfFirst { it.startsWith("a=rtpmap:$opusPayload ") }
-            lines.add((rtpIndex + 1).coerceAtLeast(0), "${fmtpPrefix}useinbandfec=1;usedtx=1")
+            lines.add((rtpIndex + 1).coerceAtLeast(0), "${fmtpPrefix}useinbandfec=1")
         }
         return lines.joinToString("\n")
     }
 
-    private fun withOption(line: String, option: String): String =
-        if (line.contains(option)) line else "$line;$option"
+    private fun withFecWithoutDtx(line: String, prefix: String): String {
+        val options = line.removePrefix(prefix)
+            .split(';')
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .filterNot { option ->
+                val name = option.substringBefore('=').trim()
+                name.equals("useinbandfec", ignoreCase = true) || name.equals("usedtx", ignoreCase = true)
+            }
+            .toMutableList()
+        options += "useinbandfec=1"
+        return prefix + options.joinToString(";")
+    }
 }

@@ -45,6 +45,7 @@ class CallForegroundService : Service() {
     private var connected = false
     private var finishing = false
     private var statsPolling = false
+    private var callNetworkLock: CallNetworkLock? = null
     private val statsTask = object : Runnable {
         override fun run() {
             if (!statsPolling) return
@@ -59,17 +60,12 @@ class CallForegroundService : Service() {
                         val stillActive = statsPolling && !finishing &&
                             snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
                         if (stillActive && media === currentMedia) {
-                            Log.i(
-                                CallLogTag,
-                                "rtt_ms=${stats.rttMs} jitter_ms=${stats.jitterMs} loss_percent=${stats.packetLossPercent} " +
-                                    "bitrate_kbps=${stats.bitrateKbps} local_candidate_type=${stats.localCandidateType} " +
-                                    "remote_candidate_type=${stats.remoteCandidateType}",
-                            )
+                            Log.i(CallLogTag, CallDiagnostics.format(stats))
                         }
                     }
                 }
             }
-            if (statsPolling) handler.postDelayed(this, StatsIntervalMillis)
+            if (statsPolling) handler.postDelayed(this, CallDiagnostics.IntervalMillis)
         }
     }
     private val telecom by lazy { TelecomCallController(AndroidTelecomRegistrar(this)) }
@@ -90,6 +86,8 @@ class CallForegroundService : Service() {
 
     override fun onDestroy() {
         stopStatsPolling()
+        callNetworkLock?.close()
+        callNetworkLock = null
         val snapshot = coordinator?.snapshot()
         val unexpected = !finishing
         if (unexpected && connected && snapshot?.phase == CallPhase.Active) {
@@ -263,15 +261,20 @@ class CallForegroundService : Service() {
     private fun updateStatsPolling() {
         if (finishing || CallServiceState.snapshot().phase != CallPhase.Active) {
             stopStatsPolling()
-        } else if (!statsPolling) {
-            statsPolling = true
-            handler.postDelayed(statsTask, StatsIntervalMillis)
+        } else {
+            val networkLock = callNetworkLock ?: CallNetworkLock.create(this).also { callNetworkLock = it }
+            networkLock.setActive(true)
+            if (!statsPolling) {
+                statsPolling = true
+                handler.postDelayed(statsTask, CallDiagnostics.IntervalMillis)
+            }
         }
     }
 
     private fun stopStatsPolling() {
         statsPolling = false
         handler.removeCallbacks(statsTask)
+        callNetworkLock?.setActive(false)
     }
 
     private fun finishCallSoon() {
@@ -375,7 +378,6 @@ class CallForegroundService : Service() {
         const val ChannelId = "calls"
         const val NotificationId = 10
         private const val SignalFlushTimeoutMillis = 5_000L
-        private const val StatsIntervalMillis = 10_000L
         private const val CallLogTag = "TiniTalkCall"
         fun startOutgoing(context: Context, callee: String) {
             start(context, Intent(context, CallForegroundService::class.java).setAction(ActionStart).putExtra(ExtraCallee, callee))

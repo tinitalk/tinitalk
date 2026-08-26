@@ -3,6 +3,8 @@ package org.tinitalk.media
 import org.webrtc.PeerConnection
 
 object WebRtcPolicy {
+    const val useLowLatencyAudio = true
+
     fun iceTransport(forceRelay: Boolean): PeerConnection.IceTransportsType =
         if (forceRelay) PeerConnection.IceTransportsType.RELAY else PeerConnection.IceTransportsType.ALL
 

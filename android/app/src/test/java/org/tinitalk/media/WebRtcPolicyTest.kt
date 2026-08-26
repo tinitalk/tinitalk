@@ -6,6 +6,11 @@ import org.webrtc.PeerConnection
 
 class WebRtcPolicyTest {
     @Test
+    fun lowLatencyAudioIsEnabled() {
+        assertEquals(true, WebRtcPolicy.useLowLatencyAudio)
+    }
+
+    @Test
     fun relayDebugOptionForcesRelayCandidatesOnly() {
         assertEquals(PeerConnection.IceTransportsType.RELAY, WebRtcPolicy.iceTransport(true))
         assertEquals(PeerConnection.IceTransportsType.ALL, WebRtcPolicy.iceTransport(false))
