@@ -37,6 +37,10 @@ import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.ContactNameViewModel
+import org.tinitalk.ui.ContactHistoryState
+import org.tinitalk.ui.isCurrentContactHistoryRequest
+import org.tinitalk.ui.isCurrentSessionRequest
+import org.tinitalk.ui.withPage
 import org.tinitalk.ui.theme.TiniTalkTheme
 import java.net.MalformedURLException
 import java.net.SocketTimeoutException
@@ -59,6 +63,9 @@ class MainActivity : ComponentActivity() {
     private var pushRegistrationStarted = false
     private var historyLoadGeneration = 0
     private var historyVisible = false
+    private var contactHistoryGeneration = 0
+    private var contactHistoryLogin: String? = null
+    private var authGeneration = 0
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread { callUiState = state }
     }
@@ -107,6 +114,10 @@ class MainActivity : ComponentActivity() {
                     onHistoryVisible = ::showHistory,
                     onLoadMoreHistory = ::loadMoreHistory,
                     onRetryHistory = ::retryHistory,
+                    onContactHistoryVisible = ::showContactHistory,
+                    onContactHistoryHidden = ::hideContactHistory,
+                    onLoadMoreContactHistory = ::loadMoreContactHistory,
+                    onRetryContactHistory = ::retryContactHistory,
                     onSignOut = ::signOut,
                 )
             }
@@ -137,6 +148,7 @@ class MainActivity : ComponentActivity() {
 
     private fun loadContacts(url: String, login: String, token: String) {
         contactNameViewModel.reset()
+        authGeneration++
         screenState = screenState.copy(signingIn = true, errorMessage = null)
         Thread {
             runCatching { repository.signIn(url, login, token) }
@@ -157,7 +169,10 @@ class MainActivity : ComponentActivity() {
 
     private fun showContacts(contacts: List<Contact>) {
         runOnUiThread {
+            authGeneration++
             historyLoadGeneration++
+            contactHistoryGeneration++
+            contactHistoryLogin = null
             screenState = screenState.copy(
                 restoring = false,
                 signingIn = false,
@@ -170,6 +185,7 @@ class MainActivity : ComponentActivity() {
                 historyNextBefore = 0,
                 historyLatestId = 0,
                 historyErrorMessage = null,
+                contactHistory = ContactHistoryState(),
                 unreadMissedCount = 0,
                 errorMessage = null,
             )
@@ -266,6 +282,171 @@ class MainActivity : ComponentActivity() {
         }.start()
     }
 
+    private fun showContactHistory(login: String) {
+        historyVisible = false
+        if (contactHistoryLogin == login &&
+            screenState.contactHistory.peerLogin == login &&
+            (screenState.contactHistory.loaded || screenState.contactHistory.loading)
+        ) {
+            return
+        }
+        contactHistoryLogin = login
+        loadContactHistory(login, reset = true)
+    }
+
+    private fun hideContactHistory() {
+        if (contactHistoryLogin == null && screenState.contactHistory.peerLogin == null) return
+        contactHistoryLogin = null
+        contactHistoryGeneration++
+        screenState = screenState.copy(contactHistory = ContactHistoryState())
+    }
+
+    private fun loadMoreContactHistory() {
+        contactHistoryLogin?.let { loadContactHistory(it, reset = false) }
+    }
+
+    private fun retryContactHistory() {
+        val login = contactHistoryLogin ?: return
+        val history = screenState.contactHistory
+        loadContactHistory(login, reset = history.items.isEmpty() || history.nextBefore == 0L)
+    }
+
+    private fun loadContactHistory(login: String, reset: Boolean) {
+        if (!screenState.signedIn || contactHistoryLogin != login) return
+        val before: Long
+        val generation: Int
+        val requestAuthGeneration = authGeneration
+        if (reset) {
+            if (screenState.contactHistory.peerLogin == login && screenState.contactHistory.loading) return
+            contactHistoryGeneration++
+            generation = contactHistoryGeneration
+            before = 0
+            screenState = screenState.copy(
+                contactHistory = ContactHistoryState(peerLogin = login, loading = true),
+            )
+        } else {
+            val history = screenState.contactHistory
+            before = history.nextBefore
+            if (history.peerLogin != login || before == 0L || history.loading || history.loadingMore) return
+            generation = contactHistoryGeneration
+            screenState = screenState.copy(
+                contactHistory = history.copy(loadingMore = true, errorMessage = null),
+            )
+        }
+        val badgeRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
+        Thread {
+            runCatching { repository.loadCallHistory(before = before, peerLogin = login) }
+                .onSuccess { page ->
+                    if (page == null) return@onSuccess
+                    runOnUiThread {
+                        if (!screenState.signedIn ||
+                            !isCurrentSessionRequest(requestAuthGeneration, authGeneration) ||
+                            !isCurrentContactHistoryRequest(
+                                generation,
+                                contactHistoryGeneration,
+                                login,
+                                contactHistoryLogin,
+                            )
+                        ) {
+                            return@runOnUiThread
+                        }
+                        val badgeCount = IncomingCallNotifier(this).updateMissedCount(
+                            page.unreadMissedCount,
+                            badgeRefreshId,
+                        )
+                        screenState = screenState.copy(
+                            contactHistory = screenState.contactHistory.withPage(login, page, reset),
+                            unreadMissedCount = badgeCount,
+                        )
+                        if (reset && page.latestId > 0) {
+                            markContactHistoryRead(login, page.latestId, generation, requestAuthGeneration)
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    if (error is ApiException && error.code == 401) {
+                        showSessionErrorIfCurrent(error, requestAuthGeneration)
+                    } else {
+                        runOnUiThread {
+                            if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration) ||
+                                !isCurrentContactHistoryRequest(
+                                    generation,
+                                    contactHistoryGeneration,
+                                    login,
+                                    contactHistoryLogin,
+                                )
+                            ) {
+                                return@runOnUiThread
+                            }
+                            screenState = screenState.copy(
+                                contactHistory = screenState.contactHistory.copy(
+                                    loaded = true,
+                                    loading = false,
+                                    loadingMore = false,
+                                    errorMessage = "Не удалось загрузить звонки. Проверьте соединение.",
+                                ),
+                            )
+                        }
+                    }
+                }
+        }.start()
+    }
+
+    private fun markContactHistoryRead(
+        login: String,
+        throughId: Long,
+        generation: Int,
+        requestAuthGeneration: Int,
+    ) {
+        if (!screenState.signedIn ||
+            !isCurrentSessionRequest(requestAuthGeneration, authGeneration) ||
+            !isCurrentContactHistoryRequest(
+                generation,
+                contactHistoryGeneration,
+                login,
+                contactHistoryLogin,
+            )
+        ) {
+            return
+        }
+        Thread {
+            runCatching { repository.markCallHistoryRead(throughId, peerLogin = login) }
+                .onSuccess { unreadMissedCount ->
+                    if (unreadMissedCount == null) return@onSuccess
+                    runOnUiThread {
+                        if (!screenState.signedIn ||
+                            !isCurrentSessionRequest(requestAuthGeneration, authGeneration)
+                        ) {
+                            return@runOnUiThread
+                        }
+                        val badgeRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
+                        val badgeCount = IncomingCallNotifier(this).updateMissedCount(
+                            unreadMissedCount,
+                            badgeRefreshId,
+                        )
+                        screenState = screenState.copy(unreadMissedCount = badgeCount)
+                    }
+                }
+                .onFailure {
+                    if (it is ApiException && it.code == 401) {
+                        showSessionErrorIfCurrent(it, requestAuthGeneration)
+                    }
+                }
+        }.start()
+    }
+
+    private fun showSessionErrorIfCurrent(
+        error: Throwable,
+        requestAuthGeneration: Int,
+    ) {
+        runOnUiThread {
+            if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
+                return@runOnUiThread
+            }
+            showError(error)
+        }
+    }
+
     private fun showError(error: Throwable) {
         val message = when (error) {
             is ApiException -> when (error.code) {
@@ -279,6 +460,7 @@ class MainActivity : ComponentActivity() {
             else -> "Не удалось подключиться к серверу"
         }
         runOnUiThread {
+            authGeneration++
             screenState = screenState.copy(
                 restoring = false,
                 signingIn = false,
@@ -290,8 +472,11 @@ class MainActivity : ComponentActivity() {
 
     private fun signOut() {
         repository.signOut()
+        authGeneration++
         contactNameViewModel.reset()
         historyLoadGeneration++
+        contactHistoryGeneration++
+        contactHistoryLogin = null
         historyVisible = false
         IncomingCallNotifier(this).clearMissedCount()
         pushRegistrationStarted = false
@@ -305,7 +490,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshPermissions()
-        if (historyVisible) showHistory() else refreshMissedCount()
+        when {
+            contactHistoryLogin != null -> loadContactHistory(contactHistoryLogin.orEmpty(), reset = true)
+            historyVisible -> showHistory()
+            else -> refreshMissedCount()
+        }
     }
 
     private fun refreshMissedCount() {
@@ -406,5 +595,10 @@ private fun MainScreenState.withContactUpdates(updates: Map<String, Contact>): M
         history = history.map { item ->
             updates[item.peerLogin]?.let { item.copy(peerName = it.displayName) } ?: item
         },
+        contactHistory = contactHistory.copy(
+            items = contactHistory.items.map { item ->
+                updates[item.peerLogin]?.let { item.copy(peerName = it.displayName) } ?: item
+            },
+        ),
     )
 }

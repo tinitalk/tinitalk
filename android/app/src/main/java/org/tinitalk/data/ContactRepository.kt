@@ -16,7 +16,7 @@ class ContactRepository(
             authStore.save(session)
             contacts
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clear()
+            if (e.code == 401) authStore.clearIfCurrent(session)
             throw e
         }
     }
@@ -30,7 +30,7 @@ class ContactRepository(
                 .filterNot { it.login == profile.login }
                 .sortedWith(contactOrder)
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clear()
+            if (e.code == 401) authStore.clearIfCurrent(session)
             throw e
         }
     }
@@ -40,7 +40,7 @@ class ContactRepository(
         return try {
             apiFactory(session.url, session.login, session.token).updateContactName(login, customName)
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clear()
+            if (e.code == 401) authStore.clearIfCurrent(session)
             throw e
         }
     }
@@ -50,7 +50,7 @@ class ContactRepository(
         return try {
             apiFactory(session.url, session.login, session.token).calls(limit, before, peerLogin)
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clear()
+            if (e.code == 401) authStore.clearIfCurrent(session)
             throw e
         }
     }
@@ -60,7 +60,7 @@ class ContactRepository(
         return try {
             apiFactory(session.url, session.login, session.token).markCallsRead(throughId, peerLogin)
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clear()
+            if (e.code == 401) authStore.clearIfCurrent(session)
             throw e
         }
     }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,10 +18,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -54,6 +55,8 @@ import org.tinitalk.call.CallUiState
 import org.tinitalk.data.Contact
 import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
+import java.time.Instant
+import java.time.ZoneId
 
 private val contactAvatarColors = listOf(
     Color(0xFF394A67),
@@ -68,17 +71,22 @@ private val contactAvatarColors = listOf(
 fun ContactScreen(
     contact: Contact,
     nameUpdate: ContactNameUpdateState,
+    history: ContactHistoryState,
     ongoingCall: CallUiState?,
     onBack: () -> Unit,
     onCall: (Contact) -> Unit,
     onOpenCall: () -> Unit,
     onRename: (customName: String?) -> Unit,
     onRenameHandled: () -> Unit,
+    onLoadMoreHistory: () -> Unit,
+    onRetryHistory: () -> Unit,
 ) {
     var renameVisible by rememberSaveable(contact.login) { mutableStateOf(false) }
     val name = contactDisplayName(contact.displayName)
     val action = contactCallAction(contact.login, ongoingCall)
     val relevantUpdate = nameUpdate.takeIf { it.login == contact.login }
+    val now = Instant.now()
+    val zone = ZoneId.systemDefault()
 
     LaunchedEffect(renameVisible, relevantUpdate?.completed) {
         if (renameVisible && relevantUpdate?.completed == true) {
@@ -109,86 +117,168 @@ fun ContactScreen(
                 Text("Контакт", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             }
 
-            Column(
+            LazyColumn(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 24.dp, vertical = 22.dp),
+                    .fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 22.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                ContactAvatar(contact, name, 104.dp)
-                Spacer(Modifier.height(22.dp))
-                Surface(
-                    onClick = {
-                        onRenameHandled()
-                        renameVisible = true
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 420.dp)
-                        .heightIn(min = 56.dp)
-                        .semantics {
-                            contentDescription = "Имя контакта: $name. Нажмите, чтобы изменить"
-                        },
-                    shape = RoundedCornerShape(18.dp),
-                    color = Color.Transparent,
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
+                item(key = "contact-profile") {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
+                        ContactAvatar(contact, name, 104.dp)
+                        Spacer(Modifier.height(22.dp))
+                        Surface(
+                            onClick = {
+                                onRenameHandled()
+                                renameVisible = true
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .widthIn(max = 420.dp)
+                                .heightIn(min = 56.dp)
+                                .semantics {
+                                    contentDescription = "Имя контакта: $name. Нажмите, чтобы изменить"
+                                },
+                            shape = RoundedCornerShape(18.dp),
+                            color = Color.Transparent,
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = name,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontSize = 28.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_edit),
+                                    contentDescription = null,
+                                    tint = BrandGold,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                            }
+                        }
                         Text(
-                            text = name,
-                            modifier = Modifier.weight(1f, fill = false),
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold,
+                            "Нажмите на имя, чтобы изменить",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
                         )
-                        Spacer(Modifier.width(10.dp))
-                        Icon(
-                            painter = painterResource(R.drawable.ic_edit),
-                            contentDescription = null,
-                            tint = BrandGold,
-                            modifier = Modifier.size(22.dp),
+                        Spacer(Modifier.height(34.dp))
+                        Button(
+                            onClick = { if (action.opensCurrentCall) onOpenCall() else onCall(contact) },
+                            enabled = action.enabled,
+                            modifier = Modifier.fillMaxWidth().widthIn(max = 380.dp).heightIn(min = 58.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = CallAnswerGreen,
+                                contentColor = Color.White,
+                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_call),
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                action.label,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                            )
+                        }
+                        Spacer(Modifier.height(22.dp))
+                    }
+                }
+                item(key = "contact-history-title") {
+                    Text(
+                        "История звонков",
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp, bottom = 4.dp),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                if (history.errorMessage != null) {
+                    item(key = "contact-history-error") {
+                        ContactHistoryMessage(
+                            message = history.errorMessage,
+                            action = "Повторить",
+                            onAction = onRetryHistory,
+                            error = true,
                         )
                     }
                 }
-                Text(
-                    "Нажмите на имя, чтобы изменить",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(34.dp))
-                Button(
-                    onClick = { if (action.opensCurrentCall) onOpenCall() else onCall(contact) },
-                    enabled = action.enabled,
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 380.dp).heightIn(min = 58.dp),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = CallAnswerGreen,
-                        contentColor = Color.White,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_call),
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        action.label,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                    )
+                when {
+                    !history.loaded && history.items.isEmpty() -> item(key = "contact-history-loading") {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(30.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                        }
+                    }
+                    history.loaded && history.items.isEmpty() && history.errorMessage == null ->
+                        item(key = "contact-history-empty") {
+                            ContactHistoryMessage("Звонков с этим контактом пока не было")
+                        }
+                    else -> itemsIndexed(
+                        items = history.items,
+                        key = { _, item -> "contact-history-${item.id}" },
+                    ) { index, item ->
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            val day = historyDayLabel(item.startedAt, now, zone)
+                            if (index == 0 || day != historyDayLabel(history.items[index - 1].startedAt, now, zone)) {
+                                Text(
+                                    text = day,
+                                    modifier = Modifier.padding(
+                                        start = 4.dp,
+                                        top = if (index == 0) 2.dp else 12.dp,
+                                        bottom = 8.dp,
+                                    ),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            HistoryRow(item, showPeer = false)
+                            if (shouldLoadMoreHistory(
+                                    index = index,
+                                    itemCount = history.items.size,
+                                    nextBefore = history.nextBefore,
+                                    loading = history.loadingMore,
+                                    hasError = history.errorMessage != null,
+                                )
+                            ) {
+                                LaunchedEffect(history.nextBefore) { onLoadMoreHistory() }
+                            }
+                        }
+                    }
+                }
+                if (history.loadingMore) {
+                    item(key = "contact-history-loading-more") {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(18.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        }
+                    }
                 }
             }
         }
@@ -206,6 +296,37 @@ fun ContactScreen(
             onRename = onRename,
             onErrorCleared = onRenameHandled,
         )
+    }
+}
+
+@Composable
+private fun ContactHistoryMessage(
+    message: String,
+    action: String? = null,
+    onAction: () -> Unit = {},
+    error: Boolean = false,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f)),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                message,
+                color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            if (action != null) {
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onAction) { Text(action) }
+            }
+        }
     }
 }
 

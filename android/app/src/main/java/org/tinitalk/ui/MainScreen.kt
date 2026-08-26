@@ -104,6 +104,7 @@ data class MainScreenState(
     val historyNextBefore: Long = 0,
     val historyLatestId: Long = 0,
     val historyErrorMessage: String? = null,
+    val contactHistory: ContactHistoryState = ContactHistoryState(),
     val unreadMissedCount: Int = 0,
     val permissions: AppPermissionsState = AppPermissionsState(),
     val errorMessage: String? = null,
@@ -129,6 +130,10 @@ fun MainScreen(
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
+    onContactHistoryVisible: (login: String) -> Unit,
+    onContactHistoryHidden: () -> Unit,
+    onLoadMoreContactHistory: () -> Unit,
+    onRetryContactHistory: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     when {
@@ -154,6 +159,10 @@ fun MainScreen(
             onHistoryVisible = onHistoryVisible,
             onLoadMoreHistory = onLoadMoreHistory,
             onRetryHistory = onRetryHistory,
+            onContactHistoryVisible = onContactHistoryVisible,
+            onContactHistoryHidden = onContactHistoryHidden,
+            onLoadMoreContactHistory = onLoadMoreContactHistory,
+            onRetryContactHistory = onRetryContactHistory,
             onSignOut = onSignOut,
         )
     }
@@ -409,6 +418,10 @@ private fun HomeScreen(
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
+    onContactHistoryVisible: (login: String) -> Unit,
+    onContactHistoryHidden: () -> Unit,
+    onLoadMoreContactHistory: () -> Unit,
+    onRetryContactHistory: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     val pagerState = rememberPagerState(pageCount = { 2 })
@@ -425,6 +438,9 @@ private fun HomeScreen(
             scope.launch { snackbarHostState.showSnackbar("Контакт больше недоступен") }
         }
     }
+    LaunchedEffect(selectedContactLogin) {
+        selectedContactLogin?.let(onContactHistoryVisible) ?: onContactHistoryHidden()
+    }
     LaunchedEffect(pagerState.currentPage) {
         if (pagerState.currentPage == 1) onHistoryVisible() else onContactsVisible()
     }
@@ -433,12 +449,15 @@ private fun HomeScreen(
             ContactScreen(
                 contact = selectedContact,
                 nameUpdate = contactNameUpdate,
+                history = state.contactHistory,
                 ongoingCall = ongoingCall,
                 onBack = { selectedContactLogin = null },
                 onCall = onCall,
                 onOpenCall = onOpenCall,
                 onRename = { customName -> onRenameContact(selectedContact.login, customName) },
                 onRenameHandled = onRenameHandled,
+                onLoadMoreHistory = onLoadMoreContactHistory,
+                onRetryHistory = onRetryContactHistory,
             )
         } else {
             AppPage(onSignOut = onSignOut) {

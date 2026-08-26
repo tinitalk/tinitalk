@@ -3,7 +3,13 @@ package org.tinitalk.data
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 class AuthStoreTest {
     @Test
@@ -26,4 +32,55 @@ class AuthStoreTest {
 
         assertNull(store.load())
     }
+
+    @Test
+    fun conditionalClearDoesNotEraseConcurrentSaveFromAnotherStore() {
+        val values = PausingKeyValueStore()
+        val first = AuthStore(values, PrefixTokenCipher())
+        val second = AuthStore(values, PrefixTokenCipher())
+        val oldSession = Session("https://host", "alice", "old")
+        val newSession = Session("https://host", "bob", "new")
+        first.save(oldSession)
+        values.pauseNextIvRead.set(true)
+
+        val clearing = thread { first.clearIfCurrent(oldSession) }
+        assertTrue(values.ivReadStarted.await(1, TimeUnit.SECONDS))
+        val saveFinished = CountDownLatch(1)
+        val saving = thread {
+            second.save(newSession)
+            saveFinished.countDown()
+        }
+        saveFinished.await(1, TimeUnit.SECONDS)
+        values.releaseIvRead.countDown()
+        clearing.join()
+        saving.join()
+
+        assertEquals(newSession, first.load())
+    }
+}
+
+private class PausingKeyValueStore : KeyValueStore {
+    private val values = ConcurrentHashMap<String, String>()
+    val pauseNextIvRead = AtomicBoolean(false)
+    val ivReadStarted = CountDownLatch(1)
+    val releaseIvRead = CountDownLatch(1)
+
+    override fun get(key: String): String? {
+        val value = values[key]
+        if (key == "iv" && pauseNextIvRead.compareAndSet(true, false)) {
+            ivReadStarted.countDown()
+            releaseIvRead.await(2, TimeUnit.SECONDS)
+        }
+        return value
+    }
+
+    override fun put(key: String, value: String) {
+        values[key] = value
+    }
+
+    override fun remove(vararg keys: String) {
+        keys.forEach(values::remove)
+    }
+
+    override fun values(): List<String> = values.values.toList()
 }

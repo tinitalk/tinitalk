@@ -57,13 +57,31 @@ class ContactRepositoryTest {
     @Test
     fun invalidTokenClearsSession() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "old"))
+        store.save(Session("https://host", "alice", "bad"))
         val repo = ContactRepository(store) { _, _, _ -> FakeApiClient(error = ApiException(401, "unauthorized")) }
 
         val result = runCatching { repo.signIn("https://host", "alice", "bad") }
 
         assertEquals(true, result.isFailure)
         assertNull(store.load())
+    }
+
+    @Test
+    fun staleUnauthorizedDoesNotClearNewSession() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val oldSession = Session("https://host", "alice", "old")
+        val newSession = Session("https://host", "bob", "new")
+        store.save(oldSession)
+        val repo = ContactRepository(store) { _, _, _ ->
+            FakeApiClient(
+                error = ApiException(401, "unauthorized"),
+                beforeError = { store.save(newSession) },
+            )
+        }
+
+        runCatching { repo.restoreContacts() }
+
+        assertEquals(newSession, store.load())
     }
 
     @Test
@@ -117,6 +135,7 @@ private class FakeApiClient(
     private val updatedContact: Contact = Contact("bob", "Bob"),
     private val unreadAfterRead: Int = 0,
     private val error: RuntimeException? = null,
+    private val beforeError: (() -> Unit)? = null,
 ) : HouseholdApi {
     var requestedPeer: String? = null
     var updatedLogin: String? = null
@@ -124,7 +143,10 @@ private class FakeApiClient(
     var readPeer: String? = null
 
     override fun me(): Profile {
-        error?.let { throw it }
+        error?.let {
+            beforeError?.invoke()
+            throw it
+        }
         return profile
     }
 

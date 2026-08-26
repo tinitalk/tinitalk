@@ -32,13 +32,23 @@ class AuthStore(
 ) {
     fun save(session: Session) {
         val encrypted = cipher.encrypt(session.token)
-        store.put("url", session.url)
-        store.put("login", session.login)
-        store.put("token", encrypted.value)
-        store.put("iv", encrypted.iv)
+        synchronized(SessionLock) {
+            store.put("url", session.url)
+            store.put("login", session.login)
+            store.put("token", encrypted.value)
+            store.put("iv", encrypted.iv)
+        }
     }
 
-    fun load(): Session? {
+    fun load(): Session? = synchronized(SessionLock) { loadUnlocked() }
+
+    fun clear() = synchronized(SessionLock) { clearUnlocked() }
+
+    fun clearIfCurrent(session: Session) = synchronized(SessionLock) {
+        if (loadUnlocked() == session) clearUnlocked()
+    }
+
+    private fun loadUnlocked(): Session? {
         val url = store.get("url") ?: return null
         val login = store.get("login") ?: return null
         val token = store.get("token") ?: return null
@@ -46,8 +56,12 @@ class AuthStore(
         return Session(url, login, cipher.decrypt(CipherText(token, iv)))
     }
 
-    fun clear() {
+    private fun clearUnlocked() {
         store.remove("url", "login", "token", "iv")
+    }
+
+    private companion object {
+        val SessionLock = Any()
     }
 }
 

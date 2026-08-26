@@ -81,7 +81,14 @@ fun HistoryScreen(
                         )
                     }
                     HistoryRow(item)
-                    if (index == items.lastIndex && nextBefore > 0 && !loadingMore) {
+                    if (shouldLoadMoreHistory(
+                            index = index,
+                            itemCount = items.size,
+                            nextBefore = nextBefore,
+                            loading = loadingMore,
+                            hasError = errorMessage != null,
+                        )
+                    ) {
                         LaunchedEffect(nextBefore) { onLoadMore() }
                     }
                 }
@@ -98,8 +105,9 @@ fun HistoryScreen(
 }
 
 @Composable
-private fun HistoryRow(item: CallHistoryItem) {
+internal fun HistoryRow(item: CallHistoryItem, showPeer: Boolean = true) {
     val name = contactDisplayName(item.peerName)
+    val direction = if (item.direction == "incoming") "Входящий" else "Исходящий"
     val missed = item.direction == "incoming" &&
         (item.outcome == "unanswered" || item.outcome == "cancelled_after_ringing")
     val successful = item.outcome == "completed"
@@ -111,34 +119,41 @@ private fun HistoryRow(item: CallHistoryItem) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .semantics { contentDescription = "$name, ${historyStatus(item)}, ${historyTime(item.startedAt)}" },
+            .semantics {
+                contentDescription = "${if (showPeer) name else direction}, ${historyStatus(item)}, ${historyTime(item.startedAt)}"
+            },
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f)),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 78.dp).padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = if (showPeer) 78.dp else 70.dp)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                modifier = Modifier.size(50.dp),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(1.dp, BrandGold.copy(alpha = 0.28f)),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        contactInitial(name, item.peerLogin),
-                        color = Color(0xFFF6E8C0),
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
+            if (showPeer) {
+                Surface(
+                    modifier = Modifier.size(50.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, BrandGold.copy(alpha = 0.28f)),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            contactInitial(name, item.peerLogin),
+                            color = Color(0xFFF6E8C0),
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
+                Spacer(Modifier.width(14.dp))
             }
-            Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    name,
+                    if (showPeer) name else direction,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
