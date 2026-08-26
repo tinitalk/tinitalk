@@ -10,6 +10,8 @@
 
     <application
         android:name=".TinitalkApplication"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/AppTheme"
         android:label="TiniTalk"
         android:allowBackup="false"
