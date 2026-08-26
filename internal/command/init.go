@@ -56,7 +56,7 @@ func runInit(w io.Writer, args []string) error {
 		rest = nil
 	}
 	if len(rest) != 0 {
-		return errors.New("usage: tinitalk init --data-dir DIR [--fcm-service-account FILE]")
+		return errors.New("usage: tinitalk init [--data-dir DIR] [--fcm-service-account FILE]")
 	}
 	db, err := state.OpenDir(dataDir)
 	if err != nil {
@@ -167,9 +167,26 @@ func runServe(args []string) error {
 	}
 }
 
+const defaultDataDir = "/var/lib/tinitalk"
+
 func parseDataDir(args []string) (string, []string, error) {
-	if len(args) < 2 || args[0] != "--data-dir" {
-		return "", nil, errors.New("--data-dir DIR is required")
+	dataDir := defaultDataDir
+	rest := make([]string, 0, len(args))
+	found := false
+	for index := 0; index < len(args); index++ {
+		if args[index] != "--data-dir" {
+			rest = append(rest, args[index])
+			continue
+		}
+		if found {
+			return "", nil, errors.New("--data-dir may only be specified once")
+		}
+		if index+1 >= len(args) {
+			return "", nil, errors.New("--data-dir requires DIR")
+		}
+		dataDir = args[index+1]
+		found = true
+		index++
 	}
-	return args[1], args[2:], nil
+	return dataDir, rest, nil
 }

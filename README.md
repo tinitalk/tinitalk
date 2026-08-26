@@ -11,10 +11,27 @@ HTTPS/WSS-сигналинг, SQLite-состояние, FCM-пробужден�
 ```bash
 make server
 sudo install -m 0755 dist/tinitalk-linux-amd64 /usr/local/bin/tinitalk
-sudo -u tinitalk tinitalk init --data-dir /var/lib/tinitalk --fcm-service-account firebase-service-account.json
-sudo -u tinitalk tinitalk user add --data-dir /var/lib/tinitalk alice "Alice"
+sudo -u tinitalk tinitalk init --fcm-service-account firebase-service-account.json
+sudo -u tinitalk tinitalk user add alice "Alice"
 make client
 ```
+
+Все команды по умолчанию используют `/var/lib/tinitalk`. Для другого пути
+добавь `--data-dir DIR` в любое место после команды.
+
+### Управление пользователями
+
+```bash
+sudo -u tinitalk tinitalk user add alice "Alice"
+sudo -u tinitalk tinitalk user list
+sudo -u tinitalk tinitalk user rotate-token alice
+sudo -u tinitalk tinitalk user disable alice
+sudo -u tinitalk tinitalk user delete alice
+```
+
+`disable` блокирует вход, но сохраняет пользователя. `delete` физически удаляет
+пользователя, его токены и зарегистрированные устройства. Если удаляемый
+пользователь уже подключен, перезапусти сервер для немедленного разрыва WSS.
 
 Те же Make target'ы работают из Windows и WSL. В WSL сервер собирается Linux
 Go toolchain'ом, а Android-сборка использует Windows JDK и Android SDK через
@@ -111,7 +128,6 @@ firebase-service-account.json
 
 ```bash
 sudo -u tinitalk tinitalk init \
-  --data-dir /var/lib/tinitalk \
   --fcm-service-account firebase-service-account.json
 ```
 
@@ -142,7 +158,7 @@ renewal. TiniTalk читает TLS-файлы на каждом новом TLS-�
 ## Запуск сервера
 
 ```bash
-tinitalk serve --data-dir /var/lib/tinitalk --addr :443 \
+tinitalk serve --addr :443 \
   --tls-cert /var/lib/tinitalk/tls/fullchain.pem \
   --tls-key /var/lib/tinitalk/tls/privkey.pem \
   --turn-public-host calls.example.com \
@@ -163,8 +179,8 @@ sudo systemctl enable --now tinitalk
 ## Диагностика и backup
 
 ```bash
-tinitalk doctor --data-dir /var/lib/tinitalk --host calls.example.com --addr :443 --turn-addr :3478 --turn-tls-addr :5349
-tinitalk backup --data-dir /var/lib/tinitalk --out /var/backups/tinitalk/state-$(date +%F).db
+tinitalk doctor --host calls.example.com --addr :443 --turn-addr :3478 --turn-tls-addr :5349
+tinitalk backup --out /var/backups/tinitalk/state-$(date +%F).db
 make check
 ```
 

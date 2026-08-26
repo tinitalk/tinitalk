@@ -49,7 +49,7 @@ func runDoctor(w io.Writer, args []string) error {
 			turnTLSAddr = rest[1]
 			rest = rest[2:]
 		default:
-			return errors.New("usage: tinitalk doctor --data-dir DIR [--host HOST] [--addr ADDR] [--turn-addr ADDR] [--turn-tls-addr ADDR]")
+			return errors.New("usage: tinitalk doctor [--data-dir DIR] [--host HOST] [--addr ADDR] [--turn-addr ADDR] [--turn-tls-addr ADDR]")
 		}
 	}
 	db, err := state.OpenDir(dataDir)

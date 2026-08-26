@@ -68,6 +68,14 @@ func (db *DB) DisableUser(login string) error {
 	return requireAffected(result, "user not found")
 }
 
+func (db *DB) DeleteUser(login string) error {
+	result, err := db.sql.Exec("DELETE FROM users WHERE login = ?", login)
+	if err != nil {
+		return err
+	}
+	return requireAffected(result, "user not found")
+}
+
 func (db *DB) RotateToken(login string) (string, error) {
 	token, err := randomToken()
 	if err != nil {

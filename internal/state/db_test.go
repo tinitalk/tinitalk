@@ -97,6 +97,49 @@ func TestUsersTokensAndRollback(t *testing.T) {
 	}
 }
 
+func TestDeleteUserRemovesCredentialsAndDevices(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Init(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	token, err := db.AddUser("alice", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertDevice("alice", "phone", "fcm-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DeleteUser("alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	users, err := db.ListUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 0 {
+		t.Fatalf("users = %+v, want none", users)
+	}
+	if _, ok, err := db.Authenticate("alice", token); err != nil || ok {
+		t.Fatalf("Authenticate after delete = %v, %v, want rejected", ok, err)
+	}
+	devices, err := db.TokensForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("devices = %+v, want none", devices)
+	}
+	if err := db.DeleteUser("alice"); err == nil {
+		t.Fatal("second DeleteUser error = nil, want user not found")
+	}
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {

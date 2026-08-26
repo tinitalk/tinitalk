@@ -14,7 +14,7 @@ func runBackup(w io.Writer, args []string) error {
 		return err
 	}
 	if len(rest) != 2 || rest[0] != "--out" {
-		return errors.New("usage: tinitalk backup --data-dir DIR --out FILE")
+		return errors.New("usage: tinitalk backup --out FILE [--data-dir DIR]")
 	}
 	db, err := state.OpenDir(dataDir)
 	if err != nil {

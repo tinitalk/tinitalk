@@ -43,7 +43,32 @@ func TestInitAndUserCommands(t *testing.T) {
 	if strings.Count(out.String(), "token:") != 1 {
 		t.Fatalf("rotate output = %q, want one token", out.String())
 	}
+	out.Reset()
+	if err := Run(&out, "user", "delete", "--data-dir", dir, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "deleted: alice\n" {
+		t.Fatalf("delete output = %q", got)
+	}
 	if _, err := RunResult("serve", "--data-dir", filepath.Join(dir, "missing"), "--bad"); err == nil {
 		t.Fatal("serve with unsupported flags error = nil, want rejection")
+	}
+}
+
+func TestParseDataDirDefaultsAndAllowsOverrideAnywhere(t *testing.T) {
+	dataDir, rest, err := parseDataDir([]string{"--out", "backup.db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataDir != "/var/lib/tinitalk" || len(rest) != 2 || rest[0] != "--out" || rest[1] != "backup.db" {
+		t.Fatalf("parseDataDir default = %q, %v", dataDir, rest)
+	}
+
+	dataDir, rest, err = parseDataDir([]string{"--out", "backup.db", "--data-dir", "./data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataDir != "./data" || len(rest) != 2 || rest[0] != "--out" || rest[1] != "backup.db" {
+		t.Fatalf("parseDataDir override = %q, %v", dataDir, rest)
 	}
 }

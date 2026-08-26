@@ -66,7 +66,7 @@ func parseServeOptions(args []string) (serveOptions, error) {
 			options.turnTLSAddr = args[1]
 			args = args[2:]
 		default:
-			return options, errors.New("usage: tinitalk serve --data-dir DIR --tls-cert FILE --tls-key FILE [--addr ADDR] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR] [--turn-tls-addr ADDR]]")
+			return options, errors.New("usage: tinitalk serve --tls-cert FILE --tls-key FILE [--data-dir DIR] [--addr ADDR] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR] [--turn-tls-addr ADDR]]")
 		}
 	}
 	if (options.tlsCert == "") != (options.tlsKey == "") {

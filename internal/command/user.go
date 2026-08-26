@@ -10,7 +10,7 @@ import (
 
 func runUser(w io.Writer, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: tinitalk user add|list|disable|rotate-token")
+		return errors.New("usage: tinitalk user add|list|disable|delete|rotate-token")
 	}
 	action := args[0]
 	dataDir, rest, err := parseDataDir(args[1:])
@@ -26,7 +26,7 @@ func runUser(w io.Writer, args []string) error {
 	switch action {
 	case "add":
 		if len(rest) != 2 {
-			return errors.New("usage: tinitalk user add --data-dir DIR LOGIN DISPLAY_NAME")
+			return errors.New("usage: tinitalk user add LOGIN DISPLAY_NAME [--data-dir DIR]")
 		}
 		token, err := db.AddUser(rest[0], rest[1])
 		if err != nil {
@@ -35,7 +35,7 @@ func runUser(w io.Writer, args []string) error {
 		_, _ = fmt.Fprintf(w, "login: %s\ntoken: %s\n", rest[0], token)
 	case "list":
 		if len(rest) != 0 {
-			return errors.New("usage: tinitalk user list --data-dir DIR")
+			return errors.New("usage: tinitalk user list [--data-dir DIR]")
 		}
 		users, err := db.ListUsers()
 		if err != nil {
@@ -50,15 +50,23 @@ func runUser(w io.Writer, args []string) error {
 		}
 	case "disable":
 		if len(rest) != 1 {
-			return errors.New("usage: tinitalk user disable --data-dir DIR LOGIN")
+			return errors.New("usage: tinitalk user disable LOGIN [--data-dir DIR]")
 		}
 		if err := db.DisableUser(rest[0]); err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintf(w, "disabled: %s\n", rest[0])
+	case "delete":
+		if len(rest) != 1 {
+			return errors.New("usage: tinitalk user delete LOGIN [--data-dir DIR]")
+		}
+		if err := db.DeleteUser(rest[0]); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(w, "deleted: %s\n", rest[0])
 	case "rotate-token":
 		if len(rest) != 1 {
-			return errors.New("usage: tinitalk user rotate-token --data-dir DIR LOGIN")
+			return errors.New("usage: tinitalk user rotate-token LOGIN [--data-dir DIR]")
 		}
 		token, err := db.RotateToken(rest[0])
 		if err != nil {
