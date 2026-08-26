@@ -12,6 +12,8 @@ sudo -u tinitalk tinitalk user add --data-dir /var/lib/tinitalk alice "Alice"
 make client
 ```
 
+The same Make targets work from Windows and WSL. In WSL, the server uses the Linux Go toolchain while the Android build reuses the Windows JDK and Android SDK through WSL interop. Override `JAVA17` or `WINDOWS_CMD` if they are installed elsewhere. On native Linux, Gradle uses `JAVA_HOME` and the Android SDK from the environment.
+
 Obtain the certificate with Certbot and copy the current pair where the service can read it:
 
 ```bash
