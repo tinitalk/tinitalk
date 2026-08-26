@@ -1,5 +1,7 @@
 /.gradle/
 /.superpowers/
+/docs/superpowers/
+/.worktrees/
 /dist/
 /state.db
 /state.db-journal
