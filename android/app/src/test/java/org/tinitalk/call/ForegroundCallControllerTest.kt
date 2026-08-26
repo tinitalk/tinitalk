@@ -422,6 +422,18 @@ class ForegroundCallControllerTest {
         assertEquals(listOf("candidate:early"), media.remoteCandidates.map { it.candidate })
     }
 
+    @Test
+    fun remoteRestartPreparesExistingMediaForNewCandidates() {
+        val media = FakeMediaSession()
+        val controller = ForegroundCallController(CapturingSignalClient(), { _, _, _, _ -> media }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.offer", JsonObject().apply { addProperty("sdp", "initial-offer") }))
+
+        controller.onSignalEvent(activeSnapshot(), event("rtc.restart"))
+
+        assertEquals(1, media.remoteDescriptionsPrepared)
+    }
+
     private fun activeSnapshot(): CallSnapshot = CallSnapshot(CallPhase.Active, callId, 1)
 
     private fun event(type: String, payload: JsonObject = JsonObject()): SignalEvent =
@@ -463,6 +475,7 @@ class ForegroundCallControllerTest {
         val updatedServers = mutableListOf<IceServerData>()
         val activity = mutableListOf<Boolean>()
         val muted = mutableListOf<Boolean>()
+        var remoteDescriptionsPrepared = 0
         private var statsCallback: ((CallStats) -> Unit)? = null
 
         override suspend fun createOffer(): String = offer
@@ -484,6 +497,9 @@ class ForegroundCallControllerTest {
         }
         override fun setActive(active: Boolean) {
             activity += active
+        }
+        override fun beginRemoteDescription() {
+            remoteDescriptionsPrepared++
         }
         override fun getStats(onResult: (CallStats) -> Unit) {
             statsCallback = onResult

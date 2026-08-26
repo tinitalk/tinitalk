@@ -75,6 +75,7 @@ class ForegroundCallController(
             "rtc.answer" -> session?.let { media ->
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
             }
+            "rtc.restart" -> session?.beginRemoteDescription()
             "rtc.ice" -> {
                 val candidate = IceCandidateData(
                     sdpMid = event.payload["sdp_mid"].asString,

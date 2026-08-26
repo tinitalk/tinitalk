@@ -22,6 +22,7 @@ interface MediaSession {
     suspend fun addIceCandidate(candidate: IceCandidateData)
     suspend fun restartIce(): String
     suspend fun updateIceServers(servers: List<IceServerData>)
+    fun beginRemoteDescription()
     fun setMuted(muted: Boolean)
     fun setActive(active: Boolean)
     fun getStats(onResult: (CallStats) -> Unit)

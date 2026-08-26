@@ -141,8 +141,15 @@ class CallForegroundService : Service() {
             onEvent = { incoming ->
                 handler.post {
                     if (socket !== newSocket || finishing) return@post
-                    if (newCoordinator.onEvent(incoming)) {
-                        newMedia.onSignalEvent(newCoordinator.snapshot(), incoming.event)
+                    try {
+                        if (newCoordinator.onEvent(incoming)) {
+                            newMedia.onSignalEvent(newCoordinator.snapshot(), incoming.event)
+                        }
+                    } catch (_: Exception) {
+                        newCoordinator.fail()
+                        publish()
+                        finishCall()
+                        return@post
                     }
                     if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
                         newMedia.setActive(true)

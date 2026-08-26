@@ -87,11 +87,12 @@ class WebRtcAudioSession private constructor(
 
     override suspend fun addIceCandidate(candidate: IceCandidateData) {
         ensureOpen()
-        iceQueue.addOrBuffer(candidate).forEach { peerConnection.addIceCandidate(it.toWebRtc()) }
+        iceQueue.addOrBuffer(candidate).forEach(::addRemoteIceCandidate)
     }
 
     override suspend fun restartIce(): String {
         ensureOpen()
+        beginRemoteDescription()
         peerConnection.restartIce()
         return createOffer()
     }
@@ -99,6 +100,10 @@ class WebRtcAudioSession private constructor(
     override suspend fun updateIceServers(servers: List<IceServerData>) {
         ensureOpen()
         check(peerConnection.setConfiguration(rtcConfiguration(servers))) { "failed to update ICE servers" }
+    }
+
+    override fun beginRemoteDescription() {
+        iceQueue.beginRemoteDescription()
     }
 
     override fun setMuted(muted: Boolean) {
@@ -146,8 +151,13 @@ class WebRtcAudioSession private constructor(
     }
 
     private suspend fun setRemoteDescription(description: SessionDescription) {
+        beginRemoteDescription()
         awaitSdp { observer -> peerConnection.setRemoteDescription(observer, description) }
-        iceQueue.markRemoteDescriptionReady().forEach { peerConnection.addIceCandidate(it.toWebRtc()) }
+        iceQueue.markRemoteDescriptionReady().forEach(::addRemoteIceCandidate)
+    }
+
+    private fun addRemoteIceCandidate(candidate: IceCandidateData) {
+        check(peerConnection.addIceCandidate(candidate.toWebRtc())) { "failed to add remote ICE candidate" }
     }
 
     private suspend fun createDescription(

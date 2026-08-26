@@ -10,6 +10,10 @@ class IceQueue {
         return emptyList()
     }
 
+    fun beginRemoteDescription() {
+        remoteDescriptionReady = false
+    }
+
     fun markRemoteDescriptionReady(): List<IceCandidateData> {
         remoteDescriptionReady = true
         val ready = pending.toList()

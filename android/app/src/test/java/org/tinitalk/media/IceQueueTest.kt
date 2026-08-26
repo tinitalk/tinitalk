@@ -35,4 +35,15 @@ class IceQueueTest {
 
         assertTrue(queue.markRemoteDescriptionReady().isEmpty())
     }
+
+    @Test
+    fun buffersCandidatesAgainForTheNextRemoteDescription() {
+        val queue = IceQueue()
+        queue.markRemoteDescriptionReady()
+        queue.beginRemoteDescription()
+        val candidate = IceCandidateData("audio", 0, "candidate:next-generation")
+
+        assertTrue(queue.addOrBuffer(candidate).isEmpty())
+        assertEquals(listOf(candidate), queue.markRemoteDescriptionReady())
+    }
 }
