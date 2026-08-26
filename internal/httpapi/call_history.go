@@ -40,8 +40,19 @@ func (s *Server) calls(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	page, err := s.db.CallHistory(currentUser(r).Login, before, limit)
+	login := currentUser(r).Login
+	peer := r.URL.Query().Get("peer")
+	var page state.CallHistoryPage
+	if peer == "" {
+		page, err = s.db.CallHistory(login, before, limit)
+	} else {
+		page, err = s.db.CallHistoryForPeer(login, peer, before, limit)
+	}
 	if err != nil {
+		if peer != "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "call history unavailable", http.StatusInternalServerError)
 		return
 	}
@@ -72,16 +83,29 @@ func (s *Server) readCalls(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		ThroughID *int64 `json:"through_id"`
+		PeerLogin string `json:"peer_login"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.ThroughID == nil || *request.ThroughID < 0 {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := s.db.MarkCallHistoryRead(currentUser(r).Login, *request.ThroughID); err != nil {
+	login := currentUser(r).Login
+	var unread int
+	var err error
+	if request.PeerLogin == "" {
+		unread, err = s.db.MarkCallHistoryReadAndCount(login, *request.ThroughID)
+	} else {
+		unread, err = s.db.MarkCallHistoryReadForPeer(login, request.PeerLogin, *request.ThroughID)
+	}
+	if err != nil {
+		if request.PeerLogin != "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "call history unavailable", http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, map[string]int{"unread_missed_count": unread})
 }
 
 func queryInt(r *http.Request, name string, fallback int) (int, error) {

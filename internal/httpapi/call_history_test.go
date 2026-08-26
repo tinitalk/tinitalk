@@ -63,8 +63,17 @@ func TestCallHistoryReadEndpointClearsMissedCounter(t *testing.T) {
 	}
 	body := []byte(fmt.Sprintf(`{"through_id":%d}`, page.LatestID))
 	response := request(t, server, http.MethodPut, "/api/calls/read", body, "bob", tokens["bob"])
-	if response.Code != http.StatusNoContent {
+	if response.Code != http.StatusOK {
 		t.Fatalf("PUT /api/calls/read status = %d, body %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		UnreadMissedCount int `json:"unread_missed_count"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.UnreadMissedCount != 0 {
+		t.Fatalf("read response = %+v, want zero unread", result)
 	}
 	after, err := db.CallHistory("bob", 0, 10)
 	if err != nil {
@@ -75,9 +84,56 @@ func TestCallHistoryReadEndpointClearsMissedCounter(t *testing.T) {
 	}
 }
 
+func TestCallHistoryEndpointFiltersAndMarksOneContactRead(t *testing.T) {
+	db, tokens := testDB(t)
+	if _, err := db.AddUser("carol", "Carol"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 8, 26, 10, 30, 0, 0, time.UTC)
+	recordMissedHistoryCallFrom(t, db, "alice-call", "alice", "bob", started)
+	recordMissedHistoryCallFrom(t, db, "carol-call", "carol", "bob", started.Add(time.Hour))
+	server := NewServer(db, Options{AllowInsecureLoopback: true})
+
+	response := request(t, server, http.MethodGet, "/api/calls?peer=alice&limit=10", nil, "bob", tokens["bob"])
+	if response.Code != http.StatusOK {
+		t.Fatalf("filtered history status = %d, body %s", response.Code, response.Body.String())
+	}
+	var page callHistoryResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].PeerLogin != "alice" || page.UnreadMissedCount != 2 {
+		t.Fatalf("filtered history = %+v", page)
+	}
+
+	body := []byte(fmt.Sprintf(`{"through_id":%d,"peer_login":"alice"}`, page.LatestID))
+	read := request(t, server, http.MethodPut, "/api/calls/read", body, "bob", tokens["bob"])
+	if read.Code != http.StatusOK {
+		t.Fatalf("filtered read status = %d, body %s", read.Code, read.Body.String())
+	}
+	var result struct {
+		UnreadMissedCount int `json:"unread_missed_count"`
+	}
+	if err := json.Unmarshal(read.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.UnreadMissedCount != 1 {
+		t.Fatalf("unread after reading alice = %d, want 1", result.UnreadMissedCount)
+	}
+
+	unknown := request(t, server, http.MethodGet, "/api/calls?peer=unknown", nil, "bob", tokens["bob"])
+	if unknown.Code != http.StatusBadRequest {
+		t.Fatalf("unknown peer status = %d, want 400", unknown.Code)
+	}
+}
+
 func recordMissedHistoryCall(t *testing.T, db *state.DB, callID string, started time.Time) {
+	recordMissedHistoryCallFrom(t, db, callID, "alice", "bob", started)
+}
+
+func recordMissedHistoryCallFrom(t *testing.T, db *state.DB, callID, caller, callee string, started time.Time) {
 	t.Helper()
-	if err := db.StartCall(callID, "alice", "bob", started); err != nil {
+	if err := db.StartCall(callID, caller, callee, started); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.MarkCallRinging(callID); err != nil {

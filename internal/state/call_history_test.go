@@ -215,6 +215,43 @@ func TestCallHistoryReadMarkerCannotHideFutureMissedCalls(t *testing.T) {
 	}
 }
 
+func TestCallHistoryForPeerFiltersAndMarksOnlyThatPeerRead(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	if _, err := db.AddUser("carol", "Carol"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	recordMissedCallFrom(t, db, "alice-call", "alice", "bob", started)
+	recordMissedCallFrom(t, db, "carol-call", "carol", "bob", started.Add(time.Hour))
+
+	page, err := db.CallHistoryForPeer("bob", "alice", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].CallID != "alice-call" || page.Items[0].PeerLogin != "alice" {
+		t.Fatalf("alice history = %+v", page.Items)
+	}
+	if page.UnreadMissed != 2 || page.LatestID != page.Items[0].ID {
+		t.Fatalf("alice history metadata = %+v", page)
+	}
+
+	unread, err := db.MarkCallHistoryReadForPeer("bob", "alice", math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unread != 1 {
+		t.Fatalf("unread after reading alice = %d, want 1", unread)
+	}
+	all, err := db.CallHistory("bob", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.UnreadMissed != 1 {
+		t.Fatalf("global unread after reading alice = %d, want 1", all.UnreadMissed)
+	}
+}
+
 func TestRecordBusyCallIsCompleteAndIdempotent(t *testing.T) {
 	db := openCallHistoryTestDB(t)
 	defer db.Close()
@@ -323,8 +360,12 @@ func openCallHistoryTestDB(t *testing.T) *DB {
 }
 
 func recordMissedCall(t *testing.T, db *DB, callID string, started time.Time) {
+	recordMissedCallFrom(t, db, callID, "alice", "bob", started)
+}
+
+func recordMissedCallFrom(t *testing.T, db *DB, callID, caller, callee string, started time.Time) {
 	t.Helper()
-	if err := db.StartCall(callID, "alice", "bob", started); err != nil {
+	if err := db.StartCall(callID, caller, callee, started); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.MarkCallRinging(callID); err != nil {

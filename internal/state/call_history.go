@@ -190,6 +190,17 @@ func (db *DB) RecoverCallHistory(endedAt time.Time) error {
 }
 
 func (db *DB) CallHistory(login string, before int64, limit int) (CallHistoryPage, error) {
+	return db.callHistory(login, "", before, limit)
+}
+
+func (db *DB) CallHistoryForPeer(login, peer string, before int64, limit int) (CallHistoryPage, error) {
+	if peer == "" {
+		return CallHistoryPage{}, errors.New("history peer is required")
+	}
+	return db.callHistory(login, peer, before, limit)
+}
+
+func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHistoryPage, error) {
 	var page CallHistoryPage
 	if limit < 1 || limit > 100 {
 		return page, errors.New("history limit must be between 1 and 100")
@@ -198,10 +209,22 @@ func (db *DB) CallHistory(login string, before int64, limit int) (CallHistoryPag
 	if err != nil {
 		return page, err
 	}
+	var peerID int64
+	if peer != "" {
+		peerID, err = db.userID(peer)
+		if err != nil {
+			return page, err
+		}
+		if peerID == userID {
+			return page, errors.New("history peer must be another user")
+		}
+	}
 	if err := db.sql.QueryRow(`
 		SELECT COALESCE(MAX(id), 0) FROM call_history
-		WHERE ended_at IS NOT NULL AND (caller_id = ? OR callee_id = ?)
-	`, userID, userID).Scan(&page.LatestID); err != nil {
+		WHERE ended_at IS NOT NULL
+			AND (caller_id = ? OR callee_id = ?)
+			AND (? = 0 OR (caller_id = ? AND callee_id = ?) OR (caller_id = ? AND callee_id = ?))
+	`, userID, userID, peerID, userID, peerID, peerID, userID).Scan(&page.LatestID); err != nil {
 		return page, err
 	}
 	if err := db.sql.QueryRow(`
@@ -220,10 +243,13 @@ func (db *DB) CallHistory(login string, before int64, limit int) (CallHistoryPag
 			ON personal.owner_user_id = ? AND personal.contact_user_id = peer.id
 		WHERE h.ended_at IS NOT NULL
 			AND (h.caller_id = ? OR h.callee_id = ?)
+			AND (? = 0 OR (h.caller_id = ? AND h.callee_id = ?) OR (h.caller_id = ? AND h.callee_id = ?))
 			AND (? = 0 OR h.id < ?)
 		ORDER BY h.id DESC
 		LIMIT ?
-	`, userID, userID, userID, userID, before, before, limit+1)
+	`, userID, userID, userID, userID,
+		peerID, userID, peerID, peerID, userID,
+		before, before, limit+1)
 	if err != nil {
 		return page, err
 	}
@@ -267,41 +293,79 @@ func (db *DB) CallHistory(login string, before int64, limit int) (CallHistoryPag
 }
 
 func (db *DB) MarkCallHistoryRead(login string, throughID int64) error {
+	_, err := db.markCallHistoryRead(login, "", throughID)
+	return err
+}
+
+func (db *DB) MarkCallHistoryReadAndCount(login string, throughID int64) (int, error) {
+	return db.markCallHistoryRead(login, "", throughID)
+}
+
+func (db *DB) MarkCallHistoryReadForPeer(login, peer string, throughID int64) (int, error) {
+	if peer == "" {
+		return 0, errors.New("history peer is required")
+	}
+	return db.markCallHistoryRead(login, peer, throughID)
+}
+
+func (db *DB) markCallHistoryRead(login, peer string, throughID int64) (int, error) {
 	if throughID < 0 {
-		return errors.New("history marker must be non-negative")
+		return 0, errors.New("history marker must be non-negative")
 	}
 	tx, err := db.sql.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
-	var userID, latestID int64
+	var userID, peerID, latestID int64
 	if err := tx.QueryRow("SELECT id FROM users WHERE login = ? AND disabled = 0", login).Scan(&userID); err != nil {
-		return err
+		return 0, err
+	}
+	if peer != "" {
+		if err := tx.QueryRow("SELECT id FROM users WHERE login = ? AND disabled = 0", peer).Scan(&peerID); err != nil {
+			return 0, err
+		}
+		if peerID == userID {
+			return 0, errors.New("history peer must be another user")
+		}
 	}
 	if err := tx.QueryRow(`
 		SELECT COALESCE(MAX(id), 0) FROM call_history
-		WHERE ended_at IS NOT NULL AND (caller_id = ? OR callee_id = ?)
-	`, userID, userID).Scan(&latestID); err != nil {
-		return err
+		WHERE ended_at IS NOT NULL
+			AND (caller_id = ? OR callee_id = ?)
+			AND (? = 0 OR (caller_id = ? AND callee_id = ?) OR (caller_id = ? AND callee_id = ?))
+	`, userID, userID, peerID, userID, peerID, peerID, userID).Scan(&latestID); err != nil {
+		return 0, err
 	}
 	if throughID > latestID {
 		throughID = latestID
 	}
-	if _, err := tx.Exec(`
-		INSERT INTO call_history_reads(user_id, through_id) VALUES(?, ?)
-		ON CONFLICT(user_id) DO UPDATE SET
-			through_id = MAX(call_history_reads.through_id, excluded.through_id)
-	`, userID, throughID); err != nil {
-		return err
+	if peerID == 0 {
+		if _, err := tx.Exec(`
+			INSERT INTO call_history_reads(user_id, through_id) VALUES(?, ?)
+			ON CONFLICT(user_id) DO UPDATE SET
+				through_id = MAX(call_history_reads.through_id, excluded.through_id)
+		`, userID, throughID); err != nil {
+			return 0, err
+		}
 	}
 	if _, err := tx.Exec(`
 		DELETE FROM call_history_unread
 		WHERE user_id = ? AND call_history_id <= ?
-	`, userID, throughID); err != nil {
-		return err
+			AND (? = 0 OR call_history_id IN (
+				SELECT id FROM call_history WHERE caller_id = ? AND callee_id = ?
+			))
+	`, userID, throughID, peerID, peerID, userID); err != nil {
+		return 0, err
 	}
-	return tx.Commit()
+	var unread int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM call_history_unread WHERE user_id = ?", userID).Scan(&unread); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return unread, nil
 }
 
 func (db *DB) userID(login string) (int64, error) {
