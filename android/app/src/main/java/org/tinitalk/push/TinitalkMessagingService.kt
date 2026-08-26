@@ -9,6 +9,8 @@ import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.TelecomCallController
+import org.tinitalk.telecom.TelecomCallCallbacks
+import org.tinitalk.telecom.CallForegroundService
 
 @Suppress("OVERRIDE_DEPRECATION")
 class TinitalkMessagingService : FirebaseMessagingService() {
@@ -32,11 +34,14 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         }
         val invite = IncomingPushPayload.parse(message.data) ?: return
         val incoming = IncomingCallController()
-        TelecomCallController(AndroidTelecomRegistrar(this)).addIncoming(
-            invite,
+        incoming.save(this, invite)
+        TelecomCallController(AndroidTelecomRegistrar(this)).addIncoming(invite, TelecomCallCallbacks(
             onAnswer = { incoming.answerFromTelecom(this, invite) },
             onDisconnect = { incoming.disconnectFromTelecom(this, invite) },
-        )
+            onActive = { CallForegroundService.telecomActive(this, invite.callId) },
+            onInactive = { CallForegroundService.telecomInactive(this, invite.callId) },
+            onEndpointsChanged = { state -> CallForegroundService.endpointsChanged(this, invite.callId, state) },
+        ))
         notifier.show(invite)
     }
 }

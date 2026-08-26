@@ -25,7 +25,10 @@ class TelecomCallControllerTest {
         var answered = false
         var disconnected = false
 
-        controller.addIncoming(invite, { answered = true }, { disconnected = true })
+        controller.addIncoming(invite, TelecomCallCallbacks(
+            onAnswer = { answered = true },
+            onDisconnect = { disconnected = true },
+        ))
         registrar.onAnswer?.invoke()
         registrar.onDisconnect?.invoke()
         controller.answer("call-1")
@@ -44,7 +47,7 @@ class TelecomCallControllerTest {
         val controller = TelecomCallController(registrar)
         var disconnected = false
 
-        controller.addOutgoing("call-2", "Bob") { disconnected = true }
+        controller.addOutgoing("call-2", "Bob", TelecomCallCallbacks(onDisconnect = { disconnected = true }))
         registrar.outgoingDisconnect?.invoke()
         controller.setActive("call-2")
 
@@ -54,32 +57,78 @@ class TelecomCallControllerTest {
         assertEquals("call-2", registrar.activeCall)
     }
 
+    @Test
+    fun forwardsActivityEndpointCallbacksAndEndpointSelection() {
+        val registrar = FakeTelecomRegistrar()
+        val controller = TelecomCallController(registrar)
+        var active = false
+        var inactive = false
+        var routes: AudioEndpointState? = null
+        val expectedRoutes = AudioEndpointState(
+            current = AudioEndpoint("earpiece-id", "Earpiece", 1),
+            available = listOf(
+                AudioEndpoint("earpiece-id", "Earpiece", 1),
+                AudioEndpoint("speaker-id", "Speaker", 4),
+            ),
+        )
+
+        controller.addOutgoing(
+            "call-1",
+            "Bob",
+            TelecomCallCallbacks(
+                onDisconnect = {},
+                onActive = { active = true },
+                onInactive = { inactive = true },
+                onEndpointsChanged = { routes = it },
+            ),
+        )
+        registrar.onActive?.invoke()
+        registrar.onInactive?.invoke()
+        registrar.onEndpointsChanged?.invoke(expectedRoutes)
+        controller.selectEndpoint("call-1", "speaker-id")
+
+        assertTrue(active)
+        assertTrue(inactive)
+        assertEquals(expectedRoutes, routes)
+        assertEquals("speaker-id", registrar.selectedEndpointId)
+    }
+
     private class FakeTelecomRegistrar : TelecomRegistrar {
         var registered: TelecomCapabilities? = null
         var invite: IncomingInvite? = null
         var onAnswer: (() -> Unit)? = null
         var onDisconnect: (() -> Unit)? = null
+        var onActive: (() -> Unit)? = null
+        var onInactive: (() -> Unit)? = null
+        var onEndpointsChanged: ((AudioEndpointState) -> Unit)? = null
         var answeredCall: String? = null
         var rejectedCall: String? = null
         var outgoingCallId: String? = null
         var outgoingDisplayName: String? = null
         var outgoingDisconnect: (() -> Unit)? = null
         var activeCall: String? = null
+        var selectedEndpointId: String? = null
 
         override fun register(capabilities: TelecomCapabilities) {
             registered = capabilities
         }
 
-        override fun addIncoming(invite: IncomingInvite, onAnswer: () -> Unit, onDisconnect: () -> Unit) {
+        override fun addIncoming(invite: IncomingInvite, callbacks: TelecomCallCallbacks) {
             this.invite = invite
-            this.onAnswer = onAnswer
-            this.onDisconnect = onDisconnect
+            onAnswer = callbacks.onAnswer
+            onDisconnect = callbacks.onDisconnect
+            onActive = callbacks.onActive
+            onInactive = callbacks.onInactive
+            onEndpointsChanged = callbacks.onEndpointsChanged
         }
 
-        override fun addOutgoing(callId: String, displayName: String, onDisconnect: () -> Unit) {
+        override fun addOutgoing(callId: String, displayName: String, callbacks: TelecomCallCallbacks) {
             outgoingCallId = callId
             outgoingDisplayName = displayName
-            outgoingDisconnect = onDisconnect
+            outgoingDisconnect = callbacks.onDisconnect
+            onActive = callbacks.onActive
+            onInactive = callbacks.onInactive
+            onEndpointsChanged = callbacks.onEndpointsChanged
         }
 
         override fun answer(callId: String) {
@@ -92,6 +141,10 @@ class TelecomCallControllerTest {
 
         override fun setActive(callId: String) {
             activeCall = callId
+        }
+
+        override fun selectEndpoint(callId: String, endpointId: String) {
+            selectedEndpointId = endpointId
         }
 
         override fun cancel(callId: String) = Unit

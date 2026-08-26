@@ -23,5 +23,6 @@ interface MediaSession {
     suspend fun restartIce(): String
     suspend fun updateIceServers(servers: List<IceServerData>)
     fun setMuted(muted: Boolean)
+    fun setActive(active: Boolean)
     suspend fun close()
 }

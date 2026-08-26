@@ -15,6 +15,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import java.lang.reflect.Modifier
 
 class ForegroundCallControllerTest {
     private val ids = object : EventIds {
@@ -22,6 +23,14 @@ class ForegroundCallControllerTest {
         override fun nextEventId(): String = "00000000-0000-0000-0000-${(next++).toString().padStart(12, '0')}"
         override fun nextCallId(): String = "00000000-0000-0000-0000-000000000099"
         override fun nowMillis(): Long = 10L
+    }
+
+    @Test
+    fun activityAndMuteSettersUseControllerMonitor() {
+        val controller = ForegroundCallController::class.java
+
+        assertTrue(Modifier.isSynchronized(controller.getDeclaredMethod("setActive", Boolean::class.javaPrimitiveType).modifiers))
+        assertTrue(Modifier.isSynchronized(controller.getDeclaredMethod("setMuted", Boolean::class.javaPrimitiveType).modifiers))
     }
 
     @Test
@@ -85,6 +94,43 @@ class ForegroundCallControllerTest {
         controller.onSignalEvent(CallSnapshot(CallPhase.Ended, callId, 2), event("call.end"))
 
         assertTrue(media.closed)
+    }
+
+    @Test
+    fun activityUpdatesCurrentMediaSession() {
+        val media = FakeMediaSession()
+        val controller = ForegroundCallController(CapturingSignalClient(), { _, _, _, _ -> media }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+
+        controller.setActive(true)
+        controller.setActive(false)
+
+        assertEquals(listOf(false, true, false), media.activity)
+    }
+
+    @Test
+    fun appliesActivitySetBeforeMediaSessionCreation() {
+        val media = FakeMediaSession()
+        val controller = ForegroundCallController(CapturingSignalClient(), { _, _, _, _ -> media }, ids)
+
+        controller.setActive(true)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+
+        assertEquals(listOf(true), media.activity)
+    }
+
+    @Test
+    fun appliesMuteSetBeforeMediaSessionCreation() {
+        val media = FakeMediaSession()
+        val controller = ForegroundCallController(CapturingSignalClient(), { _, _, _, _ -> media }, ids)
+
+        controller.setMuted(true)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+
+        assertEquals(listOf(true), media.muted)
     }
 
     @Test
@@ -385,6 +431,8 @@ class ForegroundCallControllerTest {
         var closed = false
         val remoteCandidates = mutableListOf<IceCandidateData>()
         val updatedServers = mutableListOf<IceServerData>()
+        val activity = mutableListOf<Boolean>()
+        val muted = mutableListOf<Boolean>()
 
         override suspend fun createOffer(): String = offer
         override suspend fun acceptOffer(sdp: String): String {
@@ -400,7 +448,12 @@ class ForegroundCallControllerTest {
             updatedServers.clear()
             updatedServers += servers
         }
-        override fun setMuted(muted: Boolean) = Unit
+        override fun setMuted(muted: Boolean) {
+            this.muted += muted
+        }
+        override fun setActive(active: Boolean) {
+            activity += active
+        }
         override suspend fun close() {
             closed = true
         }

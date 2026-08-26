@@ -24,6 +24,8 @@ class ForegroundCallController(
     private val scheduler: TaskScheduler = ExecutorTaskScheduler(),
 ) {
     private var session: MediaSession? = null
+    private var active = false
+    private var muted = false
     private var callId: String? = null
     private var iceServers: List<IceServerData> = emptyList()
     private var configuredCallId: String? = null
@@ -90,8 +92,16 @@ class ForegroundCallController(
         }
     }
 
+    @Synchronized
     fun setMuted(muted: Boolean) {
+        this.muted = muted
         session?.setMuted(muted)
+    }
+
+    @Synchronized
+    fun setActive(active: Boolean) {
+        this.active = active
+        session?.setActive(active)
     }
 
     @Synchronized
@@ -110,6 +120,8 @@ class ForegroundCallController(
         restartRequestID = null
         pendingOffer = null
         pendingIce.clear()
+        active = false
+        muted = false
         if (media != null) runBlockingLite { media.close() }
     }
 
@@ -137,6 +149,8 @@ class ForegroundCallController(
             { restartIce(nextCallId) },
         )
         session = created
+        created.setActive(active)
+        created.setMuted(muted)
         val queued = pendingIce.filter { it.first == nextCallId }.map { it.second }
         pendingIce.removeAll { it.first == nextCallId }
         if (queued.isNotEmpty()) runBlockingLite {

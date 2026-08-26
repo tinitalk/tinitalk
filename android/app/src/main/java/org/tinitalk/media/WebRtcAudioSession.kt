@@ -31,6 +31,8 @@ class WebRtcAudioSession private constructor(
     private val peerConnection: PeerConnection
     private val restartGate = IceRestartGate(ExecutorTaskScheduler())
     @Volatile private var closed = false
+    private var active = false
+    private var muted = false
 
     init {
         prepareFactory(context.applicationContext)
@@ -55,6 +57,7 @@ class WebRtcAudioSession private constructor(
         audioSource = factory.createAudioSource(audioConstraints())
         audioTrack = factory.createAudioTrack("local_audio", audioSource)
         sender = peerConnection.addTrack(audioTrack, listOf("audio"))
+        applyAudioTrackState()
     }
 
     override suspend fun createOffer(): String {
@@ -98,7 +101,13 @@ class WebRtcAudioSession private constructor(
     }
 
     override fun setMuted(muted: Boolean) {
-        audioTrack.setEnabled(!muted)
+        this.muted = muted
+        applyAudioTrackState()
+    }
+
+    override fun setActive(active: Boolean) {
+        this.active = active
+        applyAudioTrackState()
     }
 
     override suspend fun close() {
@@ -151,6 +160,10 @@ class WebRtcAudioSession private constructor(
 
     private fun ensureOpen() {
         check(!closed) { "media session is closed" }
+    }
+
+    private fun applyAudioTrackState() {
+        audioTrack.setEnabled(WebRtcPolicy.audioTrackEnabled(active, muted))
     }
 
     private fun onIceConnectionState(state: PeerConnection.IceConnectionState) {

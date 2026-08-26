@@ -16,6 +16,7 @@ import org.tinitalk.BuildConfig
 import org.tinitalk.MainActivity
 import org.tinitalk.R
 import org.tinitalk.call.CallCoordinator
+import org.tinitalk.call.CallAudioState
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.ForegroundCallController
@@ -26,6 +27,7 @@ import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.media.WebRtcAudioSession
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 internal fun signalingHttpClient(): OkHttpClient =
@@ -66,6 +68,7 @@ class CallForegroundService : Service() {
         runCatching { media?.close() }
         runCatching { httpClient?.dispatcher?.executorService?.shutdownNow() }
         runCatching { httpClient?.connectionPool?.evictAll() }
+        CallAudioState.reset()
         if (unexpected) {
             val terminal = coordinator?.snapshot() ?: snapshot
             if (terminal?.callId != null) {
@@ -135,14 +138,16 @@ class CallForegroundService : Service() {
         when (intent.action) {
             ActionStart -> {
                 CallServiceState.publish(call.snapshot())
+                CallAudioState.reset()
                 val callee = intent.getStringExtra(ExtraCallee) ?: return
                 call.startCall(callee)
                 call.snapshot().callId?.let { callId ->
-                    telecom.addOutgoing(callId, callee) { end(this) }
+                    telecom.addOutgoing(callId, callee, telecomCallbacks(callId) { end(this) })
                 }
             }
             ActionAnswer -> {
                 invite ?: return
+                if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callId != invite.callId) return
                 call.restoreIncoming(invite.callId, invite.lastSeq)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
@@ -151,6 +156,7 @@ class CallForegroundService : Service() {
             }
             ActionReject -> {
                 invite ?: return
+                if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callId != invite.callId) return
                 call.restoreIncoming(invite.callId, invite.lastSeq)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.reject()
@@ -158,6 +164,7 @@ class CallForegroundService : Service() {
             }
             ActionDisconnect -> {
                 invite?.let { call.restoreIncoming(it.callId, it.lastSeq) }
+                if (invite != null && call.snapshot().callId != invite.callId) return
                 if (call.snapshot().phase == CallPhase.Active) call.hangUp() else if (call.snapshot().phase == CallPhase.Ringing) call.reject()
             }
             ActionEnd -> when (call.snapshot().phase) {
@@ -167,6 +174,23 @@ class CallForegroundService : Service() {
                 else -> Unit
             }
             ActionMute -> media?.setMuted(intent.getBooleanExtra(ExtraMuted, false))
+            ActionTelecomActive -> {
+                if (!acceptsTelecomCallback(call, intent)) return
+                media?.setActive(true)
+            }
+            ActionTelecomInactive -> {
+                if (!acceptsTelecomCallback(call, intent)) return
+                media?.setActive(false)
+            }
+            ActionEndpointsChanged -> {
+                if (!acceptsTelecomCallback(call, intent)) return
+                AudioEndpointStateCodec.decode(intent.getStringExtra(ExtraAudioEndpoints))?.let(CallAudioState::publish)
+            }
+            ActionSelectEndpoint -> {
+                val callId = intent.getStringExtra(ExtraCallId) ?: return
+                if (!TelecomActionScope.acceptsSelection(call.snapshot(), callId)) return
+                intent.getStringExtra(ExtraEndpointId)?.let { telecom.selectEndpoint(callId, it) }
+            }
         }
         publish()
         if (call.snapshot().phase == CallPhase.Ended) {
@@ -187,6 +211,7 @@ class CallForegroundService : Service() {
         finishing = true
         val snapshot = coordinator?.snapshot()
         val callId = snapshot?.callId
+        CallAudioState.reset()
         media?.close()
         IncomingCallNotifier(this).cancel()
         callId?.let { IncomingCallController().clear(this, it) }
@@ -196,6 +221,25 @@ class CallForegroundService : Service() {
             publish()
         }
         stopSelf()
+    }
+
+    private fun telecomCallbacks(callId: String, onDisconnect: () -> Unit) = TelecomCallCallbacks(
+        onDisconnect = onDisconnect,
+        onActive = { telecomActive(this, callId) },
+        onInactive = { telecomInactive(this, callId) },
+        onEndpointsChanged = { state -> endpointsChanged(this, callId, state) },
+    )
+
+    private fun acceptsTelecomCallback(call: CallCoordinator, intent: Intent): Boolean {
+        val callId = intent.getStringExtra(ExtraCallId) ?: return false
+        val pending = IncomingCallController().load(this)?.invite
+        return TelecomActionScope.acceptsCallback(
+            call.snapshot(),
+            pending?.callId,
+            pending?.expiresAt,
+            callId,
+            Instant.now(),
+        )
     }
 
     private fun notification(): Notification {
@@ -252,22 +296,56 @@ class CallForegroundService : Service() {
         const val ActionDisconnect = "org.tinitalk.action.SERVICE_DISCONNECT_CALL"
         const val ActionEnd = "org.tinitalk.action.END_CALL"
         const val ActionMute = "org.tinitalk.action.MUTE_CALL"
+        const val ActionTelecomActive = "org.tinitalk.action.TELECOM_ACTIVE"
+        const val ActionTelecomInactive = "org.tinitalk.action.TELECOM_INACTIVE"
+        const val ActionEndpointsChanged = "org.tinitalk.action.TELECOM_ENDPOINTS_CHANGED"
+        const val ActionSelectEndpoint = "org.tinitalk.action.SELECT_AUDIO_ENDPOINT"
         private const val ExtraCallee = "callee"
         private const val ExtraMuted = "muted"
+        private const val ExtraCallId = "call_id"
+        private const val ExtraEndpointId = "endpoint_id"
+        private const val ExtraAudioEndpoints = "audio_endpoints"
         const val ChannelId = "calls"
         const val NotificationId = 10
         private const val SignalFlushTimeoutMillis = 5_000L
-
         fun startOutgoing(context: Context, callee: String) {
             start(context, Intent(context, CallForegroundService::class.java).setAction(ActionStart).putExtra(ExtraCallee, callee))
         }
 
         fun end(context: Context) {
-            context.startService(Intent(context, CallForegroundService::class.java).setAction(ActionEnd))
+            start(context, Intent(context, CallForegroundService::class.java).setAction(ActionEnd))
         }
 
         fun mute(context: Context, muted: Boolean) {
-            context.startService(Intent(context, CallForegroundService::class.java).setAction(ActionMute).putExtra(ExtraMuted, muted))
+            start(context, Intent(context, CallForegroundService::class.java).setAction(ActionMute).putExtra(ExtraMuted, muted))
+        }
+
+        fun telecomActive(context: Context, callId: String) {
+            start(context, Intent(context, CallForegroundService::class.java).setAction(ActionTelecomActive).putExtra(ExtraCallId, callId))
+        }
+
+        fun telecomInactive(context: Context, callId: String) {
+            start(context, Intent(context, CallForegroundService::class.java).setAction(ActionTelecomInactive).putExtra(ExtraCallId, callId))
+        }
+
+        fun endpointsChanged(context: Context, callId: String, state: AudioEndpointState) {
+            start(
+                context,
+                Intent(context, CallForegroundService::class.java)
+                    .setAction(ActionEndpointsChanged)
+                    .putExtra(ExtraCallId, callId)
+                    .putExtra(ExtraAudioEndpoints, AudioEndpointStateCodec.encode(state)),
+            )
+        }
+
+        fun selectAudioEndpoint(context: Context, callId: String, endpointId: String) {
+            start(
+                context,
+                Intent(context, CallForegroundService::class.java)
+                    .setAction(ActionSelectEndpoint)
+                    .putExtra(ExtraCallId, callId)
+                    .putExtra(ExtraEndpointId, endpointId),
+            )
         }
 
         fun start(context: Context, intent: Intent) {

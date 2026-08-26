@@ -19,8 +19,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import org.tinitalk.call.CallPhase
+import org.tinitalk.call.CallAudioState
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallSnapshot
+import org.tinitalk.telecom.AudioEndpointState
 import org.tinitalk.data.Contact
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
@@ -50,8 +52,15 @@ class MainActivity : ComponentActivity() {
     private var signedIn = false
     private var pushRegistrationStarted = false
     private var muted = false
+    private var audioEndpoints = AudioEndpointState()
     private val incomingController = IncomingCallController()
     private val callObserver: (CallSnapshot) -> Unit = { snapshot -> runOnUiThread { renderCallState(snapshot) } }
+    private val audioEndpointObserver: (AudioEndpointState) -> Unit = { state ->
+        runOnUiThread {
+            audioEndpoints = state
+            if (CallServiceState.snapshot().phase == CallPhase.Active) renderCallState(CallServiceState.snapshot())
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,6 +104,7 @@ class MainActivity : ComponentActivity() {
             }
         )
         CallServiceState.observe(callObserver)
+        CallAudioState.observe(audioEndpointObserver)
         refreshPermissions()
         Thread {
             runCatching { repository.restoreContacts() }
@@ -223,6 +233,21 @@ class MainActivity : ComponentActivity() {
                         renderCallState(snapshot)
                     }
                 })
+                audioEndpoints.current?.let { current ->
+                    contacts.addView(TextView(this).apply { text = "Audio: ${current.name}" })
+                }
+                snapshot.callId?.let { callId ->
+                    audioEndpoints.available
+                        .filter { it.id != audioEndpoints.current?.id }
+                        .forEach { endpoint ->
+                            contacts.addView(Button(this).apply {
+                                text = "Use ${endpoint.name}"
+                                setOnClickListener {
+                                    CallForegroundService.selectAudioEndpoint(this@MainActivity, callId, endpoint.id)
+                                }
+                            })
+                        }
+                }
                 contacts.addView(Button(this).apply {
                     text = "Hang up"
                     setOnClickListener { CallForegroundService.end(this@MainActivity) }
@@ -230,6 +255,7 @@ class MainActivity : ComponentActivity() {
             }
             CallPhase.Ended -> {
                 incomingInvite = null
+                muted = false
                 renderContacts()
             }
         }
@@ -252,6 +278,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         CallServiceState.removeObserver(callObserver)
+        CallAudioState.removeObserver(audioEndpointObserver)
         super.onDestroy()
     }
 
