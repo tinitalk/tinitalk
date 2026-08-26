@@ -16,18 +16,19 @@ type replayEntry struct {
 }
 
 type call struct {
-	id          string
-	caller      string
-	callee      string
-	nextSeq     uint64
-	seen        map[string]struct{}
-	seenOrder   []string
-	replay      []replayEntry
-	startedAt   time.Time
-	endedAt     time.Time
-	iceWindowAt time.Time
-	iceCount    int
-	state       callState
+	id           string
+	caller       string
+	callee       string
+	nextSeq      uint64
+	seen         map[string]struct{}
+	seenOrder    []string
+	replay       []replayEntry
+	startedAt    time.Time
+	endedAt      time.Time
+	iceWindowAt  time.Time
+	iceCount     int
+	offlineSince map[string]time.Time
+	state        callState
 }
 
 func (c *call) remember(eventID string) {

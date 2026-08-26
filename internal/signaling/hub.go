@@ -70,6 +70,11 @@ func (h *Hub) ConnectChecked(user string) (*Client, error) {
 		h.clients[user] = map[*Client]struct{}{}
 	}
 	h.clients[user][client] = struct{}{}
+	if callID, ok := h.activeByUser[user]; ok {
+		if c := h.calls[callID]; c != nil && c.state == callActive {
+			delete(c.offlineSince, user)
+		}
+	}
 	return client, nil
 }
 
@@ -83,6 +88,11 @@ func (h *Hub) Disconnect(client *Client) {
 	delete(h.clients[client.user], client)
 	if len(h.clients[client.user]) == 0 {
 		delete(h.clients, client.user)
+		if callID, ok := h.activeByUser[client.user]; ok {
+			if c := h.calls[callID]; c != nil && c.state == callActive {
+				c.offlineSince[client.user] = h.now()
+			}
+		}
 	}
 	close(client.inbox)
 }
@@ -138,6 +148,11 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	h.deliver(recipient, delivered)
 	if event.Type == "call.accept" {
 		c.state = callActive
+		for _, participant := range []string{c.caller, c.callee} {
+			if len(h.clients[participant]) == 0 {
+				c.offlineSince[participant] = h.now()
+			}
+		}
 		h.deliverICEConfig(c)
 	}
 	if event.Type == "call.accept" || event.Type == "call.reject" || event.Type == "call.cancel" {
@@ -205,13 +220,14 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 		return errors.New("callee already has an active call")
 	}
 	c := &call{
-		id:        event.CallID,
-		caller:    sender,
-		callee:    payload.CalleeID,
-		seen:      map[string]struct{}{},
-		nextSeq:   1,
-		startedAt: h.now(),
-		state:     callRinging,
+		id:           event.CallID,
+		caller:       sender,
+		callee:       payload.CalleeID,
+		seen:         map[string]struct{}{},
+		offlineSince: map[string]time.Time{},
+		nextSeq:      1,
+		startedAt:    h.now(),
+		state:        callRinging,
 	}
 	c.remember(event.ID)
 	h.calls[event.CallID] = c
@@ -240,6 +256,28 @@ func (h *Hub) Sweep() int {
 		if c.state == callEnded {
 			if now.Sub(c.endedAt) > TerminalRetention {
 				delete(h.calls, callID)
+			}
+			continue
+		}
+		if c.state == callActive {
+			for _, participant := range []string{c.caller, c.callee} {
+				offlineSince, ok := c.offlineSince[participant]
+				if !ok || now.Sub(offlineSince) <= ActiveDisconnectGrace {
+					continue
+				}
+				event := protocol.Event{
+					ID:      disconnectID(c.id),
+					CallID:  c.id,
+					Type:    "call.end",
+					SentAt:  now.UnixMilli(),
+					Payload: json.RawMessage(`{"reason":"participant_disconnected"}`),
+				}
+				delivered := h.next(c, event, c.caller, c.callee)
+				h.deliver(c.caller, delivered)
+				h.deliver(c.callee, delivered)
+				h.end(c)
+				expired++
+				break
 			}
 			continue
 		}
@@ -367,6 +405,10 @@ func (h *Hub) ActiveCall(user string) (string, error) {
 
 func expireID(callID string) string {
 	return callID[:len(callID)-3] + "999"
+}
+
+func disconnectID(callID string) string {
+	return callID[:len(callID)-3] + "998"
 }
 
 func rtcConfigID(callID, participant string) string {

@@ -236,6 +236,141 @@ func TestHubExpiresRingingCall(t *testing.T) {
 	}
 }
 
+func TestHubEndsAbandonedActiveCallAndReleasesBothUsers(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := activeCall(t, hub, alice, bob, 1201)
+
+	hub.Disconnect(bob)
+	now = now.Add(30*time.Second + time.Millisecond)
+	if got := hub.Sweep(); got != 1 {
+		t.Fatalf("Sweep() = %d, want 1", got)
+	}
+	disconnectEventID := start.CallID[:len(start.CallID)-3] + "998"
+	if got := next(t, alice); got.Type != "call.end" || got.ID != disconnectEventID || string(got.Payload) != `{"reason":"participant_disconnected"}` {
+		t.Fatalf("call end = %+v", got)
+	}
+	replayed, err := hub.Resume("bob", start.CallID, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 || replayed[0].Type != "call.end" || string(replayed[0].Payload) != `{"reason":"participant_disconnected"}` {
+		t.Fatalf("bob replay = %+v", replayed)
+	}
+	if _, err := hub.ActiveCall("alice"); err == nil {
+		t.Fatal("alice still busy")
+	}
+	if _, err := hub.ActiveCall("bob"); err == nil {
+		t.Fatal("bob still busy")
+	}
+	if err := hub.Handle("alice", event(uuid(1204), uuid(1205), "call.start", map[string]any{"callee_id": "carol"})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHubKeepsActiveCallBeforeDisconnectGrace(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := activeCall(t, hub, alice, bob, 1211)
+
+	hub.Disconnect(bob)
+	now = now.Add(30*time.Second - time.Millisecond)
+	if got := hub.Sweep(); got != 0 {
+		t.Fatalf("Sweep() = %d, want 0", got)
+	}
+	if got, err := hub.ActiveCall("alice"); err != nil || got != start.CallID {
+		t.Fatalf("ActiveCall(alice) = %q, %v; want %q, nil", got, err, start.CallID)
+	}
+}
+
+func TestHubReconnectClearsActiveDisconnectGrace(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := activeCall(t, hub, alice, bob, 1221)
+
+	hub.Disconnect(bob)
+	if _, err := hub.ConnectChecked("bob"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(30*time.Second + time.Millisecond)
+	if got := hub.Sweep(); got != 0 {
+		t.Fatalf("Sweep() = %d, want 0", got)
+	}
+	if got, err := hub.ActiveCall("alice"); err != nil || got != start.CallID {
+		t.Fatalf("ActiveCall(alice) = %q, %v; want %q, nil", got, err, start.CallID)
+	}
+}
+
+func TestHubWaitsForLastConnectionBeforeTrackingActiveDisconnect(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	alice := hub.Connect("alice")
+	bobPhone := hub.Connect("bob")
+	bobTablet := hub.Connect("bob")
+	start := event(uuid(1231), uuid(1232), "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bobPhone)
+	_ = next(t, bobTablet)
+	if err := hub.Handle("bob", event(uuid(1233), start.CallID, "call.accept", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice)
+	_ = next(t, alice)
+	_ = next(t, bobPhone)
+	_ = next(t, bobTablet)
+
+	hub.Disconnect(bobPhone)
+	now = now.Add(30*time.Second + time.Millisecond)
+	if got := hub.Sweep(); got != 0 {
+		t.Fatalf("Sweep() = %d, want 0", got)
+	}
+	if got, err := hub.ActiveCall("alice"); err != nil || got != start.CallID {
+		t.Fatalf("ActiveCall(alice) = %q, %v; want %q, nil", got, err, start.CallID)
+	}
+}
+
+func TestHubTracksParticipantAlreadyOfflineWhenCallBecomesActive(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := event(uuid(1241), uuid(1242), "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+
+	hub.Disconnect(bob)
+	if err := hub.Handle("bob", event(uuid(1243), start.CallID, "call.accept", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice)
+	_ = next(t, alice)
+	now = now.Add(30*time.Second + time.Millisecond)
+	if got := hub.Sweep(); got != 1 {
+		t.Fatalf("Sweep() = %d, want 1", got)
+	}
+	if got := next(t, alice); got.Type != "call.end" {
+		t.Fatalf("event = %+v", got)
+	}
+	if _, err := hub.ActiveCall("alice"); err == nil {
+		t.Fatal("alice still busy")
+	}
+}
+
 func TestHubLimitsConnectionsPerUser(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	for i := 0; i < MaxConnectionsPerUser; i++ {
@@ -399,6 +534,22 @@ func next(t *testing.T, c *Client) DeliveredEvent {
 		t.Fatal("no event delivered")
 	}
 	return got
+}
+
+func activeCall(t *testing.T, hub *Hub, alice, bob *Client, id int) protocol.Event {
+	t.Helper()
+	start := event(uuid(id), uuid(id+1), "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	if err := hub.Handle("bob", event(uuid(id+2), start.CallID, "call.accept", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice)
+	_ = next(t, alice)
+	_ = next(t, bob)
+	return start
 }
 
 func uuid(n int) string {

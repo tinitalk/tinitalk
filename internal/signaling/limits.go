@@ -8,4 +8,5 @@ const (
 	MaxICEPerMinute       = 32
 	SweepInterval         = time.Second
 	TerminalRetention     = 2 * time.Minute
+	ActiveDisconnectGrace = 30 * time.Second
 )
