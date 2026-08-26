@@ -145,14 +145,30 @@ func (db *DB) FinishCall(callID string, outcome CallOutcome, endedAt time.Time) 
 	if outcome == CallOutcomePending {
 		return errors.New("terminal call outcome is required")
 	}
-	result, err := db.sql.Exec(`
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`
 		UPDATE call_history SET outcome = ?, ended_at = ?
 		WHERE call_id = ? AND ended_at IS NULL
 	`, outcome, endedAt.Unix(), callID)
 	if err != nil {
 		return err
 	}
-	return requireAffected(result, "active call not found")
+	if err := requireAffected(result, "active call not found"); err != nil {
+		return err
+	}
+	if outcome == CallOutcomeUnanswered || outcome == CallOutcomeCancelledAfterRinging {
+		if _, err := tx.Exec(`
+			INSERT INTO call_history_unread(call_history_id, user_id)
+			SELECT id, callee_id FROM call_history WHERE call_id = ?
+		`, callID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (db *DB) RecoverCallHistory(endedAt time.Time) error {
@@ -189,11 +205,8 @@ func (db *DB) CallHistory(login string, before int64, limit int) (CallHistoryPag
 		return page, err
 	}
 	if err := db.sql.QueryRow(`
-		SELECT COUNT(*) FROM call_history
-		WHERE callee_id = ? AND ended_at IS NOT NULL
-			AND id > COALESCE((SELECT through_id FROM call_history_reads WHERE user_id = ?), 0)
-			AND outcome IN (?, ?)
-	`, userID, userID, CallOutcomeUnanswered, CallOutcomeCancelledAfterRinging).Scan(&page.UnreadMissed); err != nil {
+		SELECT COUNT(*) FROM call_history_unread WHERE user_id = ?
+	`, userID).Scan(&page.UnreadMissed); err != nil {
 		return page, err
 	}
 
@@ -276,6 +289,12 @@ func (db *DB) MarkCallHistoryRead(login string, throughID int64) error {
 		INSERT INTO call_history_reads(user_id, through_id) VALUES(?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			through_id = MAX(call_history_reads.through_id, excluded.through_id)
+	`, userID, throughID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM call_history_unread
+		WHERE user_id = ? AND call_history_id <= ?
 	`, userID, throughID); err != nil {
 		return err
 	}
