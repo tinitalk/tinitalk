@@ -86,6 +86,40 @@ func TestHubMergesSupportedCrossedCalls(t *testing.T) {
 	}
 }
 
+func TestHubResumesCrossedCallUsingDiscardedID(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	first := event(uuid(1321), uuid(1322), "call.start", map[string]any{
+		"callee_id": "bob", "supports_cross_call": true,
+	})
+	if err := hub.Handle("alice", first); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	reverse := event(uuid(1323), uuid(1324), "call.start", map[string]any{
+		"callee_id": "alice", "supports_cross_call": true,
+	})
+	if err := hub.Handle("bob", reverse); err != nil {
+		t.Fatal(err)
+	}
+
+	hub.Disconnect(bob)
+	bob = hub.Connect("bob")
+	resume := event(uuid(1325), reverse.CallID, "call.resume", map[string]any{"last_seq": 1})
+	if err := hub.Handle("bob", resume); err != nil {
+		t.Fatal(err)
+	}
+
+	assertCrossedAccept(t, next(t, bob), first.CallID, false)
+	if got := next(t, bob); got.Type != "rtc.config" || got.CallID != first.CallID {
+		t.Fatalf("bob config = %+v", got)
+	}
+	if got := next(t, alice); got.Type != "call.accept" {
+		t.Fatalf("alice accept = %+v", got)
+	}
+}
+
 func TestHubKeepsUnsupportedCrossedCallsBusy(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	bob := hub.Connect("bob")

@@ -31,6 +31,7 @@ type Hub struct {
 	iceConfig     ICEConfigProvider
 	clients       map[string]map[*Client]struct{}
 	calls         map[string]*call
+	callAliases   map[string]string
 	activeByUser  map[string]string
 	now           func() time.Time
 	notifications []notification
@@ -57,6 +58,7 @@ func NewHub(notifier Notifier) *Hub {
 		notifier:     notifier,
 		clients:      map[string]map[*Client]struct{}{},
 		calls:        map[string]*call{},
+		callAliases:  map[string]string{},
 		activeByUser: map[string]string{},
 		reservedWake: map[string]struct{}{},
 		now:          time.Now,
@@ -162,10 +164,11 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	if event.Type == "call.start" {
 		return h.start(sender, event)
 	}
-	c, ok := h.calls[event.CallID]
+	c, ok := h.callByID(event.CallID)
 	if !ok {
 		return errors.New("call not found")
 	}
+	event.CallID = c.id
 	if _, ok := c.seen[event.ID]; ok {
 		return nil
 	}
@@ -262,7 +265,7 @@ func withRestartID(payload json.RawMessage, restartID string) json.RawMessage {
 func (h *Hub) Resume(user, callID string, lastSeq uint64) ([]DeliveredEvent, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	c, ok := h.calls[callID]
+	c, ok := h.callByID(callID)
 	if !ok {
 		return nil, errors.New("call not found")
 	}
@@ -273,7 +276,7 @@ func (h *Hub) Resume(user, callID string, lastSeq uint64) ([]DeliveredEvent, err
 }
 
 func (h *Hub) start(sender string, event protocol.Event) error {
-	if existing, ok := h.calls[event.CallID]; ok {
+	if existing, ok := h.callByID(event.CallID); ok {
 		if _, seen := existing.seen[event.ID]; seen {
 			return nil
 		}
@@ -338,6 +341,8 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 
 func (h *Hub) acceptCrossed(c *call, source protocol.Event) {
 	c.remember(source.ID)
+	h.callAliases[source.CallID] = c.id
+	c.aliases = append(c.aliases, source.CallID)
 	c.state = callActive
 	for _, participant := range []string{c.caller, c.callee} {
 		if !h.hasOnlineClient(participant) {
@@ -371,6 +376,9 @@ func (h *Hub) Sweep() int {
 		if c.state == callEnded {
 			if now.Sub(c.endedAt) > TerminalRetention {
 				delete(h.calls, callID)
+				for _, alias := range c.aliases {
+					delete(h.callAliases, alias)
+				}
 				delete(h.reservedWake, callID)
 			}
 			continue
@@ -554,6 +562,18 @@ func (h *Hub) next(c *call, event protocol.Event, recipients ...string) Delivere
 		c.appendReplay(recipient, delivered)
 	}
 	return delivered
+}
+
+func (h *Hub) callByID(callID string) (*call, bool) {
+	if c, ok := h.calls[callID]; ok {
+		return c, true
+	}
+	canonicalID, ok := h.callAliases[callID]
+	if !ok {
+		return nil, false
+	}
+	c, ok := h.calls[canonicalID]
+	return c, ok
 }
 
 func (h *Hub) deliver(user string, event DeliveredEvent) {

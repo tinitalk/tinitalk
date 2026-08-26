@@ -23,6 +23,7 @@ type call struct {
 	seen              map[string]struct{}
 	seenOrder         []string
 	replay            []replayEntry
+	aliases           []string
 	startedAt         time.Time
 	endedAt           time.Time
 	iceWindowAt       time.Time
