@@ -58,17 +58,18 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	defer s.hub.Disconnect(client)
-	_ = conn.SetReadDeadline(time.Time{})
-	_ = conn.SetWriteDeadline(time.Time{})
 	var writeMu sync.Mutex
 	writeJSON := func(value any) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
+		if err := conn.SetWriteDeadline(time.Now().Add(s.socketTiming.writeTimeout)); err != nil {
+			return err
+		}
 		return conn.WriteJSON(value)
 	}
 	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		defer close(done)
 		for event := range client.Events() {
 			if err := writeJSON(event); err != nil {
 				_ = conn.Close()
@@ -78,6 +79,33 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	conn.SetReadLimit(protocol.MaxEventBytes)
+	if err := conn.SetReadDeadline(time.Now().Add(s.socketTiming.pongTimeout)); err != nil {
+		return
+	}
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(s.socketTiming.pongTimeout))
+	})
+	go func() {
+		ticker := time.NewTicker(s.socketTiming.pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				writeMu.Lock()
+				err := conn.SetWriteDeadline(time.Now().Add(s.socketTiming.writeTimeout))
+				if err == nil {
+					err = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(s.socketTiming.writeTimeout))
+				}
+				writeMu.Unlock()
+				if err != nil {
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {

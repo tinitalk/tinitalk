@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"tinitalk/internal/signaling"
@@ -140,6 +141,34 @@ func TestSocketRejectsConnectionAbovePerUserLimit(t *testing.T) {
 	}
 }
 
+func TestSocketHeartbeatReleasesUnresponsiveConnections(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	s := NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}).(*Server)
+	s.socketTiming = socketTiming{20 * time.Millisecond, 80 * time.Millisecond, 20 * time.Millisecond}
+	server := httptest.NewServer(s)
+	defer server.Close()
+
+	for range signaling.MaxConnectionsPerUser {
+		conn := dialSocket(t, server.URL, "alice", tokens["alice"])
+		defer conn.Close()
+	}
+
+	deadline := time.Now().Add(s.socketTiming.pongTimeout + 4*s.socketTiming.pingInterval)
+	for time.Now().Before(deadline) {
+		conn, response, err := tryDialSocket(server.URL, "alice", tokens["alice"])
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("unresponsive connections did not release a websocket slot")
+}
+
 func testDB(t *testing.T) (*state.DB, map[string]string) {
 	t.Helper()
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
@@ -172,12 +201,16 @@ func request(t *testing.T, h http.Handler, method, path string, body []byte, log
 
 func dialSocket(t *testing.T, baseURL, login, token string) *websocket.Conn {
 	t.Helper()
-	header := http.Header{}
-	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(login+":"+token)))
-	url := "ws" + baseURL[len("http"):] + "/api/socket"
-	conn, _, err := websocket.DefaultDialer.Dial(url, header)
+	conn, _, err := tryDialSocket(baseURL, login, token)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return conn
+}
+
+func tryDialSocket(baseURL, login, token string) (*websocket.Conn, *http.Response, error) {
+	header := http.Header{}
+	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(login+":"+token)))
+	url := "ws" + baseURL[len("http"):] + "/api/socket"
+	return websocket.DefaultDialer.Dial(url, header)
 }

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"tinitalk/internal/auth"
 	"tinitalk/internal/signaling"
@@ -15,20 +16,34 @@ type Options struct {
 }
 
 type Server struct {
-	db      *state.DB
-	auth    *auth.BasicAuthenticator
-	hub     *signaling.Hub
-	options Options
-	mux     *http.ServeMux
+	db           *state.DB
+	auth         *auth.BasicAuthenticator
+	hub          *signaling.Hub
+	options      Options
+	mux          *http.ServeMux
+	socketTiming socketTiming
+}
+
+type socketTiming struct {
+	writeTimeout time.Duration
+	pongTimeout  time.Duration
+	pingInterval time.Duration
+}
+
+var defaultSocketTiming = socketTiming{
+	writeTimeout: 10 * time.Second,
+	pongTimeout:  45 * time.Second,
+	pingInterval: 20 * time.Second,
 }
 
 func NewServer(db *state.DB, options Options) http.Handler {
 	s := &Server{
-		db:      db,
-		auth:    auth.NewBasicAuthenticator(db),
-		hub:     options.Hub,
-		options: options,
-		mux:     http.NewServeMux(),
+		db:           db,
+		auth:         auth.NewBasicAuthenticator(db),
+		hub:          options.Hub,
+		options:      options,
+		mux:          http.NewServeMux(),
+		socketTiming: defaultSocketTiming,
 	}
 	s.routes()
 	return s
