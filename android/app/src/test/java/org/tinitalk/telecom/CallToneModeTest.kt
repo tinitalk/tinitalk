@@ -48,6 +48,28 @@ class CallToneModeTest {
     }
 
     @Test
+    fun keepsActiveCallAliveForRetryableIceLimits() {
+        assertNull(
+            signalingFailureEndReason(
+                SignalFailure(
+                    message = "ICE restart requested too often",
+                    code = "ice_restart_rate_limited",
+                    callId = "call-1",
+                    eventId = "restart-1",
+                    retryAfterMillis = 8_750L,
+                ),
+                "call-1",
+            ),
+        )
+        assertNull(
+            signalingFailureEndReason(
+                SignalFailure("too many ICE events", "ice_rate_limited", "call-1"),
+                "call-1",
+            ),
+        )
+    }
+
+    @Test
     fun ignoresSignalingFailureWithoutActiveCall() {
         assertNull(signalingFailureEndReason(SignalFailure("call not found"), null))
     }

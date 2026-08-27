@@ -345,8 +345,16 @@ func TestHubCancelsEndsExpiresAndLimitsICE(t *testing.T) {
 			t.Fatalf("ice %d rejected: %v", i, err)
 		}
 	}
-	if err := hub.Handle("alice", event(uuid(900), start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"})); err == nil {
+	err := hub.Handle("alice", event(uuid(900), start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"}))
+	if err == nil {
 		t.Fatal("extra ICE event error = nil, want rate limit")
+	}
+	var rateLimit ClientError
+	if !errors.As(err, &rateLimit) {
+		t.Fatalf("extra ICE event error = %T, want ClientError", err)
+	}
+	if rateLimit.Code() != "ice_rate_limited" || rateLimit.RetryAfter() != time.Minute {
+		t.Fatalf("extra ICE event details = %q/%s", rateLimit.Code(), rateLimit.RetryAfter())
 	}
 	if err := hub.Handle("alice", event("018f7d51-3f90-7e63-b657-4a83a6a90499", start.CallID, "call.end", map[string]any{})); err != nil {
 		t.Fatal(err)
@@ -697,8 +705,16 @@ func TestHubEnforcesNegotiationRolesAndRestartInterval(t *testing.T) {
 	if err := hub.Handle("alice", event(uuid(1257), start.CallID, "rtc.restart", map[string]any{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := hub.Handle("alice", event(uuid(1258), start.CallID, "rtc.restart", map[string]any{})); err == nil {
+	err := hub.Handle("alice", event(uuid(1258), start.CallID, "rtc.restart", map[string]any{}))
+	if err == nil {
 		t.Fatal("immediate restart error = nil")
+	}
+	var rateLimit ClientError
+	if !errors.As(err, &rateLimit) {
+		t.Fatalf("immediate restart error = %T, want ClientError", err)
+	}
+	if rateLimit.Code() != "ice_restart_rate_limited" || rateLimit.RetryAfter() != RestartMinInterval {
+		t.Fatalf("immediate restart details = %q/%s", rateLimit.Code(), rateLimit.RetryAfter())
 	}
 	now = now.Add(10 * time.Second)
 	if err := hub.Handle("alice", event(uuid(1259), start.CallID, "rtc.restart", map[string]any{})); err != nil {

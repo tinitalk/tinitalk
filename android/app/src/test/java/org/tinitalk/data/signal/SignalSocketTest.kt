@@ -73,7 +73,7 @@ class SignalSocketTest {
     @Test
     fun reportsServerErrorEnvelope() {
         MockWebServer().use { server ->
-            server.enqueue(MockResponse().withWebSocketUpgrade(SendingWebSocketListener("""{"error":"callee already has an active call","code":"busy","call_id":"call-1"}""")))
+            server.enqueue(MockResponse().withWebSocketUpgrade(SendingWebSocketListener("""{"error":"ICE restart requested too often","code":"ice_restart_rate_limited","call_id":"call-1","event_id":"event-1","retry_after_ms":8750}""")))
             server.start()
             val client = OkHttpClient()
             lateinit var socket: SignalSocket
@@ -89,7 +89,13 @@ class SignalSocketTest {
             )
 
             assertEquals(
-                SignalFailure(message = "callee already has an active call", code = "busy", callId = "call-1"),
+                SignalFailure(
+                    message = "ICE restart requested too often",
+                    code = "ice_restart_rate_limited",
+                    callId = "call-1",
+                    eventId = "event-1",
+                    retryAfterMillis = 8_750L,
+                ),
                 error.poll(2, TimeUnit.SECONDS),
             )
             socket.close()

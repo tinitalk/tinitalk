@@ -15,6 +15,8 @@ data class SignalFailure(
 	val message: String,
 	val code: String? = null,
 	val callId: String? = null,
+	val eventId: String? = null,
+	val retryAfterMillis: Long? = null,
 )
 
 class SignalSocket(
@@ -71,6 +73,8 @@ class SignalSocket(
 								message = it,
 								code = json["code"]?.asString,
 								callId = json["call_id"]?.asString,
+								eventId = json["event_id"]?.asString,
+								retryAfterMillis = json["retry_after_ms"]?.asLong,
 							),
 						)
 						return

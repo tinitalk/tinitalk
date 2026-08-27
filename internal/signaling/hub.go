@@ -606,7 +606,11 @@ func (h *Hub) checkICERate(c *call) error {
 		c.iceCount = 0
 	}
 	if c.iceCount >= MaxICEPerMinute {
-		return errors.New("too many ICE events")
+		return clientError{
+			message:    "too many ICE events",
+			code:       iceRateLimitCode,
+			retryAfter: time.Minute - now.Sub(c.iceWindowAt),
+		}
 	}
 	c.iceCount++
 	return nil
@@ -615,7 +619,11 @@ func (h *Hub) checkICERate(c *call) error {
 func (h *Hub) checkRestartRate(c *call) error {
 	now := h.now()
 	if !c.lastRestart.IsZero() && now.Sub(c.lastRestart) < RestartMinInterval {
-		return errors.New("ICE restart requested too often")
+		return clientError{
+			message:    "ICE restart requested too often",
+			code:       iceRestartRateLimitCode,
+			retryAfter: RestartMinInterval - now.Sub(c.lastRestart),
+		}
 	}
 	c.lastRestart = now
 	return nil

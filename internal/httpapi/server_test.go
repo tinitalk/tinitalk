@@ -246,6 +246,43 @@ func TestSocketRoutesCallEvents(t *testing.T) {
 	}
 }
 
+func TestSocketReportsRetryableICERestartLimit(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	now := time.Unix(1_787_666_400, 0)
+	hub.SetNow(func() time.Time { return now })
+	server := httptest.NewServer(NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}))
+	defer server.Close()
+
+	alice := dialSocket(t, server.URL, "alice", tokens["alice"])
+	defer alice.Close()
+	bob := dialSocket(t, server.URL, "bob", tokens["bob"])
+	defer bob.Close()
+
+	callID := "018f7d51-40a1-7bb5-a2d0-7e47f9180401"
+	writeSocketEvent(t, alice, "018f7d51-3f90-7e63-b657-4a83a6a90401", callID, "call.start", map[string]any{"callee_id": "bob"})
+	readSocketEvent(t, bob) // call.incoming
+	writeSocketEvent(t, bob, "018f7d51-3f90-7e63-b657-4a83a6a90402", callID, "call.accept", map[string]any{})
+	readSocketEvent(t, alice) // call.accept
+	readSocketEvent(t, alice) // rtc.config
+	readSocketEvent(t, bob)   // rtc.config
+
+	writeSocketEvent(t, alice, "018f7d51-3f90-7e63-b657-4a83a6a90403", callID, "rtc.restart", map[string]any{})
+	readSocketEvent(t, bob)   // rtc.restart
+	readSocketEvent(t, alice) // rtc.config
+	readSocketEvent(t, bob)   // rtc.config
+
+	rejectedID := "018f7d51-3f90-7e63-b657-4a83a6a90404"
+	writeSocketEvent(t, alice, rejectedID, callID, "rtc.restart", map[string]any{})
+	failure := readSocketEvent(t, alice)
+	if failure["code"] != "ice_restart_rate_limited" || failure["call_id"] != callID || failure["event_id"] != rejectedID {
+		t.Fatalf("failure identity = %+v", failure)
+	}
+	if failure["retry_after_ms"] != float64(10_000) {
+		t.Fatalf("failure retry_after_ms = %#v", failure["retry_after_ms"])
+	}
+}
+
 func TestSocketRejectsConnectionAbovePerUserLimit(t *testing.T) {
 	db, tokens := testDB(t)
 	hub := signaling.NewHub(signaling.NoopNotifier{})
@@ -342,6 +379,28 @@ func dialSocket(t *testing.T, baseURL, login, token string) *websocket.Conn {
 		t.Fatal(err)
 	}
 	return conn
+}
+
+func writeSocketEvent(t *testing.T, conn *websocket.Conn, id, callID, eventType string, payload map[string]any) {
+	t.Helper()
+	if err := conn.WriteJSON(map[string]any{
+		"id":      id,
+		"call_id": callID,
+		"type":    eventType,
+		"sent_at": 1_787_666_400_000,
+		"payload": payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readSocketEvent(t *testing.T, conn *websocket.Conn) map[string]any {
+	t.Helper()
+	var event map[string]any
+	if err := conn.ReadJSON(&event); err != nil {
+		t.Fatal(err)
+	}
+	return event
 }
 
 func tryDialSocket(baseURL, login, token string) (*websocket.Conn, *http.Response, error) {

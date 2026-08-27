@@ -123,9 +123,16 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := s.hub.Handle(user, event); err != nil {
-			failure := map[string]string{"error": err.Error(), "call_id": event.CallID}
+			failure := map[string]any{"error": err.Error(), "call_id": event.CallID, "event_id": event.ID}
 			if errors.Is(err, signaling.ErrCalleeBusy) {
 				failure["code"] = "busy"
+			}
+			var clientError signaling.ClientError
+			if errors.As(err, &clientError) {
+				failure["code"] = clientError.Code()
+				retryAfter := clientError.RetryAfter()
+				retryAfterMillis := max(int64(1), (retryAfter.Nanoseconds()+int64(time.Millisecond)-1)/int64(time.Millisecond))
+				failure["retry_after_ms"] = retryAfterMillis
 			}
 			_ = writeJSON(failure)
 			continue

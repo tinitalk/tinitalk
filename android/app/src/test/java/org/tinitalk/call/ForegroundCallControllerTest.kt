@@ -6,6 +6,7 @@ import com.google.gson.JsonNull
 import com.google.gson.JsonObject
 import com.google.gson.JsonPrimitive
 import org.tinitalk.data.signal.SignalEvent
+import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
 import org.tinitalk.media.CallStats
@@ -502,6 +503,38 @@ class ForegroundCallControllerTest {
 
         assertEquals(listOf("rtc.restart", "rtc.restart"), signal.sent.map { it.type })
         assertEquals(signal.sent.first().id, signal.sent.last().id)
+    }
+
+    @Test
+    fun retriesRateLimitedRestartWithSameEventAfterServerDelay() {
+        val signal = CapturingSignalClient()
+        val scheduler = FakeTaskScheduler()
+        lateinit var restart: () -> Unit
+        val controller = ForegroundCallController(signal, { _, _, _, callback ->
+            restart = callback
+            FakeMediaSession()
+        }, ids, scheduler)
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        signal.sent.clear()
+
+        restart()
+        val pending = signal.sent.single()
+        controller.onSignalFailure(
+            SignalFailure(
+                message = "ICE restart requested too often",
+                code = "ice_restart_rate_limited",
+                callId = callId,
+                eventId = pending.id,
+                retryAfterMillis = 8_750L,
+            ),
+        )
+
+        assertEquals(listOf(8_750L), scheduler.delays)
+        controller.onSignalConnected()
+        assertEquals(listOf(pending.id), signal.sent.map { it.id })
+        scheduler.runPending()
+        assertEquals(listOf(pending.id, pending.id), signal.sent.map { it.id })
     }
 
     private fun activeSnapshot(): CallSnapshot = CallSnapshot(CallPhase.Active, callId, 1)

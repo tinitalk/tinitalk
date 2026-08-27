@@ -251,6 +251,7 @@ class CallForegroundService : Service() {
                     if (socket !== newSocket || finishing) return@post
                     val current = newCoordinator.snapshot()
                     val activeCallId = current.callId.takeIf { current.phase != CallPhase.Ended }
+                    newMedia.onSignalFailure(failure)
                     val reason = signalingFailureEndReason(failure, activeCallId) ?: return@post
                     newCoordinator.fail()
                     publish(reason)
@@ -592,6 +593,7 @@ internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: St
     currentCallId == null -> null
     failure.callId != null && failure.callId != currentCallId -> null
     failure.code == "busy" -> CallEndReason.Busy
+    failure.code == "ice_rate_limited" || failure.code == "ice_restart_rate_limited" -> null
     else -> CallEndReason.Failed
 }
 

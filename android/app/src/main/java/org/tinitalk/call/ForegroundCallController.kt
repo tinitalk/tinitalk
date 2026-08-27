@@ -2,6 +2,7 @@ package org.tinitalk.call
 
 import com.google.gson.JsonObject
 import org.tinitalk.data.signal.SignalEvent
+import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
 import org.tinitalk.media.CallStats
@@ -38,6 +39,7 @@ class ForegroundCallController(
     @Volatile private var localIceGeneration: String? = null
     private var remoteIceGeneration: String? = null
     private var credentialRefreshTask: CancellableTask? = null
+    private var restartRetryTask: CancellableTask? = null
     private var pendingOffer: SignalEvent? = null
     private val pendingIce = ArrayDeque<Pair<String, IceCandidateData>>()
 
@@ -64,6 +66,8 @@ class ForegroundCallController(
                     runBlockingLite { media.updateIceServers(iceServers) }
                 }
                 if (restartRequestedCallId == event.callId && restartRequestID == event.payload.restartID()) {
+                    restartRetryTask?.cancel()
+                    restartRetryTask = null
                     val offer = runBlockingLite { ensureSession(event.callId).restartIce() }
                     restartRequestedCallId = null
                     restartRequestID = null
@@ -129,6 +133,8 @@ class ForegroundCallController(
     fun close() {
         credentialRefreshTask?.cancel()
         credentialRefreshTask = null
+        restartRetryTask?.cancel()
+        restartRetryTask = null
         scheduler.close()
         val media = session
         session = null
@@ -188,7 +194,23 @@ class ForegroundCallController(
 
     @Synchronized
     fun onSignalConnected() {
-        pendingRestart?.let(signal::send)
+        if (restartRetryTask == null) pendingRestart?.let(signal::send)
+    }
+
+    @Synchronized
+    fun onSignalFailure(failure: SignalFailure) {
+        if (failure.code != "ice_restart_rate_limited") return
+        val restart = pendingRestart ?: return
+        if (failure.callId != restart.callId || failure.eventId != restart.id) return
+        val delayMillis = failure.retryAfterMillis?.coerceAtLeast(1L) ?: return
+        restartRetryTask?.cancel()
+        restartRetryTask = scheduler.schedule(delayMillis) {
+            synchronized(this) {
+                restartRetryTask = null
+                val pending = pendingRestart
+                if (pending?.id == restart.id && callId == restart.callId) signal.send(pending)
+            }
+        }
     }
 
     @Synchronized
