@@ -167,6 +167,29 @@ tinitalk serve --addr :443 \
   --turn-tls-addr :5349
 ```
 
+Встроенный TURN по умолчанию допускает `128` одновременных allocations,
+не более `2` на пользователя, и выделяет relay-порты из UDP-диапазона
+`49152-49663`. `128` allocations не означают `128` звонков: полностью
+relay-звонок обычно использует `2` установившихся allocations, а во время ICE
+может временно использовать до `4`. Теоретический диапазон поэтому составляет
+примерно `32-64` одновременных TURN-звонка; для VPS с `1 vCPU / 1 GB RAM`
+планируй `40-50` установившихся звонков и подтверждай предел нагрузочным тестом.
+Прямые peer-to-peer звонки этот лимит не расходуют.
+
+Лимит и relay-диапазон можно переопределить без пересборки:
+
+```bash
+tinitalk serve ... \
+  --turn-max-allocations 64 \
+  --turn-relay-min-port 50000 \
+  --turn-relay-max-port 50255
+```
+
+Relay-диапазон должен содержать минимум четыре порта на каждый разрешенный
+allocation. Лимит на одного пользователя остается равным `2`. Если диапазон
+переопределен, тот же диапазон нужно открыть в firewall/security group и
+добавить в `net.ipv4.ip_local_reserved_ports`.
+
 Для запуска через systemd замени example hostname и IP в
 `deploy/tinitalk.service`, затем установи unit:
 
@@ -187,6 +210,12 @@ make check
 ## Заметки по VPS
 
 - DNS `A` record должен указывать на VPS до выпуска сертификата.
+- В firewall и security group открой `443/tcp`, `3478/udp`, `3478/tcp`,
+  `5349/tcp` и UDP relay-диапазон `49152-49663`. TCP/TLS transport подключается
+  к TURN через `3478`/`5349`; WebRTC media relay использует UDP-диапазон.
+- На Linux добавь `49152-49663` в `net.ipv4.ip_local_reserved_ports`, сохранив
+  уже настроенные reserved ranges, чтобы исходящие соединения ОС не занимали
+  TURN relay-порты.
 - `/var/lib/tinitalk/state.db` должен принадлежать `tinitalk:tinitalk` и иметь
   mode `0600`.
 - Не коммить Firebase service account JSON, `state.db`, APK и собранные

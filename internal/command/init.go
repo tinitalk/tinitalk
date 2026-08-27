@@ -130,11 +130,7 @@ func runServe(args []string) error {
 			return errors.New("TURN secret is missing; run tinitalk init")
 		}
 		issuer := turnserver.CredentialIssuer{Secret: secret, TTL: 10 * time.Minute}
-		turnTLSAddr := ""
-		if tlsConfig != nil {
-			turnTLSAddr = options.turnTLSAddr
-		}
-		turn, err := turnserver.Start(turnserver.Config{PublicIP: options.turnPublicIP, UDPAddr: options.turnAddr, TCPAddr: options.turnAddr, TLSAddr: turnTLSAddr, TLS: tlsConfig, Realm: options.turnPublicHost, Issuer: issuer, Relay: turnserver.RelayPortRange{Min: 49160, Max: 49200}, MaxAllocations: 16, MaxAllocationsPerUser: 2})
+		turn, err := turnserver.Start(turnServerConfig(options, tlsConfig, issuer))
 		if err != nil {
 			return err
 		}
@@ -168,6 +164,25 @@ func runServe(args []string) error {
 			return err
 		}
 		return nil
+	}
+}
+
+func turnServerConfig(options serveOptions, tlsConfig *tls.Config, issuer turnserver.CredentialIssuer) turnserver.Config {
+	turnTLSAddr := ""
+	if tlsConfig != nil {
+		turnTLSAddr = options.turnTLSAddr
+	}
+	return turnserver.Config{
+		PublicIP:              options.turnPublicIP,
+		UDPAddr:               options.turnAddr,
+		TCPAddr:               options.turnAddr,
+		TLSAddr:               turnTLSAddr,
+		TLS:                   tlsConfig,
+		Relay:                 turnserver.RelayPortRange{Min: options.turnRelayMinPort, Max: options.turnRelayMaxPort},
+		Realm:                 options.turnPublicHost,
+		Issuer:                issuer,
+		MaxAllocations:        options.turnMaxAllocations,
+		MaxAllocationsPerUser: options.turnMaxAllocationsPerUser,
 	}
 }
 

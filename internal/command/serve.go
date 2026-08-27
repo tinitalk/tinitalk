@@ -2,22 +2,45 @@ package command
 
 import (
 	"errors"
+	"fmt"
 	"net"
+	"strconv"
+)
+
+const (
+	defaultTURNMaxAllocations        = 128
+	defaultTURNMaxAllocationsPerUser = 2
+	defaultTURNRelayMinPort          = 49152
+	defaultTURNRelayMaxPort          = 49663
+	turnRelayPortsPerAllocation      = 4
+	maxTURNRelayPort                 = 65534
 )
 
 type serveOptions struct {
-	addr           string
-	allowLoopback  bool
-	tlsCert        string
-	tlsKey         string
-	turnPublicHost string
-	turnPublicIP   string
-	turnAddr       string
-	turnTLSAddr    string
+	addr                      string
+	allowLoopback             bool
+	tlsCert                   string
+	tlsKey                    string
+	turnPublicHost            string
+	turnPublicIP              string
+	turnAddr                  string
+	turnTLSAddr               string
+	turnMaxAllocations        int
+	turnMaxAllocationsPerUser int
+	turnRelayMinPort          uint16
+	turnRelayMaxPort          uint16
 }
 
 func parseServeOptions(args []string) (serveOptions, error) {
-	options := serveOptions{addr: ":8080", turnAddr: ":3478", turnTLSAddr: ":5349"}
+	options := serveOptions{
+		addr:                      ":8080",
+		turnAddr:                  ":3478",
+		turnTLSAddr:               ":5349",
+		turnMaxAllocations:        defaultTURNMaxAllocations,
+		turnMaxAllocationsPerUser: defaultTURNMaxAllocationsPerUser,
+		turnRelayMinPort:          defaultTURNRelayMinPort,
+		turnRelayMaxPort:          defaultTURNRelayMaxPort,
+	}
 	for len(args) > 0 {
 		switch args[0] {
 		case "--addr":
@@ -65,8 +88,38 @@ func parseServeOptions(args []string) (serveOptions, error) {
 			}
 			options.turnTLSAddr = args[1]
 			args = args[2:]
+		case "--turn-max-allocations":
+			if len(args) < 2 {
+				return options, errors.New("--turn-max-allocations requires a value")
+			}
+			value, err := strconv.Atoi(args[1])
+			if err != nil || value <= 0 {
+				return options, errors.New("--turn-max-allocations must be a positive integer")
+			}
+			options.turnMaxAllocations = value
+			args = args[2:]
+		case "--turn-relay-min-port":
+			if len(args) < 2 {
+				return options, errors.New("--turn-relay-min-port requires a value")
+			}
+			port, err := parseTURNRelayPort("--turn-relay-min-port", args[1])
+			if err != nil {
+				return options, err
+			}
+			options.turnRelayMinPort = port
+			args = args[2:]
+		case "--turn-relay-max-port":
+			if len(args) < 2 {
+				return options, errors.New("--turn-relay-max-port requires a value")
+			}
+			port, err := parseTURNRelayPort("--turn-relay-max-port", args[1])
+			if err != nil {
+				return options, err
+			}
+			options.turnRelayMaxPort = port
+			args = args[2:]
 		default:
-			return options, errors.New("usage: tinitalk serve --tls-cert FILE --tls-key FILE [--data-dir DIR] [--addr ADDR] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR] [--turn-tls-addr ADDR]]")
+			return options, errors.New("usage: tinitalk serve --tls-cert FILE --tls-key FILE [--data-dir DIR] [--addr ADDR] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR] [--turn-tls-addr ADDR] [--turn-max-allocations N] [--turn-relay-min-port PORT] [--turn-relay-max-port PORT]]")
 		}
 	}
 	if (options.tlsCert == "") != (options.tlsKey == "") {
@@ -84,7 +137,25 @@ func parseServeOptions(args []string) (serveOptions, error) {
 	if options.turnPublicHost != "" && options.tlsCert == "" {
 		return options, errors.New("TURN requires --tls-cert and --tls-key")
 	}
+	if options.turnRelayMinPort > options.turnRelayMaxPort {
+		return options, errors.New("--turn-relay-min-port must not exceed --turn-relay-max-port")
+	}
+	if options.turnRelayMaxPort%2 == 0 {
+		return options, errors.New("--turn-relay-max-port must be odd so EVEN-PORT reservations stay inside the relay range")
+	}
+	relayPortCount := int(options.turnRelayMaxPort) - int(options.turnRelayMinPort) + 1
+	if options.turnMaxAllocations > relayPortCount/turnRelayPortsPerAllocation {
+		return options, fmt.Errorf("TURN relay port range must contain at least %d ports per allocation", turnRelayPortsPerAllocation)
+	}
 	return options, nil
+}
+
+func parseTURNRelayPort(name, value string) (uint16, error) {
+	port, err := strconv.ParseUint(value, 10, 16)
+	if err != nil || port == 0 || port > maxTURNRelayPort {
+		return 0, fmt.Errorf("%s must be an integer between 1 and %d", name, maxTURNRelayPort)
+	}
+	return uint16(port), nil
 }
 
 func isLoopbackAddress(addr string) bool {

@@ -11,6 +11,7 @@ WorkingDirectory=/var/lib/tinitalk
 ExecStart=/usr/local/bin/tinitalk serve --data-dir /var/lib/tinitalk --addr :443 --tls-cert /var/lib/tinitalk/tls/fullchain.pem --tls-key /var/lib/tinitalk/tls/privkey.pem --turn-public-host calls.example.com --turn-public-ip 203.0.113.10 --turn-addr :3478 --turn-tls-addr :5349
 Restart=always
 RestartSec=3
+LimitNOFILE=4096
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
