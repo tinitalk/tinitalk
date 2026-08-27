@@ -1,8 +1,11 @@
 package org.tinitalk.media
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.webrtc.PeerConnection
+import org.webrtc.RtpParameters
 
 class WebRtcPolicyTest {
     @Test
@@ -22,6 +25,25 @@ class WebRtcPolicyTest {
             PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY,
             WebRtcPolicy.continualGatheringPolicy,
         )
+    }
+
+    @Test
+    fun acceleratesRecoveryFromExcessAudioJitterDelay() {
+        val configuration = PeerConnection.RTCConfiguration(emptyList())
+
+        WebRtcPolicy.configureConnection(configuration, forceRelay = false)
+
+        assertTrue(configuration.audioJitterBufferFastAccelerate)
+    }
+
+    @Test
+    fun adaptsAudioPacketTimeToNetworkConditions() {
+        val encoding = RtpParameters.Encoding("audio", true, null)
+        assertFalse(encoding.adaptiveAudioPacketTime)
+
+        WebRtcPolicy.configureAudioEncodings(listOf(encoding))
+
+        assertTrue(encoding.adaptiveAudioPacketTime)
     }
 
     @Test

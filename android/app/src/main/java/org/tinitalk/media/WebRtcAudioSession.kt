@@ -1,6 +1,7 @@
 package org.tinitalk.media
 
 import android.content.Context
+import android.util.Log
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
@@ -62,6 +63,7 @@ class WebRtcAudioSession private constructor(
         audioSource = factory.createAudioSource(audioConstraints())
         audioTrack = factory.createAudioTrack("local_audio", audioSource)
         sender = peerConnection.addTrack(audioTrack, listOf("audio"))
+        sender?.let(::configureAudioSender)
         applyAudioTrackState()
     }
 
@@ -213,6 +215,14 @@ class WebRtcAudioSession private constructor(
         audioDeviceModule.setSpeakerMute(WebRtcPolicy.speakerMuted(active))
     }
 
+    private fun configureAudioSender(sender: RtpSender) {
+        val parameters = sender.parameters
+        WebRtcPolicy.configureAudioEncodings(parameters.encodings)
+        if (!sender.setParameters(parameters)) {
+            Log.w(LogTag, "failed to enable adaptive audio packet time")
+        }
+    }
+
     private fun onIceConnectionState(state: PeerConnection.IceConnectionState) {
         if (closed) return
         val connectionState = when (state) {
@@ -236,10 +246,8 @@ class WebRtcAudioSession private constructor(
     }
 
     private fun rtcConfiguration(iceServers: List<IceServerData>) =
-        PeerConnection.RTCConfiguration(iceServers.map { it.toWebRtc() }).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            iceTransportsType = WebRtcPolicy.iceTransport(forceRelay)
-            continualGatheringPolicy = WebRtcPolicy.continualGatheringPolicy
+        PeerConnection.RTCConfiguration(iceServers.map { it.toWebRtc() }).also {
+            WebRtcPolicy.configureConnection(it, forceRelay)
         }
 
     private fun IceServerData.toWebRtc(): PeerConnection.IceServer {
@@ -257,6 +265,7 @@ class WebRtcAudioSession private constructor(
         SessionDescription(type, OpusSdp.enableNetworkResilience(description))
 
     companion object {
+        private const val LogTag = "TiniTalkCall"
         @Volatile private var factoryReady = false
 
         fun create(
