@@ -122,6 +122,167 @@ class ForegroundCallControllerTest {
     }
 
     @Test
+    fun retriesRateLimitedIceCandidateWithSameEventAfterServerDelay() {
+        val signal = CapturingSignalClient()
+        val scheduler = FakeTaskScheduler()
+        lateinit var localIce: (IceCandidateData) -> Unit
+        val controller = ForegroundCallController(signal, { _, _, callback, _, _ ->
+            localIce = callback
+            FakeMediaSession()
+        }, ids, scheduler)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        signal.sent.clear()
+
+        localIce(IceCandidateData("audio", 0, "candidate:rate-limited"))
+        val rejected = signal.sent.single()
+        controller.onSignalFailure(
+            SignalFailure(
+                message = "too many ICE events",
+                code = "ice_rate_limited",
+                callId = callId,
+                eventId = rejected.id,
+                retryAfterMillis = 12_500L,
+            ),
+        )
+
+        assertEquals(listOf(12_500L), scheduler.delays)
+        scheduler.runPending()
+        assertEquals(listOf(rejected.id, rejected.id), signal.sent.map { it.id })
+    }
+
+    @Test
+    fun coalescesRateLimitedIceCandidatesIntoOneOrderedRetry() {
+        val signal = CapturingSignalClient()
+        val scheduler = FakeTaskScheduler()
+        lateinit var localIce: (IceCandidateData) -> Unit
+        val controller = ForegroundCallController(signal, { _, _, callback, _, _ ->
+            localIce = callback
+            FakeMediaSession()
+        }, ids, scheduler)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        signal.sent.clear()
+
+        localIce(IceCandidateData("audio", 0, "candidate:first"))
+        localIce(IceCandidateData("audio", 0, "candidate:second"))
+        val rejected = signal.sent.toList()
+        rejected.forEachIndexed { index, event ->
+            controller.onSignalFailure(
+                SignalFailure(
+                    message = "too many ICE events",
+                    code = "ice_rate_limited",
+                    callId = callId,
+                    eventId = event.id,
+                    retryAfterMillis = 12_500L - index,
+                ),
+            )
+        }
+
+        assertEquals(listOf(12_500L), scheduler.delays)
+        scheduler.runPending()
+        assertEquals(rejected.map { it.id } + rejected.map { it.id }, signal.sent.map { it.id })
+    }
+
+    @Test
+    fun extendsCoalescedIceRetryToLatestServerDeadline() {
+        val signal = CapturingSignalClient()
+        val scheduler = FakeTaskScheduler()
+        lateinit var localIce: (IceCandidateData) -> Unit
+        val controller = ForegroundCallController(signal, { _, _, callback, _, _ ->
+            localIce = callback
+            FakeMediaSession()
+        }, ids, scheduler)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        signal.sent.clear()
+
+        localIce(IceCandidateData("audio", 0, "candidate:first"))
+        localIce(IceCandidateData("audio", 0, "candidate:second"))
+        val rejected = signal.sent.toList()
+        controller.onSignalFailure(
+            SignalFailure("too many ICE events", "ice_rate_limited", callId, rejected[0].id, 1_000L),
+        )
+        controller.onSignalFailure(
+            SignalFailure("too many ICE events", "ice_rate_limited", callId, rejected[1].id, 5_000L),
+        )
+
+        assertEquals(listOf(1_000L, 5_000L), scheduler.delays)
+        assertEquals(1, scheduler.pendingCount)
+        scheduler.runPending()
+        assertEquals(rejected.map { it.id } + rejected.map { it.id }, signal.sent.map { it.id })
+    }
+
+    @Test
+    fun retriesRateLimitedIceEventsInOriginalSendOrder() {
+        val signal = CapturingSignalClient()
+        val scheduler = FakeTaskScheduler()
+        lateinit var addLocalIce: (IceCandidateData) -> Unit
+        lateinit var removeLocalIce: (List<IceCandidateData>) -> Unit
+        val controller = ForegroundCallController(signal, { _, _, added, removed, _ ->
+            addLocalIce = added
+            removeLocalIce = removed
+            FakeMediaSession()
+        }, ids, scheduler)
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        signal.sent.clear()
+
+        val candidate = IceCandidateData("audio", 0, "candidate:ordered")
+        addLocalIce(candidate)
+        removeLocalIce(listOf(candidate))
+        val rejected = signal.sent.toList()
+        rejected.asReversed().forEachIndexed { index, event ->
+            controller.onSignalFailure(
+                SignalFailure(
+                    "too many ICE events",
+                    "ice_rate_limited",
+                    callId,
+                    event.id,
+                    10_000L - index,
+                ),
+            )
+        }
+
+        scheduler.runPending()
+        assertEquals(rejected.map { it.id } + rejected.map { it.id }, signal.sent.map { it.id })
+    }
+
+    @Test
+    fun retriesRateLimitedIceRemovalWithSameEventAfterServerDelay() {
+        val signal = CapturingSignalClient()
+        val scheduler = FakeTaskScheduler()
+        lateinit var addLocalIce: (IceCandidateData) -> Unit
+        lateinit var removeLocalIce: (List<IceCandidateData>) -> Unit
+        val controller = ForegroundCallController(signal, { _, _, added, removed, _ ->
+            addLocalIce = added
+            removeLocalIce = removed
+            FakeMediaSession()
+        }, ids, scheduler)
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        val candidate = IceCandidateData("audio", 0, "candidate:removed")
+        addLocalIce(candidate)
+        signal.sent.clear()
+
+        removeLocalIce(listOf(candidate))
+        val rejected = signal.sent.single()
+        controller.onSignalFailure(
+            SignalFailure(
+                message = "too many ICE events",
+                code = "ice_rate_limited",
+                callId = callId,
+                eventId = rejected.id,
+                retryAfterMillis = 9_000L,
+            ),
+        )
+
+        assertEquals(listOf(9_000L), scheduler.delays)
+        scheduler.runPending()
+        assertEquals(listOf(rejected.id, rejected.id), signal.sent.map { it.id })
+    }
+
+    @Test
     fun terminalEventClosesMediaSession() {
         val signal = CapturingSignalClient()
         val media = FakeMediaSession()

@@ -31,6 +31,8 @@ class ForegroundCallController(
     private val ids: EventIds = UuidEventIds(),
     private val scheduler: TaskScheduler = ExecutorTaskScheduler(),
 ) {
+    private data class LocalIceEvent(val sequence: Long, val event: SignalEvent)
+
     private var session: MediaSession? = null
     private var active = false
     private var muted = false
@@ -47,10 +49,15 @@ class ForegroundCallController(
     private var remoteIceGeneration: String? = null
     private val localCandidateGenerations = mutableMapOf<IceCandidateData, String?>()
     private var credentialRefreshTask: CancellableTask? = null
+    private var iceRetryTask: CancellableTask? = null
+    private var iceRetryAtMillis: Long? = null
     private var restartRetryTask: CancellableTask? = null
     private var restartRequestRetryTask: CancellableTask? = null
     private var pendingOffer: SignalEvent? = null
     private val pendingIce = ArrayDeque<Pair<String, IceCandidateData>>()
+    private var nextLocalIceSequence = 0L
+    private val recentLocalIceEvents = linkedMapOf<String, LocalIceEvent>()
+    private val rateLimitedIceEvents = linkedMapOf<String, LocalIceEvent>()
 
     @Synchronized
     fun onSignalEvent(snapshot: CallSnapshot, event: SignalEvent) {
@@ -153,6 +160,9 @@ class ForegroundCallController(
     fun close() {
         credentialRefreshTask?.cancel()
         credentialRefreshTask = null
+        iceRetryTask?.cancel()
+        iceRetryTask = null
+        iceRetryAtMillis = null
         restartRetryTask?.cancel()
         restartRetryTask = null
         restartRequestRetryTask?.cancel()
@@ -174,6 +184,9 @@ class ForegroundCallController(
         localCandidateGenerations.clear()
         pendingOffer = null
         pendingIce.clear()
+        nextLocalIceSequence = 0L
+        recentLocalIceEvents.clear()
+        rateLimitedIceEvents.clear()
         active = false
         muted = false
         if (media != null) runBlockingLite { media.close() }
@@ -226,6 +239,32 @@ class ForegroundCallController(
     @Synchronized
     fun onSignalFailure(failure: SignalFailure) {
         when (failure.code) {
+            "ice_rate_limited" -> {
+                val eventId = failure.eventId ?: return
+                val rejected = recentLocalIceEvents[eventId] ?: return
+                if (failure.callId != rejected.event.callId || callId != rejected.event.callId) return
+                val delayMillis = failure.retryAfterMillis?.coerceAtLeast(1L) ?: return
+                if (rateLimitedIceEvents.size == SignalEvent.EVENT_BUFFER_LIMIT && rejected.event.id !in rateLimitedIceEvents) {
+                    rateLimitedIceEvents.remove(rateLimitedIceEvents.keys.first())
+                }
+                rateLimitedIceEvents[rejected.event.id] = rejected
+                val retryAtMillis = ids.nowMillis() + delayMillis
+                if (iceRetryAtMillis?.let { it >= retryAtMillis } == true) return
+                iceRetryTask?.cancel()
+                iceRetryAtMillis = retryAtMillis
+                iceRetryTask = scheduler.schedule(delayMillis) {
+                    synchronized(this) {
+                        iceRetryTask = null
+                        iceRetryAtMillis = null
+                        val pending = rateLimitedIceEvents.values
+                            .filter { it.event.callId == callId }
+                            .sortedBy(LocalIceEvent::sequence)
+                            .map(LocalIceEvent::event)
+                        rateLimitedIceEvents.clear()
+                        pending.forEach(signal::send)
+                    }
+                }
+            }
             "ice_restart_rate_limited" -> {
                 val restart = pendingRestart ?: return
                 if (failure.callId != restart.callId || failure.eventId != restart.id) return
@@ -354,7 +393,7 @@ class ForegroundCallController(
             addProperty("candidate", candidate.candidate)
             generation?.let { addProperty("restart_id", it) }
         }
-        signal.send(event(callId, "rtc.ice", payload))
+        sendLocalIceEvent(event(callId, "rtc.ice", payload))
     }
 
     @Synchronized
@@ -388,7 +427,15 @@ class ForegroundCallController(
 
     private fun sendIceRemovalBatch(callId: String, generation: String?, candidates: List<IceCandidateData>) {
         if (candidates.isEmpty()) return
-        signal.send(event(callId, "rtc.ice", iceRemovalPayload(candidates, generation)))
+        sendLocalIceEvent(event(callId, "rtc.ice", iceRemovalPayload(candidates, generation)))
+    }
+
+    private fun sendLocalIceEvent(event: SignalEvent) {
+        if (recentLocalIceEvents.size == SignalEvent.EVENT_BUFFER_LIMIT) {
+            recentLocalIceEvents.remove(recentLocalIceEvents.keys.first())
+        }
+        recentLocalIceEvents[event.id] = LocalIceEvent(nextLocalIceSequence++, event)
+        signal.send(event)
     }
 
     private fun iceRemovalFits(callId: String, generation: String?, candidates: List<IceCandidateData>): Boolean =
