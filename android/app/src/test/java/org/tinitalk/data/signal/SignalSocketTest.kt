@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
 
 class SignalSocketTest {
     @Test
-    fun connectsWithBasicAuthHeaderAndNoQueryToken() {
+    fun connectsWithAuthAndDeviceHeadersAndNoQueryToken() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().withWebSocketUpgrade(CapturingWebSocketListener()))
             server.start()
@@ -32,6 +32,7 @@ class SignalSocketTest {
             val socket = SignalSocket(
                 client,
                 Session(server.url("/").toString(), "alice", "secret-token"),
+                deviceId = "android-device-123",
             )
 
             socket.connect(onEvent = {})
@@ -40,6 +41,7 @@ class SignalSocketTest {
             assertEquals("/api/socket", request.path)
             assertNull(request.requestUrl?.query)
             assertEquals("Basic YWxpY2U6c2VjcmV0LXRva2Vu", request.getHeader("Authorization"))
+            assertEquals("android-device-123", request.getHeader("X-TiniTalk-Device-ID"))
             socket.close()
             client.shutdown()
         }

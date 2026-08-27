@@ -12,6 +12,8 @@ import (
 	"tinitalk/internal/signaling"
 )
 
+const deviceIDHeader = "X-TiniTalk-Device-ID"
+
 type deviceRequest struct {
 	DeviceID string `json:"device_id"`
 	FCMToken string `json:"fcm_token"`
@@ -48,7 +50,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := currentUser(r).Login
-	client, err := s.hub.ConnectChecked(user)
+	client, err := s.hub.ConnectDeviceChecked(user, r.Header.Get(deviceIDHeader))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
 		return

@@ -11,6 +11,8 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
+private const val DeviceIDHeader = "X-TiniTalk-Device-ID"
+
 data class SignalFailure(
     val message: String,
     val code: String? = null,
@@ -25,6 +27,7 @@ class SignalSocket(
     private val backoff: ReconnectBackoff = ReconnectBackoff(),
     private val socketFactory: WebSocket.Factory = client,
     private val reconnectScheduler: (Long, () -> Unit) -> Unit = ::scheduleReconnect,
+    private val deviceId: String = "",
 ) : SignalClient {
     private val pending = ArrayDeque<String>()
     private var closed = false
@@ -128,6 +131,11 @@ class SignalSocket(
         val request = Request.Builder()
             .url(socketUrl())
             .header("Authorization", basicAuth())
+            .apply {
+                if (deviceId.isNotEmpty()) {
+                    header(DeviceIDHeader, deviceId)
+                }
+            }
             .build()
         val nextSocket = socketFactory.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {

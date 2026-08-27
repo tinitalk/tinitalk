@@ -319,6 +319,37 @@ func TestSocketRejectsConnectionAbovePerUserLimit(t *testing.T) {
 	}
 }
 
+func TestSocketReplacesPreviousConnectionFromSameDevice(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	server := httptest.NewServer(NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}))
+	defer server.Close()
+
+	phone := dialDeviceSocket(t, server.URL, "alice", tokens["alice"], "phone")
+	defer phone.Close()
+	tablet := dialDeviceSocket(t, server.URL, "alice", tokens["alice"], "tablet")
+	defer tablet.Close()
+	replacement := dialDeviceSocket(t, server.URL, "alice", tokens["alice"], "phone")
+	defer replacement.Close()
+
+	if err := phone.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := phone.ReadMessage(); err == nil {
+		t.Fatal("replaced device connection remained open")
+	}
+
+	bob := dialSocket(t, server.URL, "bob", tokens["bob"])
+	defer bob.Close()
+	callID := "018f7d51-40a1-7bb5-a2d0-7e47f9180501"
+	writeSocketEvent(t, bob, "018f7d51-3f90-7e63-b657-4a83a6a90501", callID, "call.start", map[string]any{"callee_id": "alice"})
+	for name, conn := range map[string]*websocket.Conn{"replacement": replacement, "tablet": tablet} {
+		if eventType := readSocketEvent(t, conn)["type"]; eventType != "call.incoming" {
+			t.Fatalf("%s event type = %#v", name, eventType)
+		}
+	}
+}
+
 func TestSocketHeartbeatReleasesUnresponsiveConnections(t *testing.T) {
 	db, tokens := testDB(t)
 	hub := signaling.NewHub(signaling.NoopNotifier{})
@@ -386,6 +417,15 @@ func dialSocket(t *testing.T, baseURL, login, token string) *websocket.Conn {
 	return conn
 }
 
+func dialDeviceSocket(t *testing.T, baseURL, login, token, deviceID string) *websocket.Conn {
+	t.Helper()
+	conn, _, err := tryDialDeviceSocket(baseURL, login, token, deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
 func writeSocketEvent(t *testing.T, conn *websocket.Conn, id, callID, eventType string, payload map[string]any) {
 	t.Helper()
 	if err := conn.WriteJSON(map[string]any{
@@ -409,8 +449,15 @@ func readSocketEvent(t *testing.T, conn *websocket.Conn) map[string]any {
 }
 
 func tryDialSocket(baseURL, login, token string) (*websocket.Conn, *http.Response, error) {
+	return tryDialDeviceSocket(baseURL, login, token, "")
+}
+
+func tryDialDeviceSocket(baseURL, login, token, deviceID string) (*websocket.Conn, *http.Response, error) {
 	header := http.Header{}
 	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(login+":"+token)))
+	if deviceID != "" {
+		header.Set("X-TiniTalk-Device-ID", deviceID)
+	}
 	url := "ws" + baseURL[len("http"):] + "/api/socket"
 	return websocket.DefaultDialer.Dial(url, header)
 }

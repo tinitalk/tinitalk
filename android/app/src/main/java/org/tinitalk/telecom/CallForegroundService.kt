@@ -36,6 +36,7 @@ import org.tinitalk.media.WebRtcAudioSession
 import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
+import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
 import java.time.Instant
@@ -167,7 +168,11 @@ class CallForegroundService : Service() {
         val auth = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         val session = auth.load() ?: return false
         val newHttpClient = signalingHttpClient()
-        val newSocket = SignalSocket(newHttpClient, session)
+        val newSocket = SignalSocket(
+            newHttpClient,
+            session,
+            deviceId = DeviceRegistrar.deviceId(this),
+        )
         val newCoordinator = CallCoordinator(session.login, newSocket)
         val newMedia = ForegroundCallController(
             signal = newSocket,

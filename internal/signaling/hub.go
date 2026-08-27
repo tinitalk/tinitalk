@@ -97,12 +97,23 @@ func (h *Hub) Connect(user string) *Client {
 }
 
 func (h *Hub) ConnectChecked(user string) (*Client, error) {
+	return h.ConnectDeviceChecked(user, "")
+}
+
+func (h *Hub) ConnectDeviceChecked(user, deviceID string) (*Client, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if deviceID != "" {
+		for client := range h.clients[user] {
+			if client.deviceID == deviceID {
+				h.disconnectLocked(client)
+			}
+		}
+	}
 	if len(h.clients[user]) >= MaxConnectionsPerUser {
 		return nil, errors.New("too many connections for user")
 	}
-	client := &Client{user: user, inbox: make(chan DeliveredEvent, ReplayLimit)}
+	client := &Client{user: user, deviceID: deviceID, inbox: make(chan DeliveredEvent, ReplayLimit)}
 	if h.clients[user] == nil {
 		h.clients[user] = map[*Client]struct{}{}
 	}

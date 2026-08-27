@@ -588,6 +588,48 @@ func TestHubLimitsConnectionsPerUser(t *testing.T) {
 	}
 }
 
+func TestHubReplacesConnectionForSameDeviceAtLimit(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	phone, err := hub.ConnectDeviceChecked("alice", "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tablet, err := hub.ConnectDeviceChecked("alice", "tablet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hub.Connected(phone) || !hub.Connected(tablet) {
+		t.Fatal("initial device connections are not online")
+	}
+
+	replacement, err := hub.ConnectDeviceChecked("alice", "phone")
+	if err != nil {
+		t.Fatalf("same-device replacement: %v", err)
+	}
+
+	if hub.Connected(phone) {
+		t.Fatal("superseded phone connection is still active")
+	}
+	if !hub.Connected(replacement) {
+		t.Fatal("replacement phone connection is not active")
+	}
+	if !hub.Connected(tablet) {
+		t.Fatal("other device was disconnected by phone replacement")
+	}
+}
+
+func TestHubStillLimitsDistinctDeviceConnections(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	for _, deviceID := range []string{"phone", "tablet"} {
+		if _, err := hub.ConnectDeviceChecked("alice", deviceID); err != nil {
+			t.Fatalf("ConnectDeviceChecked(%q): %v", deviceID, err)
+		}
+	}
+	if _, err := hub.ConnectDeviceChecked("alice", "laptop"); err == nil {
+		t.Fatal("third distinct device connection succeeded")
+	}
+}
+
 func TestHubDisconnectReleasesConnectionSlot(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	client, err := hub.ConnectChecked("alice")

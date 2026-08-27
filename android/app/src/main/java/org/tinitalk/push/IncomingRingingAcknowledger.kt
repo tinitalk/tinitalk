@@ -21,7 +21,11 @@ class IncomingRingingAcknowledger(context: Context) : Closeable {
         stop()
         val session = AuthStore(SharedPreferencesKeyValueStore(context), AndroidKeystoreTokenCipher()).load() ?: return
         val client = signalingHttpClient()
-        val signal = SignalSocket(client, session)
+        val signal = SignalSocket(
+            client,
+            session,
+            deviceId = DeviceRegistrar.deviceId(context),
+        )
         CallCoordinator(session.login, signal).restoreIncoming(invite.callId, invite.lastSeq)
         signal.connect(onEvent = {})
         callId = invite.callId
