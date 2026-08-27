@@ -6,6 +6,18 @@ import org.junit.Test
 
 class ContactRepositoryTest {
     @Test
+    fun reportsServerApiAndCommitDetails() {
+        val repo = ContactRepository(AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())) { _, _, _ ->
+            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 1, commit = "01234567"))
+        }
+
+        assertEquals(
+            ServerCheckDetails(ServerCheckResult.Available, apiVersion = 1, commit = "01234567"),
+            repo.checkServerDetails("https://host"),
+        )
+    }
+
+    @Test
     fun reportsServerAddressHealthWithoutStartingAuthentication() {
         val cases = listOf(
             ServerInfo("tinitalk", "ok", 1) to ServerCheckResult.Available,

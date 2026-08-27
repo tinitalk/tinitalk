@@ -38,6 +38,8 @@ var defaultSocketTiming = socketTiming{
 
 const apiVersion = 1
 
+var serverCommit = "unknown"
+
 func NewServer(db *state.DB, options Options) http.Handler {
 	s := &Server{
 		db:           db,
@@ -72,10 +74,12 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 		Service    string `json:"service"`
 		Status     string `json:"status"`
 		APIVersion int    `json:"api_version"`
+		Commit     string `json:"commit"`
 	}{
 		Service:    "tinitalk",
 		Status:     "ok",
 		APIVersion: apiVersion,
+		Commit:     serverCommit,
 	})
 }
 

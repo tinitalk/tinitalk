@@ -90,6 +90,7 @@ import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactPage
+import org.tinitalk.data.ServerCheckDetails
 import org.tinitalk.data.ServerCheckResult
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.ui.theme.BrandBackground
@@ -139,6 +140,7 @@ data class MainScreenState(
     val restoring: Boolean = true,
     val signingIn: Boolean = false,
     val signedIn: Boolean = false,
+    val serverUrl: String = "",
     val contacts: List<Contact> = emptyList(),
     val contactsRefreshing: Boolean = false,
     val contactsRefreshErrorMessage: String? = null,
@@ -183,6 +185,7 @@ fun MainScreen(
     defaultServerUrl: String,
     onSignIn: (url: String, login: String, token: String) -> Unit,
     onCheckServer: (url: String) -> ServerCheckResult,
+    onCheckServerDetails: (url: String) -> ServerCheckDetails,
     onRequestNotifications: () -> Unit,
     onRequestMicrophone: () -> Unit,
     onRequestFullScreenCalls: () -> Unit,
@@ -204,45 +207,63 @@ fun MainScreen(
     onRetryContactHistory: () -> Unit,
     onSignOut: () -> Unit,
 ) {
-    when {
-        state.restoring -> LoadingScreen()
-        !state.signedIn -> LoginScreen(
-            loginResetKey,
-            defaultServerUrl,
-            state.signingIn,
-            state.errorMessage,
-            onSignIn,
-            onCheckServer,
-        )
-        !state.permissions.allRequiredGranted -> PermissionsScreen(
-            permissions = state.permissions,
-            onRequestNotifications = onRequestNotifications,
-            onRequestMicrophone = onRequestMicrophone,
-            onRequestFullScreenCalls = onRequestFullScreenCalls,
-            onRefresh = onRefreshPermissions,
-            onSignOut = onSignOut,
-        )
-        else -> HomeScreen(
-            state = state,
-            contactNameUpdate = contactNameUpdate,
-            ongoingCall = ongoingCall,
-            onCall = onCall,
-            onRenameContact = onRenameContact,
-            onRenameHandled = onRenameHandled,
-            onOpenCall = onOpenCall,
-            onContactsVisible = onContactsVisible,
-            onRefreshContacts = onRefreshContacts,
-            onLoadMoreContacts = onLoadMoreContacts,
-            onContactsRefreshMessageHandled = onContactsRefreshMessageHandled,
-            onHistoryVisible = onHistoryVisible,
-            onLoadMoreHistory = onLoadMoreHistory,
-            onRetryHistory = onRetryHistory,
-            onContactHistoryVisible = onContactHistoryVisible,
-            onContactHistoryHidden = onContactHistoryHidden,
-            onLoadMoreContactHistory = onLoadMoreContactHistory,
-            onRetryContactHistory = onRetryContactHistory,
-            onSignOut = onSignOut,
-        )
+    var aboutVisible by rememberSaveable(state.signedIn) { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (aboutVisible) Modifier.clearAndSetSemantics {} else Modifier),
+        ) {
+            when {
+                state.restoring -> LoadingScreen()
+                !state.signedIn -> LoginScreen(
+                    loginResetKey,
+                    defaultServerUrl,
+                    state.signingIn,
+                    state.errorMessage,
+                    onSignIn,
+                    onCheckServer,
+                )
+                !state.permissions.allRequiredGranted -> PermissionsScreen(
+                    permissions = state.permissions,
+                    onRequestNotifications = onRequestNotifications,
+                    onRequestMicrophone = onRequestMicrophone,
+                    onRequestFullScreenCalls = onRequestFullScreenCalls,
+                    onRefresh = onRefreshPermissions,
+                    onAbout = { aboutVisible = true },
+                    onSignOut = onSignOut,
+                )
+                else -> HomeScreen(
+                    state = state,
+                    contactNameUpdate = contactNameUpdate,
+                    ongoingCall = ongoingCall,
+                    onCall = onCall,
+                    onRenameContact = onRenameContact,
+                    onRenameHandled = onRenameHandled,
+                    onOpenCall = onOpenCall,
+                    onContactsVisible = onContactsVisible,
+                    onRefreshContacts = onRefreshContacts,
+                    onLoadMoreContacts = onLoadMoreContacts,
+                    onContactsRefreshMessageHandled = onContactsRefreshMessageHandled,
+                    onHistoryVisible = onHistoryVisible,
+                    onLoadMoreHistory = onLoadMoreHistory,
+                    onRetryHistory = onRetryHistory,
+                    onContactHistoryVisible = onContactHistoryVisible,
+                    onContactHistoryHidden = onContactHistoryHidden,
+                    onLoadMoreContactHistory = onLoadMoreContactHistory,
+                    onRetryContactHistory = onRetryContactHistory,
+                    onAbout = { aboutVisible = true },
+                    onSignOut = onSignOut,
+                )
+            }
+        }
+        if (aboutVisible) {
+            AboutScreen(
+                serverUrl = state.serverUrl,
+                onCheckServer = onCheckServerDetails,
+                onBack = { aboutVisible = false },
+            )
+        }
     }
 }
 
@@ -469,9 +490,10 @@ private fun PermissionsScreen(
     onRequestMicrophone: () -> Unit,
     onRequestFullScreenCalls: () -> Unit,
     onRefresh: () -> Unit,
+    onAbout: () -> Unit,
     onSignOut: () -> Unit,
 ) {
-    AppPage(onSignOut = onSignOut) {
+    AppPage(onAbout = onAbout, onSignOut = onSignOut) {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         ) {
@@ -579,6 +601,7 @@ private fun HomeScreen(
     onContactHistoryHidden: () -> Unit,
     onLoadMoreContactHistory: () -> Unit,
     onRetryContactHistory: () -> Unit,
+    onAbout: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     val pagerState = rememberPagerState(pageCount = { 2 })
@@ -611,7 +634,7 @@ private fun HomeScreen(
         Box(
             modifier = if (selectedContact == null) Modifier else Modifier.clearAndSetSemantics {},
         ) {
-            AppPage(onSignOut = onSignOut) {
+            AppPage(onAbout = onAbout, onSignOut = onSignOut) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     if (ongoingCall != null) {
                         OngoingCallBanner(ongoingCall, onOpenCall)
@@ -914,7 +937,11 @@ private fun ContactRow(contact: Contact, onOpen: (Contact) -> Unit) {
 }
 
 @Composable
-private fun AppPage(onSignOut: () -> Unit, content: @Composable () -> Unit) {
+private fun AppPage(
+    onAbout: () -> Unit,
+    onSignOut: () -> Unit,
+    content: @Composable () -> Unit,
+) {
     var menuExpanded by remember { mutableStateOf(false) }
     var logoutDialog by remember { mutableStateOf(false) }
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -935,6 +962,13 @@ private fun AppPage(onSignOut: () -> Unit, content: @Composable () -> Unit) {
                         Text("⋮", fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     }
                     DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("О программе") },
+                            onClick = {
+                                menuExpanded = false
+                                onAbout()
+                            },
+                        )
                         DropdownMenuItem(
                             text = { Text("Выйти из аккаунта") },
                             onClick = {
@@ -968,7 +1002,7 @@ private fun AppPage(onSignOut: () -> Unit, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun AppMark(size: androidx.compose.ui.unit.Dp) {
+internal fun AppMark(size: androidx.compose.ui.unit.Dp) {
     Surface(
         modifier = Modifier.size(size),
         shape = RoundedCornerShape(size / 3f),

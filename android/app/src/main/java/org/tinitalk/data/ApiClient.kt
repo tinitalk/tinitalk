@@ -13,6 +13,7 @@ data class ServerInfo(
     val service: String?,
     val status: String?,
     @SerializedName("api_version") val apiVersion: Int = 0,
+    val commit: String? = null,
 )
 data class Contact(
     val login: String,

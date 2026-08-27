@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
                     defaultServerUrl = BuildConfig.SERVER_URL,
                     onSignIn = ::loadContacts,
                     onCheckServer = repository::checkServer,
+                    onCheckServerDetails = repository::checkServerDetails,
                     onRequestNotifications = ::requestNotificationPermission,
                     onRequestMicrophone = ::requestMicrophonePermission,
                     onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
@@ -138,16 +139,20 @@ class MainActivity : ComponentActivity() {
 
     private fun restoreContacts() {
         Thread {
-            runCatching { repository.restoreContacts() }
-                .onSuccess { contacts ->
+            runCatching {
+                repository.restoreContacts()?.let { contacts ->
+                    contacts to authStore.load()?.url.orEmpty()
+                }
+            }
+                .onSuccess { restored ->
                     runOnUiThread {
-                        if (contacts == null) {
+                        if (restored == null) {
                             screenState = MainScreenState(
                                 restoring = false,
                                 permissions = screenState.permissions,
                             )
                         } else {
-                            showContacts(contacts)
+                            showContacts(restored.first, restored.second)
                         }
                     }
                 }
@@ -159,9 +164,10 @@ class MainActivity : ComponentActivity() {
         contactNameViewModel.reset()
         authGeneration++
         screenState = screenState.copy(signingIn = true, errorMessage = null)
+        val serverUrl = url.trim().trimEnd('/')
         Thread {
             runCatching { repository.signIn(url, login, token) }
-                .onSuccess(::showContacts)
+                .onSuccess { showContacts(it, serverUrl) }
                 .onFailure(::showError)
         }.start()
     }
@@ -176,7 +182,7 @@ class MainActivity : ComponentActivity() {
         startActivity(CallActivity.outgoingIntent(this, contact.login, contact.displayName))
     }
 
-    private fun showContacts(page: ContactPage) {
+    private fun showContacts(page: ContactPage, serverUrl: String) {
         runOnUiThread {
             authGeneration++
             historyLoadGeneration++
@@ -186,6 +192,7 @@ class MainActivity : ComponentActivity() {
                 restoring = false,
                 signingIn = false,
                 signedIn = true,
+                serverUrl = serverUrl,
                 contacts = page.items,
                 contactsRefreshing = false,
                 contactsRefreshErrorMessage = null,

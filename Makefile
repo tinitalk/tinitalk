@@ -8,17 +8,19 @@ CLIENT_GRADLE_ARGS = -PtinitalkServerUrl=$(SERVER_URL) $(GRADLE_ARGS)
 ifeq ($(OS),Windows_NT)
 SHELL := cmd.exe
 .SHELLFLAGS := /C
+NULL_DEVICE := NUL
 JAVA17 ?= C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot
 CREATE_DIST = if not exist dist mkdir dist
-BUILD_SERVER = set CGO_ENABLED=0&& set GOOS=linux&& set GOARCH=$(GOARCH)&& go build -trimpath -buildvcs=false -ldflags "-s -w" -o dist/tinitalk-linux-$(GOARCH) ./cmd/tinitalk
+BUILD_SERVER = set CGO_ENABLED=0&& set GOOS=linux&& set GOARCH=$(GOARCH)&& go build -trimpath -buildvcs=false -ldflags "-s -w -X tinitalk/internal/httpapi.serverCommit=$(SERVER_COMMIT)" -o dist/tinitalk-linux-$(GOARCH) ./cmd/tinitalk
 BUILD_CLIENT = cd android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest assembleDebug $(CLIENT_GRADLE_ARGS)
 TEST_CLIENT = cd android && set JAVA_HOME=$(JAVA17)&& gradlew.bat testDebugUnitTest
 COPY_CLIENT = copy /Y android\app\build\outputs\apk\debug\app-debug.apk dist\tinitalk-debug.apk >NUL
 CLEAN_DIST = if exist dist rmdir /S /Q dist
 else
 SHELL := /bin/sh
+NULL_DEVICE := /dev/null
 CREATE_DIST = mkdir -p dist
-BUILD_SERVER = CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -buildvcs=false -ldflags "-s -w" -o dist/tinitalk-linux-$(GOARCH) ./cmd/tinitalk
+BUILD_SERVER = CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -buildvcs=false -ldflags "-s -w -X tinitalk/internal/httpapi.serverCommit=$(SERVER_COMMIT)" -o dist/tinitalk-linux-$(GOARCH) ./cmd/tinitalk
 COPY_CLIENT = cp android/app/build/outputs/apk/debug/app-debug.apk dist/tinitalk-debug.apk
 CLEAN_DIST = rm -rf dist
 ifneq ($(WSL_DISTRO_NAME),)
@@ -31,6 +33,11 @@ else
 BUILD_CLIENT = cd android && ./gradlew testDebugUnitTest assembleDebug $(CLIENT_GRADLE_ARGS)
 TEST_CLIENT = cd android && ./gradlew testDebugUnitTest
 endif
+endif
+
+SERVER_COMMIT := $(shell git -c safe.directory="$(CURDIR)" rev-parse --short=8 HEAD 2>$(NULL_DEVICE))
+ifeq ($(strip $(SERVER_COMMIT)),)
+SERVER_COMMIT := unknown
 endif
 
 server:

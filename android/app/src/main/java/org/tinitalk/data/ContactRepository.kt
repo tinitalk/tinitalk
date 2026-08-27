@@ -18,6 +18,12 @@ enum class ServerCheckResult {
     Unavailable,
 }
 
+data class ServerCheckDetails(
+    val result: ServerCheckResult,
+    val apiVersion: Int? = null,
+    val commit: String? = null,
+)
+
 class ServerCompatibilityException(
     val problem: CompatibilityProblem,
 ) : RuntimeException()
@@ -28,16 +34,27 @@ class ContactRepository(
         { url, login, token -> UrlConnectionApiClient(url, login, token) },
 ) {
     fun checkServer(url: String): ServerCheckResult {
+        return checkServerDetails(url).result
+    }
+
+    fun checkServerDetails(url: String): ServerCheckDetails {
         return try {
-            when (apiFactory(url.trim().trimEnd('/'), "", "").serverInfo().compatibilityProblem()) {
+            val info = apiFactory(url.trim().trimEnd('/'), "", "").serverInfo()
+            val result = when (info.compatibilityProblem()) {
                 null -> ServerCheckResult.Available
                 CompatibilityProblem.WrongServer -> ServerCheckResult.WrongServer
                 CompatibilityProblem.ServerOutdated -> ServerCheckResult.ServerOutdated
                 CompatibilityProblem.AppOutdated -> ServerCheckResult.AppOutdated
                 CompatibilityProblem.Unavailable -> ServerCheckResult.Unavailable
             }
+            val isTiniTalk = info.service == TINITALK_SERVICE
+            ServerCheckDetails(
+                result = result,
+                apiVersion = info.apiVersion.takeIf { isTiniTalk && it > 0 },
+                commit = info.commit?.trim()?.takeIf { isTiniTalk && it.isNotEmpty() },
+            )
         } catch (_: Exception) {
-            ServerCheckResult.Unavailable
+            ServerCheckDetails(ServerCheckResult.Unavailable)
         }
     }
 

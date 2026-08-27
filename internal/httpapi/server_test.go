@@ -52,7 +52,11 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	}
 }
 
-func TestHealthIdentifiesTiniTalkAndItsAPIVersion(t *testing.T) {
+func TestHealthIdentifiesTiniTalkVersionAndCommit(t *testing.T) {
+	previousCommit := serverCommit
+	serverCommit = "01234567"
+	t.Cleanup(func() { serverCommit = previousCommit })
+
 	db, _ := testDB(t)
 	server := NewServer(db, Options{})
 
@@ -64,12 +68,13 @@ func TestHealthIdentifiesTiniTalkAndItsAPIVersion(t *testing.T) {
 		Service    string `json:"service"`
 		Status     string `json:"status"`
 		APIVersion int    `json:"api_version"`
+		Commit     string `json:"commit"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil {
 		t.Fatal(err)
 	}
-	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 1 {
-		t.Fatalf("health = %+v, want tinitalk, ok, API version 1", health)
+	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 1 || health.Commit != "01234567" {
+		t.Fatalf("health = %+v, want tinitalk, ok, API version 1, commit 01234567", health)
 	}
 }
 
