@@ -24,7 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -88,6 +88,7 @@ import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.Contact
+import org.tinitalk.data.ContactPage
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.ui.theme.BrandBackground
 import org.tinitalk.ui.theme.BrandGold
@@ -102,6 +103,9 @@ data class MainScreenState(
     val contacts: List<Contact> = emptyList(),
     val contactsRefreshing: Boolean = false,
     val contactsRefreshErrorMessage: String? = null,
+    val contactsLoadingMore: Boolean = false,
+    val contactsNextCursor: String = "",
+    val contactsLoadMoreErrorMessage: String? = null,
     val history: List<CallHistoryItem> = emptyList(),
     val historyLoaded: Boolean = false,
     val historyLoading: Boolean = false,
@@ -115,10 +119,20 @@ data class MainScreenState(
     val errorMessage: String? = null,
 )
 
-fun MainScreenState.withRefreshedContacts(contacts: List<Contact>): MainScreenState = copy(
-    contacts = contacts,
+fun MainScreenState.withRefreshedContacts(page: ContactPage): MainScreenState = copy(
+    contacts = page.items,
     contactsRefreshing = false,
     contactsRefreshErrorMessage = null,
+    contactsLoadingMore = false,
+    contactsNextCursor = page.nextCursor,
+    contactsLoadMoreErrorMessage = null,
+)
+
+fun MainScreenState.withContactsPage(page: ContactPage): MainScreenState = copy(
+    contacts = (contacts + page.items).distinctBy(Contact::login),
+    contactsLoadingMore = false,
+    contactsNextCursor = page.nextCursor,
+    contactsLoadMoreErrorMessage = null,
 )
 
 @Composable
@@ -139,6 +153,7 @@ fun MainScreen(
     onOpenCall: () -> Unit,
     onContactsVisible: () -> Unit,
     onRefreshContacts: () -> Unit,
+    onLoadMoreContacts: () -> Unit,
     onContactsRefreshMessageHandled: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
@@ -170,6 +185,7 @@ fun MainScreen(
             onOpenCall = onOpenCall,
             onContactsVisible = onContactsVisible,
             onRefreshContacts = onRefreshContacts,
+            onLoadMoreContacts = onLoadMoreContacts,
             onContactsRefreshMessageHandled = onContactsRefreshMessageHandled,
             onHistoryVisible = onHistoryVisible,
             onLoadMoreHistory = onLoadMoreHistory,
@@ -431,6 +447,7 @@ private fun HomeScreen(
     onOpenCall: () -> Unit,
     onContactsVisible: () -> Unit,
     onRefreshContacts: () -> Unit,
+    onLoadMoreContacts: () -> Unit,
     onContactsRefreshMessageHandled: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
@@ -485,7 +502,11 @@ private fun HomeScreen(
                                 contacts = state.contacts,
                                 listState = contactsListState,
                                 refreshing = state.contactsRefreshing,
+                                loadingMore = state.contactsLoadingMore,
+                                nextCursor = state.contactsNextCursor,
+                                loadMoreErrorMessage = state.contactsLoadMoreErrorMessage,
                                 onRefresh = onRefreshContacts,
+                                onLoadMore = onLoadMoreContacts,
                                 onContactSelected = { selectedContactLogin = it.login },
                             )
                         } else {
@@ -566,7 +587,11 @@ private fun ContactsPage(
     contacts: List<Contact>,
     listState: LazyListState,
     refreshing: Boolean,
+    loadingMore: Boolean,
+    nextCursor: String,
+    loadMoreErrorMessage: String?,
     onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
     onContactSelected: (Contact) -> Unit,
 ) {
     PullToRefreshBox(
@@ -598,13 +623,53 @@ private fun ContactsPage(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(contacts, key = { contact -> contact.login }) { contact ->
+                itemsIndexed(contacts, key = { _, contact -> contact.login }) { index, contact ->
                     ContactRow(contact, onContactSelected)
+                    if (shouldLoadMoreContacts(
+                            index = index,
+                            itemCount = contacts.size,
+                            nextCursor = nextCursor,
+                            loading = loadingMore || refreshing,
+                            hasError = loadMoreErrorMessage != null,
+                        )
+                    ) {
+                        LaunchedEffect(nextCursor) { onLoadMore() }
+                    }
+                }
+                if (loadMoreErrorMessage != null) {
+                    item(key = "contacts-load-error") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                loadMoreErrorMessage,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            TextButton(onClick = onLoadMore) { Text("Повторить") }
+                        }
+                    }
+                }
+                if (loadingMore) {
+                    item(key = "contacts-loading-more") {
+                        Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 2.dp)
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+fun shouldLoadMoreContacts(
+    index: Int,
+    itemCount: Int,
+    nextCursor: String,
+    loading: Boolean,
+    hasError: Boolean,
+): Boolean = nextCursor.isNotEmpty() && !loading && !hasError && index == maxOf(0, itemCount - 5)
 
 @Composable
 private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {

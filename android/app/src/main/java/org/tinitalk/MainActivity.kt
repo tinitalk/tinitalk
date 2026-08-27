@@ -28,6 +28,7 @@ import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.ApiException
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.Contact
+import org.tinitalk.data.ContactPage
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.permissions.AppPermissionsState
@@ -40,6 +41,7 @@ import org.tinitalk.ui.ContactNameViewModel
 import org.tinitalk.ui.ContactHistoryState
 import org.tinitalk.ui.isCurrentContactHistoryRequest
 import org.tinitalk.ui.isCurrentSessionRequest
+import org.tinitalk.ui.withContactsPage
 import org.tinitalk.ui.withRefreshedContacts
 import org.tinitalk.ui.withPage
 import org.tinitalk.ui.theme.TiniTalkTheme
@@ -113,6 +115,7 @@ class MainActivity : ComponentActivity() {
                     onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
                     onContactsVisible = { historyVisible = false },
                     onRefreshContacts = ::refreshContacts,
+                    onLoadMoreContacts = ::loadMoreContacts,
                     onContactsRefreshMessageHandled = ::clearContactsRefreshMessage,
                     onHistoryVisible = ::showHistory,
                     onLoadMoreHistory = ::loadMoreHistory,
@@ -170,7 +173,7 @@ class MainActivity : ComponentActivity() {
         startActivity(CallActivity.outgoingIntent(this, contact.login, contact.displayName))
     }
 
-    private fun showContacts(contacts: List<Contact>) {
+    private fun showContacts(page: ContactPage) {
         runOnUiThread {
             authGeneration++
             historyLoadGeneration++
@@ -180,9 +183,12 @@ class MainActivity : ComponentActivity() {
                 restoring = false,
                 signingIn = false,
                 signedIn = true,
-                contacts = contacts,
+                contacts = page.items,
                 contactsRefreshing = false,
                 contactsRefreshErrorMessage = null,
+                contactsLoadingMore = false,
+                contactsNextCursor = page.nextCursor,
+                contactsLoadMoreErrorMessage = null,
                 history = emptyList(),
                 historyLoaded = false,
                 historyLoading = false,
@@ -200,28 +206,29 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshContacts() {
-        if (!screenState.signedIn || screenState.contactsRefreshing) return
+        if (!screenState.signedIn || screenState.contactsRefreshing || screenState.contactsLoadingMore) return
         val requestAuthGeneration = authGeneration
         screenState = screenState.copy(
             contactsRefreshing = true,
             contactsRefreshErrorMessage = null,
+            contactsLoadMoreErrorMessage = null,
         )
         Thread {
             runCatching { repository.refreshContacts() }
-                .onSuccess { contacts ->
+                .onSuccess { page ->
                     runOnUiThread {
                         if (!screenState.signedIn ||
                             !isCurrentSessionRequest(requestAuthGeneration, authGeneration)
                         ) {
                             return@runOnUiThread
                         }
-                        screenState = if (contacts == null) {
+                        screenState = if (page == null) {
                             screenState.copy(
                                 contactsRefreshing = false,
                                 contactsRefreshErrorMessage = "Не удалось обновить контакты",
                             )
                         } else {
-                            screenState.withRefreshedContacts(contacts)
+                            screenState.withRefreshedContacts(page)
                         }
                     }
                 }
@@ -236,6 +243,52 @@ class MainActivity : ComponentActivity() {
                             screenState = screenState.copy(
                                 contactsRefreshing = false,
                                 contactsRefreshErrorMessage = "Не удалось обновить контакты",
+                            )
+                        }
+                    }
+                }
+        }.start()
+    }
+
+    private fun loadMoreContacts() {
+        if (!screenState.signedIn || screenState.contactsRefreshing || screenState.contactsLoadingMore) return
+        val cursor = screenState.contactsNextCursor
+        if (cursor.isEmpty()) return
+        val requestAuthGeneration = authGeneration
+        screenState = screenState.copy(
+            contactsLoadingMore = true,
+            contactsLoadMoreErrorMessage = null,
+        )
+        Thread {
+            runCatching { repository.refreshContacts(cursor) }
+                .onSuccess { page ->
+                    runOnUiThread {
+                        if (!screenState.signedIn ||
+                            !isCurrentSessionRequest(requestAuthGeneration, authGeneration)
+                        ) {
+                            return@runOnUiThread
+                        }
+                        screenState = if (page == null) {
+                            screenState.copy(
+                                contactsLoadingMore = false,
+                                contactsLoadMoreErrorMessage = "Не удалось загрузить контакты",
+                            )
+                        } else {
+                            screenState.withContactsPage(page)
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    if (error is ApiException && error.code == 401) {
+                        showSessionErrorIfCurrent(error, requestAuthGeneration)
+                    } else {
+                        runOnUiThread {
+                            if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
+                                return@runOnUiThread
+                            }
+                            screenState = screenState.copy(
+                                contactsLoadingMore = false,
+                                contactsLoadMoreErrorMessage = "Не удалось загрузить контакты",
                             )
                         }
                     }

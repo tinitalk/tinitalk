@@ -14,14 +14,14 @@ class ContactRepositoryTest {
         )
         val repo = ContactRepository(store) { _, _, _ -> api }
 
-        val contacts = repo.signIn("https://host", "alice", "token")
+        val page = repo.signIn("https://host", "alice", "token")
 
-        assertEquals(listOf(Contact("bob", "Bob")), contacts)
+        assertEquals(listOf(Contact("bob", "Bob")), page.items)
         assertEquals(Session("https://host", "alice", "token"), store.load())
     }
 
     @Test
-    fun sortsContactsByDisplayNameInsteadOfLogin() {
+    fun keepsServerContactOrder() {
         val repo = ContactRepository(AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())) { _, _, _ ->
             FakeApiClient(
                 profile = Profile("self", "Я"),
@@ -33,9 +33,9 @@ class ContactRepositoryTest {
             )
         }
 
-        val contacts = repo.signIn("https://host", "self", "token")
+        val page = repo.signIn("https://host", "self", "token")
 
-        assertEquals(listOf("Анна", "мария", "Яна"), contacts.map(Contact::displayName))
+        assertEquals(listOf("Яна", "мария", "Анна"), page.items.map(Contact::displayName))
     }
 
     @Test
@@ -124,11 +124,12 @@ class ContactRepositoryTest {
         )
         val repo = ContactRepository(store) { _, _, _ -> api }
 
-        val contacts = repo.refreshContacts()
+        val page = repo.refreshContacts(cursor = "next-page")
 
-        assertEquals(listOf("bob"), contacts?.map(Contact::login))
+        assertEquals(listOf("bob"), page?.items?.map(Contact::login))
         assertEquals(0, api.profileRequests)
         assertEquals(1, api.contactsRequests)
+        assertEquals("next-page", api.requestedContactCursor)
     }
 
     @Test
@@ -158,6 +159,7 @@ private class FakeApiClient(
 ) : HouseholdApi {
     var profileRequests = 0
     var contactsRequests = 0
+    var requestedContactCursor = ""
     var requestedPeer: String? = null
     var updatedLogin: String? = null
     var updatedName: String? = null
@@ -172,10 +174,11 @@ private class FakeApiClient(
         return profile
     }
 
-    override fun contacts(): List<Contact> {
+    override fun contactsPage(limit: Int, cursor: String): ContactPage {
         contactsRequests++
+        requestedContactCursor = cursor
         error?.let { throw it }
-        return contacts
+        return ContactPage(contacts, "")
     }
 
     override fun updateContactName(login: String, customName: String?): Contact {

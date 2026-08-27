@@ -5,14 +5,12 @@ class ContactRepository(
     private val apiFactory: (url: String, login: String, token: String) -> HouseholdApi =
         { url, login, token -> UrlConnectionApiClient(url, login, token) },
 ) {
-    fun signIn(url: String, login: String, token: String): List<Contact> {
+    fun signIn(url: String, login: String, token: String): ContactPage {
         val session = Session(url.trim().trimEnd('/'), login.trim(), token.trim())
         val api = apiFactory(session.url, session.login, session.token)
         return try {
             val profile = api.me()
-            val contacts = api.contacts()
-                .filterNot { it.login == profile.login }
-                .sortedWith(contactOrder)
+            val contacts = api.contactsPage().withoutUser(profile.login)
             authStore.save(session)
             contacts
         } catch (e: ApiException) {
@@ -21,26 +19,24 @@ class ContactRepository(
         }
     }
 
-    fun restoreContacts(): List<Contact>? {
+    fun restoreContacts(): ContactPage? {
         val session = authStore.load() ?: return null
         val api = apiFactory(session.url, session.login, session.token)
         return try {
             val profile = api.me()
-            api.contacts()
-                .filterNot { it.login == profile.login }
-                .sortedWith(contactOrder)
+            api.contactsPage().withoutUser(profile.login)
         } catch (e: ApiException) {
             if (e.code == 401) authStore.clearIfCurrent(session)
             throw e
         }
     }
 
-    fun refreshContacts(): List<Contact>? {
+    fun refreshContacts(cursor: String = ""): ContactPage? {
         val session = authStore.load() ?: return null
         return try {
-            apiFactory(session.url, session.login, session.token).contacts()
-                .filterNot { it.login == session.login }
-                .sortedWith(contactOrder)
+            apiFactory(session.url, session.login, session.token)
+                .contactsPage(cursor = cursor)
+                .withoutUser(session.login)
         } catch (e: ApiException) {
             if (e.code == 401) authStore.clearIfCurrent(session)
             throw e
@@ -82,5 +78,5 @@ class ContactRepository(
     }
 }
 
-private val contactOrder = compareBy<Contact, String>(String.CASE_INSENSITIVE_ORDER) { it.displayName.trim() }
-    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.login }
+private fun ContactPage.withoutUser(login: String): ContactPage =
+    copy(items = items.filterNot { it.login == login })

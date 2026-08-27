@@ -61,6 +61,41 @@ func TestPersonalContactsUseIndependentCustomNames(t *testing.T) {
 	}
 }
 
+func TestContactPagesDoNotSkipAfterLoadedContactIsRenamed(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, user := range []struct{ login, name string }{
+		{"owner", "Owner"},
+		{"a", "A"},
+		{"b", "B"},
+		{"c", "C"},
+		{"d", "D"},
+		{"e", "E"},
+	} {
+		if _, err := db.AddUser(user.login, user.name); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first, next, err := db.ContactsPageForUser("owner", 2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetContactName("owner", first[0].Login, "Z"); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := db.ContactsPageForUser("owner", 2, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second[0].DisplayName != "C" {
+		t.Fatalf("second page starts with %q, want C", second[0].DisplayName)
+	}
+}
+
 func contactByLogin(t *testing.T, contacts []Contact, login string) Contact {
 	t.Helper()
 	for _, contact := range contacts {

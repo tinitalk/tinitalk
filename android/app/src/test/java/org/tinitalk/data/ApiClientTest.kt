@@ -7,14 +7,21 @@ import org.junit.Test
 
 class ApiClientTest {
     @Test
-    fun loadsContactsFromServerWithoutPersonalNameFields() {
+    fun loadsRequestedContactsPage() {
         val server = MockWebServer()
-        server.enqueue(MockResponse().setBody("""[{"login":"bob","display_name":"Bob"}]"""))
+        server.enqueue(
+            MockResponse().setBody(
+                """{"items":[{"login":"bob","display_name":"Bob"}],"next_cursor":"next-page"}""",
+            ),
+        )
         server.start()
         try {
-            val contacts = UrlConnectionApiClient(server.url("/").toString(), "alice", "token").contacts()
+            val page = UrlConnectionApiClient(server.url("/").toString(), "alice", "token")
+                .contactsPage(limit = 20, cursor = "current-page")
 
-            assertEquals(listOf(Contact("bob", "Bob", "Bob", null)), contacts)
+            assertEquals(listOf(Contact("bob", "Bob", "Bob", null)), page.items)
+            assertEquals("next-page", page.nextCursor)
+            assertEquals("/api/contacts/page?limit=20&cursor=current-page", server.takeRequest().path)
         } finally {
             server.shutdown()
         }

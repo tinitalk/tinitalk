@@ -57,6 +57,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.health)
 	s.mux.Handle("/api/me", s.requireAuth(http.HandlerFunc(s.profile)))
 	s.mux.Handle("/api/contacts", s.requireAuth(http.HandlerFunc(s.contacts)))
+	s.mux.Handle("GET /api/contacts/page", s.requireAuth(http.HandlerFunc(s.contactsPage)))
 	s.mux.Handle("PUT /api/contacts/{login}/name", s.requireAuth(http.HandlerFunc(s.contactName)))
 	s.mux.Handle("/api/device", s.requireAuth(http.HandlerFunc(s.device)))
 	s.mux.Handle("/api/calls", s.requireAuth(http.HandlerFunc(s.calls)))

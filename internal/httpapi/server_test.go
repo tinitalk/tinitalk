@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -101,6 +102,49 @@ func TestContactNamesArePersonalAndResettable(t *testing.T) {
 	invalid := request(t, server, http.MethodPut, "/api/contacts/bob/name", []byte(`{"custom_name":"   "}`), "alice", tokens["alice"])
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("blank name status = %d, want 400", invalid.Code)
+	}
+}
+
+func TestContactsPageReturnsTwentyContactsAtATime(t *testing.T) {
+	db, tokens := testDB(t)
+	for i := 0; i < 23; i++ {
+		if _, err := db.AddUser(fmt.Sprintf("user%02d", i), fmt.Sprintf("Person %02d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := NewServer(db, Options{AllowInsecureLoopback: true})
+
+	first := request(t, server, http.MethodGet, "/api/contacts/page?limit=20", nil, "alice", tokens["alice"])
+	if first.Code != http.StatusOK {
+		t.Fatalf("first page status = %d, body %s", first.Code, first.Body.String())
+	}
+	var firstPage struct {
+		Items      []contactResponse `json:"items"`
+		NextCursor string            `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Items) != 20 || firstPage.NextCursor == "" {
+		t.Fatalf("first page has %d items and cursor %q, want 20 items and a cursor", len(firstPage.Items), firstPage.NextCursor)
+	}
+
+	second := request(t, server, http.MethodGet, "/api/contacts/page?limit=20&cursor="+firstPage.NextCursor, nil, "alice", tokens["alice"])
+	if second.Code != http.StatusOK {
+		t.Fatalf("second page status = %d, body %s", second.Code, second.Body.String())
+	}
+	var secondPage struct {
+		Items      []contactResponse `json:"items"`
+		NextCursor string            `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Items) != 4 || secondPage.NextCursor != "" {
+		t.Fatalf("second page has %d items and cursor %q, want 4 and no cursor", len(secondPage.Items), secondPage.NextCursor)
+	}
+	if firstPage.Items[19].Login == secondPage.Items[0].Login {
+		t.Fatalf("pages overlap at %q", secondPage.Items[0].Login)
 	}
 }
 

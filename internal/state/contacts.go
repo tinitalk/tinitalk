@@ -14,6 +14,11 @@ type Contact struct {
 	CustomName         string
 }
 
+type ContactCursor struct {
+	DisplayName string
+	Login       string
+}
+
 func (db *DB) ContactForUser(owner, login string) (Contact, error) {
 	ownerID, err := db.userID(owner)
 	if err != nil {
@@ -76,6 +81,59 @@ func (db *DB) ContactsForUser(owner string) ([]Contact, error) {
 		contacts = append(contacts, contact)
 	}
 	return contacts, rows.Err()
+}
+
+func (db *DB) ContactsPageForUser(owner string, limit int, after *ContactCursor) ([]Contact, *ContactCursor, error) {
+	ownerID, err := db.userID(owner)
+	if err != nil {
+		return nil, nil, err
+	}
+	query := `
+		SELECT contact.login,
+			COALESCE(uc.custom_name, contact.display_name),
+			contact.display_name,
+			COALESCE(uc.custom_name, '')
+		FROM user_contacts uc
+		JOIN users contact ON contact.id = uc.contact_user_id
+		WHERE uc.owner_user_id = ? AND contact.disabled = 0
+	`
+	args := []any{ownerID}
+	if after != nil {
+		query += `
+			AND (COALESCE(uc.custom_name, contact.display_name) COLLATE NOCASE > ?
+				OR (COALESCE(uc.custom_name, contact.display_name) COLLATE NOCASE = ?
+					AND contact.login > ?))
+		`
+		args = append(args, after.DisplayName, after.DisplayName, after.Login)
+	}
+	query += `
+		ORDER BY COALESCE(uc.custom_name, contact.display_name) COLLATE NOCASE, contact.login
+		LIMIT ?
+	`
+	args = append(args, limit+1)
+	rows, err := db.sql.Query(query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	contacts := make([]Contact, 0, limit+1)
+	for rows.Next() {
+		var contact Contact
+		if err := rows.Scan(&contact.Login, &contact.DisplayName, &contact.DefaultDisplayName, &contact.CustomName); err != nil {
+			return nil, nil, err
+		}
+		contacts = append(contacts, contact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	var next *ContactCursor
+	if len(contacts) > limit {
+		contacts = contacts[:limit]
+		last := contacts[len(contacts)-1]
+		next = &ContactCursor{DisplayName: last.DisplayName, Login: last.Login}
+	}
+	return contacts, next, nil
 }
 
 // SetContactName stores a personal name. An empty name restores the server name.

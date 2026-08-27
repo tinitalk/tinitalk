@@ -15,6 +15,10 @@ data class Contact(
     val defaultDisplayName: String = displayName,
     val customName: String? = null,
 )
+data class ContactPage(
+    val items: List<Contact>,
+    @SerializedName("next_cursor") val nextCursor: String,
+)
 private data class ContactWire(
     val login: String,
     @SerializedName("display_name") val displayName: String,
@@ -22,6 +26,12 @@ private data class ContactWire(
     @SerializedName("custom_name") val customName: String?,
 ) {
     fun toContact() = Contact(login, displayName, defaultDisplayName ?: displayName, customName)
+}
+private data class ContactPageWire(
+    val items: List<ContactWire>,
+    @SerializedName("next_cursor") val nextCursor: String,
+) {
+    fun toContactPage() = ContactPage(items.map(ContactWire::toContact), nextCursor)
 }
 data class CallHistoryItem(
     val id: Long,
@@ -46,7 +56,7 @@ class ApiException(val code: Int, message: String) : RuntimeException(message)
 
 interface HouseholdApi {
     fun me(): Profile
-    fun contacts(): List<Contact>
+    fun contactsPage(limit: Int = 20, cursor: String = ""): ContactPage
     fun updateContactName(login: String, customName: String?): Contact
     fun calls(limit: Int = 50, before: Long = 0, peerLogin: String? = null): CallHistoryPage
     fun markCallsRead(throughId: Long, peerLogin: String? = null): Int
@@ -61,8 +71,12 @@ class UrlConnectionApiClient(
     override fun me(): Profile =
         get("/api/me", Profile::class.java)
 
-    override fun contacts(): List<Contact> =
-        get("/api/contacts", Array<ContactWire>::class.java).map(ContactWire::toContact)
+    override fun contactsPage(limit: Int, cursor: String): ContactPage =
+        get(
+            "/api/contacts/page?limit=$limit" +
+                cursor.takeIf(String::isNotEmpty)?.let { "&cursor=${encode(it)}" }.orEmpty(),
+            ContactPageWire::class.java,
+        ).toContactPage()
 
     override fun updateContactName(login: String, customName: String?): Contact =
         put(
