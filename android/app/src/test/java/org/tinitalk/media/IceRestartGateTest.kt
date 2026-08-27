@@ -76,6 +76,51 @@ class IceRestartGateTest {
     }
 
     @Test
+    fun networkHandoverReplacesDisconnectDelayWithImmediateRestart() {
+        val scheduler = FakeTaskScheduler()
+        var restarts = 0
+        val gate = IceRestartGate(scheduler)
+
+        gate.onDisconnected { restarts++ }
+        gate.onNetworkChanged { restarts++ }
+
+        assertEquals(listOf(0L), scheduler.pendingDelays)
+        scheduler.runNext()
+        assertEquals(1, restarts)
+        assertEquals(listOf(10_000L), scheduler.pendingDelays)
+    }
+
+    @Test
+    fun latestNetworkHandoverSupersedesPendingRetry() {
+        val scheduler = FakeTaskScheduler()
+        var restarts = 0
+        val gate = IceRestartGate(scheduler)
+
+        gate.onNetworkChanged { restarts++ }
+        scheduler.runNext()
+        gate.onNetworkChanged { restarts++ }
+
+        assertEquals(listOf(0L), scheduler.pendingDelays)
+        scheduler.runNext()
+
+        assertEquals(2, restarts)
+        assertEquals(listOf(10_000L), scheduler.pendingDelays)
+    }
+
+    @Test
+    fun connectedFromOldPathDoesNotCancelRequiredNetworkRestart() {
+        val scheduler = FakeTaskScheduler()
+        var restarts = 0
+        val gate = IceRestartGate(scheduler)
+
+        gate.onNetworkChanged { restarts++ }
+        gate.onConnected()
+        scheduler.runNext()
+
+        assertEquals(1, restarts)
+    }
+
+    @Test
     fun closeCancelsPendingRestartAndIsIdempotent() {
         val scheduler = FakeTaskScheduler()
         var restarts = 0

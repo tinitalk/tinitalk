@@ -31,6 +31,7 @@ class WebRtcAudioSession private constructor(
     private val sender: RtpSender?
     private val peerConnection: PeerConnection
     private val restartGate = IceRestartGate(ExecutorTaskScheduler())
+    private val networkObserver: DefaultNetworkObserver
     private val statsCollector = CallStatsCollector()
     @Volatile private var closed = false
     private var active = false
@@ -61,6 +62,9 @@ class WebRtcAudioSession private constructor(
         audioTrack = factory.createAudioTrack("local_audio", audioSource)
         sender = peerConnection.addTrack(audioTrack, listOf("audio"))
         applyAudioTrackState()
+        networkObserver = DefaultNetworkObserver(context.applicationContext) {
+            if (!closed) restartGate.onNetworkChanged(onIceRestartNeeded)
+        }
     }
 
     override suspend fun createOffer(): String {
@@ -137,6 +141,7 @@ class WebRtcAudioSession private constructor(
     override suspend fun close() {
         if (closed) return
         closed = true
+        networkObserver.close()
         restartGate.close()
         iceQueue.clear()
         sender?.let { peerConnection.removeTrack(it) }

@@ -5,6 +5,7 @@ internal class IceRestartGate(private val scheduler: TaskScheduler) {
     private var scheduleId = 0L
     private var outage = false
     private var attempted = false
+    private var requiredNetworkRestartPending = false
     private var closed = false
     private var pending: CancellableTask? = null
     private var pendingDelayMillis: Long? = null
@@ -26,8 +27,19 @@ internal class IceRestartGate(private val scheduler: TaskScheduler) {
     }
 
     @Synchronized
+    fun onNetworkChanged(onRestart: () -> Unit) {
+        if (closed) return
+        outage = true
+        attempted = false
+        requiredNetworkRestartPending = true
+        val expectedGeneration = ++generation
+        scheduleLocked(FailedDelayMillis, onRestart, expectedGeneration)
+    }
+
+    @Synchronized
     fun onConnected() {
         if (closed) return
+        if (requiredNetworkRestartPending) return
         outage = false
         attempted = false
         generation++
@@ -55,6 +67,7 @@ internal class IceRestartGate(private val scheduler: TaskScheduler) {
                     pending = null
                     pendingDelayMillis = null
                     attempted = true
+                    requiredNetworkRestartPending = false
                     true
                 } else {
                     false
@@ -83,6 +96,7 @@ internal class IceRestartGate(private val scheduler: TaskScheduler) {
         pending?.cancel()
         pending = null
         pendingDelayMillis = null
+        requiredNetworkRestartPending = false
         scheduler.close()
     }
 
