@@ -9,6 +9,11 @@ import java.net.URLEncoder
 import java.util.Base64
 
 data class Profile(val login: String, @SerializedName("display_name") val displayName: String)
+data class ServerInfo(
+    val service: String?,
+    val status: String?,
+    @SerializedName("api_version") val apiVersion: Int = 0,
+)
 data class Contact(
     val login: String,
     val displayName: String,
@@ -55,6 +60,7 @@ private data class CallHistoryReadResult(
 class ApiException(val code: Int, message: String) : RuntimeException(message)
 
 interface HouseholdApi {
+    fun serverInfo(): ServerInfo
     fun me(): Profile
     fun contactsPage(limit: Int = 20, cursor: String = ""): ContactPage
     fun updateContactName(login: String, customName: String?): Contact
@@ -68,6 +74,9 @@ class UrlConnectionApiClient(
     private val login: String,
     private val token: String,
 ) : HouseholdApi {
+    override fun serverInfo(): ServerInfo =
+        get("/healthz", ServerInfo::class.java, authenticated = false)
+
     override fun me(): Profile =
         get("/api/me", Profile::class.java)
 
@@ -124,12 +133,12 @@ class UrlConnectionApiClient(
         return gson.fromJson(connection.inputStream.bufferedReader().readText(), type)
     }
 
-    private fun <T> get(path: String, type: Class<T>): T {
+    private fun <T> get(path: String, type: Class<T>, authenticated: Boolean = true): T {
         val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
             readTimeout = 5000
-            setRequestProperty("Authorization", basicAuth())
+            if (authenticated) setRequestProperty("Authorization", basicAuth())
         }
         val code = connection.responseCode
         if (code !in 200..299) {

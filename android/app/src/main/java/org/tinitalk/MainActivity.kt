@@ -30,6 +30,8 @@ import org.tinitalk.data.AuthStore
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactPage
 import org.tinitalk.data.ContactRepository
+import org.tinitalk.data.CompatibilityProblem
+import org.tinitalk.data.ServerCompatibilityException
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.push.DeviceRegistrar
@@ -555,6 +557,11 @@ class MainActivity : ComponentActivity() {
 
     private fun showError(error: Throwable) {
         val message = when (error) {
+            is ServerCompatibilityException -> when (error.problem) {
+                CompatibilityProblem.WrongServer -> "По этому адресу нет сервера TiniTalk. Проверьте адрес"
+                CompatibilityProblem.ServerOutdated -> "Сервер TiniTalk устарел. Обновите сервер"
+                CompatibilityProblem.AppOutdated -> "Приложение TiniTalk устарело. Установите новую версию"
+            }
             is ApiException -> when (error.code) {
                 401 -> "Неверный логин или токен"
                 404 -> "Сервер TiniTalk не найден"

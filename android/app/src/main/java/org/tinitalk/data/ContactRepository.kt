@@ -1,5 +1,18 @@
 package org.tinitalk.data
 
+private const val TINITALK_SERVICE = "tinitalk"
+private const val SUPPORTED_API_VERSION = 1
+
+enum class CompatibilityProblem {
+    WrongServer,
+    ServerOutdated,
+    AppOutdated,
+}
+
+class ServerCompatibilityException(
+    val problem: CompatibilityProblem,
+) : RuntimeException()
+
 class ContactRepository(
     private val authStore: AuthStore,
     private val apiFactory: (url: String, login: String, token: String) -> HouseholdApi =
@@ -9,6 +22,7 @@ class ContactRepository(
         val session = Session(url.trim().trimEnd('/'), login.trim(), token.trim())
         val api = apiFactory(session.url, session.login, session.token)
         return try {
+            api.requireCompatibleServer()
             val profile = api.me()
             val contacts = api.contactsPage().withoutUser(profile.login)
             authStore.save(session)
@@ -23,6 +37,7 @@ class ContactRepository(
         val session = authStore.load() ?: return null
         val api = apiFactory(session.url, session.login, session.token)
         return try {
+            api.requireCompatibleServer()
             val profile = api.me()
             api.contactsPage().withoutUser(profile.login)
         } catch (e: ApiException) {
@@ -80,3 +95,14 @@ class ContactRepository(
 
 private fun ContactPage.withoutUser(login: String): ContactPage =
     copy(items = items.filterNot { it.login == login })
+
+private fun HouseholdApi.requireCompatibleServer() {
+    val info = serverInfo()
+    val problem = when {
+        info.service != TINITALK_SERVICE -> CompatibilityProblem.WrongServer
+        info.apiVersion < SUPPORTED_API_VERSION -> CompatibilityProblem.ServerOutdated
+        info.apiVersion > SUPPORTED_API_VERSION -> CompatibilityProblem.AppOutdated
+        else -> return
+    }
+    throw ServerCompatibilityException(problem)
+}

@@ -52,6 +52,27 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	}
 }
 
+func TestHealthIdentifiesTiniTalkAndItsAPIVersion(t *testing.T) {
+	db, _ := testDB(t)
+	server := NewServer(db, Options{})
+
+	response := request(t, server, http.MethodGet, "/healthz", nil, "", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("/healthz status = %d, body %s", response.Code, response.Body.String())
+	}
+	var health struct {
+		Service    string `json:"service"`
+		Status     string `json:"status"`
+		APIVersion int    `json:"api_version"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil {
+		t.Fatal(err)
+	}
+	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 1 {
+		t.Fatalf("health = %+v, want tinitalk, ok, API version 1", health)
+	}
+}
+
 func TestContactNamesArePersonalAndResettable(t *testing.T) {
 	db, tokens := testDB(t)
 	server := NewServer(db, Options{AllowInsecureLoopback: true})

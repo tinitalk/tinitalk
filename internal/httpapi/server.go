@@ -36,6 +36,8 @@ var defaultSocketTiming = socketTiming{
 	pingInterval: 20 * time.Second,
 }
 
+const apiVersion = 1
+
 func NewServer(db *state.DB, options Options) http.Handler {
 	s := &Server{
 		db:           db,
@@ -66,8 +68,15 @@ func (s *Server) routes() {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
+	writeJSON(w, struct {
+		Service    string `json:"service"`
+		Status     string `json:"status"`
+		APIVersion int    `json:"api_version"`
+	}{
+		Service:    "tinitalk",
+		Status:     "ok",
+		APIVersion: apiVersion,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

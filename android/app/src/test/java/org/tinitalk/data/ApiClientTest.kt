@@ -7,6 +7,28 @@ import org.junit.Test
 
 class ApiClientTest {
     @Test
+    fun loadsTiniTalkServerIdentityWithoutCredentials() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"service":"tinitalk","status":"ok","api_version":1}""",
+            ),
+        )
+        server.start()
+        try {
+            val info = UrlConnectionApiClient(server.url("/").toString(), "alice", "secret-token")
+                .serverInfo()
+
+            assertEquals(ServerInfo("tinitalk", "ok", 1), info)
+            val request = server.takeRequest()
+            assertEquals("/healthz", request.path)
+            assertEquals(null, request.getHeader("Authorization"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun loadsRequestedContactsPage() {
         val server = MockWebServer()
         server.enqueue(

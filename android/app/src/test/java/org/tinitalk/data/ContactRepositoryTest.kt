@@ -6,6 +6,43 @@ import org.junit.Test
 
 class ContactRepositoryTest {
     @Test
+    fun rejectsWrongServerOrIncompatibleApiBeforeAuthentication() {
+        val cases = listOf(
+            ServerInfo("another-service", "ok", 1) to CompatibilityProblem.WrongServer,
+            ServerInfo("tinitalk", "ok", 0) to CompatibilityProblem.ServerOutdated,
+            ServerInfo("tinitalk", "ok", 2) to CompatibilityProblem.AppOutdated,
+        )
+
+        cases.forEach { (serverInfo, expectedProblem) ->
+            val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+            val api = FakeApiClient(serverInfo = serverInfo)
+            val repo = ContactRepository(store) { _, _, _ -> api }
+
+            val error = runCatching {
+                repo.signIn("https://host", "alice", "token")
+            }.exceptionOrNull() as? ServerCompatibilityException
+
+            assertEquals(expectedProblem, error?.problem)
+            assertEquals(0, api.profileRequests)
+            assertNull(store.load())
+        }
+    }
+
+    @Test
+    fun checksServerCompatibilityWhenRestoringSavedSession() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token"))
+        val api = FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 0))
+        val repo = ContactRepository(store) { _, _, _ -> api }
+
+        val error = runCatching { repo.restoreContacts() }
+            .exceptionOrNull() as? ServerCompatibilityException
+
+        assertEquals(CompatibilityProblem.ServerOutdated, error?.problem)
+        assertEquals(0, api.profileRequests)
+    }
+
+    @Test
     fun verifiesCredentialsBeforeSavingAndFiltersSelf() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         val api = FakeApiClient(
@@ -149,6 +186,7 @@ class ContactRepositoryTest {
 }
 
 private class FakeApiClient(
+    private val serverInfo: ServerInfo = ServerInfo("tinitalk", "ok", 1),
     private val profile: Profile = Profile("alice", "Alice"),
     private val contacts: List<Contact> = emptyList(),
     private val callHistory: CallHistoryPage = CallHistoryPage(emptyList(), 0, 0, 0),
@@ -164,6 +202,8 @@ private class FakeApiClient(
     var updatedLogin: String? = null
     var updatedName: String? = null
     var readPeer: String? = null
+
+    override fun serverInfo(): ServerInfo = serverInfo
 
     override fun me(): Profile {
         profileRequests++
