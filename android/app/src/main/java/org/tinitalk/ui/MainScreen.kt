@@ -69,6 +69,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -445,21 +446,9 @@ private fun HomeScreen(
         if (pagerState.currentPage == 1) onHistoryVisible() else onContactsVisible()
     }
     Box(modifier = Modifier.fillMaxSize()) {
-        if (selectedContact != null) {
-            ContactScreen(
-                contact = selectedContact,
-                nameUpdate = contactNameUpdate,
-                history = state.contactHistory,
-                ongoingCall = ongoingCall,
-                onBack = { selectedContactLogin = null },
-                onCall = onCall,
-                onOpenCall = onOpenCall,
-                onRename = { customName -> onRenameContact(selectedContact.login, customName) },
-                onRenameHandled = onRenameHandled,
-                onLoadMoreHistory = onLoadMoreContactHistory,
-                onRetryHistory = onRetryContactHistory,
-            )
-        } else {
+        Box(
+            modifier = if (selectedContact == null) Modifier else Modifier.clearAndSetSemantics {},
+        ) {
             AppPage(onSignOut = onSignOut) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     if (ongoingCall != null) {
@@ -524,6 +513,21 @@ private fun HomeScreen(
                     }
                 }
             }
+        }
+        if (selectedContact != null) {
+            ContactScreen(
+                contact = selectedContact,
+                nameUpdate = contactNameUpdate,
+                history = state.contactHistory,
+                ongoingCall = ongoingCall,
+                onBack = { selectedContactLogin = null },
+                onCall = onCall,
+                onOpenCall = onOpenCall,
+                onRename = { customName -> onRenameContact(selectedContact.login, customName) },
+                onRenameHandled = onRenameHandled,
+                onLoadMoreHistory = onLoadMoreContactHistory,
+                onRetryHistory = onRetryContactHistory,
+            )
         }
         SnackbarHost(
             hostState = snackbarHostState,
