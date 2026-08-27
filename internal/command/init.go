@@ -129,7 +129,7 @@ func runServe(args []string) error {
 		if len(secret) == 0 {
 			return errors.New("TURN secret is missing; run tinitalk init")
 		}
-		issuer := turnserver.CredentialIssuer{Secret: secret, TTL: 10 * time.Minute}
+		issuer := turnserver.CredentialIssuer{Secret: secret, TTL: turnserver.DefaultCredentialTTL}
 		turn, err := turnserver.Start(turnServerConfig(options, tlsConfig, issuer))
 		if err != nil {
 			return err
@@ -183,6 +183,7 @@ func turnServerConfig(options serveOptions, tlsConfig *tls.Config, issuer turnse
 		Issuer:                issuer,
 		MaxAllocations:        options.turnMaxAllocations,
 		MaxAllocationsPerUser: options.turnMaxAllocationsPerUser,
+		AllocationLifetime:    defaultTURNAllocationLifetime,
 	}
 }
 

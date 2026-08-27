@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const DefaultCredentialTTL = 24 * time.Hour
+
 type TemporaryCredential struct {
 	Username string
 	Password string
@@ -27,9 +29,9 @@ func (i CredentialIssuer) Issue(user string) TemporaryCredential {
 	now := i.now()
 	ttl := i.TTL
 	if ttl == 0 {
-		ttl = 10 * time.Minute
+		ttl = DefaultCredentialTTL
 	}
-	expires := now.Add(ttl)
+	expires := now.Add(ttl).Truncate(time.Second)
 	username := fmt.Sprintf("%d:%s", expires.Unix(), user)
 	return TemporaryCredential{
 		Username: username,
@@ -57,7 +59,7 @@ func (i CredentialIssuer) Login(username string) (string, bool) {
 		return "", false
 	}
 	expires, err := strconv.ParseInt(expiresText, 10, 64)
-	if err != nil || i.now().Unix() > expires {
+	if err != nil || i.now().Unix() >= expires {
 		return "", false
 	}
 	return login, true

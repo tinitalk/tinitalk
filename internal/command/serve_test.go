@@ -3,6 +3,7 @@ package command
 import (
 	"crypto/tls"
 	"testing"
+	"time"
 
 	"tinitalk/internal/turnserver"
 )
@@ -29,8 +30,8 @@ func TestParseServeOptionsUsesTURNCapacityDefaults(t *testing.T) {
 	if options.turnMaxAllocations != 128 {
 		t.Fatalf("TURN max allocations = %d, want 128", options.turnMaxAllocations)
 	}
-	if options.turnMaxAllocationsPerUser != 2 {
-		t.Fatalf("TURN max allocations per user = %d, want 2", options.turnMaxAllocationsPerUser)
+	if options.turnMaxAllocationsPerUser != 8 {
+		t.Fatalf("TURN max allocations per user = %d, want 8", options.turnMaxAllocationsPerUser)
 	}
 	if options.turnRelayMinPort != 49152 || options.turnRelayMaxPort != 49663 {
 		t.Fatalf("TURN relay range = %d-%d, want 49152-49663", options.turnRelayMinPort, options.turnRelayMaxPort)
@@ -40,6 +41,7 @@ func TestParseServeOptionsUsesTURNCapacityDefaults(t *testing.T) {
 func TestParseServeOptionsAcceptsTURNTuning(t *testing.T) {
 	options, err := parseServeOptions(productionServeArgs(
 		"--turn-max-allocations", "64",
+		"--turn-max-allocations-per-user", "6",
 		"--turn-relay-min-port", "50000",
 		"--turn-relay-max-port", "50255",
 	))
@@ -50,8 +52,22 @@ func TestParseServeOptionsAcceptsTURNTuning(t *testing.T) {
 	if options.turnMaxAllocations != 64 {
 		t.Fatalf("TURN max allocations = %d, want 64", options.turnMaxAllocations)
 	}
+	if options.turnMaxAllocationsPerUser != 6 {
+		t.Fatalf("TURN max allocations per user = %d, want 6", options.turnMaxAllocationsPerUser)
+	}
 	if options.turnRelayMinPort != 50000 || options.turnRelayMaxPort != 50255 {
 		t.Fatalf("TURN relay range = %d-%d, want 50000-50255", options.turnRelayMinPort, options.turnRelayMaxPort)
+	}
+}
+
+func TestParseServeOptionsCapsDefaultPerUserQuotaAtTotal(t *testing.T) {
+	options, err := parseServeOptions(productionServeArgs("--turn-max-allocations", "4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if options.turnMaxAllocations != 4 || options.turnMaxAllocationsPerUser != 4 {
+		t.Fatalf("TURN limits = %d/%d, want 4/4", options.turnMaxAllocations, options.turnMaxAllocationsPerUser)
 	}
 }
 
@@ -63,6 +79,10 @@ func TestParseServeOptionsRejectsInvalidTURNTuning(t *testing.T) {
 		{name: "missing allocation value", extra: []string{"--turn-max-allocations"}},
 		{name: "non numeric allocations", extra: []string{"--turn-max-allocations", "many"}},
 		{name: "zero allocations", extra: []string{"--turn-max-allocations", "0"}},
+		{name: "missing per-user allocation value", extra: []string{"--turn-max-allocations-per-user"}},
+		{name: "non numeric per-user allocations", extra: []string{"--turn-max-allocations-per-user", "many"}},
+		{name: "zero per-user allocations", extra: []string{"--turn-max-allocations-per-user", "0"}},
+		{name: "per-user allocations above total", extra: []string{"--turn-max-allocations", "4", "--turn-max-allocations-per-user", "5"}},
 		{name: "zero relay port", extra: []string{"--turn-relay-min-port", "0"}},
 		{name: "overflowing relay port", extra: []string{"--turn-relay-max-port", "65535"}},
 		{name: "reversed relay range", extra: []string{"--turn-relay-min-port", "50001", "--turn-relay-max-port", "50000"}},
@@ -82,6 +102,7 @@ func TestParseServeOptionsRejectsInvalidTURNTuning(t *testing.T) {
 func TestTURNServerConfigUsesServeCapacityOptions(t *testing.T) {
 	options, err := parseServeOptions(productionServeArgs(
 		"--turn-max-allocations", "64",
+		"--turn-max-allocations-per-user", "6",
 		"--turn-relay-min-port", "50000",
 		"--turn-relay-max-port", "50255",
 	))
@@ -93,8 +114,11 @@ func TestTURNServerConfigUsesServeCapacityOptions(t *testing.T) {
 
 	config := turnServerConfig(options, tlsConfig, issuer)
 
-	if config.MaxAllocations != 64 || config.MaxAllocationsPerUser != 2 {
-		t.Fatalf("TURN limits = %d/%d, want 64/2", config.MaxAllocations, config.MaxAllocationsPerUser)
+	if config.MaxAllocations != 64 || config.MaxAllocationsPerUser != 6 {
+		t.Fatalf("TURN limits = %d/%d, want 64/6", config.MaxAllocations, config.MaxAllocationsPerUser)
+	}
+	if config.AllocationLifetime != 10*time.Minute {
+		t.Fatalf("TURN allocation lifetime = %s, want 10m", config.AllocationLifetime)
 	}
 	if config.Relay.Min != 50000 || config.Relay.Max != 50255 {
 		t.Fatalf("TURN relay range = %d-%d, want 50000-50255", config.Relay.Min, config.Relay.Max)

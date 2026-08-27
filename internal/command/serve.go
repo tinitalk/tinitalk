@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 )
 
 const (
 	defaultTURNMaxAllocations        = 128
-	defaultTURNMaxAllocationsPerUser = 2
+	defaultTURNMaxAllocationsPerUser = 8
 	defaultTURNRelayMinPort          = 49152
 	defaultTURNRelayMaxPort          = 49663
+	defaultTURNAllocationLifetime    = 10 * time.Minute
 	turnRelayPortsPerAllocation      = 4
 	maxTURNRelayPort                 = 65534
 )
@@ -41,6 +43,7 @@ func parseServeOptions(args []string) (serveOptions, error) {
 		turnRelayMinPort:          defaultTURNRelayMinPort,
 		turnRelayMaxPort:          defaultTURNRelayMaxPort,
 	}
+	perUserLimitSet := false
 	for len(args) > 0 {
 		switch args[0] {
 		case "--addr":
@@ -98,6 +101,17 @@ func parseServeOptions(args []string) (serveOptions, error) {
 			}
 			options.turnMaxAllocations = value
 			args = args[2:]
+		case "--turn-max-allocations-per-user":
+			if len(args) < 2 {
+				return options, errors.New("--turn-max-allocations-per-user requires a value")
+			}
+			value, err := strconv.Atoi(args[1])
+			if err != nil || value <= 0 {
+				return options, errors.New("--turn-max-allocations-per-user must be a positive integer")
+			}
+			options.turnMaxAllocationsPerUser = value
+			perUserLimitSet = true
+			args = args[2:]
 		case "--turn-relay-min-port":
 			if len(args) < 2 {
 				return options, errors.New("--turn-relay-min-port requires a value")
@@ -119,7 +133,7 @@ func parseServeOptions(args []string) (serveOptions, error) {
 			options.turnRelayMaxPort = port
 			args = args[2:]
 		default:
-			return options, errors.New("usage: tinitalk serve --tls-cert FILE --tls-key FILE [--data-dir DIR] [--addr ADDR] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR] [--turn-tls-addr ADDR] [--turn-max-allocations N] [--turn-relay-min-port PORT] [--turn-relay-max-port PORT]]")
+			return options, errors.New("usage: tinitalk serve --tls-cert FILE --tls-key FILE [--data-dir DIR] [--addr ADDR] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR] [--turn-tls-addr ADDR] [--turn-max-allocations N] [--turn-max-allocations-per-user N] [--turn-relay-min-port PORT] [--turn-relay-max-port PORT]]")
 		}
 	}
 	if (options.tlsCert == "") != (options.tlsKey == "") {
@@ -142,6 +156,12 @@ func parseServeOptions(args []string) (serveOptions, error) {
 	}
 	if options.turnRelayMaxPort%2 == 0 {
 		return options, errors.New("--turn-relay-max-port must be odd so EVEN-PORT reservations stay inside the relay range")
+	}
+	if options.turnMaxAllocationsPerUser > options.turnMaxAllocations {
+		if perUserLimitSet {
+			return options, errors.New("--turn-max-allocations-per-user must not exceed --turn-max-allocations")
+		}
+		options.turnMaxAllocationsPerUser = options.turnMaxAllocations
 	}
 	relayPortCount := int(options.turnRelayMaxPort) - int(options.turnRelayMinPort) + 1
 	if options.turnMaxAllocations > relayPortCount/turnRelayPortsPerAllocation {

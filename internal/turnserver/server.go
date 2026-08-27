@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/pion/logging"
 	"github.com/pion/turn/v5"
@@ -29,6 +30,7 @@ type Config struct {
 	Issuer                CredentialIssuer
 	MaxAllocations        int
 	MaxAllocationsPerUser int
+	AllocationLifetime    time.Duration
 }
 
 type Server struct {
@@ -95,11 +97,12 @@ func newTransportServer(
 			}
 			return login, turn.GenerateAuthKey(ra.Username, config.Realm, config.Issuer.Password(ra.Username)), true
 		},
-		QuotaHandler:      func(username, _ string, source net.Addr) bool { return limiter.Allow(scope, username, source) },
-		EventHandler:      limiter.EventHandler(scope),
-		PacketConnConfigs: packetConfigs,
-		ListenerConfigs:   listenerConfigs,
-		LoggerFactory:     privateLoggerFactory(),
+		QuotaHandler:       func(username, _ string, source net.Addr) bool { return limiter.Allow(scope, username, source) },
+		EventHandler:       limiter.EventHandler(scope),
+		AllocationLifetime: config.AllocationLifetime,
+		PacketConnConfigs:  packetConfigs,
+		ListenerConfigs:    listenerConfigs,
+		LoggerFactory:      privateLoggerFactory(),
 	})
 }
 
@@ -118,6 +121,9 @@ func validateConfig(config Config) error {
 	}
 	if config.MaxAllocationsPerUser < 0 {
 		return errors.New("max allocations per user must not be negative")
+	}
+	if config.AllocationLifetime < 0 {
+		return errors.New("allocation lifetime must not be negative")
 	}
 	if config.MaxAllocations > 0 && config.MaxAllocationsPerUser > config.MaxAllocations {
 		return errors.New("max allocations per user must not exceed max allocations")

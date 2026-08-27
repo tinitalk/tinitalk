@@ -26,6 +26,51 @@ func TestTemporaryCredentialsUseHMACAndExpire(t *testing.T) {
 	}
 }
 
+func TestTemporaryCredentialsDefaultToOneDay(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	issuer := CredentialIssuer{Secret: []byte("secret"), Now: func() time.Time { return now }}
+
+	cred := issuer.Issue("alice")
+
+	if got := cred.Expires.Sub(now); got != 24*time.Hour {
+		t.Fatalf("default credential TTL = %s, want 24h", got)
+	}
+}
+
+func TestTemporaryCredentialsExpireAtDeclaredSecond(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	issuer := CredentialIssuer{
+		Secret: []byte("secret"),
+		TTL:    time.Minute,
+		Now:    func() time.Time { return now },
+	}
+	cred := issuer.Issue("alice")
+
+	now = cred.Expires.Add(-time.Second)
+	if !issuer.Valid(cred.Username, cred.Password) {
+		t.Fatal("credential expired before declared second")
+	}
+	now = cred.Expires
+	if issuer.Valid(cred.Username, cred.Password) {
+		t.Fatal("credential remained valid at declared expiry")
+	}
+}
+
+func TestTemporaryCredentialExpiryMatchesUsernameSecond(t *testing.T) {
+	now := time.Unix(1_000, int64(500*time.Millisecond))
+	issuer := CredentialIssuer{
+		Secret: []byte("secret"),
+		TTL:    time.Minute,
+		Now:    func() time.Time { return now },
+	}
+
+	cred := issuer.Issue("alice")
+
+	if want := time.Unix(1_060, 0); !cred.Expires.Equal(want) {
+		t.Fatalf("credential expiry = %s, want %s", cred.Expires, want)
+	}
+}
+
 func TestCredentialLoginIsStableAndRejectsInvalidUsernames(t *testing.T) {
 	issuer := CredentialIssuer{Now: func() time.Time { return time.Unix(1_000, 0) }}
 
