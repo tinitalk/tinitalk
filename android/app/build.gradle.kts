@@ -13,6 +13,21 @@ val tinitalkServerUrl = providers.gradleProperty("tinitalkServerUrl")
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
 
+val repositoryDir = rootDir.parentFile
+val commitHash = runCatching {
+    val process = ProcessBuilder(
+        "git",
+        "-c",
+        "safe.directory=${repositoryDir.absolutePath.replace('\\', '/')}",
+        "rev-parse",
+        "--short=8",
+        "HEAD",
+    ).directory(repositoryDir).redirectErrorStream(true).start()
+    val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+    check(process.waitFor() == 0 && output.matches(Regex("[0-9a-fA-F]+")))
+    output
+}.getOrDefault("unknown")
+
 android {
     namespace = "org.tinitalk"
     compileSdk = 36
@@ -21,10 +36,11 @@ android {
         applicationId = "org.tinitalk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
+        versionCode = 3
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
+        buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
         buildConfigField("String", "SERVER_URL", "\"$tinitalkServerUrl\"")
     }
 

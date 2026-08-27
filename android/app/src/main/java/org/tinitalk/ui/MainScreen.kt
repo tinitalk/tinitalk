@@ -81,6 +81,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.tinitalk.BuildConfig
 import org.tinitalk.R
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
@@ -449,6 +450,13 @@ private fun LoginScreen(
                         Text("Войти", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "v ${BuildConfig.COMMIT_HASH}",
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                    fontSize = 10.sp,
+                )
             }
         }
     }
