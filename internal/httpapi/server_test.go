@@ -73,8 +73,41 @@ func TestHealthIdentifiesTiniTalkVersionAndCommit(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil {
 		t.Fatal(err)
 	}
-	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 1 || health.Commit != "01234567" {
-		t.Fatalf("health = %+v, want tinitalk, ok, API version 1, commit 01234567", health)
+	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 2 || health.Commit != "01234567" {
+		t.Fatalf("health = %+v, want tinitalk, ok, API version 2, commit 01234567", health)
+	}
+}
+
+func TestSocketRequiresSignalingProtocolV2(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	server := httptest.NewServer(NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}))
+	defer server.Close()
+
+	for _, version := range []string{"", "1"} {
+		conn, response, err := tryDialSocketWithProtocol(server.URL, "alice", tokens["alice"], version)
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if err == nil {
+			t.Fatalf("protocol version %q connected", version)
+		}
+		if response == nil || response.StatusCode != http.StatusUpgradeRequired {
+			t.Fatalf("protocol version %q response = %+v, want status %d", version, response, http.StatusUpgradeRequired)
+		}
+		if got := response.Header.Get("X-TiniTalk-Signal-Protocol"); got != "2" {
+			t.Fatalf("protocol version %q response header = %q, want 2", version, got)
+		}
+		_ = response.Body.Close()
+	}
+
+	conn, response, err := tryDialSocketWithProtocol(server.URL, "alice", tokens["alice"], "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if got := response.Header.Get("X-TiniTalk-Signal-Protocol"); got != "2" {
+		t.Fatalf("accepted response header = %q, want 2", got)
 	}
 }
 
@@ -360,6 +393,7 @@ func TestSocketRejectsConnectionAbovePerUserLimit(t *testing.T) {
 
 	header := http.Header{}
 	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("alice:"+tokens["alice"])))
+	header.Set(signalProtocolHeader, signalProtocolVersion)
 	url := "ws" + server.URL[len("http"):] + "/api/socket"
 	conn, response, err := websocket.DefaultDialer.Dial(url, header)
 	if conn != nil {
@@ -484,6 +518,7 @@ func dialAcknowledgedSocket(t *testing.T, baseURL, login, token string) (*websoc
 	t.Helper()
 	header := http.Header{}
 	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(login+":"+token)))
+	header.Set(signalProtocolHeader, signalProtocolVersion)
 	header.Set("X-TiniTalk-Signal-Ack", "1")
 	url := "ws" + baseURL[len("http"):] + "/api/socket"
 	conn, response, err := websocket.DefaultDialer.Dial(url, header)
@@ -519,9 +554,20 @@ func tryDialSocket(baseURL, login, token string) (*websocket.Conn, *http.Respons
 	return tryDialDeviceSocket(baseURL, login, token, "")
 }
 
+func tryDialSocketWithProtocol(baseURL, login, token, version string) (*websocket.Conn, *http.Response, error) {
+	header := http.Header{}
+	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(login+":"+token)))
+	if version != "" {
+		header.Set("X-TiniTalk-Signal-Protocol", version)
+	}
+	url := "ws" + baseURL[len("http"):] + "/api/socket"
+	return websocket.DefaultDialer.Dial(url, header)
+}
+
 func tryDialDeviceSocket(baseURL, login, token, deviceID string) (*websocket.Conn, *http.Response, error) {
 	header := http.Header{}
 	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(login+":"+token)))
+	header.Set(signalProtocolHeader, signalProtocolVersion)
 	if deviceID != "" {
 		header.Set("X-TiniTalk-Device-ID", deviceID)
 	}

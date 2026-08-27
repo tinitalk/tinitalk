@@ -1,5 +1,7 @@
 # Call Signaling Contract
 
+The current HTTP API and WebSocket signaling protocol version is `2`.
+
 All signaling messages use one JSON envelope:
 
 ```json
@@ -29,6 +31,12 @@ Control events: `call.start`, `call.incoming`, `call.ringing`, `call.accept`, `c
 WebRTC events: `rtc.config`, `rtc.offer`, `rtc.answer`, `rtc.ice`, `rtc.restart`, `rtc.restart.request`.
 
 ## WebSocket connection
+
+Every client must send `X-TiniTalk-Signal-Protocol: 2` during the WebSocket
+upgrade. The server rejects a missing or different version with HTTP `426` and
+returns its required version in the same header. A successful upgrade echoes
+`X-TiniTalk-Signal-Protocol: 2`. Protocol versions are intentionally strict;
+server and Android clients must be updated together.
 
 Clients should send a stable `X-TiniTalk-Device-ID` header. When the same user
 opens a new WebSocket with the same non-empty device ID, the server closes and

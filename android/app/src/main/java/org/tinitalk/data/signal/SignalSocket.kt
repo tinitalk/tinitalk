@@ -12,6 +12,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
 private const val DeviceIDHeader = "X-TiniTalk-Device-ID"
+private const val SignalProtocolHeader = "X-TiniTalk-Signal-Protocol"
+private const val SignalProtocolVersion = "2"
 private const val SignalAckHeader = "X-TiniTalk-Signal-Ack"
 private const val SignalAckVersion = "1"
 
@@ -136,6 +138,7 @@ class SignalSocket(
         val request = Request.Builder()
             .url(socketUrl())
             .header("Authorization", basicAuth())
+            .header(SignalProtocolHeader, SignalProtocolVersion)
             .header(SignalAckHeader, SignalAckVersion)
             .apply {
                 if (deviceId.isNotEmpty()) {
@@ -202,6 +205,25 @@ class SignalSocket(
         response: Response,
         callbacks: SignalCallbacks,
     ) {
+        if (response.header(SignalProtocolHeader) != SignalProtocolVersion) {
+            synchronized(pending) {
+                if (!isCurrentLocked(currentAttempt, webSocket)) return
+                closed = true
+                opened = false
+                generation++
+                attempt = null
+                this.callbacks = null
+                pending.clear()
+            }
+            webSocket.cancel()
+            callbacks.onError(
+                SignalFailure(
+                    message = "incompatible signaling protocol",
+                    code = "incompatible_server",
+                ),
+            )
+            return
+        }
         var flushFailed = false
         synchronized(pending) {
             if (!isCurrentLocked(currentAttempt, webSocket)) return

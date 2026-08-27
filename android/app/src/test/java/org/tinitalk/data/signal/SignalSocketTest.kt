@@ -26,7 +26,7 @@ class SignalSocketTest {
     @Test
     fun connectsWithAuthAndDeviceHeadersAndNoQueryToken() {
         MockWebServer().use { server ->
-            server.enqueue(MockResponse().withWebSocketUpgrade(CapturingWebSocketListener()))
+            server.enqueue(MockResponse().withTiniTalkWebSocketUpgrade(CapturingWebSocketListener()))
             server.start()
             val client = OkHttpClient()
             val socket = SignalSocket(
@@ -43,16 +43,46 @@ class SignalSocketTest {
             assertEquals("Basic YWxpY2U6c2VjcmV0LXRva2Vu", request.getHeader("Authorization"))
             assertEquals("android-device-123", request.getHeader("X-TiniTalk-Device-ID"))
             assertEquals("1", request.getHeader("X-TiniTalk-Signal-Ack"))
+            assertEquals("2", request.getHeader("X-TiniTalk-Signal-Protocol"))
             socket.close()
             client.shutdown()
         }
     }
 
     @Test
+    fun rejectsServerWithoutSignalingProtocolV2() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val scheduler = FakeReconnectScheduler()
+        val failures = mutableListOf<SignalFailure>()
+        val opened = mutableListOf<Long>()
+        val socket = SignalSocket(
+            client,
+            Session("https://talk.example.com", "alice", "token"),
+            socketFactory = factory,
+            reconnectScheduler = scheduler::schedule,
+        )
+
+        socket.connect(onEvent = {}, onOpen = opened::add, onError = failures::add)
+        val connection = factory.connections.single()
+        connection.listener.onOpen(
+            connection.webSocket,
+            response(connection.webSocket.request(), signalingProtocol = null),
+        )
+
+        assertTrue(opened.isEmpty())
+        assertEquals("incompatible_server", failures.single().code)
+        assertTrue(connection.webSocket.cancelled)
+        assertEquals(0, scheduler.pendingCount)
+        socket.close()
+        client.shutdown()
+    }
+
+    @Test
     fun sendsEncodedEvent() {
         MockWebServer().use { server ->
             val listener = CapturingWebSocketListener()
-            server.enqueue(MockResponse().withWebSocketUpgrade(listener))
+            server.enqueue(MockResponse().withTiniTalkWebSocketUpgrade(listener))
             server.start()
             val client = OkHttpClient()
             val socket = SignalSocket(client, Session(server.url("/").toString(), "alice", "token"))
@@ -82,7 +112,7 @@ class SignalSocketTest {
     @Test
     fun reportsServerErrorEnvelope() {
         MockWebServer().use { server ->
-            server.enqueue(MockResponse().withWebSocketUpgrade(SendingWebSocketListener("""{"error":"ICE restart requested too often","code":"ice_restart_rate_limited","call_id":"call-1","event_id":"event-1","retry_after_ms":8750}""")))
+            server.enqueue(MockResponse().withTiniTalkWebSocketUpgrade(SendingWebSocketListener("""{"error":"ICE restart requested too often","code":"ice_restart_rate_limited","call_id":"call-1","event_id":"event-1","retry_after_ms":8750}""")))
             server.start()
             val client = OkHttpClient()
             lateinit var socket: SignalSocket
@@ -115,8 +145,8 @@ class SignalSocketTest {
     @Test
     fun reconnectsAfterNormalWebSocketClose() {
         MockWebServer().use { server ->
-            server.enqueue(MockResponse().withWebSocketUpgrade(ClosingWebSocketListener()))
-            server.enqueue(MockResponse().withWebSocketUpgrade(CapturingWebSocketListener()))
+            server.enqueue(MockResponse().withTiniTalkWebSocketUpgrade(ClosingWebSocketListener()))
+            server.enqueue(MockResponse().withTiniTalkWebSocketUpgrade(CapturingWebSocketListener()))
             server.start()
             val client = OkHttpClient()
             val socket = SignalSocket(client, Session(server.url("/").toString(), "alice", "token"))
@@ -485,15 +515,23 @@ private fun testEvent(type: String) = SignalEvent(
     payload = JsonObject(),
 )
 
-private fun response(request: Request, acknowledgesEvents: Boolean = false): Response = Response.Builder()
+private fun response(
+    request: Request,
+    acknowledgesEvents: Boolean = false,
+    signalingProtocol: String? = "2",
+): Response = Response.Builder()
     .request(request)
     .protocol(Protocol.HTTP_1_1)
     .code(101)
     .message("Switching Protocols")
     .apply {
         if (acknowledgesEvents) header("X-TiniTalk-Signal-Ack", "1")
+        if (signalingProtocol != null) header("X-TiniTalk-Signal-Protocol", signalingProtocol)
     }
     .build()
+
+private fun MockResponse.withTiniTalkWebSocketUpgrade(listener: WebSocketListener): MockResponse =
+    withWebSocketUpgrade(listener).setHeader("X-TiniTalk-Signal-Protocol", "2")
 
 private fun OkHttpClient.shutdown() {
     dispatcher.executorService.shutdownNow()

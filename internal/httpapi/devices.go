@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	deviceIDHeader   = "X-TiniTalk-Device-ID"
-	signalAckHeader  = "X-TiniTalk-Signal-Ack"
-	signalAckVersion = "1"
+	deviceIDHeader        = "X-TiniTalk-Device-ID"
+	signalProtocolHeader  = "X-TiniTalk-Signal-Protocol"
+	signalProtocolVersion = "2"
+	signalAckHeader       = "X-TiniTalk-Signal-Ack"
+	signalAckVersion      = "1"
 )
 
 type deviceRequest struct {
@@ -53,6 +55,11 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "websocket endpoint is not active yet", http.StatusUpgradeRequired)
 		return
 	}
+	if r.Header.Get(signalProtocolHeader) != signalProtocolVersion {
+		w.Header().Set(signalProtocolHeader, signalProtocolVersion)
+		http.Error(w, "signaling protocol version 2 is required", http.StatusUpgradeRequired)
+		return
+	}
 	user := currentUser(r).Login
 	client, err := s.hub.ConnectDeviceChecked(user, r.Header.Get(deviceIDHeader))
 	if err != nil {
@@ -60,9 +67,9 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acknowledgesEvents := r.Header.Get(signalAckHeader) == signalAckVersion
-	var responseHeader http.Header
+	responseHeader := http.Header{signalProtocolHeader: []string{signalProtocolVersion}}
 	if acknowledgesEvents {
-		responseHeader = http.Header{signalAckHeader: []string{signalAckVersion}}
+		responseHeader.Set(signalAckHeader, signalAckVersion)
 	}
 	conn, err := websocket.Upgrade(w, r, responseHeader, protocol.MaxEventBytes, protocol.MaxEventBytes)
 	if err != nil {

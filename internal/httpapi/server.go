@@ -36,7 +36,7 @@ var defaultSocketTiming = socketTiming{
 	pingInterval: 20 * time.Second,
 }
 
-const apiVersion = 1
+const apiVersion = 2
 
 var serverCommit = "unknown"
 

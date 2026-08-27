@@ -230,6 +230,10 @@ make check
 
 ## Заметки по Android
 
+- Сервер и Android-приложение используют строгую версию signaling protocol
+  `v2`. При обновлении сервера пересобери и установи новый APK на все телефоны:
+  старые версии приложения подключаться не будут.
+
 - Перед `make client` положи Firebase Android config в
   `android/app/google-services.json`.
 - По умолчанию экран входа использует `https://tinitalk.example.com`. Другой
