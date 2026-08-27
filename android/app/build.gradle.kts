@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -12,6 +14,11 @@ val tinitalkServerUrl = providers.gradleProperty("tinitalkServerUrl")
     .getOrElse("https://tinitalk.example.com")
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
+
+val tinitalkAbi = providers.gradleProperty("tinitalkAbi").getOrElse("all")
+require(tinitalkAbi == "arm64" || tinitalkAbi == "all") {
+    "tinitalkAbi must be 'arm64' or 'all'"
+}
 
 val repositoryDir = rootDir.parentFile
 val commitHash = runCatching {
@@ -42,6 +49,23 @@ android {
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
         buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
         buildConfigField("String", "SERVER_URL", "\"$tinitalkServerUrl\"")
+        if (tinitalkAbi == "arm64") {
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
     }
 
     buildFeatures {
@@ -86,4 +110,46 @@ dependencies {
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)
+}
+
+val requiredWebRtcJniStrings = listOf(
+    "Lorg/jni_zero/JniInit;",
+    "Lorg/webrtc/PeerConnection;",
+    "Lorg/webrtc/PeerConnection\$RTCConfiguration;",
+    "Lorg/webrtc/PeerConnection\$Observer;",
+    "Lorg/webrtc/SdpObserver;",
+    "onIceCandidate",
+    "onCreateSuccess",
+)
+
+tasks.register("verifyWebRtcJni") {
+    group = "verification"
+    description = "Checks that R8 preserved WebRTC classes and callbacks used from JNI"
+    dependsOn("assembleRelease")
+
+    doLast {
+        val apk = providers.gradleProperty("tinitalkVerifyApk").orNull
+            ?.let(::file)
+            ?: layout.buildDirectory.file("outputs/apk/release/app-release.apk").get().asFile
+        check(apk.isFile) { "APK not found: $apk" }
+
+        val dexContents = ZipFile(apk).use { archive ->
+            archive.entries().asSequence()
+                .filter { it.name.matches(Regex("classes\\d*\\.dex")) }
+                .map { entry ->
+                    archive.getInputStream(entry).use { input ->
+                        input.readBytes().toString(Charsets.ISO_8859_1)
+                    }
+                }
+                .toList()
+        }
+        check(dexContents.isNotEmpty()) { "No DEX files found in $apk" }
+
+        val missing = requiredWebRtcJniStrings.filterNot { required ->
+            dexContents.any { required in it }
+        }
+        check(missing.isEmpty()) {
+            "R8 removed WebRTC JNI classes or callbacks from ${apk.name}: ${missing.joinToString()}"
+        }
+    }
 }

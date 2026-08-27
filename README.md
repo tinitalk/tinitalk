@@ -101,7 +101,14 @@ android/app/google-services.json
 
 ```bash
 make client
+make client-min
 ```
+
+`make client` быстро собирает универсальный debug APK в
+`dist/tinitalk-debug.apk`. `make client-min` собирает оптимизированный ARM64 APK
+в `dist/tinitalk-min.apk`; он подходит для телефонов и планшетов Android с
+64-битной ARM-архитектурой (`arm64-v8a`), то есть для большинства современных
+Android-устройств. Если архитектура неизвестна, используй универсальный debug APK.
 
 Файл `android/app/google-services.json` игнорируется Git'ом. APK без него
 соберется, но FCM-пробуждение из фона работать не будет.
@@ -234,8 +241,16 @@ make check
   `v2`. При обновлении сервера пересобери и установи новый APK на все телефоны:
   старые версии приложения подключаться не будут.
 
-- Перед `make client` положи Firebase Android config в
+- Перед `make client` или `make client-min` положи Firebase Android config в
   `android/app/google-services.json`.
+- `make client` быстро собирает универсальный debug APK
+  `dist/tinitalk-debug.apk` со всеми поддерживаемыми ABI.
+- `make client-min` собирает оптимизированный ARM64 release APK
+  `dist/tinitalk-min.apk` и проверяет, что R8 не удалил JNI API WebRTC.
+- Оба APK подписываются локальным Android debug-ключом. Для обновления без
+  удаления приложения собирай их на том же компьютере и сохрани
+  `%USERPROFILE%\.android\debug.keystore` (на Linux это
+  `~/.android/debug.keystore`).
 - По умолчанию экран входа использует `https://tinitalk.example.com`. Другой
   адрес можно зашить в APK при сборке:
 
@@ -244,9 +259,12 @@ make client SERVER_URL=https://talk.example.com
 ```
 
   При прямом запуске Gradle используй
-  `-PtinitalkServerUrl=https://talk.example.com`. Адрес по-прежнему можно
-  изменить вручную в настройках сервера на экране входа.
-- Установи `dist/tinitalk-debug.apk`, открой приложение один раз, войди и выдай
+  `-PtinitalkServerUrl=https://talk.example.com` и `-PtinitalkAbi=arm64` либо
+  `-PtinitalkAbi=all`. Адрес по-прежнему можно изменить вручную в настройках
+  сервера на экране входа.
+- Установи `dist/tinitalk-min.apk` на ARM64-телефон либо
+  `dist/tinitalk-debug.apk`, если архитектура неизвестна. Открой приложение
+  один раз, войди и выдай
   разрешения на микрофон, уведомления и full-screen incoming calls.
 - Relay-only диагностический APK собирается так:
 
