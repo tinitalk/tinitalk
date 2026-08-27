@@ -11,14 +11,15 @@
 
     <application
         android:name=".TinitalkApplication"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher"
+        android:icon="@drawable/ic_launcher_legacy"
+        android:roundIcon="@drawable/ic_launcher_legacy"
         android:theme="@style/AppTheme"
         android:label="TiniTalk"
         android:allowBackup="false"
         android:supportsRtl="true">
         <activity
             android:name=".MainActivity"
+            android:icon="@mipmap/ic_launcher"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

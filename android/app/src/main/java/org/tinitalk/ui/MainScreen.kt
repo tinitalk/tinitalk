@@ -497,7 +497,7 @@ private fun PermissionsScreen(
                 onRequest = onRequestMicrophone,
             )
             PermissionItem(
-                title = "Полноэкранный вызов",
+                title = "Полноэкранные оповещения",
                 description = "Показывать звонок поверх заблокированного экрана",
                 granted = permissions.fullScreenIntentGranted,
                 onRequest = onRequestFullScreenCalls,
@@ -528,21 +528,33 @@ private fun PermissionItem(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 1.dp,
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth().padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(4.dp))
-                Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    title,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.width(12.dp))
+                if (granted) {
+                    Text("Разрешено", color = CallAnswerGreen, fontWeight = FontWeight.SemiBold)
+                } else {
+                    FilledTonalButton(onClick = onRequest) { Text("Разрешить") }
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            if (granted) {
-                Text("Разрешено", color = CallAnswerGreen, fontWeight = FontWeight.SemiBold)
-            } else {
-                FilledTonalButton(onClick = onRequest) { Text("Разрешить") }
-            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                description,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

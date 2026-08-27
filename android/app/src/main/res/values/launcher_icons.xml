@@ -1,0 +1,3 @@
+<resources>
+    <item name="ic_launcher" type="mipmap">@drawable/ic_launcher_legacy</item>
+</resources>
