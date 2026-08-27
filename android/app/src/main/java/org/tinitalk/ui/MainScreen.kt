@@ -47,6 +47,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
@@ -961,20 +962,59 @@ private fun AppPage(
                     ) {
                         Text("⋮", fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     }
-                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                        modifier = Modifier.widthIn(min = 240.dp),
+                    ) {
                         DropdownMenuItem(
-                            text = { Text("О программе") },
+                            text = {
+                                Text(
+                                    "О программе",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            },
                             onClick = {
                                 menuExpanded = false
                                 onAbout()
                             },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_info),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp),
+                                )
+                            },
+                            modifier = Modifier.heightIn(min = 64.dp),
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+                            colors = MenuDefaults.itemColors(leadingIconColor = BrandGold),
                         )
                         DropdownMenuItem(
-                            text = { Text("Выйти из аккаунта") },
+                            text = {
+                                Text(
+                                    "Выйти из аккаунта",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            },
                             onClick = {
                                 menuExpanded = false
                                 logoutDialog = true
                             },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_logout),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp),
+                                )
+                            },
+                            modifier = Modifier.heightIn(min = 64.dp),
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+                            colors = MenuDefaults.itemColors(
+                                textColor = CallRejectRed,
+                                leadingIconColor = CallRejectRed,
+                            ),
                         )
                     }
                 }
