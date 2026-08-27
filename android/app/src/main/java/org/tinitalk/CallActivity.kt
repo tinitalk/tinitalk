@@ -79,13 +79,11 @@ class CallActivity : ComponentActivity() {
     private val inviteMonitor = object : Runnable {
         override fun run() {
             val invite = incomingInvite ?: return
-            val liveCallMatches = callState.callId == invite.callId && callState.phase != CallPhase.Idle
-            val storedCallMatches = incomingController.load(this@CallActivity)?.invite?.callId == invite.callId
-            if ((!storedCallMatches && !liveCallMatches) || !invite.expiresAt.isAfter(Instant.now())) {
+            if (!isCurrentIncoming(invite)) {
                 finish()
                 return
             }
-            if (liveCallMatches && callState.phase != CallPhase.Ringing) return
+            if (callState.callId == invite.callId && callState.phase != CallPhase.Ringing) return
             handler.postDelayed(this, InviteCheckIntervalMillis)
         }
     }
@@ -195,6 +193,10 @@ class CallActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         activityStarted = true
+        incomingInvite?.takeUnless(::isCurrentIncoming)?.let {
+            finish()
+            return
+        }
         showIncomingCallFullScreen()
         updateProximity()
         handler.removeCallbacks(inviteMonitor)
@@ -319,6 +321,7 @@ class CallActivity : ComponentActivity() {
 
     private fun showIncomingCallFullScreen() {
         val invite = incomingInvite ?: return
+        if (!isCurrentIncoming(invite)) return
         if (shouldDismissIncomingOverlay(activityStarted, visibleCallState())) {
             IncomingCallNotifier(this).fullScreenShown(invite)
             ringingAcknowledger.acknowledge(invite)
@@ -328,10 +331,23 @@ class CallActivity : ComponentActivity() {
     private fun restoreIncomingCallNotification() {
         val invite = incomingInvite ?: return
         val stillRinging = !actionGate.isLocked(invite.callId) &&
-            incomingController.load(this)?.invite?.callId == invite.callId &&
-            invite.expiresAt.isAfter(Instant.now()) &&
+            isCurrentIncoming(invite) &&
             visibleCallState().phase == CallPhase.Ringing
         if (stillRinging) IncomingCallNotifier(this).fullScreenHidden(invite)
+    }
+
+    private fun isCurrentIncoming(invite: IncomingInvite): Boolean {
+        if (!invite.expiresAt.isAfter(Instant.now()) || incomingController.isTerminal(this, invite.callId)) {
+            return false
+        }
+        val pending = incomingController.load(this)
+        if (pending?.invite?.callId == invite.callId && pending.action == IncomingCallController.ActionReject) {
+            return false
+        }
+        val storedCallMatches = pending?.invite?.callId == invite.callId
+        val liveCallMatches = callState.callId == invite.callId &&
+            callState.phase != CallPhase.Idle && callState.phase != CallPhase.Ended
+        return storedCallMatches || liveCallMatches
     }
 
     companion object {

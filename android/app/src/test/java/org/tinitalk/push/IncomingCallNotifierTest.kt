@@ -55,4 +55,22 @@ class IncomingCallNotifierTest {
         controller.save(context, expired)
         assertEquals(IncomingAnswerClaim.Invalid, controller.claimAnswer(context, expired))
     }
+
+    @Test
+    fun systemDisconnectImmediatelyPreventsIncomingCallReplay() {
+        val context = RuntimeEnvironment.getApplication()
+        val controller = IncomingCallController()
+        val invite = IncomingInvite(
+            callId = "call-rejected-by-system",
+            caller = "Alice",
+            expiresAt = Instant.now().plusSeconds(30),
+        )
+        controller.save(context, invite)
+
+        controller.disconnectFromTelecom(context, invite)
+
+        assertTrue(controller.isTerminal(context, invite.callId))
+        assertEquals(null, controller.load(context))
+        assertEquals(null, IncomingCallNotifier(context).buildIncomingNotification(invite))
+    }
 }

@@ -138,8 +138,7 @@ class IncomingCallController {
     }
 
     fun rejectFromTelecom(context: Context, invite: IncomingInvite) {
-        save(context, invite, ActionReject)
-        IncomingCallNotifier(context).cancel()
+        finishIncoming(context, invite)
         CallForegroundService.start(
             context,
             intent(context, CallForegroundService::class.java, CallForegroundService.ActionReject, invite),
@@ -147,10 +146,17 @@ class IncomingCallController {
     }
 
     fun disconnectFromTelecom(context: Context, invite: IncomingInvite) {
+        finishIncoming(context, invite)
         CallForegroundService.start(
             context,
             intent(context, CallForegroundService::class.java, CallForegroundService.ActionDisconnect, invite),
         )
+    }
+
+    private fun finishIncoming(context: Context, invite: IncomingInvite) {
+        rememberTerminal(context, invite.callId)
+        clear(context, invite.callId)
+        IncomingCallNotifier(context).cancel()
     }
 
     companion object {
