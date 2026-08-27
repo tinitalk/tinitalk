@@ -7,7 +7,7 @@ import java.util.UUID
 data class SequencedSignalEvent(val event: SignalEvent, val seq: Long)
 
 interface SignalClient {
-    fun send(event: SignalEvent)
+    fun send(event: SignalEvent, onSettled: (() -> Unit)? = null)
 }
 
 interface EventIds {
@@ -49,16 +49,16 @@ class CallCoordinator(
         machine.transition(CallPhase.Active, callId)
     }
 
-    fun reject() {
-        sendTerminal("call.reject")
+    fun reject(onSettled: (() -> Unit)? = null) {
+        sendTerminal("call.reject", onSettled)
     }
 
-    fun cancel() {
-        sendTerminal("call.cancel")
+    fun cancel(onSettled: (() -> Unit)? = null) {
+        sendTerminal("call.cancel", onSettled)
     }
 
-    fun hangUp() {
-        sendTerminal("call.end")
+    fun hangUp(onSettled: (() -> Unit)? = null) {
+        sendTerminal("call.end", onSettled)
     }
 
     fun mediaConnected() {
@@ -111,9 +111,9 @@ class CallCoordinator(
         return true
     }
 
-    private fun sendTerminal(type: String) {
+    private fun sendTerminal(type: String, onSettled: (() -> Unit)?) {
         val callId = requireNotNull(machine.snapshot().callId) { "no call" }
-        signal.send(event(callId, type, JsonObject()))
+        signal.send(event(callId, type, JsonObject()), onSettled)
         machine.transition(CallPhase.Ended, callId)
     }
 

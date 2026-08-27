@@ -3,6 +3,7 @@ package org.tinitalk.call
 import com.google.gson.JsonObject
 import org.tinitalk.data.signal.SignalEvent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -126,6 +127,22 @@ class CallCoordinatorTest {
     }
 
     @Test
+    fun terminalEventReportsSettlementOnlyAfterSignalClientConfirmsIt() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("alice", signal, ids = FixedIds())
+        coordinator.startCall("bob")
+        coordinator.onEvent(event("call.accept", seq = 1))
+        var settled = false
+
+        coordinator.hangUp { settled = true }
+
+        assertEquals(CallPhase.Ended, coordinator.snapshot().phase)
+        assertFalse(settled)
+        signal.settle(signal.sent.last().id)
+        assertTrue(settled)
+    }
+
+    @Test
     fun endsCallAfterSignalingProtocolError() {
         val coordinator = CallCoordinator("alice", FakeSignalClient(), ids = FixedIds())
         coordinator.startCall("bob")
@@ -161,9 +178,14 @@ class CallCoordinatorTest {
 
 private class FakeSignalClient : SignalClient {
     val sent = mutableListOf<SignalEvent>()
-    override fun send(event: SignalEvent) {
+    private val settlements = mutableMapOf<String, () -> Unit>()
+
+    override fun send(event: SignalEvent, onSettled: (() -> Unit)?) {
         sent += event
+        onSettled?.let { settlements[event.id] = it }
     }
+
+    fun settle(eventId: String) = settlements.remove(eventId)?.invoke()
 }
 
 private class FixedIds : EventIds {

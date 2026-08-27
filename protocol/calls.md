@@ -58,6 +58,11 @@ so an ACK lost with the old connection does not repeat the action. `call.resume`
 is a replay request rather than an action and is not deduplicated; clients must
 ignore replayed events whose `seq` is not newer than the last processed value.
 
+For a locally generated `call.end`, `call.cancel`, or `call.reject`, Android
+releases media and Telecom resources immediately but keeps the signaling
+service alive until the event is acknowledged or rejected. A 20-second
+failsafe bounds this drain if connectivity does not recover.
+
 If a valid event cannot be handled, the server sends an error frame:
 
 ```json

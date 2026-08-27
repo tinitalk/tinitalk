@@ -232,8 +232,8 @@ class ForegroundCallController(
 
     @Synchronized
     fun onSignalConnected() {
-        if (restartRetryTask == null) pendingRestart?.let(signal::send)
-        if (restartRequestRetryTask == null) pendingRestartRequest?.let(signal::send)
+        if (restartRetryTask == null) pendingRestart?.let { signal.send(it) }
+        if (restartRequestRetryTask == null) pendingRestartRequest?.let { signal.send(it) }
     }
 
     @Synchronized
@@ -261,7 +261,7 @@ class ForegroundCallController(
                             .sortedBy(LocalIceEvent::sequence)
                             .map(LocalIceEvent::event)
                         rateLimitedIceEvents.clear()
-                        pending.forEach(signal::send)
+                        pending.forEach { signal.send(it) }
                     }
                 }
             }

@@ -954,7 +954,7 @@ class ForegroundCallControllerTest {
 
     private class CapturingSignalClient : SignalClient {
         val sent = mutableListOf<SignalEvent>()
-        override fun send(event: SignalEvent) {
+        override fun send(event: SignalEvent, onSettled: (() -> Unit)?) {
             sent += event
         }
     }

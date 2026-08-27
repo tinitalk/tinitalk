@@ -312,6 +312,41 @@ class SignalSocketTest {
     }
 
     @Test
+    fun terminalSettlementWaitsForAckAcrossReconnect() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val scheduler = FakeReconnectScheduler()
+        val socket = SignalSocket(
+            client,
+            Session("https://talk.example.com", "alice", "token"),
+            socketFactory = factory,
+            reconnectScheduler = scheduler::schedule,
+        )
+        socket.connect(onEvent = {})
+        val first = factory.connections.single()
+        first.listener.onOpen(first.webSocket, response(first.webSocket.request(), acknowledgesEvents = true))
+        val event = testEvent("call.end")
+        var settlements = 0
+
+        socket.send(event) { settlements++ }
+        first.listener.onFailure(first.webSocket, IOException("handover before ack"), null)
+        scheduler.runPending()
+        val replacement = factory.connections.last()
+        replacement.listener.onOpen(
+            replacement.webSocket,
+            response(replacement.webSocket.request(), acknowledgesEvents = true),
+        )
+
+        assertEquals(0, settlements)
+        assertEquals(first.webSocket.sent, replacement.webSocket.sent)
+        replacement.listener.onMessage(replacement.webSocket, """{"ack":"${event.id}"}""")
+        replacement.listener.onMessage(replacement.webSocket, """{"ack":"${event.id}"}""")
+        assertEquals(1, settlements)
+        socket.close()
+        client.shutdown()
+    }
+
+    @Test
     fun acknowledgedSendIsNotRetriedOnReplacementSocket() {
         val client = OkHttpClient()
         val factory = FakeWebSocketFactory()

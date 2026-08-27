@@ -33,6 +33,7 @@ import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.WebRtcAudioSession
+import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
@@ -63,6 +64,7 @@ class CallForegroundService : Service() {
     private var media: ForegroundCallController? = null
     @Volatile private var connected = false
     private var finishing = false
+    private var callResourcesReleased = false
     private var statsPolling = false
     private var telecomCallId: String? = null
     private var outgoingPeer: CallPeer? = null
@@ -70,6 +72,14 @@ class CallForegroundService : Service() {
     private var networkObserver: DefaultNetworkObserver? = null
     private lateinit var callTones: CallToneController
     private val connectionHealthClassifier = ConnectionHealthClassifier()
+    private val terminalSignalGate = TerminalSignalGate(
+        timeoutMillis = TerminalSignalTimeoutMillis,
+        scheduleTimeout = { delayMillis, action ->
+            handler.postDelayed(action, delayMillis)
+            CancellableTask { handler.removeCallbacks(action) }
+        },
+        onReady = { handler.post(::finishCallSoon) },
+    )
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         handler.post {
             if (!finishing) {
@@ -132,6 +142,7 @@ class CallForegroundService : Service() {
         finishing = true
         CallUiStateStore.removeObserver(callUiObserver)
         callTones.close()
+        terminalSignalGate.close()
         stopStatsPolling()
         callNetworkLock?.close()
         callNetworkLock = null
@@ -251,7 +262,7 @@ class CallForegroundService : Service() {
                         }
                     }
                     publish(incoming.event.endReason())
-                    if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallSoon()
+                    if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallUnlessAwaitingTerminalSignal()
                 }
             },
             onOpen = { connectionGeneration ->
@@ -260,7 +271,7 @@ class CallForegroundService : Service() {
                     connected = true
                     newMedia.onSignalConnected()
                     newCoordinator.resume()
-                    if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallSoon()
+                    if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallUnlessAwaitingTerminalSignal()
                 }
             },
             onDisconnected = {
@@ -292,6 +303,11 @@ class CallForegroundService : Service() {
         val call = coordinator ?: return
         val invite = IncomingCallController.inviteFrom(intent)
         var endReason: CallEndReason? = null
+        var awaitingTerminalSignal = false
+        fun terminalSettlement(): () -> Unit {
+            awaitingTerminalSignal = true
+            return terminalSignalGate.begin()
+        }
         when (intent.action) {
             ActionStart -> {
                 if (call.snapshot().phase != CallPhase.Idle) return
@@ -346,7 +362,7 @@ class CallForegroundService : Service() {
                 )
                 call.restoreIncoming(invite.callId, invite.lastSeq)
                 call.resume()
-                if (call.snapshot().phase == CallPhase.Ringing) call.reject()
+                if (call.snapshot().phase == CallPhase.Ringing) call.reject(terminalSettlement())
                 endReason = CallEndReason.Rejected
                 IncomingCallController().clear(this, invite.callId)
             }
@@ -358,27 +374,27 @@ class CallForegroundService : Service() {
                 }
                 if (invite != null && call.snapshot().callId != invite.callId) return
                 if (call.snapshot().phase == CallPhase.Active) {
-                    call.hangUp()
+                    call.hangUp(terminalSettlement())
                     endReason = CallEndReason.LocalHangup
                 } else if (call.snapshot().phase == CallPhase.Ringing) {
-                    call.reject()
+                    call.reject(terminalSettlement())
                     endReason = CallEndReason.Rejected
                 }
             }
             ActionEnd -> when (call.snapshot().phase) {
                 CallPhase.Active -> {
-                    call.hangUp()
+                    call.hangUp(terminalSettlement())
                     endReason = CallEndReason.LocalHangup
                 }
                 CallPhase.Connecting -> {
-                    call.cancel()
+                    call.cancel(terminalSettlement())
                     endReason = CallEndReason.Cancelled
                 }
                 CallPhase.Ringing -> if (CallUiStateStore.snapshot().direction == CallDirection.Outgoing) {
-                    call.cancel()
+                    call.cancel(terminalSettlement())
                     endReason = CallEndReason.Cancelled
                 } else {
-                    call.reject()
+                    call.reject(terminalSettlement())
                     endReason = CallEndReason.Rejected
                 }
                 else -> Unit
@@ -410,7 +426,7 @@ class CallForegroundService : Service() {
         }
         publish(endReason)
         if (call.snapshot().phase == CallPhase.Ended) {
-            if (connected) finishCallSoon() else handler.postDelayed({ finishCall() }, SignalFlushTimeoutMillis)
+            if (awaitingTerminalSignal) releaseCallResources() else finishCallUnlessAwaitingTerminalSignal()
         }
     }
 
@@ -446,6 +462,10 @@ class CallForegroundService : Service() {
         finishCallAfter(FinishToneDelayMillis)
     }
 
+    private fun finishCallUnlessAwaitingTerminalSignal() {
+        if (!terminalSignalGate.isWaiting()) finishCallSoon()
+    }
+
     private fun finishCallAfter(delayMillis: Long) {
         handler.postDelayed({ finishCall() }, delayMillis)
     }
@@ -453,15 +473,25 @@ class CallForegroundService : Service() {
     private fun finishCall() {
         if (finishing) return
         finishing = true
+        terminalSignalGate.close()
+        releaseCallResources()
+        stopSelf()
+    }
+
+    private fun releaseCallResources() {
+        if (callResourcesReleased) return
+        callResourcesReleased = true
         stopStatsPolling()
         val snapshot = coordinator?.snapshot()
         val callId = snapshot?.callId
         CallAudioState.reset()
-        media?.close()
+        val currentMedia = media
+        media = null
+        currentMedia?.close()
         IncomingCallNotifier(this).cancel()
         callId?.let { IncomingCallController().clear(this, it) }
         (telecomCallId ?: callId)?.let(telecom::cancel)
-        stopSelf()
+        telecomCallId = null
     }
 
     private fun telecomCallbacks(callId: String, onDisconnect: () -> Unit) = TelecomCallCallbacks(
@@ -564,7 +594,7 @@ class CallForegroundService : Service() {
         private const val ExtraEndpointId = "endpoint_id"
         const val ChannelId = "calls"
         const val NotificationId = 10
-        private const val SignalFlushTimeoutMillis = 5_000L
+        private const val TerminalSignalTimeoutMillis = 20_000L
         private const val FinishToneDelayMillis = 450L
         private const val BusyToneDelayMillis = 2_200L
         private const val EndedStateLifetimeMillis = 1_000L

@@ -86,11 +86,13 @@ class SignalSocket(
         !closed && opened && generation == expectedGeneration
     }
 
-    override fun send(event: SignalEvent) {
-        val queued = PendingEvent(event.id, event.encode())
+    override fun send(event: SignalEvent, onSettled: (() -> Unit)?) {
+        val queued = PendingEvent(event.id, event.encode(), onSettled)
         var failedSocket: WebSocket? = null
         var failedAttempt: SocketAttempt? = null
         var failureCallbacks: SignalCallbacks? = null
+        var settled: PendingEvent? = null
+        var sent = false
         synchronized(pending) {
             if (closed) return
             if (pending.size == SignalEvent.EVENT_BUFFER_LIMIT) pending.removeFirst()
@@ -99,15 +101,18 @@ class SignalSocket(
             val current = currentAttempt?.socket
             if (opened && current != null) {
                 if (current.send(queued.raw)) {
-                    if (!currentAttempt.acknowledgesEvents) pending.removeLast()
-                    return
+                    if (!currentAttempt.acknowledgesEvents) settled = pending.removeLast()
+                    sent = true
+                } else {
+                    opened = false
+                    failedSocket = current
+                    failedAttempt = currentAttempt
+                    failureCallbacks = callbacks
                 }
-                opened = false
-                failedSocket = current
-                failedAttempt = currentAttempt
-                failureCallbacks = callbacks
             }
         }
+        settled?.onSettled?.invoke()
+        if (sent) return
         val failed = failedAttempt
         val currentCallbacks = failureCallbacks
         if (failed != null && currentCallbacks != null) {
@@ -225,6 +230,7 @@ class SignalSocket(
             return
         }
         var flushFailed = false
+        val settled = mutableListOf<PendingEvent>()
         synchronized(pending) {
             if (!isCurrentLocked(currentAttempt, webSocket)) return
             backoff.reset()
@@ -244,7 +250,7 @@ class SignalSocket(
                         opened = false
                         break
                     }
-                    pending.removeFirst()
+                    settled += pending.removeFirst()
                 }
             }
             if (!flushFailed) {
@@ -252,6 +258,7 @@ class SignalSocket(
                 callbacks.onOpen(currentAttempt.generation)
             }
         }
+        settled.forEach { it.onSettled?.invoke() }
         if (flushFailed) {
             handleFailure(currentAttempt, webSocket, callbacks)
             webSocket.cancel()
@@ -282,17 +289,25 @@ class SignalSocket(
             ParsedSignal.Event(SequencedSignalEvent(SignalEvent.decode(json.toString()), seq))
         }.getOrElse { ParsedSignal.Error(SignalFailure("invalid server event")) }
 
+        var settled = emptyList<PendingEvent>()
         synchronized(pending) {
             if (!isCurrentLocked(currentAttempt, webSocket)) return
             when (result) {
                 is ParsedSignal.Event -> callbacks.onEvent(result.value)
                 is ParsedSignal.Error -> {
-                    result.value.eventId?.let { eventId -> pending.removeAll { it.id == eventId } }
+                    result.value.eventId?.let { eventId -> settled = removePendingLocked(eventId) }
                     callbacks.onError(result.value)
                 }
-                is ParsedSignal.Acknowledgement -> pending.removeAll { it.id == result.eventId }
+                is ParsedSignal.Acknowledgement -> settled = removePendingLocked(result.eventId)
             }
         }
+        settled.forEach { it.onSettled?.invoke() }
+    }
+
+    private fun removePendingLocked(eventId: String): List<PendingEvent> {
+        val removed = pending.filter { it.id == eventId }
+        pending.removeAll { it.id == eventId }
+        return removed
     }
 
     private fun handleFailure(
@@ -351,7 +366,11 @@ class SignalSocket(
         val deferred = ArrayDeque<() -> Unit>()
     }
 
-    private data class PendingEvent(val id: String, val raw: String)
+    private data class PendingEvent(
+        val id: String,
+        val raw: String,
+        val onSettled: (() -> Unit)?,
+    )
 
     private sealed interface ParsedSignal {
         data class Event(val value: SequencedSignalEvent) : ParsedSignal
