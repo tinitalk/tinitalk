@@ -9,6 +9,19 @@ import org.junit.Test
 
 class SignalEventTest {
     @Test
+    fun acceptsRestartRequestEvent() {
+        val event = SignalEvent(
+            id = "018f7d51-3f90-7e63-b657-4a83a6a90210",
+            callId = "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+            type = "rtc.restart.request",
+            sentAt = 1787666400000,
+            payload = com.google.gson.JsonObject(),
+        )
+
+        assertEquals("rtc.restart.request", SignalEvent.decode(event.encode()).type)
+    }
+
+    @Test
     fun decodesValidFixtures() {
         listOf("call_start.json", "call_resume.json", "rtc_ice.json").forEach { name ->
             val event = SignalEvent.decode(readFixture(name))

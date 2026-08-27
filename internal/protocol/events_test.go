@@ -1,11 +1,26 @@
 package protocol
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRestartRequestIsAValidEventType(t *testing.T) {
+	event := Event{
+		ID:      "018f7d51-3f90-7e63-b657-4a83a6a90210",
+		CallID:  "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+		Type:    "rtc.restart.request",
+		SentAt:  1787666400000,
+		Payload: json.RawMessage(`{}`),
+	}
+
+	if err := event.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
 
 func TestDecodeValidFixtures(t *testing.T) {
 	for _, name := range []string{"call_start.json", "call_resume.json", "rtc_ice.json"} {

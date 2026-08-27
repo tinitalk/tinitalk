@@ -399,7 +399,7 @@ class ForegroundCallControllerTest {
     }
 
     @Test
-    fun onlyInitialOffererSendsRestartOffersAcrossOutages() {
+    fun calleeRequestsRestartButOnlyInitialOffererStartsIt() {
         val callerSignal = CapturingSignalClient()
         val calleeSignal = CapturingSignalClient()
         lateinit var callerRestart: () -> Unit
@@ -420,12 +420,14 @@ class ForegroundCallControllerTest {
         callerSignal.sent.clear()
         calleeSignal.sent.clear()
 
-        callerRestart()
         calleeRestart()
+        val request = calleeSignal.sent.single()
+        caller.onSignalEvent(activeSnapshot(), request)
         callerRestart()
 
         assertEquals(listOf("rtc.restart"), callerSignal.sent.map { it.type })
-        assertTrue(calleeSignal.sent.isEmpty())
+        assertEquals(listOf("rtc.restart.request"), calleeSignal.sent.map { it.type })
+        assertTrue(calleeSignal.sent.none { it.type == "rtc.offer" || it.type == "rtc.restart" })
     }
 
     @Test
@@ -535,6 +537,76 @@ class ForegroundCallControllerTest {
         assertEquals(listOf(pending.id), signal.sent.map { it.id })
         scheduler.runPending()
         assertEquals(listOf(pending.id, pending.id), signal.sent.map { it.id })
+    }
+
+    @Test
+    fun retriesPendingRestartRequestAfterSignalReconnect() {
+        val signal = CapturingSignalClient()
+        lateinit var restart: () -> Unit
+        val controller = ForegroundCallController(signal, { _, _, _, callback ->
+            restart = callback
+            FakeMediaSession()
+        }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.offer", JsonObject().apply { addProperty("sdp", "remote-offer") }))
+        signal.sent.clear()
+
+        restart()
+        controller.onSignalConnected()
+
+        assertEquals(listOf("rtc.restart.request", "rtc.restart.request"), signal.sent.map { it.type })
+        assertEquals(signal.sent.first().id, signal.sent.last().id)
+    }
+
+    @Test
+    fun retriesRateLimitedRestartRequestWithSameEventAfterServerDelay() {
+        val signal = CapturingSignalClient()
+        val scheduler = FakeTaskScheduler()
+        lateinit var restart: () -> Unit
+        val controller = ForegroundCallController(signal, { _, _, _, callback ->
+            restart = callback
+            FakeMediaSession()
+        }, ids, scheduler)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.offer", JsonObject().apply { addProperty("sdp", "remote-offer") }))
+        signal.sent.clear()
+
+        restart()
+        val pending = signal.sent.single()
+        controller.onSignalFailure(
+            SignalFailure(
+                message = "ICE restart request sent too often",
+                code = "ice_restart_request_rate_limited",
+                callId = callId,
+                eventId = pending.id,
+                retryAfterMillis = 7_500L,
+            ),
+        )
+
+        assertEquals(listOf(7_500L), scheduler.delays)
+        controller.onSignalConnected()
+        assertEquals(listOf(pending.id), signal.sent.map { it.id })
+        scheduler.runPending()
+        assertEquals(listOf(pending.id, pending.id), signal.sent.map { it.id })
+    }
+
+    @Test
+    fun remoteRestartClearsPendingCalleeRequest() {
+        val signal = CapturingSignalClient()
+        lateinit var restart: () -> Unit
+        val controller = ForegroundCallController(signal, { _, _, _, callback ->
+            restart = callback
+            FakeMediaSession()
+        }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.offer", JsonObject().apply { addProperty("sdp", "remote-offer") }))
+        signal.sent.clear()
+
+        restart()
+        controller.onSignalEvent(activeSnapshot(), event("rtc.restart"))
+        controller.onSignalConnected()
+
+        assertEquals(listOf("rtc.restart.request"), signal.sent.map { it.type })
     }
 
     private fun activeSnapshot(): CallSnapshot = CallSnapshot(CallPhase.Active, callId, 1)

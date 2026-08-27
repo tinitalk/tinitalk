@@ -67,6 +67,12 @@ class CallToneModeTest {
                 "call-1",
             ),
         )
+        assertNull(
+            signalingFailureEndReason(
+                SignalFailure("ICE restart request sent too often", "ice_restart_request_rate_limited", "call-1"),
+                "call-1",
+            ),
+        )
     }
 
     @Test

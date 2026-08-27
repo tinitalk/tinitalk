@@ -46,6 +46,7 @@ data class SignalEvent(
             "rtc.answer",
             "rtc.ice",
             "rtc.restart",
+            "rtc.restart.request",
         )
 
         fun decode(raw: String): SignalEvent {

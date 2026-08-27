@@ -3,8 +3,9 @@ package signaling
 import "time"
 
 const (
-	iceRateLimitCode        = "ice_rate_limited"
-	iceRestartRateLimitCode = "ice_restart_rate_limited"
+	iceRateLimitCode               = "ice_rate_limited"
+	iceRestartRateLimitCode        = "ice_restart_rate_limited"
+	iceRestartRequestRateLimitCode = "ice_restart_request_rate_limited"
 )
 
 type ClientError interface {

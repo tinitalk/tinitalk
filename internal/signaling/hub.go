@@ -217,6 +217,11 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 			return err
 		}
 	}
+	if event.Type == "rtc.restart.request" {
+		if err := h.checkRestartRequestRate(c); err != nil {
+			return err
+		}
+	}
 	now := h.now()
 	if h.history != nil {
 		switch event.Type {
@@ -629,6 +634,19 @@ func (h *Hub) checkRestartRate(c *call) error {
 	return nil
 }
 
+func (h *Hub) checkRestartRequestRate(c *call) error {
+	now := h.now()
+	if !c.lastRestartRequest.IsZero() && now.Sub(c.lastRestartRequest) < RestartRequestMinInterval {
+		return clientError{
+			message:    "ICE restart request sent too often",
+			code:       iceRestartRequestRateLimitCode,
+			retryAfter: RestartRequestMinInterval - now.Sub(c.lastRestartRequest),
+		}
+	}
+	c.lastRestartRequest = now
+	return nil
+}
+
 func (h *Hub) next(c *call, event protocol.Event, recipients ...string) DeliveredEvent {
 	delivered := DeliveredEvent{Event: event, Seq: c.nextSeq}
 	c.nextSeq++
@@ -733,6 +751,11 @@ func (c *call) validateTransition(sender, eventType string) error {
 	case "rtc.offer", "rtc.restart":
 		if sender != c.caller {
 			return errors.New("only caller can send this event")
+		}
+		return nil
+	case "rtc.restart.request":
+		if sender != c.callee {
+			return errors.New("only callee can request ICE restart")
 		}
 		return nil
 	case "rtc.answer":

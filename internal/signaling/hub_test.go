@@ -722,6 +722,62 @@ func TestHubEnforcesNegotiationRolesAndRestartInterval(t *testing.T) {
 	}
 }
 
+func TestHubRoutesCalleeRestartRequestWithoutChangingOfferer(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := activeCall(t, hub, alice, bob, 1271)
+
+	request := event(uuid(1274), start.CallID, "rtc.restart.request", map[string]any{})
+	if err := hub.Handle("bob", request); err != nil {
+		t.Fatalf("callee restart request: %v", err)
+	}
+	if got := next(t, alice); got.ID != request.ID || got.Type != "rtc.restart.request" {
+		t.Fatalf("caller request = %+v", got)
+	}
+
+	restart := event(uuid(1275), start.CallID, "rtc.restart", map[string]any{})
+	if err := hub.Handle("alice", restart); err != nil {
+		t.Fatalf("caller restart after callee request: %v", err)
+	}
+	if got := next(t, bob); got.ID != restart.ID || got.Type != "rtc.restart" {
+		t.Fatalf("callee restart = %+v", got)
+	}
+	if err := hub.Handle("alice", event(uuid(1276), start.CallID, "rtc.restart.request", map[string]any{})); err == nil {
+		t.Fatal("caller restart request error = nil")
+	}
+}
+
+func TestHubRateLimitsCalleeRestartRequestsSeparately(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := activeCall(t, hub, alice, bob, 1281)
+
+	if err := hub.Handle("bob", event(uuid(1284), start.CallID, "rtc.restart.request", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice)
+	err := hub.Handle("bob", event(uuid(1285), start.CallID, "rtc.restart.request", map[string]any{}))
+	if err == nil {
+		t.Fatal("immediate restart request error = nil")
+	}
+	var rateLimit ClientError
+	if !errors.As(err, &rateLimit) {
+		t.Fatalf("immediate restart request error = %T, want ClientError", err)
+	}
+	if rateLimit.Code() != "ice_restart_request_rate_limited" || rateLimit.RetryAfter() != RestartRequestMinInterval {
+		t.Fatalf("immediate restart request details = %q/%s", rateLimit.Code(), rateLimit.RetryAfter())
+	}
+
+	now = now.Add(RestartRequestMinInterval)
+	if err := hub.Handle("bob", event(uuid(1286), start.CallID, "rtc.restart.request", map[string]any{})); err != nil {
+		t.Fatalf("restart request after interval: %v", err)
+	}
+}
+
 func TestHubDisconnectsSlowClientAndRetainsReplay(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alice := hub.Connect("alice")

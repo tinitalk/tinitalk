@@ -22,21 +22,22 @@ type Event struct {
 }
 
 var allowedTypes = map[string]struct{}{
-	"call.start":     {},
-	"call.incoming":  {},
-	"call.ringing":   {},
-	"call.accept":    {},
-	"call.connected": {},
-	"call.reject":    {},
-	"call.cancel":    {},
-	"call.end":       {},
-	"call.expire":    {},
-	"call.resume":    {},
-	"rtc.config":     {},
-	"rtc.offer":      {},
-	"rtc.answer":     {},
-	"rtc.ice":        {},
-	"rtc.restart":    {},
+	"call.start":          {},
+	"call.incoming":       {},
+	"call.ringing":        {},
+	"call.accept":         {},
+	"call.connected":      {},
+	"call.reject":         {},
+	"call.cancel":         {},
+	"call.end":            {},
+	"call.expire":         {},
+	"call.resume":         {},
+	"rtc.config":          {},
+	"rtc.offer":           {},
+	"rtc.answer":          {},
+	"rtc.ice":             {},
+	"rtc.restart":         {},
+	"rtc.restart.request": {},
 }
 
 func Decode(raw []byte) (Event, error) {

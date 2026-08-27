@@ -36,10 +36,12 @@ class ForegroundCallController(
     private var restartRequestedCallId: String? = null
     private var restartRequestID: String? = null
     private var pendingRestart: SignalEvent? = null
+    private var pendingRestartRequest: SignalEvent? = null
     @Volatile private var localIceGeneration: String? = null
     private var remoteIceGeneration: String? = null
     private var credentialRefreshTask: CancellableTask? = null
     private var restartRetryTask: CancellableTask? = null
+    private var restartRequestRetryTask: CancellableTask? = null
     private var pendingOffer: SignalEvent? = null
     private val pendingIce = ArrayDeque<Pair<String, IceCandidateData>>()
 
@@ -86,9 +88,11 @@ class ForegroundCallController(
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
             }
             "rtc.restart" -> {
+                clearPendingRestartRequest(event.callId)
                 remoteIceGeneration = event.id
                 session?.beginRemoteDescription()
             }
+            "rtc.restart.request" -> restartIce(event.callId)
             "rtc.ice" -> {
                 val generation = event.payload.restartID()
                 if (generation != null && generation != remoteIceGeneration) return
@@ -135,6 +139,8 @@ class ForegroundCallController(
         credentialRefreshTask = null
         restartRetryTask?.cancel()
         restartRetryTask = null
+        restartRequestRetryTask?.cancel()
+        restartRequestRetryTask = null
         scheduler.close()
         val media = session
         session = null
@@ -146,6 +152,7 @@ class ForegroundCallController(
         restartRequestedCallId = null
         restartRequestID = null
         pendingRestart = null
+        pendingRestartRequest = null
         localIceGeneration = null
         remoteIceGeneration = null
         pendingOffer = null
@@ -195,33 +202,66 @@ class ForegroundCallController(
     @Synchronized
     fun onSignalConnected() {
         if (restartRetryTask == null) pendingRestart?.let(signal::send)
+        if (restartRequestRetryTask == null) pendingRestartRequest?.let(signal::send)
     }
 
     @Synchronized
     fun onSignalFailure(failure: SignalFailure) {
-        if (failure.code != "ice_restart_rate_limited") return
-        val restart = pendingRestart ?: return
-        if (failure.callId != restart.callId || failure.eventId != restart.id) return
-        val delayMillis = failure.retryAfterMillis?.coerceAtLeast(1L) ?: return
-        restartRetryTask?.cancel()
-        restartRetryTask = scheduler.schedule(delayMillis) {
-            synchronized(this) {
-                restartRetryTask = null
-                val pending = pendingRestart
-                if (pending?.id == restart.id && callId == restart.callId) signal.send(pending)
+        when (failure.code) {
+            "ice_restart_rate_limited" -> {
+                val restart = pendingRestart ?: return
+                if (failure.callId != restart.callId || failure.eventId != restart.id) return
+                val delayMillis = failure.retryAfterMillis?.coerceAtLeast(1L) ?: return
+                restartRetryTask?.cancel()
+                restartRetryTask = scheduler.schedule(delayMillis) {
+                    synchronized(this) {
+                        restartRetryTask = null
+                        val pending = pendingRestart
+                        if (pending?.id == restart.id && callId == restart.callId) signal.send(pending)
+                    }
+                }
+            }
+            "ice_restart_request_rate_limited" -> {
+                val request = pendingRestartRequest ?: return
+                if (failure.callId != request.callId || failure.eventId != request.id) return
+                val delayMillis = failure.retryAfterMillis?.coerceAtLeast(1L) ?: return
+                restartRequestRetryTask?.cancel()
+                restartRequestRetryTask = scheduler.schedule(delayMillis) {
+                    synchronized(this) {
+                        restartRequestRetryTask = null
+                        val pending = pendingRestartRequest
+                        if (pending?.id == request.id && callId == request.callId) signal.send(pending)
+                    }
+                }
             }
         }
     }
 
     @Synchronized
     private fun restartIce(nextCallId: String) {
-        if (offerStartedCallId != nextCallId || callId != nextCallId || restartRequestedCallId == nextCallId) return
+        if (callId != nextCallId) return
+        if (offerStartedCallId != nextCallId) {
+            if (pendingRestartRequest != null) return
+            event(nextCallId, "rtc.restart.request", JsonObject()).also {
+                pendingRestartRequest = it
+                signal.send(it)
+            }
+            return
+        }
+        if (restartRequestedCallId == nextCallId) return
         val restart = event(nextCallId, "rtc.restart", JsonObject())
         restartRequestedCallId = nextCallId
         restartRequestID = restart.id
         pendingRestart = restart
         remoteIceGeneration = restart.id
         signal.send(restart)
+    }
+
+    private fun clearPendingRestartRequest(nextCallId: String) {
+        if (pendingRestartRequest?.callId != nextCallId) return
+        restartRequestRetryTask?.cancel()
+        restartRequestRetryTask = null
+        pendingRestartRequest = null
     }
 
     private fun scheduleCredentialRefresh(nextCallId: String) {

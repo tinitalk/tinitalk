@@ -593,7 +593,9 @@ internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: St
     currentCallId == null -> null
     failure.callId != null && failure.callId != currentCallId -> null
     failure.code == "busy" -> CallEndReason.Busy
-    failure.code == "ice_rate_limited" || failure.code == "ice_restart_rate_limited" -> null
+    failure.code == "ice_rate_limited" ||
+        failure.code == "ice_restart_rate_limited" ||
+        failure.code == "ice_restart_request_rate_limited" -> null
     else -> CallEndReason.Failed
 }
 
