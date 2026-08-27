@@ -34,6 +34,7 @@ import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.WebRtcAudioSession
 import org.tinitalk.media.ConnectionHealthClassifier
+import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
@@ -45,18 +46,27 @@ internal fun signalingHttpClient(): OkHttpClient =
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
+internal fun migrateCallNetwork(
+    reconnectSignaling: () -> Unit,
+    restartMedia: () -> Unit,
+) {
+    reconnectSignaling()
+    restartMedia()
+}
+
 class CallForegroundService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var socket: SignalSocket? = null
     private var httpClient: OkHttpClient? = null
     private var coordinator: CallCoordinator? = null
     private var media: ForegroundCallController? = null
-    private var connected = false
+    @Volatile private var connected = false
     private var finishing = false
     private var statsPolling = false
     private var telecomCallId: String? = null
     private var outgoingPeer: CallPeer? = null
     private var callNetworkLock: CallNetworkLock? = null
+    private var networkObserver: DefaultNetworkObserver? = null
     private lateinit var callTones: CallToneController
     private val connectionHealthClassifier = ConnectionHealthClassifier()
     private val callUiObserver: (CallUiState) -> Unit = { state ->
@@ -124,6 +134,8 @@ class CallForegroundService : Service() {
         stopStatsPolling()
         callNetworkLock?.close()
         callNetworkLock = null
+        networkObserver?.close()
+        networkObserver = null
         val snapshot = coordinator?.snapshot()
         if (unexpected && connected && snapshot?.phase == CallPhase.Active) {
             runCatching { coordinator?.hangUp() }
@@ -185,6 +197,10 @@ class CallForegroundService : Service() {
         httpClient = newHttpClient
         coordinator = newCoordinator
         media = newMedia
+        networkObserver = DefaultNetworkObserver(applicationContext) {
+            connected = false
+            migrateCallNetwork(newSocket::reconnectNow, newMedia::onNetworkChanged)
+        }
         newSocket.connect(
             onEvent = { incoming ->
                 handler.post {
@@ -232,9 +248,9 @@ class CallForegroundService : Service() {
                     if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallSoon()
                 }
             },
-            onOpen = {
+            onOpen = { connectionGeneration ->
                 handler.post {
-                    if (socket !== newSocket || finishing) return@post
+                    if (socket !== newSocket || finishing || !newSocket.isOpen(connectionGeneration)) return@post
                     connected = true
                     newMedia.onSignalConnected()
                     newCoordinator.resume()
@@ -243,7 +259,7 @@ class CallForegroundService : Service() {
             },
             onDisconnected = {
                 handler.post {
-                    if (socket === newSocket) connected = false
+                    if (socket === newSocket && !newSocket.isOpen()) connected = false
                 }
             },
             onError = { failure ->

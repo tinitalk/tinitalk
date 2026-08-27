@@ -126,6 +126,11 @@ class ForegroundCallController(
     }
 
     @Synchronized
+    fun onNetworkChanged() {
+        session?.onNetworkChanged()
+    }
+
+    @Synchronized
     fun getStats(onResult: (CallStats) -> Unit) {
         val current = session ?: return
         current.getStats { stats ->

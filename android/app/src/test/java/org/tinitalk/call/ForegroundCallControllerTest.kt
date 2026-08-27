@@ -36,6 +36,18 @@ class ForegroundCallControllerTest {
     }
 
     @Test
+    fun networkChangeIsForwardedToCurrentMediaSession() {
+        val media = FakeMediaSession()
+        val controller = ForegroundCallController(CapturingSignalClient(), { _, _, _, _ -> media }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+
+        controller.onNetworkChanged()
+
+        assertEquals(1, media.networkChanges)
+    }
+
+    @Test
     fun callerWaitsForIceConfigBeforeCreatingOffer() {
         val signal = CapturingSignalClient()
         val media = FakeMediaSession(offer = "local-offer")
@@ -658,6 +670,7 @@ class ForegroundCallControllerTest {
         val activity = mutableListOf<Boolean>()
         val muted = mutableListOf<Boolean>()
         var remoteDescriptionsPrepared = 0
+        var networkChanges = 0
         private var statsCallback: ((CallStats) -> Unit)? = null
 
         override suspend fun createOffer(): String = offer
@@ -682,6 +695,9 @@ class ForegroundCallControllerTest {
         }
         override fun beginRemoteDescription() {
             remoteDescriptionsPrepared++
+        }
+        override fun onNetworkChanged() {
+            networkChanges++
         }
         override fun getStats(onResult: (CallStats) -> Unit) {
             statsCallback = onResult

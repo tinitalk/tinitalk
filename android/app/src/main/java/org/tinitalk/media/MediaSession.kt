@@ -31,6 +31,7 @@ interface MediaSession {
     suspend fun restartIce(): String
     suspend fun updateIceServers(servers: List<IceServerData>)
     fun beginRemoteDescription()
+    fun onNetworkChanged()
     fun setMuted(muted: Boolean)
     fun setActive(active: Boolean)
     fun getStats(onResult: (CallStats) -> Unit)
