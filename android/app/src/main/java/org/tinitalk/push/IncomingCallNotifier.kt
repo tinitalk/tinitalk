@@ -204,7 +204,7 @@ class IncomingCallNotifier(private val context: Context) {
             @Suppress("DEPRECATION")
             Notification.Builder(context)
         }
-        val answer = controller.actionIntent(context, IncomingCallController.ActionAnswer, invite)
+        val answer = controller.activityIntent(context, IncomingCallController.ActionAnswer, invite)
         val reject = controller.actionIntent(context, IncomingCallController.ActionReject, invite)
         val fullScreen = controller.activityIntent(context, IncomingCallController.ActionIncoming, invite)
         @Suppress("DEPRECATION")

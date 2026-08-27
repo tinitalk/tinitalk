@@ -66,6 +66,26 @@ class IncomingCallController {
         )
     }
 
+    internal fun claimAnswer(
+        context: Context,
+        invite: IncomingInvite,
+        now: Instant = Instant.now(),
+    ): IncomingAnswerClaim = synchronized(PendingActionLock) {
+        if (!invite.expiresAt.isAfter(now) || isTerminal(context, invite.callId)) {
+            return@synchronized IncomingAnswerClaim.Invalid
+        }
+        val pending = load(context)
+        if (pending?.invite?.callId != invite.callId || !pending.invite.expiresAt.isAfter(now)) {
+            return@synchronized IncomingAnswerClaim.Invalid
+        }
+        if (pending.action == ActionAnswer) return@synchronized IncomingAnswerClaim.AlreadyClaimed
+        if (prefs(context).edit().putString(ExtraAction, ActionAnswer).commit()) {
+            IncomingAnswerClaim.Claimed
+        } else {
+            IncomingAnswerClaim.Invalid
+        }
+    }
+
     fun activityIntent(context: Context, action: String, invite: IncomingInvite): PendingIntent =
         PendingIntent.getActivity(
             context,
@@ -147,6 +167,7 @@ class IncomingCallController {
         private const val ExtraExpiresAt = "expires_at"
         private const val ExtraLastSeq = "last_seq"
         private const val ExtraAction = "action"
+        private val PendingActionLock = Any()
 
         fun inviteFrom(intent: Intent?): IncomingInvite? {
             val callId = intent?.getStringExtra(ExtraCallId) ?: return null
@@ -233,3 +254,9 @@ internal object TerminalCallTombstones {
 }
 
 data class PendingIncomingCall(val invite: IncomingInvite, val action: String?)
+
+internal enum class IncomingAnswerClaim {
+    Claimed,
+    AlreadyClaimed,
+    Invalid,
+}

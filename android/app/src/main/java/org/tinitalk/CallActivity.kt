@@ -40,6 +40,7 @@ import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import org.tinitalk.push.IncomingRingingAcknowledger
 import org.tinitalk.telecom.CallForegroundService
+import org.tinitalk.telecom.IncomingAnswerClaim
 import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.ProximityController
 import org.tinitalk.ui.call.ActiveCallScreen
@@ -210,8 +211,7 @@ class CallActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        setIntent(intent)
-        applyIntent(intent)
+        if (applyIntent(intent)) setIntent(intent)
         showIncomingCallFullScreen()
     }
 
@@ -223,16 +223,33 @@ class CallActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun applyIntent(intent: Intent?) {
+    private fun applyIntent(intent: Intent?): Boolean {
         val invite = IncomingCallController.inviteFrom(intent)
         if (invite != null) {
+            val answerRequested = intent?.action == IncomingCallController.ActionAnswer
+            val answerClaim = if (answerRequested) {
+                val liveCall = callState.phase != CallPhase.Idle && callState.phase != CallPhase.Ended
+                when {
+                    liveCall && callState.callId == invite.callId -> IncomingAnswerClaim.AlreadyClaimed
+                    liveCall -> IncomingAnswerClaim.Invalid
+                    else -> incomingController.claimAnswer(this, invite)
+                }
+            } else {
+                null
+            }
+            if (answerClaim == IncomingAnswerClaim.Invalid) {
+                if (callState.phase == CallPhase.Idle || callState.phase == CallPhase.Ended) finish()
+                return false
+            }
+            if (answerRequested) intent.action = IncomingCallController.ActionIncoming
             if (incomingInvite?.callId != invite.callId) actionGate.reset()
             incomingInvite = invite
             outgoingLogin = null
             outgoingName = null
-            return
+            if (answerClaim == IncomingAnswerClaim.Claimed) answer(invite)
+            return true
         }
-        val login = intent?.getStringExtra(ExtraOutgoingLogin) ?: return
+        val login = intent?.getStringExtra(ExtraOutgoingLogin) ?: return false
         val redial = intent.action == ActionRedial
         if (redial) intent.action = null
         val servicePhase = CallServiceState.snapshot().phase
@@ -240,7 +257,7 @@ class CallActivity : ComponentActivity() {
             incomingInvite = null
             outgoingLogin = null
             outgoingName = null
-            return
+            return true
         }
         if (outgoingLogin != login) actionGate.reset()
         outgoingLogin = login
@@ -249,6 +266,7 @@ class CallActivity : ComponentActivity() {
         if (redial) {
             CallForegroundService.startOutgoing(this, login, outgoingName.orEmpty())
         }
+        return true
     }
 
     private fun visibleCallState(): CallUiState {
