@@ -251,6 +251,60 @@ func TestSocketRoutesCallEvents(t *testing.T) {
 	}
 }
 
+func TestSocketAcknowledgesAcceptedEventsWhenNegotiated(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	server := httptest.NewServer(NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}))
+	defer server.Close()
+
+	alice, response := dialAcknowledgedSocket(t, server.URL, "alice", tokens["alice"])
+	defer alice.Close()
+	if got := response.Header.Get("X-TiniTalk-Signal-Ack"); got != "1" {
+		t.Fatalf("acknowledgement handshake = %q, want 1", got)
+	}
+	bob := dialSocket(t, server.URL, "bob", tokens["bob"])
+	defer bob.Close()
+
+	eventID := "018f7d51-3f90-7e63-b657-4a83a6a90311"
+	callID := "018f7d51-40a1-7bb5-a2d0-7e47f9180311"
+	for range 2 {
+		writeSocketEvent(t, alice, eventID, callID, "call.start", map[string]any{"callee_id": "bob"})
+		if ack := readSocketEvent(t, alice); ack["ack"] != eventID {
+			t.Fatalf("acknowledgement = %+v", ack)
+		}
+	}
+	if incoming := readSocketEvent(t, bob); incoming["type"] != "call.incoming" {
+		t.Fatalf("incoming = %+v", incoming)
+	}
+	if err := bob.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := bob.ReadMessage(); err == nil {
+		t.Fatal("duplicate event was delivered to peer")
+	}
+}
+
+func TestSocketDoesNotAcknowledgeEventsWithoutNegotiation(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	server := httptest.NewServer(NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}))
+	defer server.Close()
+
+	alice := dialSocket(t, server.URL, "alice", tokens["alice"])
+	defer alice.Close()
+	bob := dialSocket(t, server.URL, "bob", tokens["bob"])
+	defer bob.Close()
+
+	writeSocketEvent(t, alice, "018f7d51-3f90-7e63-b657-4a83a6a90321", "018f7d51-40a1-7bb5-a2d0-7e47f9180321", "call.start", map[string]any{"callee_id": "bob"})
+	readSocketEvent(t, bob)
+	if err := alice.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := alice.ReadMessage(); err == nil {
+		t.Fatal("legacy client received an acknowledgement")
+	}
+}
+
 func TestSocketReportsRetryableICERestartLimit(t *testing.T) {
 	db, tokens := testDB(t)
 	hub := signaling.NewHub(signaling.NoopNotifier{})
@@ -424,6 +478,19 @@ func dialDeviceSocket(t *testing.T, baseURL, login, token, deviceID string) *web
 		t.Fatal(err)
 	}
 	return conn
+}
+
+func dialAcknowledgedSocket(t *testing.T, baseURL, login, token string) (*websocket.Conn, *http.Response) {
+	t.Helper()
+	header := http.Header{}
+	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(login+":"+token)))
+	header.Set("X-TiniTalk-Signal-Ack", "1")
+	url := "ws" + baseURL[len("http"):] + "/api/socket"
+	conn, response, err := websocket.DefaultDialer.Dial(url, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn, response
 }
 
 func writeSocketEvent(t *testing.T, conn *websocket.Conn, id, callID, eventType string, payload map[string]any) {

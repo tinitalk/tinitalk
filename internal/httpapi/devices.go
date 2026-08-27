@@ -12,7 +12,11 @@ import (
 	"tinitalk/internal/signaling"
 )
 
-const deviceIDHeader = "X-TiniTalk-Device-ID"
+const (
+	deviceIDHeader   = "X-TiniTalk-Device-ID"
+	signalAckHeader  = "X-TiniTalk-Signal-Ack"
+	signalAckVersion = "1"
+)
 
 type deviceRequest struct {
 	DeviceID string `json:"device_id"`
@@ -55,7 +59,12 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
 		return
 	}
-	conn, err := websocket.Upgrade(w, r, nil, protocol.MaxEventBytes, protocol.MaxEventBytes)
+	acknowledgesEvents := r.Header.Get(signalAckHeader) == signalAckVersion
+	var responseHeader http.Header
+	if acknowledgesEvents {
+		responseHeader = http.Header{signalAckHeader: []string{signalAckVersion}}
+	}
+	conn, err := websocket.Upgrade(w, r, responseHeader, protocol.MaxEventBytes, protocol.MaxEventBytes)
 	if err != nil {
 		s.hub.Disconnect(client)
 		return
@@ -138,6 +147,11 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = writeJSON(failure)
 			continue
+		}
+		if acknowledgesEvents {
+			if err := writeJSON(map[string]string{"ack": event.ID}); err != nil {
+				return
+			}
 		}
 		select {
 		case <-done:

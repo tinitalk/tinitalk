@@ -42,6 +42,7 @@ class SignalSocketTest {
             assertNull(request.requestUrl?.query)
             assertEquals("Basic YWxpY2U6c2VjcmV0LXRva2Vu", request.getHeader("Authorization"))
             assertEquals("android-device-123", request.getHeader("X-TiniTalk-Device-ID"))
+            assertEquals("1", request.getHeader("X-TiniTalk-Signal-Ack"))
             socket.close()
             client.shutdown()
         }
@@ -251,6 +252,103 @@ class SignalSocketTest {
     }
 
     @Test
+    fun successfulButUnacknowledgedSendIsRetriedOnReplacementSocket() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val scheduler = FakeReconnectScheduler()
+        val socket = SignalSocket(
+            client,
+            Session("https://talk.example.com", "alice", "token"),
+            socketFactory = factory,
+            reconnectScheduler = scheduler::schedule,
+        )
+        socket.connect(onEvent = {})
+        val first = factory.connections.single()
+        first.listener.onOpen(first.webSocket, response(first.webSocket.request(), acknowledgesEvents = true))
+
+        socket.send(testEvent("rtc.offer"))
+        first.listener.onFailure(first.webSocket, IOException("frame delivery unknown"), null)
+        scheduler.runPending()
+        val replacement = factory.connections.last()
+        replacement.listener.onOpen(
+            replacement.webSocket,
+            response(replacement.webSocket.request(), acknowledgesEvents = true),
+        )
+
+        assertEquals(1, first.webSocket.sent.size)
+        assertEquals(first.webSocket.sent, replacement.webSocket.sent)
+        socket.close()
+        client.shutdown()
+    }
+
+    @Test
+    fun acknowledgedSendIsNotRetriedOnReplacementSocket() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val scheduler = FakeReconnectScheduler()
+        val socket = SignalSocket(
+            client,
+            Session("https://talk.example.com", "alice", "token"),
+            socketFactory = factory,
+            reconnectScheduler = scheduler::schedule,
+        )
+        socket.connect(onEvent = {})
+        val first = factory.connections.single()
+        first.listener.onOpen(first.webSocket, response(first.webSocket.request(), acknowledgesEvents = true))
+
+        val event = testEvent("rtc.answer")
+        socket.send(event)
+        first.listener.onMessage(first.webSocket, """{"ack":"${event.id}"}""")
+        first.listener.onFailure(first.webSocket, IOException("offline after ack"), null)
+        scheduler.runPending()
+        val replacement = factory.connections.last()
+        replacement.listener.onOpen(
+            replacement.webSocket,
+            response(replacement.webSocket.request(), acknowledgesEvents = true),
+        )
+
+        assertTrue(replacement.webSocket.sent.isEmpty())
+        socket.close()
+        client.shutdown()
+    }
+
+    @Test
+    fun rejectedSendIsNotRetriedOnReplacementSocket() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val scheduler = FakeReconnectScheduler()
+        val failures = mutableListOf<SignalFailure>()
+        val socket = SignalSocket(
+            client,
+            Session("https://talk.example.com", "alice", "token"),
+            socketFactory = factory,
+            reconnectScheduler = scheduler::schedule,
+        )
+        socket.connect(onEvent = {}, onError = failures::add)
+        val first = factory.connections.single()
+        first.listener.onOpen(first.webSocket, response(first.webSocket.request(), acknowledgesEvents = true))
+
+        val event = testEvent("rtc.ice")
+        socket.send(event)
+        first.listener.onMessage(
+            first.webSocket,
+            """{"error":"rate limited","code":"ice_rate_limited","event_id":"${event.id}"}""",
+        )
+        first.listener.onFailure(first.webSocket, IOException("offline after rejection"), null)
+        scheduler.runPending()
+        val replacement = factory.connections.last()
+        replacement.listener.onOpen(
+            replacement.webSocket,
+            response(replacement.webSocket.request(), acknowledgesEvents = true),
+        )
+
+        assertEquals("ice_rate_limited", failures.single().code)
+        assertTrue(replacement.webSocket.sent.isEmpty())
+        socket.close()
+        client.shutdown()
+    }
+
+    @Test
     fun openStateTracksImmediateNetworkReplacement() {
         val client = OkHttpClient()
         val factory = FakeWebSocketFactory()
@@ -387,11 +485,14 @@ private fun testEvent(type: String) = SignalEvent(
     payload = JsonObject(),
 )
 
-private fun response(request: Request): Response = Response.Builder()
+private fun response(request: Request, acknowledgesEvents: Boolean = false): Response = Response.Builder()
     .request(request)
     .protocol(Protocol.HTTP_1_1)
     .code(101)
     .message("Switching Protocols")
+    .apply {
+        if (acknowledgesEvents) header("X-TiniTalk-Signal-Ack", "1")
+    }
     .build()
 
 private fun OkHttpClient.shutdown() {

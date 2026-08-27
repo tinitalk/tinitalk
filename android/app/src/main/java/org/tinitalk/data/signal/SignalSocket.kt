@@ -12,6 +12,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
 private const val DeviceIDHeader = "X-TiniTalk-Device-ID"
+private const val SignalAckHeader = "X-TiniTalk-Signal-Ack"
+private const val SignalAckVersion = "1"
 
 data class SignalFailure(
     val message: String,
@@ -29,7 +31,7 @@ class SignalSocket(
     private val reconnectScheduler: (Long, () -> Unit) -> Unit = ::scheduleReconnect,
     private val deviceId: String = "",
 ) : SignalClient {
-    private val pending = ArrayDeque<String>()
+    private val pending = ArrayDeque<PendingEvent>()
     private var closed = false
     private var opened = false
     private var generation = 0L
@@ -83,23 +85,26 @@ class SignalSocket(
     }
 
     override fun send(event: SignalEvent) {
-        val raw = event.encode()
+        val queued = PendingEvent(event.id, event.encode())
         var failedSocket: WebSocket? = null
         var failedAttempt: SocketAttempt? = null
         var failureCallbacks: SignalCallbacks? = null
         synchronized(pending) {
             if (closed) return
+            if (pending.size == SignalEvent.EVENT_BUFFER_LIMIT) pending.removeFirst()
+            pending.addLast(queued)
             val currentAttempt = attempt
             val current = currentAttempt?.socket
             if (opened && current != null) {
-                if (current.send(raw)) return
+                if (current.send(queued.raw)) {
+                    if (!currentAttempt.acknowledgesEvents) pending.removeLast()
+                    return
+                }
                 opened = false
                 failedSocket = current
                 failedAttempt = currentAttempt
                 failureCallbacks = callbacks
             }
-            if (pending.size == SignalEvent.EVENT_BUFFER_LIMIT) pending.removeFirst()
-            pending.addLast(raw)
         }
         val failed = failedAttempt
         val currentCallbacks = failureCallbacks
@@ -131,6 +136,7 @@ class SignalSocket(
         val request = Request.Builder()
             .url(socketUrl())
             .header("Authorization", basicAuth())
+            .header(SignalAckHeader, SignalAckVersion)
             .apply {
                 if (deviceId.isNotEmpty()) {
                     header(DeviceIDHeader, deviceId)
@@ -139,7 +145,7 @@ class SignalSocket(
             .build()
         val nextSocket = socketFactory.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                dispatch(currentAttempt) { handleOpen(currentAttempt, webSocket, callbacks) }
+                dispatch(currentAttempt) { handleOpen(currentAttempt, webSocket, response, callbacks) }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -193,19 +199,31 @@ class SignalSocket(
     private fun handleOpen(
         currentAttempt: SocketAttempt,
         webSocket: WebSocket,
+        response: Response,
         callbacks: SignalCallbacks,
     ) {
         var flushFailed = false
         synchronized(pending) {
             if (!isCurrentLocked(currentAttempt, webSocket)) return
             backoff.reset()
-            while (pending.isNotEmpty()) {
-                if (!webSocket.send(pending.first())) {
-                    flushFailed = true
-                    opened = false
-                    break
+            currentAttempt.acknowledgesEvents = response.header(SignalAckHeader) == SignalAckVersion
+            if (currentAttempt.acknowledgesEvents) {
+                for (event in pending) {
+                    if (!webSocket.send(event.raw)) {
+                        flushFailed = true
+                        opened = false
+                        break
+                    }
                 }
-                pending.removeFirst()
+            } else {
+                while (pending.isNotEmpty()) {
+                    if (!webSocket.send(pending.first().raw)) {
+                        flushFailed = true
+                        opened = false
+                        break
+                    }
+                    pending.removeFirst()
+                }
             }
             if (!flushFailed) {
                 opened = true
@@ -237,6 +255,7 @@ class SignalSocket(
                     ),
                 )
             }
+            json["ack"]?.asString?.let { return@runCatching ParsedSignal.Acknowledgement(it) }
             val seq = json.remove("seq")?.asLong ?: 0L
             ParsedSignal.Event(SequencedSignalEvent(SignalEvent.decode(json.toString()), seq))
         }.getOrElse { ParsedSignal.Error(SignalFailure("invalid server event")) }
@@ -245,7 +264,11 @@ class SignalSocket(
             if (!isCurrentLocked(currentAttempt, webSocket)) return
             when (result) {
                 is ParsedSignal.Event -> callbacks.onEvent(result.value)
-                is ParsedSignal.Error -> callbacks.onError(result.value)
+                is ParsedSignal.Error -> {
+                    result.value.eventId?.let { eventId -> pending.removeAll { it.id == eventId } }
+                    callbacks.onError(result.value)
+                }
+                is ParsedSignal.Acknowledgement -> pending.removeAll { it.id == result.eventId }
             }
         }
     }
@@ -302,12 +325,16 @@ class SignalSocket(
 
     private class SocketAttempt(val generation: Long) {
         var socket: WebSocket? = null
+        var acknowledgesEvents = false
         val deferred = ArrayDeque<() -> Unit>()
     }
+
+    private data class PendingEvent(val id: String, val raw: String)
 
     private sealed interface ParsedSignal {
         data class Event(val value: SequencedSignalEvent) : ParsedSignal
         data class Error(val value: SignalFailure) : ParsedSignal
+        data class Acknowledgement(val eventId: String) : ParsedSignal
     }
 }
 
