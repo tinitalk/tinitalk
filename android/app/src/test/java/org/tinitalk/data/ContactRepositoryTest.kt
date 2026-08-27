@@ -6,6 +6,36 @@ import org.junit.Test
 
 class ContactRepositoryTest {
     @Test
+    fun reportsServerAddressHealthWithoutStartingAuthentication() {
+        val cases = listOf(
+            ServerInfo("tinitalk", "ok", 1) to ServerCheckResult.Available,
+            ServerInfo("another-service", "ok", 1) to ServerCheckResult.WrongServer,
+            ServerInfo("tinitalk", "ok", 0) to ServerCheckResult.ServerOutdated,
+            ServerInfo("tinitalk", "ok", 2) to ServerCheckResult.AppOutdated,
+            ServerInfo("tinitalk", "maintenance", 1) to ServerCheckResult.Unavailable,
+        )
+
+        cases.forEach { (serverInfo, expected) ->
+            val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+            val api = FakeApiClient(serverInfo = serverInfo)
+            val repo = ContactRepository(store) { _, _, _ -> api }
+
+            assertEquals(expected, repo.checkServer(" https://host/ "))
+            assertEquals(0, api.profileRequests)
+            assertNull(store.load())
+        }
+    }
+
+    @Test
+    fun reportsUnavailableWhenServerCheckCannotConnect() {
+        val repo = ContactRepository(AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())) { _, _, _ ->
+            FakeApiClient(serverInfoError = IllegalStateException("offline"))
+        }
+
+        assertEquals(ServerCheckResult.Unavailable, repo.checkServer("https://host"))
+    }
+
+    @Test
     fun rejectsWrongServerOrIncompatibleApiBeforeAuthentication() {
         val cases = listOf(
             ServerInfo("another-service", "ok", 1) to CompatibilityProblem.WrongServer,
@@ -187,6 +217,7 @@ class ContactRepositoryTest {
 
 private class FakeApiClient(
     private val serverInfo: ServerInfo = ServerInfo("tinitalk", "ok", 1),
+    private val serverInfoError: RuntimeException? = null,
     private val profile: Profile = Profile("alice", "Alice"),
     private val contacts: List<Contact> = emptyList(),
     private val callHistory: CallHistoryPage = CallHistoryPage(emptyList(), 0, 0, 0),
@@ -203,7 +234,7 @@ private class FakeApiClient(
     var updatedName: String? = null
     var readPeer: String? = null
 
-    override fun serverInfo(): ServerInfo = serverInfo
+    override fun serverInfo(): ServerInfo = serverInfoError?.let { throw it } ?: serverInfo
 
     override fun me(): Profile {
         profileRequests++

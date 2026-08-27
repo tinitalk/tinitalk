@@ -89,12 +89,50 @@ import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactPage
+import org.tinitalk.data.ServerCheckResult
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.ui.theme.BrandBackground
 import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
 import org.tinitalk.ui.theme.CallRejectRed
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+internal enum class ServerCheckIndicator {
+    Checking,
+    Available,
+    Unavailable,
+    Incompatible,
+}
+
+internal data class ServerCheckPresentation(
+    val indicator: ServerCheckIndicator,
+    val message: String,
+)
+
+internal fun serverCheckPresentation(
+    serverReady: Boolean,
+    checking: Boolean,
+    result: ServerCheckResult?,
+): ServerCheckPresentation = when {
+    !serverReady -> ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Введите полный адрес сервера")
+    checking -> ServerCheckPresentation(ServerCheckIndicator.Checking, "Проверяем подключение…")
+    result == null -> ServerCheckPresentation(ServerCheckIndicator.Checking, "Проверяем подключение…")
+    result == ServerCheckResult.Available ->
+        ServerCheckPresentation(ServerCheckIndicator.Available, "Сервер TiniTalk доступен")
+    result == ServerCheckResult.WrongServer ->
+        ServerCheckPresentation(ServerCheckIndicator.Unavailable, "По этому адресу нет сервера TiniTalk")
+    result == ServerCheckResult.ServerOutdated ->
+        ServerCheckPresentation(ServerCheckIndicator.Incompatible, "Сервер TiniTalk устарел. Обновите сервер")
+    result == ServerCheckResult.AppOutdated ->
+        ServerCheckPresentation(ServerCheckIndicator.Incompatible, "Приложение TiniTalk устарело. Установите новую версию")
+    else -> ServerCheckPresentation(
+        ServerCheckIndicator.Unavailable,
+        "Сервер недоступен. Проверьте адрес и подключение к сети",
+    )
+}
 
 data class MainScreenState(
     val restoring: Boolean = true,
@@ -143,6 +181,7 @@ fun MainScreen(
     loginResetKey: Int,
     defaultServerUrl: String,
     onSignIn: (url: String, login: String, token: String) -> Unit,
+    onCheckServer: (url: String) -> ServerCheckResult,
     onRequestNotifications: () -> Unit,
     onRequestMicrophone: () -> Unit,
     onRequestFullScreenCalls: () -> Unit,
@@ -166,7 +205,14 @@ fun MainScreen(
 ) {
     when {
         state.restoring -> LoadingScreen()
-        !state.signedIn -> LoginScreen(loginResetKey, defaultServerUrl, state.signingIn, state.errorMessage, onSignIn)
+        !state.signedIn -> LoginScreen(
+            loginResetKey,
+            defaultServerUrl,
+            state.signingIn,
+            state.errorMessage,
+            onSignIn,
+            onCheckServer,
+        )
         !state.permissions.allRequiredGranted -> PermissionsScreen(
             permissions = state.permissions,
             onRequestNotifications = onRequestNotifications,
@@ -224,15 +270,33 @@ private fun LoginScreen(
     loading: Boolean,
     errorMessage: String?,
     onSignIn: (String, String, String) -> Unit,
+    onCheckServer: (String) -> ServerCheckResult,
 ) {
     var login by rememberSaveable(resetKey) { mutableStateOf("") }
     var token by rememberSaveable(resetKey) { mutableStateOf("") }
     var url by rememberSaveable(resetKey, defaultServerUrl) { mutableStateOf(defaultServerUrl) }
     var serverExpanded by rememberSaveable(resetKey) { mutableStateOf(false) }
+    var serverCheckResult by remember(resetKey) { mutableStateOf<ServerCheckResult?>(null) }
+    var checkingServer by remember(resetKey) { mutableStateOf(false) }
     val serverReady = url.trim().matches(Regex("https?://.+", RegexOption.IGNORE_CASE))
+    val serverPresentation = serverCheckPresentation(serverReady, checkingServer, serverCheckResult)
     val canSubmit = !loading && serverReady && login.isNotBlank() && token.isNotBlank()
     val submit = { if (canSubmit) onSignIn(url, login, token) }
     val keyboardVisible = WindowInsets.isImeVisible
+
+    LaunchedEffect(serverExpanded, url) {
+        if (!serverExpanded) return@LaunchedEffect
+        if (!serverReady) {
+            checkingServer = false
+            serverCheckResult = ServerCheckResult.Unavailable
+            return@LaunchedEffect
+        }
+        checkingServer = true
+        serverCheckResult = null
+        delay(500)
+        serverCheckResult = withContext(Dispatchers.IO) { onCheckServer(url) }
+        checkingServer = false
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
@@ -290,7 +354,10 @@ private fun LoginScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 TextButton(
-                    onClick = { serverExpanded = !serverExpanded },
+                    onClick = {
+                        if (!serverExpanded) serverCheckResult = null
+                        serverExpanded = !serverExpanded
+                    },
                     enabled = !loading,
                     modifier = Modifier.align(Alignment.Start),
                 ) {
@@ -299,11 +366,47 @@ private fun LoginScreen(
                 if (serverExpanded) {
                     OutlinedTextField(
                         value = url,
-                        onValueChange = { url = it },
+                        onValueChange = {
+                            url = it
+                            checkingServer = true
+                            serverCheckResult = null
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Адрес сервера") },
                         placeholder = { Text("https://talk.example.com") },
-                        supportingText = { Text("Адрес вашего сервера TiniTalk") },
+                        supportingText = {
+                            Text(
+                                serverPresentation.message,
+                                color = when (serverPresentation.indicator) {
+                                    ServerCheckIndicator.Available -> CallAnswerGreen
+                                    ServerCheckIndicator.Incompatible -> BrandGold
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        },
+                        trailingIcon = {
+                            when (serverPresentation.indicator) {
+                                ServerCheckIndicator.Checking -> CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                ServerCheckIndicator.Available -> Icon(
+                                    painterResource(R.drawable.ic_server_available),
+                                    contentDescription = "Сервер доступен",
+                                    tint = CallAnswerGreen,
+                                )
+                                ServerCheckIndicator.Unavailable -> Icon(
+                                    painterResource(R.drawable.ic_server_unavailable),
+                                    contentDescription = "Сервер недоступен",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                ServerCheckIndicator.Incompatible -> Icon(
+                                    painterResource(R.drawable.ic_server_incompatible),
+                                    contentDescription = "Несовместимая версия",
+                                    tint = BrandGold,
+                                )
+                            }
+                        },
                         singleLine = true,
                         enabled = !loading,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),

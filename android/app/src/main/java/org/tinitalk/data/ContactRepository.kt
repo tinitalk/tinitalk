@@ -7,6 +7,15 @@ enum class CompatibilityProblem {
     WrongServer,
     ServerOutdated,
     AppOutdated,
+    Unavailable,
+}
+
+enum class ServerCheckResult {
+    Available,
+    WrongServer,
+    ServerOutdated,
+    AppOutdated,
+    Unavailable,
 }
 
 class ServerCompatibilityException(
@@ -18,6 +27,20 @@ class ContactRepository(
     private val apiFactory: (url: String, login: String, token: String) -> HouseholdApi =
         { url, login, token -> UrlConnectionApiClient(url, login, token) },
 ) {
+    fun checkServer(url: String): ServerCheckResult {
+        return try {
+            when (apiFactory(url.trim().trimEnd('/'), "", "").serverInfo().compatibilityProblem()) {
+                null -> ServerCheckResult.Available
+                CompatibilityProblem.WrongServer -> ServerCheckResult.WrongServer
+                CompatibilityProblem.ServerOutdated -> ServerCheckResult.ServerOutdated
+                CompatibilityProblem.AppOutdated -> ServerCheckResult.AppOutdated
+                CompatibilityProblem.Unavailable -> ServerCheckResult.Unavailable
+            }
+        } catch (_: Exception) {
+            ServerCheckResult.Unavailable
+        }
+    }
+
     fun signIn(url: String, login: String, token: String): ContactPage {
         val session = Session(url.trim().trimEnd('/'), login.trim(), token.trim())
         val api = apiFactory(session.url, session.login, session.token)
@@ -97,12 +120,13 @@ private fun ContactPage.withoutUser(login: String): ContactPage =
     copy(items = items.filterNot { it.login == login })
 
 private fun HouseholdApi.requireCompatibleServer() {
-    val info = serverInfo()
-    val problem = when {
-        info.service != TINITALK_SERVICE -> CompatibilityProblem.WrongServer
-        info.apiVersion < SUPPORTED_API_VERSION -> CompatibilityProblem.ServerOutdated
-        info.apiVersion > SUPPORTED_API_VERSION -> CompatibilityProblem.AppOutdated
-        else -> return
-    }
-    throw ServerCompatibilityException(problem)
+    throw ServerCompatibilityException(serverInfo().compatibilityProblem() ?: return)
+}
+
+private fun ServerInfo.compatibilityProblem(): CompatibilityProblem? = when {
+    service != TINITALK_SERVICE -> CompatibilityProblem.WrongServer
+    status != "ok" -> CompatibilityProblem.Unavailable
+    apiVersion < SUPPORTED_API_VERSION -> CompatibilityProblem.ServerOutdated
+    apiVersion > SUPPORTED_API_VERSION -> CompatibilityProblem.AppOutdated
+    else -> null
 }

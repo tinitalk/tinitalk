@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
                     loginResetKey = loginResetKey,
                     defaultServerUrl = BuildConfig.SERVER_URL,
                     onSignIn = ::loadContacts,
+                    onCheckServer = repository::checkServer,
                     onRequestNotifications = ::requestNotificationPermission,
                     onRequestMicrophone = ::requestMicrophonePermission,
                     onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
@@ -561,6 +562,7 @@ class MainActivity : ComponentActivity() {
                 CompatibilityProblem.WrongServer -> "По этому адресу нет сервера TiniTalk. Проверьте адрес"
                 CompatibilityProblem.ServerOutdated -> "Сервер TiniTalk устарел. Обновите сервер"
                 CompatibilityProblem.AppOutdated -> "Приложение TiniTalk устарело. Установите новую версию"
+                CompatibilityProblem.Unavailable -> "Сервер TiniTalk временно недоступен"
             }
             is ApiException -> when (error.code) {
                 401 -> "Неверный логин или токен"
