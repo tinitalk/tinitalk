@@ -41,4 +41,19 @@ class MissedBadgeCounterTest {
         assertFalse(counter.update(oldRequest, count = 3).applied)
         assertEquals(0, counter.update(oldRequest, count = 3).count)
     }
+
+    @Test
+    fun defersUpdatedCountPublication() {
+        val pending = ArrayDeque<() -> Unit>()
+        val published = mutableListOf<Int>()
+        val badges = MissedBadgeUpdater(MissedBadgeCounter()) { task -> pending.addLast(task) }
+        val refreshId = badges.beginRefresh()
+
+        assertEquals(3, badges.update(refreshId, count = 3, publish = published::add))
+        assertTrue(published.isEmpty())
+
+        pending.removeFirst().invoke()
+
+        assertEquals(listOf(3), published)
+    }
 }

@@ -24,6 +24,7 @@ import org.tinitalk.call.CallSnapshot
 import org.tinitalk.telecom.IncomingCallController
 import java.time.Instant
 import java.time.Duration
+import java.util.concurrent.Executors
 
 data class IncomingInvite(
     val callId: String,
@@ -56,7 +57,32 @@ internal class MissedBadgeCounter {
     }
 }
 
-private val MissedBadges = MissedBadgeCounter()
+internal class MissedBadgeUpdater(
+    private val counter: MissedBadgeCounter,
+    private val execute: ((() -> Unit) -> Unit),
+) {
+    fun beginRefresh(): Long = counter.beginRefresh()
+
+    @Synchronized
+    fun update(refreshId: Long, count: Int, publish: (Int) -> Unit): Int {
+        val update = counter.update(refreshId, count)
+        if (update.applied) execute { publish(update.count) }
+        return update.count
+    }
+
+    @Synchronized
+    fun clear(publish: (Int) -> Unit) {
+        counter.reset()
+        execute { publish(0) }
+    }
+}
+
+private val MissedBadgeExecutor = Executors.newSingleThreadExecutor { task ->
+    Thread(task, "tinitalk-missed-badge").apply { isDaemon = true }
+}
+private val MissedBadges = MissedBadgeUpdater(MissedBadgeCounter()) { task ->
+    MissedBadgeExecutor.execute { runCatching { task() } }
+}
 
 internal class IncomingCallForegroundPresentation(
     private val enterForeground: (IncomingInvite) -> Unit,
@@ -225,15 +251,11 @@ class IncomingCallNotifier(private val context: Context) {
 
     fun beginMissedCountRefresh(): Long = MissedBadges.beginRefresh()
 
-    fun updateMissedCount(count: Int, refreshId: Long, latest: IncomingInvite? = null): Int {
-        val update = MissedBadges.update(refreshId, count)
-        if (update.applied) publishMissedCount(update.count, latest)
-        return update.count
-    }
+    fun updateMissedCount(count: Int, refreshId: Long, latest: IncomingInvite? = null): Int =
+        MissedBadges.update(refreshId, count) { publishMissedCount(it, latest) }
 
     fun clearMissedCount() {
-        MissedBadges.reset()
-        publishMissedCount(0, null)
+        MissedBadges.clear { publishMissedCount(it, null) }
     }
 
     private fun publishMissedCount(count: Int, latest: IncomingInvite?) {
