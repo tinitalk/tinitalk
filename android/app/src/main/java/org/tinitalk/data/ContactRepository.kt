@@ -35,6 +35,18 @@ class ContactRepository(
         }
     }
 
+    fun refreshContacts(): List<Contact>? {
+        val session = authStore.load() ?: return null
+        return try {
+            apiFactory(session.url, session.login, session.token).contacts()
+                .filterNot { it.login == session.login }
+                .sortedWith(contactOrder)
+        } catch (e: ApiException) {
+            if (e.code == 401) authStore.clearIfCurrent(session)
+            throw e
+        }
+    }
+
     fun updateContactName(login: String, customName: String?): Contact? {
         val session = authStore.load() ?: return null
         return try {

@@ -113,6 +113,25 @@ class ContactRepositoryTest {
     }
 
     @Test
+    fun refreshesContactsWithoutReloadingProfile() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token"))
+        val api = FakeApiClient(
+            contacts = listOf(
+                Contact("alice", "Alice"),
+                Contact("bob", "Bob"),
+            ),
+        )
+        val repo = ContactRepository(store) { _, _, _ -> api }
+
+        val contacts = repo.refreshContacts()
+
+        assertEquals(listOf("bob"), contacts?.map(Contact::login))
+        assertEquals(0, api.profileRequests)
+        assertEquals(1, api.contactsRequests)
+    }
+
+    @Test
     fun updatesContactAndMarksOnlyItsHistoryRead() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         store.save(Session("https://host", "alice", "token"))
@@ -137,12 +156,15 @@ private class FakeApiClient(
     private val error: RuntimeException? = null,
     private val beforeError: (() -> Unit)? = null,
 ) : HouseholdApi {
+    var profileRequests = 0
+    var contactsRequests = 0
     var requestedPeer: String? = null
     var updatedLogin: String? = null
     var updatedName: String? = null
     var readPeer: String? = null
 
     override fun me(): Profile {
+        profileRequests++
         error?.let {
             beforeError?.invoke()
             throw it
@@ -151,6 +173,7 @@ private class FakeApiClient(
     }
 
     override fun contacts(): List<Contact> {
+        contactsRequests++
         error?.let { throw it }
         return contacts
     }

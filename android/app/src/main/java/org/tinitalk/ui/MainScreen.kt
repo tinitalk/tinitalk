@@ -42,6 +42,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +56,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -98,6 +100,8 @@ data class MainScreenState(
     val signingIn: Boolean = false,
     val signedIn: Boolean = false,
     val contacts: List<Contact> = emptyList(),
+    val contactsRefreshing: Boolean = false,
+    val contactsRefreshErrorMessage: String? = null,
     val history: List<CallHistoryItem> = emptyList(),
     val historyLoaded: Boolean = false,
     val historyLoading: Boolean = false,
@@ -109,6 +113,12 @@ data class MainScreenState(
     val unreadMissedCount: Int = 0,
     val permissions: AppPermissionsState = AppPermissionsState(),
     val errorMessage: String? = null,
+)
+
+fun MainScreenState.withRefreshedContacts(contacts: List<Contact>): MainScreenState = copy(
+    contacts = contacts,
+    contactsRefreshing = false,
+    contactsRefreshErrorMessage = null,
 )
 
 @Composable
@@ -128,6 +138,8 @@ fun MainScreen(
     onRenameHandled: () -> Unit,
     onOpenCall: () -> Unit,
     onContactsVisible: () -> Unit,
+    onRefreshContacts: () -> Unit,
+    onContactsRefreshMessageHandled: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
@@ -157,6 +169,8 @@ fun MainScreen(
             onRenameHandled = onRenameHandled,
             onOpenCall = onOpenCall,
             onContactsVisible = onContactsVisible,
+            onRefreshContacts = onRefreshContacts,
+            onContactsRefreshMessageHandled = onContactsRefreshMessageHandled,
             onHistoryVisible = onHistoryVisible,
             onLoadMoreHistory = onLoadMoreHistory,
             onRetryHistory = onRetryHistory,
@@ -416,6 +430,8 @@ private fun HomeScreen(
     onRenameHandled: () -> Unit,
     onOpenCall: () -> Unit,
     onContactsVisible: () -> Unit,
+    onRefreshContacts: () -> Unit,
+    onContactsRefreshMessageHandled: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
@@ -445,6 +461,12 @@ private fun HomeScreen(
     LaunchedEffect(pagerState.currentPage) {
         if (pagerState.currentPage == 1) onHistoryVisible() else onContactsVisible()
     }
+    LaunchedEffect(state.contactsRefreshErrorMessage) {
+        state.contactsRefreshErrorMessage?.let { message ->
+            scope.launch { snackbarHostState.showSnackbar(message) }
+            onContactsRefreshMessageHandled()
+        }
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = if (selectedContact == null) Modifier else Modifier.clearAndSetSemantics {},
@@ -462,6 +484,8 @@ private fun HomeScreen(
                             ContactsPage(
                                 contacts = state.contacts,
                                 listState = contactsListState,
+                                refreshing = state.contactsRefreshing,
+                                onRefresh = onRefreshContacts,
                                 onContactSelected = { selectedContactLogin = it.login },
                             )
                         } else {
@@ -536,35 +560,47 @@ private fun HomeScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ContactsPage(
     contacts: List<Contact>,
     listState: LazyListState,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
     onContactSelected: (Contact) -> Unit,
 ) {
-    if (contacts.isEmpty()) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(32.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text("Контактов пока нет", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Добавьте абонентов в настройках сервера.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    } else {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(contacts, key = { contact -> contact.login }) { contact ->
-                ContactRow(contact, onContactSelected)
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        if (contacts.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(32.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("Контактов пока нет", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Добавьте абонентов в настройках сервера.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(contacts, key = { contact -> contact.login }) { contact ->
+                    ContactRow(contact, onContactSelected)
+                }
             }
         }
     }

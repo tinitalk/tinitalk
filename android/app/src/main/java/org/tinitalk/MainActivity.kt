@@ -40,6 +40,7 @@ import org.tinitalk.ui.ContactNameViewModel
 import org.tinitalk.ui.ContactHistoryState
 import org.tinitalk.ui.isCurrentContactHistoryRequest
 import org.tinitalk.ui.isCurrentSessionRequest
+import org.tinitalk.ui.withRefreshedContacts
 import org.tinitalk.ui.withPage
 import org.tinitalk.ui.theme.TiniTalkTheme
 import java.net.MalformedURLException
@@ -111,6 +112,8 @@ class MainActivity : ComponentActivity() {
                     onRenameHandled = contactNameViewModel::clearResult,
                     onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
                     onContactsVisible = { historyVisible = false },
+                    onRefreshContacts = ::refreshContacts,
+                    onContactsRefreshMessageHandled = ::clearContactsRefreshMessage,
                     onHistoryVisible = ::showHistory,
                     onLoadMoreHistory = ::loadMoreHistory,
                     onRetryHistory = ::retryHistory,
@@ -178,6 +181,8 @@ class MainActivity : ComponentActivity() {
                 signingIn = false,
                 signedIn = true,
                 contacts = contacts,
+                contactsRefreshing = false,
+                contactsRefreshErrorMessage = null,
                 history = emptyList(),
                 historyLoaded = false,
                 historyLoading = false,
@@ -192,6 +197,54 @@ class MainActivity : ComponentActivity() {
             refreshPermissions()
             refreshMissedCount()
         }
+    }
+
+    private fun refreshContacts() {
+        if (!screenState.signedIn || screenState.contactsRefreshing) return
+        val requestAuthGeneration = authGeneration
+        screenState = screenState.copy(
+            contactsRefreshing = true,
+            contactsRefreshErrorMessage = null,
+        )
+        Thread {
+            runCatching { repository.refreshContacts() }
+                .onSuccess { contacts ->
+                    runOnUiThread {
+                        if (!screenState.signedIn ||
+                            !isCurrentSessionRequest(requestAuthGeneration, authGeneration)
+                        ) {
+                            return@runOnUiThread
+                        }
+                        screenState = if (contacts == null) {
+                            screenState.copy(
+                                contactsRefreshing = false,
+                                contactsRefreshErrorMessage = "Не удалось обновить контакты",
+                            )
+                        } else {
+                            screenState.withRefreshedContacts(contacts)
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    if (error is ApiException && error.code == 401) {
+                        showSessionErrorIfCurrent(error, requestAuthGeneration)
+                    } else {
+                        runOnUiThread {
+                            if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
+                                return@runOnUiThread
+                            }
+                            screenState = screenState.copy(
+                                contactsRefreshing = false,
+                                contactsRefreshErrorMessage = "Не удалось обновить контакты",
+                            )
+                        }
+                    }
+                }
+        }.start()
+    }
+
+    private fun clearContactsRefreshMessage() {
+        screenState = screenState.copy(contactsRefreshErrorMessage = null)
     }
 
     private fun showHistory() {
