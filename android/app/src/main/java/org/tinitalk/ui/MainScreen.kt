@@ -498,7 +498,7 @@ private fun PermissionsScreen(
             )
             PermissionItem(
                 title = "Полноэкранные оповещения",
-                description = "Показывать звонок поверх заблокированного экрана",
+                description = "Показывать звонок поверх экрана блокировки",
                 granted = permissions.fullScreenIntentGranted,
                 onRequest = onRequestFullScreenCalls,
             )
