@@ -8,12 +8,14 @@ import android.app.Person
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import androidx.core.app.ServiceCompat
 import org.tinitalk.BuildConfig
 import org.tinitalk.CallActivity
 import org.tinitalk.R
@@ -126,7 +128,12 @@ class CallForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (finishing) return START_NOT_STICKY
-        startForeground(NotificationId, notification(CallUiStateStore.snapshot()))
+        ServiceCompat.startForeground(
+            this,
+            NotificationId,
+            notification(CallUiStateStore.snapshot()),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+        )
         if (intent == null || !ensureRuntime()) {
             stopSelf()
             return START_NOT_STICKY

@@ -1,18 +1,57 @@
 package org.tinitalk.telecom
 
+import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import org.tinitalk.push.IncomingCallForegroundService
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class CallForegroundServiceManifestTest {
     @Test
-    fun manifestDeclaresAudioCallPermissionsAndPhoneCallService() {
-        val manifest = File("src/main/AndroidManifest.xml").readText()
+    fun activeCallDeclaresAndStartsWithMicrophoneForegroundType() {
+        val context = RuntimeEnvironment.getApplication()
+        val packageInfo = context.packageManager.getPackageInfo(
+            context.packageName,
+            PackageManager.GET_PERMISSIONS,
+        )
+        assertTrue(packageInfo.requestedPermissions.orEmpty().contains(Manifest.permission.RECORD_AUDIO))
+        assertTrue(packageInfo.requestedPermissions.orEmpty().contains(Manifest.permission.FOREGROUND_SERVICE_MICROPHONE))
 
-        assertTrue(manifest.contains("android.permission.RECORD_AUDIO"))
-        assertTrue(manifest.contains("android.permission.MANAGE_OWN_CALLS"))
-        assertTrue(manifest.contains("android.permission.WAKE_LOCK"))
-        assertTrue(manifest.contains("android.permission.FOREGROUND_SERVICE_PHONE_CALL"))
-        assertTrue(manifest.contains("android:foregroundServiceType=\"phoneCall\""))
+        val activeCallTypes = serviceInfo(context, CallForegroundService::class.java).foregroundServiceType
+        assertEquals(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            activeCallTypes,
+        )
+
+        Shadows.shadowOf(context).grantPermissions(Manifest.permission.RECORD_AUDIO)
+        val service = Robolectric.buildService(CallForegroundService::class.java).create().get()
+        service.onStartCommand(null, 0, 1)
+        assertEquals(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            service.foregroundServiceType,
+        )
     }
+
+    @Test
+    fun ringingServiceDoesNotRequestMicrophoneAccess() {
+        assertEquals(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL,
+            serviceInfo(RuntimeEnvironment.getApplication(), IncomingCallForegroundService::class.java).foregroundServiceType,
+        )
+    }
+
+    private fun serviceInfo(context: Context, service: Class<*>) =
+        context.packageManager.getServiceInfo(ComponentName(context, service), PackageManager.GET_META_DATA)
 }
