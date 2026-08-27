@@ -28,12 +28,14 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -119,11 +121,16 @@ fun ContactScreen(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_arrow_back),
-                            contentDescription = "Назад",
-                        )
+                    CompositionLocalProvider(LocalRippleConfiguration provides null) {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_arrow_back),
+                                contentDescription = "Назад",
+                            )
+                        }
                     }
                     Spacer(Modifier.width(4.dp))
                     Text("Контакт", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
