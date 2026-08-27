@@ -49,6 +49,10 @@ android {
         compose = true
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -78,6 +82,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.mockwebserver)
     testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)

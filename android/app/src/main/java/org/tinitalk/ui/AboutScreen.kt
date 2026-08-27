@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -37,7 +38,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.tinitalk.BuildConfig
 import org.tinitalk.R
@@ -178,13 +178,29 @@ private fun AboutInfoCard(
                 }
             }
             if (inlineValues.isNotEmpty()) {
-                Text(
-                    inlineValues.joinToString("  ·  ") { (label, value) -> "$label $value" },
+                FlowRow(
                     modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    inlineValues.forEach { (label, value) ->
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                value,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
