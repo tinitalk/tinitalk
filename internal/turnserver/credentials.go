@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const DefaultCredentialTTL = 24 * time.Hour
+const DefaultCredentialTTL = 10 * time.Minute
 
 type TemporaryCredential struct {
 	Username string

@@ -26,14 +26,19 @@ func TestTemporaryCredentialsUseHMACAndExpire(t *testing.T) {
 	}
 }
 
-func TestTemporaryCredentialsDefaultToOneDay(t *testing.T) {
+func TestDefaultTemporaryCredentialStopsAuthenticatingAfterTenMinutes(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	issuer := CredentialIssuer{Secret: []byte("secret"), Now: func() time.Time { return now }}
-
 	cred := issuer.Issue("alice")
 
-	if got := cred.Expires.Sub(now); got != 24*time.Hour {
-		t.Fatalf("default credential TTL = %s, want 24h", got)
+	now = now.Add(10*time.Minute - time.Second)
+	if !issuer.Valid(cred.Username, cred.Password) {
+		t.Fatal("default credential expired before ten minutes")
+	}
+
+	now = now.Add(time.Second)
+	if issuer.Valid(cred.Username, cred.Password) {
+		t.Fatal("default credential remained valid after ten minutes")
 	}
 }
 
