@@ -17,6 +17,14 @@ class WebRtcPolicyTest {
     }
 
     @Test
+    fun gathersIceCandidatesContinuallyAcrossNetworkChanges() {
+        assertEquals(
+            PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY,
+            WebRtcPolicy.continualGatheringPolicy,
+        )
+    }
+
+    @Test
     fun audioTrackIsEnabledOnlyForActiveUnmutedCalls() {
         assertEquals(true, WebRtcPolicy.audioTrackEnabled(active = true, muted = false))
         assertEquals(false, WebRtcPolicy.audioTrackEnabled(active = true, muted = true))

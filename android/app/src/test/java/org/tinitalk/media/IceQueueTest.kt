@@ -46,4 +46,15 @@ class IceQueueTest {
         assertTrue(queue.addOrBuffer(candidate).isEmpty())
         assertEquals(listOf(candidate), queue.markRemoteDescriptionReady())
     }
+
+    @Test
+    fun removalDropsBufferedCandidatesWithoutPassingThemToPeerConnection() {
+        val queue = IceQueue()
+        val buffered = IceCandidateData("audio", 0, "candidate:buffered")
+        val alreadyApplied = IceCandidateData("audio", 0, "candidate:applied")
+        queue.addOrBuffer(buffered)
+
+        assertEquals(listOf(alreadyApplied), queue.remove(listOf(buffered, alreadyApplied)))
+        assertTrue(queue.markRemoteDescriptionReady().isEmpty())
+    }
 }

@@ -5,7 +5,7 @@ import "time"
 const (
 	ReplayLimit               = 256
 	MaxConnectionsPerUser     = 2
-	MaxICEPerMinute           = 32
+	MaxICEPerMinute           = 128
 	RestartMinInterval        = 10 * time.Second
 	RestartRequestMinInterval = 10 * time.Second
 	SweepInterval             = time.Second

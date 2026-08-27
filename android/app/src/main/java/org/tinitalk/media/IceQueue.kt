@@ -21,6 +21,12 @@ class IceQueue {
         return ready
     }
 
+    fun remove(candidates: List<IceCandidateData>): List<IceCandidateData> {
+        val buffered = candidates.filterTo(mutableSetOf()) { it in pending }
+        pending.removeAll(buffered)
+        return candidates.filterNot { it in buffered }
+    }
+
     fun clear() {
         pending.clear()
     }

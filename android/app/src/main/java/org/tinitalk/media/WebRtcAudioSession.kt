@@ -19,6 +19,7 @@ class WebRtcAudioSession private constructor(
     context: Context,
     iceServers: List<IceServerData>,
     private val onLocalIceCandidate: (IceCandidateData) -> Unit,
+    private val onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit,
     private val onIceRestartNeeded: () -> Unit,
     private val onConnectionStateChanged: (MediaConnectionState) -> Unit,
     private val forceRelay: Boolean,
@@ -53,6 +54,7 @@ class WebRtcAudioSession private constructor(
                 rtcConfiguration(iceServers),
                 PeerConnectionObserver(
                     onLocalIceCandidate = onLocalIceCandidate,
+                    onLocalIceCandidatesRemoved = onLocalIceCandidatesRemoved,
                     onConnectionChange = { state -> onIceConnectionState(state) },
                 ),
             ),
@@ -90,6 +92,16 @@ class WebRtcAudioSession private constructor(
     override suspend fun addIceCandidate(candidate: IceCandidateData) {
         ensureOpen()
         iceQueue.addOrBuffer(candidate).forEach(::addRemoteIceCandidate)
+    }
+
+    override suspend fun removeIceCandidates(candidates: List<IceCandidateData>) {
+        ensureOpen()
+        val applied = iceQueue.remove(candidates)
+        if (applied.isNotEmpty()) {
+            check(peerConnection.removeIceCandidates(applied.map { it.toWebRtc() }.toTypedArray())) {
+                "failed to remove remote ICE candidates"
+            }
+        }
     }
 
     override suspend fun restartIce(): String {
@@ -227,6 +239,7 @@ class WebRtcAudioSession private constructor(
         PeerConnection.RTCConfiguration(iceServers.map { it.toWebRtc() }).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             iceTransportsType = WebRtcPolicy.iceTransport(forceRelay)
+            continualGatheringPolicy = WebRtcPolicy.continualGatheringPolicy
         }
 
     private fun IceServerData.toWebRtc(): PeerConnection.IceServer {
@@ -251,12 +264,14 @@ class WebRtcAudioSession private constructor(
             iceServers: List<IceServerData> = emptyList(),
             forceRelay: Boolean = false,
             onLocalIceCandidate: (IceCandidateData) -> Unit = {},
+            onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit = {},
             onIceRestartNeeded: () -> Unit = {},
             onConnectionStateChanged: (MediaConnectionState) -> Unit = {},
         ): WebRtcAudioSession = WebRtcAudioSession(
             context,
             iceServers,
             onLocalIceCandidate,
+            onLocalIceCandidatesRemoved,
             onIceRestartNeeded,
             onConnectionStateChanged,
             forceRelay,

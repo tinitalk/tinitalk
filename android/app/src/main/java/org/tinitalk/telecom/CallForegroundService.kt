@@ -171,12 +171,13 @@ class CallForegroundService : Service() {
         val newCoordinator = CallCoordinator(session.login, newSocket)
         val newMedia = ForegroundCallController(
             signal = newSocket,
-            mediaFactory = { _, iceServers, onLocalIce, onIceRestartNeeded ->
+            mediaFactory = { _, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
                 WebRtcAudioSession.create(
                     this,
                     iceServers = iceServers,
                     forceRelay = BuildConfig.FORCE_RELAY,
                     onLocalIceCandidate = onLocalIce,
+                    onLocalIceCandidatesRemoved = onLocalIceRemoved,
                     onIceRestartNeeded = onIceRestartNeeded,
                     onConnectionStateChanged = { state ->
                         handler.post {

@@ -28,6 +28,7 @@ interface MediaSession {
     suspend fun acceptOffer(sdp: String): String
     suspend fun setAnswer(sdp: String)
     suspend fun addIceCandidate(candidate: IceCandidateData)
+    suspend fun removeIceCandidates(candidates: List<IceCandidateData>)
     suspend fun restartIce(): String
     suspend fun updateIceServers(servers: List<IceServerData>)
     fun beginRemoteDescription()

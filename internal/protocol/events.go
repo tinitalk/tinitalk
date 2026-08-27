@@ -113,14 +113,35 @@ func (e Event) validatePayload() error {
 			return errors.New("last_seq must be non-negative")
 		}
 	case "rtc.ice":
-		var payload struct {
+		type iceCandidate struct {
 			Candidate string `json:"candidate"`
+		}
+		var payload struct {
+			Candidate  string          `json:"candidate"`
+			Removed    json.RawMessage `json:"removed"`
+			Candidates []iceCandidate  `json:"candidates"`
 		}
 		if err := json.Unmarshal(e.Payload, &payload); err != nil {
 			return err
 		}
 		if payload.Candidate == "" {
 			return errors.New("candidate is required")
+		}
+		if len(payload.Removed) > 0 {
+			removed := bytes.TrimSpace(payload.Removed)
+			if !bytes.Equal(removed, []byte("true")) && !bytes.Equal(removed, []byte("false")) {
+				return errors.New("removed must be a boolean")
+			}
+			if bytes.Equal(removed, []byte("true")) {
+				if len(payload.Candidates) == 0 {
+					return errors.New("candidates are required for removal")
+				}
+				for _, candidate := range payload.Candidates {
+					if candidate.Candidate == "" {
+						return errors.New("removed candidate is required")
+					}
+				}
+			}
 		}
 	}
 	return nil

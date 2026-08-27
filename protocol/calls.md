@@ -24,4 +24,6 @@ Control events: `call.start`, `call.incoming`, `call.ringing`, `call.accept`, `c
 
 WebRTC events: `rtc.config`, `rtc.offer`, `rtc.answer`, `rtc.ice`, `rtc.restart`.
 
+With continual ICE gathering, `rtc.ice` also carries candidate removals. Such an event has `removed: true`, a non-empty `candidates` array, and repeats the first candidate in the top-level ICE fields so older clients can still decode it. `restart_id`, when present, scopes additions and removals to the current ICE generation.
+
 The server assigns a monotonic `seq` to delivered events. Re-sending the same `id` must not create a second action. A reconnecting client sends `call.resume` with `last_seq`; the server replays buffered events for the active call after that sequence.

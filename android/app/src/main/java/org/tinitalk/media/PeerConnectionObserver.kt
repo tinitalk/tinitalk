@@ -8,6 +8,7 @@ import org.webrtc.RtpReceiver
 
 open class PeerConnectionObserver(
     private val onLocalIceCandidate: (IceCandidateData) -> Unit = {},
+    private val onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit = {},
     private val onConnectionChange: (PeerConnection.IceConnectionState) -> Unit = {},
 ) : PeerConnection.Observer {
     override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
@@ -25,10 +26,18 @@ open class PeerConnectionObserver(
         )
     }
 
-    override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
+    override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {
+        onLocalIceCandidatesRemoved(candidates.map { it.toData() })
+    }
     override fun onAddStream(stream: MediaStream) = Unit
     override fun onRemoveStream(stream: MediaStream) = Unit
     override fun onDataChannel(channel: DataChannel) = Unit
     override fun onRenegotiationNeeded() = Unit
     override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) = Unit
+
+    private fun IceCandidate.toData() = IceCandidateData(
+        sdpMid = sdpMid.orEmpty(),
+        sdpMLineIndex = sdpMLineIndex,
+        candidate = sdp,
+    )
 }

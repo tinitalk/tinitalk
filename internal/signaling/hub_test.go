@@ -367,6 +367,19 @@ func TestHubCancelsEndsExpiresAndLimitsICE(t *testing.T) {
 	}
 }
 
+func TestHubAllowsContinualICEGatheringAcrossHandovers(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := activeCall(t, hub, alice, bob, 1401)
+
+	for i := 0; i < 64; i++ {
+		if err := hub.Handle("alice", event(uuid(2000+i), start.CallID, "rtc.ice", map[string]any{"candidate": "candidate"})); err != nil {
+			t.Fatalf("continual ICE event %d rejected: %v", i, err)
+		}
+	}
+}
+
 func TestHubExpiresRingingCall(t *testing.T) {
 	now := time.Unix(2000, 0)
 	hub := NewHub(NoopNotifier{})

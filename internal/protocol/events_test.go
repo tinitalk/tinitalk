@@ -70,11 +70,21 @@ func TestDecodeValidatesPayloadShape(t *testing.T) {
 		`{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.start","sent_at":1787666400000,"payload":{}}`,
 		`{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.resume","sent_at":1787666400000,"payload":{"last_seq":-1}}`,
 		`{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"rtc.ice","sent_at":1787666400000,"payload":{"candidate":""}}`,
+		`{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"rtc.ice","sent_at":1787666400000,"payload":{"candidate":"candidate:first","removed":true,"candidates":[]}}`,
+		`{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"rtc.ice","sent_at":1787666400000,"payload":{"candidate":"candidate:first","removed":"true","candidates":[{"candidate":"candidate:first"}]}}`,
 	}
 	for _, raw := range cases {
 		if _, err := Decode([]byte(raw)); err == nil {
 			t.Fatalf("Decode(%s) error = nil, want payload rejection", raw)
 		}
+	}
+}
+
+func TestDecodeAcceptsBatchedICECandidateRemoval(t *testing.T) {
+	raw := `{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"rtc.ice","sent_at":1787666400000,"payload":{"sdp_mid":"audio","sdp_mline_index":0,"candidate":"candidate:first","removed":true,"candidates":[{"sdp_mid":"audio","sdp_mline_index":0,"candidate":"candidate:first"},{"sdp_mid":"audio","sdp_mline_index":0,"candidate":"candidate:second"}]}}`
+
+	if _, err := Decode([]byte(raw)); err != nil {
+		t.Fatalf("Decode() error = %v", err)
 	}
 }
 
