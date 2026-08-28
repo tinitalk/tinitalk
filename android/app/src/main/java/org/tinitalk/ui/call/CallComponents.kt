@@ -146,6 +146,7 @@ internal fun RoundCallAction(
     labelMaxLines: Int = 1,
     showLabel: Boolean = true,
 ) {
+    val labelFontSize = (12f / LocalDensity.current.fontScale.coerceAtLeast(1f)).sp
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         IconButton(
             onClick = onClick,
@@ -169,7 +170,7 @@ internal fun RoundCallAction(
             Text(
                 text = label,
                 color = Color.White.copy(alpha = if (enabled) 1f else 0.52f),
-                fontSize = 13.sp,
+                fontSize = labelFontSize,
                 fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.Center,
                 maxLines = labelMaxLines,

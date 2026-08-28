@@ -89,17 +89,7 @@ internal fun weakNetworkVideoMessage(
     null
 }
 
-internal fun callControlColumns(
-    videoAllowed: Boolean,
-    widthDp: Float,
-    fontScale: Float,
-): Int = when {
-    fontScale >= 1.3f -> 2
-    videoAllowed && widthDp < 360f -> 2
-    !videoAllowed && widthDp < 300f -> 2
-    videoAllowed -> 4
-    else -> 3
-}
+internal fun callControlColumns(videoAllowed: Boolean): Int = if (videoAllowed) 4 else 3
 
 internal fun callControlLayout(
     videoAllowed: Boolean,
@@ -131,7 +121,7 @@ internal fun callControlLayout(
         .coerceAtMost(heightDp.coerceAtLeast(CompactCallActionSizeDp.toFloat()))
         .toInt()
     return CallControlLayout(
-        columns = callControlColumns(videoAllowed, widthDp, fontScale),
+        columns = callControlColumns(videoAllowed),
         actions = actions,
         scrollable = heightDp < 560f || fontScale >= 1.3f,
         viewportHeightDp = viewportHeight,

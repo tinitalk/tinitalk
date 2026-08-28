@@ -53,7 +53,7 @@ class VideoCallPresentationTest {
         assertFalse(presentation.remoteVideoVisible)
         assertFalse(presentation.blockProximity)
         assertEquals(3, presentation.actionCount)
-        assertEquals(2, callControlColumns(videoAllowed = false, widthDp = 280f, fontScale = 2f))
+        assertEquals(3, callControlColumns(videoAllowed = false))
     }
 
     @Test
@@ -100,15 +100,6 @@ class VideoCallPresentationTest {
             null,
             weakNetworkVideoMessage(videoAllowed = true, cameraRequested = true, networkGated = false),
         )
-    }
-
-    @Test
-    fun videoControlsUseOneRowOnlyWhenWidthAndFontAllowIt() {
-        assertEquals(4, callControlColumns(videoAllowed = true, widthDp = 420f, fontScale = 1f))
-        assertEquals(2, callControlColumns(videoAllowed = true, widthDp = 359f, fontScale = 1f))
-        assertEquals(2, callControlColumns(videoAllowed = true, widthDp = 420f, fontScale = 1.3f))
-        assertEquals(3, callControlColumns(videoAllowed = false, widthDp = 320f, fontScale = 1f))
-        assertTrue(CompactCallActionSizeDp >= 48)
     }
 
     @Test
@@ -166,6 +157,9 @@ class VideoCallPresentationTest {
             listOf(CallControlAction.Mute, CallControlAction.AudioRoute, CallControlAction.End),
             audio.actions,
         )
+        assertEquals(4, video.columns)
+        assertEquals(4, cameraReady.columns)
+        assertEquals(3, audio.columns)
         assertTrue(video.scrollable)
         assertTrue(cameraReady.scrollable)
         assertTrue(audio.scrollable)

@@ -747,8 +747,7 @@ private fun SwitchCameraCallAction(
         onClick = onSwitchCamera,
         iconResource = R.drawable.ic_camera_switch,
         buttonSize = CompactCallActionSizeDp.dp,
-        labelMaxLines = 2,
-        showLabel = false,
+        labelMaxLines = 1,
     )
 }
 
@@ -766,8 +765,7 @@ private fun CameraCallAction(
         onClick = { onCamera(!requested) },
         iconResource = R.drawable.ic_videocam,
         buttonSize = CompactCallActionSizeDp.dp,
-        labelMaxLines = 2,
-        showLabel = false,
+        labelMaxLines = 1,
     )
 }
 
@@ -784,8 +782,7 @@ private fun EndCallAction(
         onClick = onEnd,
         iconRotation = 135f,
         buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
-        labelMaxLines = if (compact) 2 else 1,
-        showLabel = false,
+        labelMaxLines = 1,
     )
 }
 
@@ -804,8 +801,7 @@ internal fun MuteCallAction(
         onClick = { onMute(!muted) },
         iconResource = if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
         buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
-        labelMaxLines = if (compact) 2 else 1,
-        showLabel = false,
+        labelMaxLines = 1,
     )
 }
 
@@ -838,8 +834,7 @@ internal fun AudioRouteAction(
         },
         iconResource = audioEndpointIcon(currentEndpoint),
         buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
-        labelMaxLines = if (compact) 2 else 1,
-        showLabel = false,
+        labelMaxLines = 1,
     )
 }
 
