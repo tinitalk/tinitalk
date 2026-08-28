@@ -34,7 +34,7 @@ import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.data.signal.SignalFailure
-import org.tinitalk.media.WebRtcAudioSession
+import org.tinitalk.media.WebRtcCallSession
 import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.media.DefaultNetworkObserver
@@ -198,9 +198,10 @@ class CallForegroundService : Service() {
         )
         val newMedia = ForegroundCallController(
             signal = newSocket,
-            mediaFactory = { _, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
-                WebRtcAudioSession.create(
+            mediaFactory = { videoAllowed, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
+                WebRtcCallSession.create(
                     this,
+                    videoAllowed = videoAllowed,
                     iceServers = iceServers,
                     forceRelay = BuildConfig.FORCE_RELAY,
                     onLocalIceCandidate = onLocalIce,

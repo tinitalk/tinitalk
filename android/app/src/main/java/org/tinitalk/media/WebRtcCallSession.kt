@@ -16,8 +16,9 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
-class WebRtcAudioSession private constructor(
+class WebRtcCallSession private constructor(
     context: Context,
+    private val videoAllowed: Boolean,
     iceServers: List<IceServerData>,
     private val onLocalIceCandidate: (IceCandidateData) -> Unit,
     private val onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit,
@@ -270,14 +271,16 @@ class WebRtcAudioSession private constructor(
 
         fun create(
             context: Context,
+            videoAllowed: Boolean,
             iceServers: List<IceServerData> = emptyList(),
             forceRelay: Boolean = false,
             onLocalIceCandidate: (IceCandidateData) -> Unit = {},
             onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit = {},
             onIceRestartNeeded: () -> Unit = {},
             onConnectionStateChanged: (MediaConnectionState) -> Unit = {},
-        ): WebRtcAudioSession = WebRtcAudioSession(
+        ): WebRtcCallSession = WebRtcCallSession(
             context,
+            videoAllowed,
             iceServers,
             onLocalIceCandidate,
             onLocalIceCandidatesRemoved,

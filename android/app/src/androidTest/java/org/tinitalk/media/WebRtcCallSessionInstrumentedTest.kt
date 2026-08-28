@@ -8,11 +8,12 @@ import kotlin.coroutines.startCoroutine
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-class WebRtcAudioSessionInstrumentedTest {
+/** Guards the shared session's audio-only construction path on a device. */
+class WebRtcCallSessionInstrumentedTest {
     @Test
-    fun createsOfferAndClosesOnDevice() {
+    fun audioOnlySessionCreatesOfferAndClosesOnDevice() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val session = WebRtcAudioSession.create(context)
+        val session = WebRtcCallSession.create(context, videoAllowed = false)
 
         runBlockingLite {
             session.createOffer()
