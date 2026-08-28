@@ -122,6 +122,53 @@ class VideoCallPresentationTest {
     }
 
     @Test
+    fun selfiePreviewStaysInsideSafeAreaAndSnapsToNearestCorner() {
+        val visibleBounds = selfPreviewBounds(
+            containerWidth = 360f,
+            containerHeight = 720f,
+            previewWidth = 96f,
+            previewHeight = 160f,
+            safeLeft = 0f,
+            safeTop = 24f,
+            safeRight = 0f,
+            safeBottom = 20f,
+            topControlsHeight = 112f,
+            bottomControlsHeight = 180f,
+            controlsVisible = true,
+            edgeSpacing = 12f,
+        )
+        val hiddenBounds = selfPreviewBounds(
+            containerWidth = 360f,
+            containerHeight = 720f,
+            previewWidth = 96f,
+            previewHeight = 160f,
+            safeLeft = 0f,
+            safeTop = 24f,
+            safeRight = 0f,
+            safeBottom = 20f,
+            topControlsHeight = 112f,
+            bottomControlsHeight = 180f,
+            controlsVisible = false,
+            edgeSpacing = 12f,
+        )
+
+        assertEquals(SelfPreviewBounds(12f, 124f, 252f, 368f), visibleBounds)
+        assertEquals(SelfPreviewBounds(12f, 36f, 252f, 528f), hiddenBounds)
+        assertEquals(
+            SelfPreviewPosition(12f, 368f),
+            clampSelfPreviewPosition(SelfPreviewPosition(-50f, 999f), visibleBounds),
+        )
+        assertEquals(
+            SelfPreviewCorner.BottomRight,
+            nearestSelfPreviewCorner(SelfPreviewPosition(240f, 350f), visibleBounds),
+        )
+        assertEquals(
+            SelfPreviewPosition(252f, 368f),
+            selfPreviewPosition(SelfPreviewCorner.BottomRight, visibleBounds),
+        )
+    }
+
+    @Test
     fun shortLargeTextLayoutsKeepEveryEssentialActionReachable() {
         val video = callControlLayout(
             videoAllowed = true,

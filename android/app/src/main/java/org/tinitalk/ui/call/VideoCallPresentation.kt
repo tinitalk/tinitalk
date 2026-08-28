@@ -12,6 +12,76 @@ internal fun selfPreviewSize(compact: Boolean): SelfPreviewSize {
     return SelfPreviewSize(widthDp = widthDp, heightDp = widthDp * 16f / 9f)
 }
 
+internal enum class SelfPreviewCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+internal data class SelfPreviewPosition(
+    val x: Float,
+    val y: Float,
+)
+
+internal data class SelfPreviewBounds(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+)
+
+internal fun selfPreviewBounds(
+    containerWidth: Float,
+    containerHeight: Float,
+    previewWidth: Float,
+    previewHeight: Float,
+    safeLeft: Float,
+    safeTop: Float,
+    safeRight: Float,
+    safeBottom: Float,
+    topControlsHeight: Float,
+    bottomControlsHeight: Float,
+    controlsVisible: Boolean,
+    edgeSpacing: Float,
+): SelfPreviewBounds {
+    val left = safeLeft + edgeSpacing
+    val right = (containerWidth - safeRight - edgeSpacing - previewWidth).coerceAtLeast(left)
+    val topClearance = if (controlsVisible) maxOf(safeTop, topControlsHeight) else safeTop
+    val bottomClearance = if (controlsVisible) maxOf(safeBottom, bottomControlsHeight) else safeBottom
+    val top = topClearance + edgeSpacing
+    val bottom = (containerHeight - bottomClearance - edgeSpacing - previewHeight).coerceAtLeast(top)
+    return SelfPreviewBounds(left = left, top = top, right = right, bottom = bottom)
+}
+
+internal fun selfPreviewPosition(
+    corner: SelfPreviewCorner,
+    bounds: SelfPreviewBounds,
+): SelfPreviewPosition = when (corner) {
+    SelfPreviewCorner.TopLeft -> SelfPreviewPosition(bounds.left, bounds.top)
+    SelfPreviewCorner.TopRight -> SelfPreviewPosition(bounds.right, bounds.top)
+    SelfPreviewCorner.BottomLeft -> SelfPreviewPosition(bounds.left, bounds.bottom)
+    SelfPreviewCorner.BottomRight -> SelfPreviewPosition(bounds.right, bounds.bottom)
+}
+
+internal fun clampSelfPreviewPosition(
+    position: SelfPreviewPosition,
+    bounds: SelfPreviewBounds,
+): SelfPreviewPosition = SelfPreviewPosition(
+    x = position.x.coerceIn(bounds.left, bounds.right),
+    y = position.y.coerceIn(bounds.top, bounds.bottom),
+)
+
+internal fun nearestSelfPreviewCorner(
+    position: SelfPreviewPosition,
+    bounds: SelfPreviewBounds,
+): SelfPreviewCorner = SelfPreviewCorner.entries.minBy { corner ->
+    val target = selfPreviewPosition(corner, bounds)
+    val deltaX = position.x - target.x
+    val deltaY = position.y - target.y
+    deltaX * deltaX + deltaY * deltaY
+}
+
 internal enum class VideoControlsVisibilityEvent {
     VideoChanged,
     AutoHideElapsed,

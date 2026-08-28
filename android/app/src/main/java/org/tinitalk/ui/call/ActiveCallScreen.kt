@@ -1,6 +1,8 @@
 package org.tinitalk.ui.call
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateIntOffsetAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -19,12 +21,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
@@ -38,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,13 +54,16 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset
 import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.R
 import org.tinitalk.call.CallVideoState
@@ -68,6 +77,7 @@ import org.tinitalk.ui.theme.CallBackgroundBottom
 import org.tinitalk.ui.theme.CallBackgroundTop
 import org.tinitalk.ui.theme.CallRejectRed
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -383,6 +393,11 @@ private fun VideoActiveCallScreen(
     )
     val controlsMayAutoHide = presentation.controlsMayAutoHide
     var controlsVisible by remember(videoState.callId) { mutableStateOf(true) }
+    var previewCorner by remember(videoState.callId) { mutableStateOf(SelfPreviewCorner.TopRight) }
+    var draggedPreviewPosition by remember(videoState.callId) { mutableStateOf<SelfPreviewPosition?>(null) }
+    var previewDragging by remember(videoState.callId) { mutableStateOf(false) }
+    var topControlsHeight by remember(videoState.callId) { mutableIntStateOf(0) }
+    var bottomControlsHeight by remember(videoState.callId) { mutableIntStateOf(0) }
     val toggleControls = {
         controlsVisible = nextVideoControlsVisibility(
             currentVisible = controlsVisible,
@@ -394,14 +409,14 @@ private fun VideoActiveCallScreen(
     LaunchedEffect(videoState.callId, localSource, remoteSource, presentation.blockProximity) {
         onVideoVisibilityChanged(presentation.blockProximity)
     }
-    LaunchedEffect(videoState.callId, controlsMayAutoHide, controlsVisible) {
+    LaunchedEffect(videoState.callId, controlsMayAutoHide, controlsVisible, previewDragging) {
         if (!controlsMayAutoHide) {
             controlsVisible = nextVideoControlsVisibility(
                 currentVisible = controlsVisible,
                 remoteVideoVisible = false,
                 event = VideoControlsVisibilityEvent.VideoChanged,
             )
-        } else if (controlsVisible) {
+        } else if (controlsVisible && !previewDragging) {
             delay(VideoControlsAutoHideMillis)
             controlsVisible = nextVideoControlsVisibility(
                 currentVisible = controlsVisible,
@@ -419,12 +434,15 @@ private fun VideoActiveCallScreen(
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(CallBackgroundTop, CallBackgroundBottom))),
     ) {
+        val density = LocalDensity.current
+        val layoutDirection = LocalLayoutDirection.current
+        val safeDrawingInsets = WindowInsets.safeDrawing
         val controlLayout = callControlLayout(
             videoAllowed = true,
             videoModeActive = true,
             widthDp = (maxWidth.value - 24f).coerceAtLeast(0f),
             heightDp = maxHeight.value,
-            fontScale = LocalDensity.current.fontScale,
+            fontScale = density.fontScale,
         )
         if (remoteSource != null) {
             VideoCallRenderer(
@@ -453,7 +471,10 @@ private fun VideoActiveCallScreen(
             visible = controlsVisible,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .statusBarsPadding(),
+                .statusBarsPadding()
+                .onSizeChanged { size ->
+                    if (size.height > 0) topControlsHeight = size.height
+                },
             enter = fadeIn(tween(VideoControlsFadeInMillis)),
             exit = fadeOut(tween(VideoControlsFadeOutMillis)),
         ) {
@@ -490,14 +511,55 @@ private fun VideoActiveCallScreen(
             }
         }
 
-        if (localSource != null && videoState.requested) {
-            val compactPreview = LocalDensity.current.fontScale >= 1.3f
+        if (
+            localSource != null &&
+            videoState.requested &&
+            topControlsHeight > 0 &&
+            bottomControlsHeight > 0
+        ) {
+            val compactPreview = density.fontScale >= 1.3f
             val previewSize = selfPreviewSize(compactPreview)
+            val previewWidth = with(density) { previewSize.widthDp.dp.toPx() }
+            val previewHeight = with(density) { previewSize.heightDp.dp.toPx() }
+            val previewBounds = selfPreviewBounds(
+                containerWidth = with(density) { maxWidth.toPx() },
+                containerHeight = with(density) { maxHeight.toPx() },
+                previewWidth = previewWidth,
+                previewHeight = previewHeight,
+                safeLeft = safeDrawingInsets.getLeft(density, layoutDirection).toFloat(),
+                safeTop = safeDrawingInsets.getTop(density).toFloat(),
+                safeRight = safeDrawingInsets.getRight(density, layoutDirection).toFloat(),
+                safeBottom = safeDrawingInsets.getBottom(density).toFloat(),
+                topControlsHeight = topControlsHeight.toFloat(),
+                bottomControlsHeight = bottomControlsHeight.toFloat(),
+                controlsVisible = controlsVisible,
+                edgeSpacing = with(density) { SelfPreviewEdgeSpacing.toPx() },
+            )
+            val targetPreviewPosition = draggedPreviewPosition?.let { position ->
+                clampSelfPreviewPosition(position, previewBounds)
+            } ?: selfPreviewPosition(previewCorner, previewBounds)
+            val animatedPreviewOffset by animateIntOffsetAsState(
+                targetValue = IntOffset(
+                    x = targetPreviewPosition.x.roundToInt(),
+                    y = targetPreviewPosition.y.roundToInt(),
+                ),
+                animationSpec = if (draggedPreviewPosition == null) {
+                    tween(VideoPreviewSnapMillis)
+                } else {
+                    snap()
+                },
+                label = "selfPreviewOffset",
+            )
+            val finishPreviewDrag = {
+                draggedPreviewPosition?.let { position ->
+                    previewCorner = nearestSelfPreviewCorner(position, previewBounds)
+                }
+                draggedPreviewPosition = null
+                previewDragging = false
+            }
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(top = if (compactPreview) 96.dp else 112.dp, end = 14.dp)
+                    .offset { animatedPreviewOffset }
                     .size(
                         width = previewSize.widthDp.dp,
                         height = previewSize.heightDp.dp,
@@ -512,6 +574,30 @@ private fun VideoActiveCallScreen(
                     localOverlay = true,
                     modifier = Modifier.fillMaxSize(),
                     onClick = toggleControls.takeIf { controlsMayAutoHide },
+                    onDragStart = {
+                        previewDragging = true
+                        draggedPreviewPosition = clampSelfPreviewPosition(
+                            SelfPreviewPosition(
+                                x = animatedPreviewOffset.x.toFloat(),
+                                y = animatedPreviewOffset.y.toFloat(),
+                            ),
+                            previewBounds,
+                        )
+                    },
+                    onDrag = { dragX, dragY ->
+                        val current = draggedPreviewPosition ?: SelfPreviewPosition(
+                            x = animatedPreviewOffset.x.toFloat(),
+                            y = animatedPreviewOffset.y.toFloat(),
+                        )
+                        draggedPreviewPosition = clampSelfPreviewPosition(
+                            SelfPreviewPosition(
+                                x = current.x + dragX,
+                                y = current.y + dragY,
+                            ),
+                            previewBounds,
+                        )
+                    },
+                    onDragEnd = finishPreviewDrag,
                     contentDescription = if (controlsMayAutoHide) {
                         if (controlsVisible) "Скрыть элементы управления" else "Показать элементы управления"
                     } else null,
@@ -524,7 +610,10 @@ private fun VideoActiveCallScreen(
             visible = controlsVisible,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .onSizeChanged { size ->
+                    if (size.height > 0) bottomControlsHeight = size.height
+                },
             enter = slideInVertically(
                 animationSpec = tween(VideoControlsSlideMillis),
                 initialOffsetY = { it },
@@ -598,6 +687,8 @@ private const val VideoControlsAutoHideMillis = 3_000L
 private const val VideoControlsFadeInMillis = 180
 private const val VideoControlsFadeOutMillis = 220
 private const val VideoControlsSlideMillis = 260
+private const val VideoPreviewSnapMillis = 220
+private val SelfPreviewEdgeSpacing = 12.dp
 
 @Composable
 private fun VideoFallbackContent(peerName: String) {

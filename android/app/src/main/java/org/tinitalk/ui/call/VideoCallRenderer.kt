@@ -4,7 +4,9 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -25,6 +27,9 @@ internal fun VideoCallRenderer(
     localOverlay: Boolean,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    onDragStart: (() -> Unit)? = null,
+    onDrag: ((Float, Float) -> Unit)? = null,
+    onDragEnd: (() -> Unit)? = null,
     contentDescription: String? = null,
     onFrameVisibilityChanged: (Boolean) -> Unit,
 ) {
@@ -35,6 +40,9 @@ internal fun VideoCallRenderer(
             localOverlay = localOverlay,
             modifier = modifier,
             onClick = onClick,
+            onDragStart = onDragStart,
+            onDrag = onDrag,
+            onDragEnd = onDragEnd,
             contentDescription = contentDescription,
             onFrameVisibilityChanged = onFrameVisibilityChanged,
         )
@@ -48,12 +56,26 @@ private fun VideoCallRendererForSource(
     localOverlay: Boolean,
     modifier: Modifier,
     onClick: (() -> Unit)?,
+    onDragStart: (() -> Unit)?,
+    onDrag: ((Float, Float) -> Unit)?,
+    onDragEnd: (() -> Unit)?,
     contentDescription: String?,
     onFrameVisibilityChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val currentVisibilityCallback = rememberUpdatedState(onFrameVisibilityChanged)
     val currentClick = rememberUpdatedState(onClick)
+    val currentDragStart = rememberUpdatedState(onDragStart)
+    val currentDrag = rememberUpdatedState(onDrag)
+    val currentDragEnd = rememberUpdatedState(onDragEnd)
+    val touchListener = remember(context) {
+        RendererTouchListener(
+            context = context,
+            onDragStart = { currentDragStart.value?.invoke() },
+            onDrag = { x, y -> currentDrag.value?.invoke(x, y) },
+            onDragEnd = { currentDragEnd.value?.invoke() },
+        )
+    }
     val handle = remember {
         VideoRendererHandle(
             context = context,
@@ -74,11 +96,86 @@ private fun VideoCallRendererForSource(
             renderer.setMirror(mirror)
             renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
             renderer.contentDescription = contentDescription
-            renderer.isClickable = currentClick.value != null
-            renderer.setOnClickListener { currentClick.value?.invoke() }
+            val clickEnabled = currentClick.value != null
+            renderer.setOnClickListener(
+                if (clickEnabled) View.OnClickListener { currentClick.value?.invoke() } else null,
+            )
+            renderer.isClickable = clickEnabled
+            val interactive = currentClick.value != null || currentDrag.value != null
+            renderer.setOnTouchListener(touchListener.takeIf { interactive })
         },
     )
 
+}
+
+private class RendererTouchListener(
+    context: Context,
+    private val onDragStart: () -> Unit,
+    private val onDrag: (Float, Float) -> Unit,
+    private val onDragEnd: () -> Unit,
+) : View.OnTouchListener {
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+    private var tracking = false
+    private var dragging = false
+    private var downX = 0f
+    private var downY = 0f
+    private var lastX = 0f
+    private var lastY = 0f
+
+    override fun onTouch(view: View, event: MotionEvent): Boolean {
+        return when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                tracking = true
+                dragging = false
+                downX = event.rawX
+                downY = event.rawY
+                lastX = downX
+                lastY = downY
+                true
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (!tracking) return false
+                val x = event.rawX
+                val y = event.rawY
+                if (!dragging) {
+                    val totalX = x - downX
+                    val totalY = y - downY
+                    if (totalX * totalX + totalY * totalY > touchSlop * touchSlop) {
+                        dragging = true
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                        onDragStart()
+                        onDrag(totalX, totalY)
+                    }
+                } else {
+                    onDrag(x - lastX, y - lastY)
+                }
+                lastX = x
+                lastY = y
+                true
+            }
+
+            MotionEvent.ACTION_UP -> {
+                if (!tracking) return false
+                if (dragging) onDragEnd() else view.performClick()
+                reset()
+                true
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                if (tracking && dragging) onDragEnd()
+                reset()
+                true
+            }
+
+            else -> tracking
+        }
+    }
+
+    private fun reset() {
+        tracking = false
+        dragging = false
+    }
 }
 
 private class VideoRendererHandle(
