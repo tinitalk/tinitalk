@@ -1,8 +1,15 @@
 package org.tinitalk.ui.call
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +66,7 @@ import org.tinitalk.ui.contactInitial
 import org.tinitalk.ui.theme.CallBackgroundBottom
 import org.tinitalk.ui.theme.CallBackgroundTop
 import org.tinitalk.ui.theme.CallRejectRed
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -336,9 +345,34 @@ private fun VideoActiveCallScreen(
         localFrameVisible = localFrameVisible,
         remoteFrameVisible = remoteFrameVisible,
     )
+    val controlsMayAutoHide = presentation.controlsMayAutoHide
+    var controlsVisible by remember(videoState.callId) { mutableStateOf(true) }
+    val toggleControls = {
+        controlsVisible = nextVideoControlsVisibility(
+            currentVisible = controlsVisible,
+            remoteVideoVisible = controlsMayAutoHide,
+            event = VideoControlsVisibilityEvent.SurfaceTapped,
+        )
+    }
 
     LaunchedEffect(videoState.callId, localSource, remoteSource, presentation.blockProximity) {
         onVideoVisibilityChanged(presentation.blockProximity)
+    }
+    LaunchedEffect(videoState.callId, controlsMayAutoHide, controlsVisible) {
+        if (!controlsMayAutoHide) {
+            controlsVisible = nextVideoControlsVisibility(
+                currentVisible = controlsVisible,
+                remoteVideoVisible = false,
+                event = VideoControlsVisibilityEvent.VideoChanged,
+            )
+        } else if (controlsVisible) {
+            delay(VideoControlsAutoHideMillis)
+            controlsVisible = nextVideoControlsVisibility(
+                currentVisible = controlsVisible,
+                remoteVideoVisible = true,
+                event = VideoControlsVisibilityEvent.AutoHideElapsed,
+            )
+        }
     }
     DisposableEffect(videoState.callId) {
         onDispose { onVideoVisibilityChanged(false) }
@@ -368,39 +402,55 @@ private fun VideoActiveCallScreen(
             VideoFallbackContent(peerName)
         }
 
-        Column(
+        if (controlsMayAutoHide) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(videoState.callId, controlsMayAutoHide, controlsVisible) {
+                        detectTapGestures { toggleControls() }
+                    },
+            )
+        }
+
+        AnimatedVisibility(
+            visible = controlsVisible,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .statusBarsPadding(),
+            enter = fadeIn(tween(VideoControlsFadeInMillis)),
+            exit = fadeOut(tween(VideoControlsFadeOutMillis)),
         ) {
-            Text(
-                text = status,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(Color.Black.copy(alpha = 0.32f))
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                color = statusColor,
-                style = MaterialTheme.typography.titleSmall,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = peerName,
-                color = Color.White,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = durationText,
-                color = Color.White.copy(alpha = 0.82f),
-                style = MaterialTheme.typography.titleSmall,
-            )
+            Column(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = status,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color.Black.copy(alpha = 0.32f))
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                    color = statusColor,
+                    style = MaterialTheme.typography.titleSmall,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = peerName,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = durationText,
+                    color = Color.White.copy(alpha = 0.82f),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            }
         }
 
         if (localSource != null && videoState.requested) {
@@ -423,14 +473,28 @@ private fun VideoActiveCallScreen(
                     mirror = videoState.facing == CameraFacing.Front,
                     localOverlay = true,
                     modifier = Modifier.fillMaxSize(),
-                    onClick = onSwitchCamera.takeIf { presentation.switchCameraEnabled },
-                    contentDescription = "Сменить камеру",
+                    onClick = when {
+                        !controlsVisible -> toggleControls
+                        presentation.switchCameraEnabled -> onSwitchCamera
+                        controlsMayAutoHide -> toggleControls
+                        else -> null
+                    },
+                    contentDescription = when {
+                        !controlsVisible -> "Показать элементы управления"
+                        presentation.switchCameraEnabled -> "Сменить камеру"
+                        controlsMayAutoHide -> "Скрыть элементы управления"
+                        else -> null
+                    },
                     onFrameVisibilityChanged = { localFrameVisible = it },
                 )
-                if (presentation.switchCameraEnabled) {
+                AnimatedVisibility(
+                    visible = controlsVisible && presentation.switchCameraEnabled,
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                    enter = fadeIn(tween(VideoControlsFadeInMillis)),
+                    exit = fadeOut(tween(VideoControlsFadeOutMillis)),
+                ) {
                     Box(
                         modifier = Modifier
-                            .align(Alignment.BottomEnd)
                             .padding(6.dp)
                             .size(32.dp)
                             .clip(CircleShape)
@@ -448,67 +512,86 @@ private fun VideoActiveCallScreen(
             }
         }
 
-        Column(
+        AnimatedVisibility(
+            visible = controlsVisible,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.34f))
-                .navigationBarsPadding()
-                .then(
-                    if (controlLayout.scrollable) {
-                        Modifier
-                            .heightIn(max = controlLayout.viewportHeightDp.dp)
-                            .verticalScroll(rememberScrollState())
-                    } else {
-                        Modifier
-                    },
-                )
-                .padding(horizontal = 12.dp, vertical = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .fillMaxWidth(),
+            enter = slideInVertically(
+                animationSpec = tween(VideoControlsSlideMillis),
+                initialOffsetY = { it },
+            ) + fadeIn(tween(VideoControlsFadeInMillis)),
+            exit = slideOutVertically(
+                animationSpec = tween(VideoControlsSlideMillis),
+                targetOffsetY = { it },
+            ) + fadeOut(tween(VideoControlsFadeOutMillis)),
         ) {
-            weakNetworkVideoMessage(
-                videoAllowed = videoState.allowed,
-                cameraRequested = videoState.requested,
-                networkGated = videoState.networkGated,
-            )?.let { message ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.34f))
+                    .navigationBarsPadding()
+                    .then(
+                        if (controlLayout.scrollable) {
+                            Modifier
+                                .heightIn(max = controlLayout.viewportHeightDp.dp)
+                                .verticalScroll(rememberScrollState())
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                weakNetworkVideoMessage(
+                    videoAllowed = videoState.allowed,
+                    cameraRequested = videoState.requested,
+                    networkGated = videoState.networkGated,
+                )?.let { message ->
+                    Text(
+                        text = message,
+                        color = Color(0xFFFFCA6A),
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
+                if (videoState.failure != null && !videoState.sending) {
+                    Text(
+                        text = "Не удалось включить камеру",
+                        color = Color(0xFFFFCA6A),
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
                 Text(
-                    text = message,
-                    color = Color(0xFFFFCA6A),
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
+                    text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
+                    color = Color.White.copy(alpha = 0.72f),
+                    style = MaterialTheme.typography.bodySmall,
                 )
-                Spacer(Modifier.height(6.dp))
-            }
-            if (videoState.failure != null && !videoState.sending) {
-                Text(
-                    text = "Не удалось включить камеру",
-                    color = Color(0xFFFFCA6A),
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
+                Spacer(Modifier.height(8.dp))
+                AdaptiveVideoControls(
+                    muted = muted,
+                    currentEndpoint = currentEndpoint,
+                    availableEndpoints = availableEndpoints,
+                    layout = controlLayout,
+                    cameraRequested = videoState.requested,
+                    onMute = onMute,
+                    onSelectEndpoint = onSelectEndpoint,
+                    onShowRoutePicker = onShowRoutePicker,
+                    onCamera = onCamera,
+                    onEnd = onEnd,
                 )
-                Spacer(Modifier.height(6.dp))
             }
-            Text(
-                text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
-                color = Color.White.copy(alpha = 0.72f),
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
-            AdaptiveVideoControls(
-                muted = muted,
-                currentEndpoint = currentEndpoint,
-                availableEndpoints = availableEndpoints,
-                layout = controlLayout,
-                cameraRequested = videoState.requested,
-                onMute = onMute,
-                onSelectEndpoint = onSelectEndpoint,
-                onShowRoutePicker = onShowRoutePicker,
-                onCamera = onCamera,
-                onEnd = onEnd,
-            )
         }
     }
 }
+
+private const val VideoControlsAutoHideMillis = 3_000L
+private const val VideoControlsFadeInMillis = 180
+private const val VideoControlsFadeOutMillis = 220
+private const val VideoControlsSlideMillis = 260
 
 @Composable
 private fun VideoFallbackContent(peerName: String) {

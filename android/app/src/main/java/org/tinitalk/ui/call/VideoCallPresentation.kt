@@ -2,6 +2,23 @@ package org.tinitalk.ui.call
 
 internal const val CompactCallActionSizeDp = 64
 
+internal enum class VideoControlsVisibilityEvent {
+    VideoChanged,
+    AutoHideElapsed,
+    SurfaceTapped,
+}
+
+internal fun nextVideoControlsVisibility(
+    currentVisible: Boolean,
+    remoteVideoVisible: Boolean,
+    event: VideoControlsVisibilityEvent,
+): Boolean = when {
+    !remoteVideoVisible -> true
+    event == VideoControlsVisibilityEvent.AutoHideElapsed -> false
+    event == VideoControlsVisibilityEvent.SurfaceTapped -> !currentVisible
+    else -> currentVisible
+}
+
 internal enum class CallControlAction {
     Mute,
     AudioRoute,
@@ -20,6 +37,7 @@ internal data class VideoCallPresentation(
     val cameraActionVisible: Boolean,
     val localVideoVisible: Boolean,
     val remoteVideoVisible: Boolean,
+    val controlsMayAutoHide: Boolean,
     val switchCameraEnabled: Boolean,
     val blockProximity: Boolean,
     val actionCount: Int,
@@ -37,6 +55,7 @@ internal fun videoCallPresentation(
         cameraActionVisible = videoAllowed,
         localVideoVisible = localVisible,
         remoteVideoVisible = remoteVisible,
+        controlsMayAutoHide = remoteVisible,
         switchCameraEnabled = localVisible,
         blockProximity = localVisible || remoteVisible,
         actionCount = if (videoAllowed) 4 else 3,

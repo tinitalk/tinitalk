@@ -7,6 +7,39 @@ import org.junit.Test
 
 class VideoCallPresentationTest {
     @Test
+    fun videoControlsFollowAutoHideTapAndVideoLoss() {
+        var visible = true
+
+        visible = nextVideoControlsVisibility(
+            currentVisible = visible,
+            remoteVideoVisible = true,
+            event = VideoControlsVisibilityEvent.AutoHideElapsed,
+        )
+        assertFalse(visible)
+
+        visible = nextVideoControlsVisibility(
+            currentVisible = visible,
+            remoteVideoVisible = true,
+            event = VideoControlsVisibilityEvent.SurfaceTapped,
+        )
+        assertTrue(visible)
+
+        visible = nextVideoControlsVisibility(
+            currentVisible = visible,
+            remoteVideoVisible = true,
+            event = VideoControlsVisibilityEvent.SurfaceTapped,
+        )
+        assertFalse(visible)
+
+        visible = nextVideoControlsVisibility(
+            currentVisible = visible,
+            remoteVideoVisible = false,
+            event = VideoControlsVisibilityEvent.VideoChanged,
+        )
+        assertTrue(visible)
+    }
+
+    @Test
     fun audioOnlyCallKeepsThreeActionsAndNeverShowsCameraVideo() {
         val presentation = videoCallPresentation(
             videoAllowed = false,
@@ -24,7 +57,7 @@ class VideoCallPresentationTest {
     }
 
     @Test
-    fun videoVisibilityCombinesLocalAndRemoteFramesForProximity() {
+    fun onlyRemoteVideoCanHideControls() {
         val local = videoCallPresentation(
             videoAllowed = true,
             cameraRequested = true,
@@ -42,9 +75,11 @@ class VideoCallPresentationTest {
         assertTrue(local.localVideoVisible)
         assertTrue(local.switchCameraEnabled)
         assertTrue(local.blockProximity)
+        assertFalse(local.controlsMayAutoHide)
         assertTrue(remote.remoteVideoVisible)
         assertFalse(remote.switchCameraEnabled)
         assertTrue(remote.blockProximity)
+        assertTrue(remote.controlsMayAutoHide)
     }
 
     @Test
