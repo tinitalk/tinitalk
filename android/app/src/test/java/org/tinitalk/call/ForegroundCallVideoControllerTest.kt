@@ -505,6 +505,29 @@ class ForegroundCallVideoControllerTest {
     }
 
     @Test
+    fun newTransportEpochRefreshesActiveVideoSenderOnceAfterConnecting() {
+        val session = FakeCameraMediaSession()
+        val states = mutableListOf<CallVideoState<*>>()
+        val controller = controller(session, states::add)
+        configureVideoSession(controller)
+        prepareHealthyTransport(controller)
+        controller.setCameraForeground(CurrentCall, foreground = true, permissionGranted = true)
+        controller.setCameraRequested(CurrentCall, requested = true)
+        controller.onCameraCaptureStarted(CurrentCall, CameraFacing.Front)
+
+        controller.onMediaConnection(CurrentCall, epoch = 2, MediaConnectionState.Connecting)
+        assertEquals(0, session.videoSenderRefreshes)
+
+        controller.onMediaConnection(CurrentCall, epoch = 2, MediaConnectionState.Connected)
+        controller.onMediaConnection(CurrentCall, epoch = 2, MediaConnectionState.Connected)
+
+        assertEquals(1, session.videoSenderRefreshes)
+        assertTrue(states.last().requested)
+        assertTrue(states.last().sending)
+        assertFalse(states.last().networkGated)
+    }
+
+    @Test
     fun userOffHidesGateStateButReRequestCannotBypassDisconnectedTransport() {
         val session = FakeCameraMediaSession()
         val states = mutableListOf<CallVideoState<*>>()
@@ -636,6 +659,7 @@ class ForegroundCallVideoControllerTest {
         var starts = 0
         var pauses = 0
         var stops = 0
+        var videoSenderRefreshes = 0
         var closed = false
         var onStart: () -> Unit = {}
         var onStop: () -> Unit = {}
@@ -666,6 +690,9 @@ class ForegroundCallVideoControllerTest {
         }
 
         override fun switchCamera() = Unit
+        override fun refreshVideoSender(onFailure: () -> Unit) {
+            videoSenderRefreshes++
+        }
         override suspend fun createOffer(): String = "offer"
         override suspend fun acceptOffer(sdp: String): String = "answer"
         override suspend fun setAnswer(sdp: String) = Unit
@@ -696,6 +723,7 @@ class ForegroundCallVideoControllerTest {
             override val opening = true
             override fun oppositeFacingDevice(): String? = null
             override fun start() = Unit
+            override fun refreshSender() = true
             override fun detach() = CameraAttemptRelease()
             override fun stop() {
                 stopEntered.countDown()

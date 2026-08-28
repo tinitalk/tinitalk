@@ -101,6 +101,7 @@ internal class WebRtcCameraController(
         afterDetached = { AndroidMainCameraQueue.execute(afterDetached) },
         afterReleased = { AndroidMainCameraQueue.execute(afterReleased) },
     )
+    fun refreshSender(onFailure: () -> Unit = {}) = lifecycle.refreshSender(onFailure)
     fun switchCamera() = lifecycle.switchCamera()
     fun close(afterDetached: () -> Unit, afterReleased: () -> Unit) = lifecycle.close(
         afterDetached = { AndroidMainCameraQueue.execute(afterDetached) },
@@ -235,6 +236,8 @@ private class WebRtcCameraAttempt(
         if (!capturing.getAndSet(false)) return
         capturer.stopCapture()
     }
+
+    override fun refreshSender(): Boolean = lease.refresh()
 
     override fun detach(): CameraAttemptRelease {
         if (!detached.compareAndSet(false, true)) return CameraAttemptRelease()

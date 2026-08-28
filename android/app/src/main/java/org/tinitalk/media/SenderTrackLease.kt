@@ -21,6 +21,15 @@ internal class SenderTrackLease<Track>(
         return attached
     }
 
+    fun refresh(): Boolean {
+        if (released || !attached) return false
+        val detached = runCatching(detach).getOrDefault(false)
+        if (!detached) return false
+        attached = false
+        attached = runCatching { attach(track) }.getOrDefault(false)
+        return attached
+    }
+
     fun release(): CameraAttemptRelease {
         if (released) return CameraAttemptRelease()
         released = true

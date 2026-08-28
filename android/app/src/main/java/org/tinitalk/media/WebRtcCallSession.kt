@@ -255,6 +255,10 @@ class WebRtcCallSession private constructor(
         controller.start()
     }
 
+    override fun refreshVideoSender(onFailure: () -> Unit) {
+        if (!closed) cameraController?.refreshSender(onFailure)
+    }
+
     @Synchronized
     override fun pauseCamera(onDetached: () -> Unit, onReleased: () -> Unit) {
         pauseCameraOrComplete(cameraController.takeUnless { closed }, onDetached, onReleased)

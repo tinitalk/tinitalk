@@ -42,6 +42,8 @@ interface MediaSession {
 
 interface CameraMediaSession {
     fun startCamera()
+    /** Rebinds an active video track after the media transport moves to a new network path. */
+    fun refreshVideoSender(onFailure: () -> Unit = {}) = Unit
     /** [onDetached] is logical/nonblocking; [onReleased] follows native stop and safe disposal. */
     fun pauseCamera(
         onDetached: () -> Unit = {},

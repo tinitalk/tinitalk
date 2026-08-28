@@ -171,6 +171,27 @@ class SerializedCameraLifecycleTest {
     }
 
     @Test
+    fun senderRefreshRunsOnControlQueueAndIsSkippedAfterPause() {
+        val control = ManualCameraQueue()
+        val attempt = FakeCameraAttempt("front-main", CameraFacing.Front, "back-main", control)
+        val lifecycle = lifecycle(control, FakeAttemptProvider(attempt))
+        lifecycle.start()
+        control.runAll()
+        attempt.events.onFirstFrame()
+        control.runAll()
+
+        lifecycle.refreshSender()
+        assertEquals(0, attempt.refreshCalls)
+        control.runAll()
+        assertEquals(1, attempt.refreshCalls)
+
+        lifecycle.refreshSender()
+        lifecycle.pause()
+        control.runAll()
+        assertEquals(1, attempt.refreshCalls)
+    }
+
+    @Test
     fun lateNativeAndSwitchCallbacksAreNoOpsAfterControlQueueCloses() {
         val delegate = ManualCameraQueue()
         val control = CloseableCameraTaskQueue(delegate)
@@ -243,6 +264,7 @@ class SerializedCameraLifecycleTest {
         lateinit var events: CameraAttemptEvents
         lateinit var switchEvents: CameraSwitchEvents
         var stopCalls = 0
+        var refreshCalls = 0
         var detachCalls = 0
         var detachRanOnControlQueue = false
         var disposed = false
@@ -263,6 +285,12 @@ class SerializedCameraLifecycleTest {
             stopCalls++
             onStop()
             openingState = false
+        }
+
+        override fun refreshSender(): Boolean {
+            check(queue.running)
+            refreshCalls++
+            return true
         }
 
         override fun detach(): CameraAttemptRelease {

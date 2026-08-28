@@ -273,6 +273,13 @@ class ForegroundCallController(
 
     @Synchronized
     fun onMediaConnection(callId: String, epoch: Long, state: MediaConnectionState) {
+        val previousGate = weakNetworkVideoGate.snapshot()
+        val refreshActiveVideo = state == MediaConnectionState.Connected &&
+            previousGate.callId == callId &&
+            previousGate.transportReady &&
+            epoch > previousGate.epoch &&
+            videoState.callId == callId &&
+            videoState.sending
         val gate = when (state) {
             MediaConnectionState.Connected -> weakNetworkVideoGate.onTransportConnected(callId, epoch)
             MediaConnectionState.Connecting -> weakNetworkVideoGate.snapshot()
@@ -281,6 +288,7 @@ class ForegroundCallController(
             MediaConnectionState.Closed -> weakNetworkVideoGate.onTransportUnavailable(callId, epoch)
         }
         applyWeakNetworkGate(callId, gate)
+        if (refreshActiveVideo) refreshVideoSender(callId, epoch)
     }
 
     @Synchronized
@@ -503,6 +511,26 @@ class ForegroundCallController(
         } else {
             reconcileCamera(callId)
         }
+    }
+
+    private fun refreshVideoSender(nextCallId: String, epoch: Long) {
+        if (videoState.callId != nextCallId || !videoState.sending) return
+        val camera = session as? CameraMediaSession ?: return
+        runCatching {
+            camera.refreshVideoSender {
+                videoSenderRefreshFailed(nextCallId, epoch)
+            }
+        }
+    }
+
+    @Synchronized
+    private fun videoSenderRefreshFailed(nextCallId: String, epoch: Long) {
+        val gate = weakNetworkVideoGate.snapshot()
+        if (
+            gate.callId != nextCallId || gate.epoch != epoch || !gate.transportReady ||
+            videoState.callId != nextCallId || !videoState.sending
+        ) return
+        pauseCamera(nextCallId)
     }
 
     private fun requestCameraStop(

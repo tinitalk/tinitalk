@@ -63,6 +63,17 @@ internal fun migrateCallNetwork(
     restartMedia()
 }
 
+internal fun postCurrentMediaCallback(
+    post: (() -> Unit) -> Unit,
+    isCurrent: () -> Boolean,
+    onDropped: () -> Unit = {},
+    action: () -> Unit,
+) {
+    post {
+        if (isCurrent()) action() else onDropped()
+    }
+}
+
 internal fun callForegroundServiceType(cameraSending: Boolean): Int =
     ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
         ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
@@ -261,6 +272,17 @@ class CallForegroundService : Service() {
             }
             if (Looper.myLooper() == Looper.getMainLooper()) route() else handler.post(route)
         }
+        fun postMediaCallback(
+            onDropped: () -> Unit = {},
+            action: () -> Unit,
+        ) {
+            postCurrentMediaCallback(
+                post = { callback -> handler.post(callback) },
+                isCurrent = { !finishing && media === newMedia },
+                onDropped = onDropped,
+                action = action,
+            )
+        }
         newMedia = ForegroundCallController(
             signal = newSocket,
             mediaFactory = { callId, videoAllowed, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
@@ -270,9 +292,15 @@ class CallForegroundService : Service() {
                     videoAllowed = videoAllowed,
                     iceServers = iceServers,
                     forceRelay = BuildConfig.FORCE_RELAY,
-                    onLocalIceCandidate = onLocalIce,
-                    onLocalIceCandidatesRemoved = onLocalIceRemoved,
-                    onIceRestartNeeded = onIceRestartNeeded,
+                    onLocalIceCandidate = { candidate ->
+                        postMediaCallback { onLocalIce(candidate) }
+                    },
+                    onLocalIceCandidatesRemoved = { candidates ->
+                        postMediaCallback { onLocalIceRemoved(candidates) }
+                    },
+                    onIceRestartNeeded = {
+                        postMediaCallback(action = onIceRestartNeeded)
+                    },
                     onConnectionStateChanged = { state ->
                         handler.post {
                             if (finishing || media !== newMedia) return@post

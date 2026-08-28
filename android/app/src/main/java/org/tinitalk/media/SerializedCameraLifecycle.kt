@@ -46,6 +46,7 @@ internal interface CameraAttempt<out Track> {
     val opening: Boolean
     fun oppositeFacingDevice(): String?
     fun start()
+    fun refreshSender(): Boolean
     fun detach(): CameraAttemptRelease
     fun stop()
     fun dispose()
@@ -150,6 +151,20 @@ internal class SerializedCameraLifecycle<Track>(
                 )
             }.onFailure {
                 switchFailed(expectedGeneration, attempt, it.message ?: "camera switch failed")
+            }
+        }
+    }
+
+    fun refreshSender(onFailure: () -> Unit = {}) {
+        val expectedGeneration = generation.get()
+        controlQueue.execute {
+            val attempt = current
+                ?.takeIf { isWanted(expectedGeneration) && firstFrameSeen }
+                ?: return@execute
+            val refreshed = runCatching(attempt::refreshSender).getOrDefault(false)
+            if (refreshed || !isWanted(expectedGeneration) || current !== attempt) return@execute
+            mainQueue.execute {
+                if (isWanted(expectedGeneration)) onFailure()
             }
         }
     }
