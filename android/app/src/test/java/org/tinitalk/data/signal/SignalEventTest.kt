@@ -53,6 +53,13 @@ class SignalEventTest {
         assertTrue(result.isFailure)
     }
 
+    @Test
+    fun acceptsEventLargerThanLegacySixteenKiBLimit() {
+        val raw = """{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.start","sent_at":1787666400000,"payload":{"blob":"${"a".repeat(20 * 1024)}"}}"""
+
+        assertEquals("call.start", SignalEvent.decode(raw).type)
+    }
+
     private fun readFixture(name: String): String =
         readPath(fixtureRoot().resolve(name))
 

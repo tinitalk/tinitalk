@@ -63,17 +63,72 @@ class ForegroundCallControllerTest {
     }
 
     @Test
+    fun authoritativeVideoPermissionIsPassedToOutgoingMediaCreation() {
+        var mediaVideoAllowed: Any? = null
+        val controller = ForegroundCallController(CapturingSignalClient(), { videoAllowed, _, _, _, _ ->
+            mediaVideoAllowed = videoAllowed
+            FakeMediaSession()
+        }, ids)
+
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig().apply {
+            addProperty("video_allowed", true)
+        }))
+
+        assertEquals(true, mediaVideoAllowed)
+    }
+
+    @Test
+    fun missingVideoPermissionDefaultsIncomingMediaCreationToFalse() {
+        var mediaVideoAllowed: Any? = null
+        val controller = ForegroundCallController(CapturingSignalClient(), { videoAllowed, _, _, _, _ ->
+            mediaVideoAllowed = videoAllowed
+            FakeMediaSession()
+        }, ids)
+
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.offer", JsonObject().apply { addProperty("sdp", "remote-offer") }),
+        )
+
+        assertEquals(false, mediaVideoAllowed)
+    }
+
+    @Test
+    fun authoritativeFalseDisablesVideoForOutgoingOldPeer() {
+        var mediaVideoAllowed: Any? = null
+        val controller = ForegroundCallController(CapturingSignalClient(), { videoAllowed, _, _, _, _ ->
+            mediaVideoAllowed = videoAllowed
+            FakeMediaSession()
+        }, ids)
+
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig().apply {
+            addProperty("video_allowed", false)
+        }))
+
+        assertEquals(false, mediaVideoAllowed)
+    }
+
+    @Test
     fun crossedAnswererWaitsForOfferInsteadOfCreatingOne() {
         val signal = CapturingSignalClient()
         val media = FakeMediaSession(answer = "local-answer")
-        val controller = ForegroundCallController(signal, { _, _, _, _, _ -> media }, ids)
+        var mediaVideoAllowed: Any? = null
+        val controller = ForegroundCallController(signal, { videoAllowed, _, _, _, _ ->
+            mediaVideoAllowed = videoAllowed
+            media
+        }, ids)
         val accept = JsonObject().apply {
             addProperty("crossed", true)
             addProperty("offerer", false)
         }
 
         controller.onSignalEvent(activeSnapshot(), event("call.accept", accept))
-        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig().apply {
+            addProperty("video_allowed", true)
+        }))
 
         assertTrue(signal.sent.isEmpty())
 
@@ -81,6 +136,7 @@ class ForegroundCallControllerTest {
         controller.onSignalEvent(activeSnapshot(), event("rtc.offer", offer))
 
         assertEquals("remote-offer", media.acceptedOffer)
+        assertEquals(true, mediaVideoAllowed)
         assertEquals("rtc.answer", signal.sent.single().type)
         assertEquals("local-answer", signal.sent.single().payload["sdp"].asString)
     }

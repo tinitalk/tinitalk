@@ -39,7 +39,8 @@ class ContactRepository(
 
     fun checkServerDetails(url: String): ServerCheckDetails {
         return try {
-            val info = apiFactory(url.trim().trimEnd('/'), "", "").serverInfo()
+            val normalizedUrl = url.trim().trimEnd('/')
+            val info = apiFactory(normalizedUrl, "", "").serverInfo()
             val result = when (info.compatibilityProblem()) {
                 null -> ServerCheckResult.Available
                 CompatibilityProblem.WrongServer -> ServerCheckResult.WrongServer
@@ -48,6 +49,9 @@ class ContactRepository(
                 CompatibilityProblem.Unavailable -> ServerCheckResult.Unavailable
             }
             val isTiniTalk = info.service == TINITALK_SERVICE
+            if (result == ServerCheckResult.Available) {
+                authStore.updateFeatures(normalizedUrl, info.features)
+            }
             ServerCheckDetails(
                 result = result,
                 apiVersion = info.apiVersion.takeIf { isTiniTalk && it > 0 },
@@ -62,10 +66,10 @@ class ContactRepository(
         val session = Session(url.trim().trimEnd('/'), login.trim(), token.trim())
         val api = apiFactory(session.url, session.login, session.token)
         return try {
-            api.requireCompatibleServer()
+            val info = api.requireCompatibleServer()
             val profile = api.me()
             val contacts = api.contactsPage().withoutUser(profile.login)
-            authStore.save(session)
+            authStore.save(session.copy(features = info.features))
             contacts
         } catch (e: ApiException) {
             if (e.code == 401) authStore.clearIfCurrent(session)
@@ -77,9 +81,11 @@ class ContactRepository(
         val session = authStore.load() ?: return null
         val api = apiFactory(session.url, session.login, session.token)
         return try {
-            api.requireCompatibleServer()
+            val info = api.requireCompatibleServer()
             val profile = api.me()
-            api.contactsPage().withoutUser(profile.login)
+            val contacts = api.contactsPage().withoutUser(profile.login)
+            authStore.save(session.copy(features = info.features))
+            contacts
         } catch (e: ApiException) {
             if (e.code == 401) authStore.clearIfCurrent(session)
             throw e
@@ -136,8 +142,9 @@ class ContactRepository(
 private fun ContactPage.withoutUser(login: String): ContactPage =
     copy(items = items.filterNot { it.login == login })
 
-private fun HouseholdApi.requireCompatibleServer() {
-    throw ServerCompatibilityException(serverInfo().compatibilityProblem() ?: return)
+private fun HouseholdApi.requireCompatibleServer(): ServerInfo {
+    val info = serverInfo()
+    throw ServerCompatibilityException(info.compatibilityProblem() ?: return info)
 }
 
 private fun ServerInfo.compatibilityProblem(): CompatibilityProblem? = when {

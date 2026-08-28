@@ -4,13 +4,20 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-data class Session(val url: String, val login: String, val token: String)
+data class Session(
+    val url: String,
+    val login: String,
+    val token: String,
+    val features: Set<String> = emptySet(),
+)
 
 interface KeyValueStore {
     fun get(key: String): String?
@@ -31,13 +38,7 @@ class AuthStore(
     private val cipher: TokenCipher,
 ) {
     fun save(session: Session) {
-        val encrypted = cipher.encrypt(session.token)
-        synchronized(SessionLock) {
-            store.put("url", session.url)
-            store.put("login", session.login)
-            store.put("token", encrypted.value)
-            store.put("iv", encrypted.iv)
-        }
+        synchronized(SessionLock) { saveUnlocked(session) }
     }
 
     fun load(): Session? = synchronized(SessionLock) { loadUnlocked() }
@@ -45,7 +46,19 @@ class AuthStore(
     fun clear() = synchronized(SessionLock) { clearUnlocked() }
 
     fun clearIfCurrent(session: Session) = synchronized(SessionLock) {
-        if (loadUnlocked() == session) clearUnlocked()
+        val current = loadUnlocked()
+        if (current != null &&
+            current.url == session.url &&
+            current.login == session.login &&
+            current.token == session.token
+        ) {
+            clearUnlocked()
+        }
+    }
+
+    fun updateFeatures(url: String, features: Set<String>) = synchronized(SessionLock) {
+        val session = loadUnlocked() ?: return@synchronized
+        if (session.url == url) saveUnlocked(session.copy(features = features))
     }
 
     private fun loadUnlocked(): Session? {
@@ -53,15 +66,31 @@ class AuthStore(
         val login = store.get("login") ?: return null
         val token = store.get("token") ?: return null
         val iv = store.get("iv") ?: return null
-        return Session(url, login, cipher.decrypt(CipherText(token, iv)))
+        val features = store.get("features")
+            ?.let { encoded ->
+                runCatching { gson.fromJson<List<String>>(encoded, featureListType).toSet() }.getOrNull()
+            }
+            .orEmpty()
+        return Session(url, login, cipher.decrypt(CipherText(token, iv)), features)
+    }
+
+    private fun saveUnlocked(session: Session) {
+        val encrypted = cipher.encrypt(session.token)
+        store.put("url", session.url)
+        store.put("login", session.login)
+        store.put("token", encrypted.value)
+        store.put("iv", encrypted.iv)
+        store.put("features", gson.toJson(session.features.sorted()))
     }
 
     private fun clearUnlocked() {
-        store.remove("url", "login", "token", "iv")
+        store.remove("url", "login", "token", "iv", "features")
     }
 
     private companion object {
         val SessionLock = Any()
+        val gson = Gson()
+        val featureListType = object : TypeToken<List<String>>() {}.type
     }
 }
 

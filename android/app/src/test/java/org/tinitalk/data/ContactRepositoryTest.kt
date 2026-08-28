@@ -6,6 +6,49 @@ import org.junit.Test
 
 class ContactRepositoryTest {
     @Test
+    fun signInPersistsObservedServerFeatures() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val repo = ContactRepository(store) { _, _, _ ->
+            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("video_1to1")))
+        }
+
+        repo.signIn("https://host", "alice", "token")
+
+        assertEquals(setOf("video_1to1"), store.load()?.features)
+    }
+
+    @Test
+    fun restorePersistsFeaturesObservedAfterLegacySessionLoad() {
+        val values = MemoryKeyValueStore().apply {
+            put("url", "https://host")
+            put("login", "alice")
+            put("token", "nekot")
+            put("iv", "iv")
+        }
+        val store = AuthStore(values, PrefixTokenCipher())
+        val repo = ContactRepository(store) { _, _, _ ->
+            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("video_1to1")))
+        }
+
+        repo.restoreContacts()
+
+        assertEquals(setOf("video_1to1"), store.load()?.features)
+    }
+
+    @Test
+    fun successfulCheckRefreshesFeaturesForMatchingStoredServer() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token", setOf("stale_feature")))
+        val repo = ContactRepository(store) { _, _, _ ->
+            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("video_1to1")))
+        }
+
+        assertEquals(ServerCheckResult.Available, repo.checkServer("https://host/"))
+
+        assertEquals(setOf("video_1to1"), store.load()?.features)
+    }
+
+    @Test
     fun reportsServerApiAndCommitDetails() {
         val repo = ContactRepository(AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())) { _, _, _ ->
             FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, commit = "01234567"))
@@ -137,6 +180,18 @@ class ContactRepositoryTest {
     fun invalidTokenClearsSession() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         store.save(Session("https://host", "alice", "bad"))
+        val repo = ContactRepository(store) { _, _, _ -> FakeApiClient(error = ApiException(401, "unauthorized")) }
+
+        val result = runCatching { repo.signIn("https://host", "alice", "bad") }
+
+        assertEquals(true, result.isFailure)
+        assertNull(store.load())
+    }
+
+    @Test
+    fun invalidTokenClearsFeatureBearingSessionWithSameCredentials() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "bad", setOf("video_1to1")))
         val repo = ContactRepository(store) { _, _, _ -> FakeApiClient(error = ApiException(401, "unauthorized")) }
 
         val result = runCatching { repo.signIn("https://host", "alice", "bad") }

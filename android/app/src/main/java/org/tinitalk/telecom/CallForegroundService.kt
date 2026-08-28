@@ -191,7 +191,11 @@ class CallForegroundService : Service() {
             session,
             deviceId = DeviceRegistrar.deviceId(this),
         )
-        val newCoordinator = CallCoordinator(session.login, newSocket)
+        val newCoordinator = CallCoordinator(
+            session.login,
+            newSocket,
+            serverFeatures = session.features,
+        )
         val newMedia = ForegroundCallController(
             signal = newSocket,
             mediaFactory = { _, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->

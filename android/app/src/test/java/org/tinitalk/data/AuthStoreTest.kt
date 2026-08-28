@@ -13,6 +13,33 @@ import kotlin.concurrent.thread
 
 class AuthStoreTest {
     @Test
+    fun loadsLegacySessionWithEmptyServerFeatures() {
+        val prefs = MemoryKeyValueStore().apply {
+            put("url", "https://host")
+            put("login", "alice")
+            put("token", "nekot-terces")
+            put("iv", "iv")
+        }
+
+        val session = AuthStore(prefs, PrefixTokenCipher()).load()
+
+        assertEquals("https://host", session?.url)
+        assertEquals("alice", session?.login)
+        assertEquals("secret-token", session?.token)
+        assertEquals(emptySet<String>(), session?.features)
+    }
+
+    @Test
+    fun savesAndLoadsServerFeaturesWithSession() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session("https://host", "alice", "token", setOf("video_1to1", "future_feature"))
+
+        store.save(session)
+
+        assertEquals(session, store.load())
+    }
+
+    @Test
     fun savesCiphertextInsteadOfPlainToken() {
         val prefs = MemoryKeyValueStore()
         val store = AuthStore(prefs, PrefixTokenCipher())

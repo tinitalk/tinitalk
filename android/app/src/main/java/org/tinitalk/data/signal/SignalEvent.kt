@@ -25,7 +25,7 @@ data class SignalEvent(
     }
 
     companion object {
-        const val MAX_EVENT_BYTES = 16 * 1024
+        const val MAX_EVENT_BYTES = 32 * 1024
         const val RING_TIMEOUT_SECONDS = 45
         const val EVENT_BUFFER_LIMIT = 256
 

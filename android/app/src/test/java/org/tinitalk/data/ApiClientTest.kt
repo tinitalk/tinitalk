@@ -7,6 +7,24 @@ import org.junit.Test
 
 class ApiClientTest {
     @Test
+    fun loadsServerFeaturesFromHealthResponse() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"service":"tinitalk","status":"ok","api_version":3,"features":["video_1to1","future_feature"]}""",
+            ),
+        )
+        server.start()
+        try {
+            val info = UrlConnectionApiClient(server.url("/").toString(), "alice", "token").serverInfo()
+
+            assertEquals(setOf("video_1to1", "future_feature"), info.features)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun loadsTiniTalkServerIdentityWithoutCredentials() {
         val server = MockWebServer()
         server.enqueue(
@@ -20,6 +38,7 @@ class ApiClientTest {
                 .serverInfo()
 
             assertEquals(ServerInfo("tinitalk", "ok", 1), info)
+            assertEquals(emptySet<String>(), info.features)
             val request = server.takeRequest()
             assertEquals("/healthz", request.path)
             assertEquals(null, request.getHeader("Authorization"))

@@ -22,7 +22,7 @@ internal const val CredentialRefreshLeadMillis = 60_000L
 class ForegroundCallController(
     private val signal: SignalClient,
     private val mediaFactory: (
-        String,
+        Boolean,
         List<IceServerData>,
         (IceCandidateData) -> Unit,
         (List<IceCandidateData>) -> Unit,
@@ -38,6 +38,7 @@ class ForegroundCallController(
     private var muted = false
     private var callId: String? = null
     private var iceServers: List<IceServerData> = emptyList()
+    private var videoAllowed = false
     private var configuredCallId: String? = null
     private var acceptedCallId: String? = null
     private var offerStartedCallId: String? = null
@@ -76,6 +77,9 @@ class ForegroundCallController(
             }
             "rtc.config" -> {
                 iceServers = event.payload.parseIceServers()
+                videoAllowed = event.payload["video_allowed"]
+                    ?.takeUnless { it.isJsonNull }
+                    ?.asBoolean == true
                 configuredCallId = event.callId
                 event.payload.restartID()?.let { localIceGeneration = it }
                 session?.takeIf { callId == event.callId }?.let { media ->
@@ -172,6 +176,7 @@ class ForegroundCallController(
         session = null
         callId = null
         iceServers = emptyList()
+        videoAllowed = false
         configuredCallId = null
         acceptedCallId = null
         offerStartedCallId = null
@@ -210,7 +215,7 @@ class ForegroundCallController(
         if (current != null) close()
         callId = nextCallId
         val created = mediaFactory(
-            nextCallId,
+            videoAllowed,
             iceServers,
             { candidate -> sendIce(nextCallId, candidate) },
             { candidates -> sendIceCandidatesRemoved(nextCallId, candidates) },
