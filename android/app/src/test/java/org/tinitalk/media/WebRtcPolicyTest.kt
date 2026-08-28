@@ -69,7 +69,7 @@ class WebRtcPolicyTest {
     }
 
     @Test
-    fun capsTheSingleVideoEncodingWithoutTouchingAudioPolicy() {
+    fun allowsAdaptiveHdVideoWithoutTouchingAudioPolicy() {
         val video = RtpParameters.Encoding("video", true, null)
         val audio = RtpParameters.Encoding("audio", true, null)
         var committed = false
@@ -81,9 +81,16 @@ class WebRtcPolicyTest {
 
         assertTrue(applied)
         assertTrue(committed)
-        assertEquals(600_000, video.maxBitrateBps)
-        assertEquals(15, video.maxFramerate)
-        assertEquals(1.0, video.scaleResolutionDownBy)
+        assertEquals(1920, WebRtcPolicy.videoCaptureWidth)
+        assertEquals(1080, WebRtcPolicy.videoCaptureHeight)
+        assertEquals(30, WebRtcPolicy.videoCaptureFps)
+        assertEquals(4_000_000, video.maxBitrateBps)
+        assertEquals(null, video.maxFramerate)
+        assertEquals(null, video.scaleResolutionDownBy)
+        assertEquals(
+            RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE,
+            WebRtcPolicy.videoDegradationPreference,
+        )
         assertFalse(audio.adaptiveAudioPacketTime)
         assertEquals(null, audio.maxBitrateBps)
         assertEquals(null, audio.maxFramerate)

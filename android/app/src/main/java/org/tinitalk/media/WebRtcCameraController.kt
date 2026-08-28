@@ -219,7 +219,11 @@ private class WebRtcCameraAttempt(
         openingState.set(true)
         capturing.set(true)
         try {
-            capturer.startCapture(CaptureWidth, CaptureHeight, CaptureFps)
+            capturer.startCapture(
+                WebRtcPolicy.videoCaptureWidth,
+                WebRtcPolicy.videoCaptureHeight,
+                WebRtcPolicy.videoCaptureFps,
+            )
         } catch (failure: Throwable) {
             openingState.set(false)
             capturing.set(false)
@@ -300,6 +304,3 @@ private object AndroidMainCameraQueue : CameraTaskQueue {
 private const val LogTag = "TiniTalkCamera"
 private const val CameraThreadName = "TiniTalkCameraCapture"
 private const val LocalVideoTrackId = "local_video"
-private const val CaptureWidth = 640
-private const val CaptureHeight = 360
-private const val CaptureFps = 15

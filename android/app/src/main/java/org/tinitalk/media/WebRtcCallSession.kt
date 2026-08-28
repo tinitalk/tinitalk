@@ -237,6 +237,7 @@ class WebRtcCallSession private constructor(
         check(videoAllowed) { "video is not allowed for this call" }
         val retainedVideoSender = requireNotNull(videoSender)
         val videoParameters = retainedVideoSender.parameters
+        videoParameters.degradationPreference = WebRtcPolicy.videoDegradationPreference
         check(
             WebRtcPolicy.configureVideoSender(videoParameters.encodings) {
                 retainedVideoSender.setParameters(videoParameters)
