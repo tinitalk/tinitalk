@@ -1,6 +1,7 @@
 package org.tinitalk.ui.call
 
 internal const val CompactCallActionSizeDp = 64
+internal const val DenseVideoCallActionSizeDp = 56
 
 internal data class SelfPreviewSize(
     val widthDp: Float,
@@ -110,6 +111,7 @@ internal enum class CallControlAction {
 internal data class CallControlLayout(
     val columns: Int,
     val actions: List<CallControlAction>,
+    val buttonSizeDp: Int,
     val scrollable: Boolean,
     val viewportHeightDp: Int,
 )
@@ -145,7 +147,7 @@ internal fun videoCallPresentation(
         controlsMayAutoHide = remoteVisible,
         switchCameraEnabled = localVisible,
         blockProximity = localVisible || remoteVisible,
-        actionCount = if (videoAllowed) 4 else 3,
+        actionCount = if (videoAllowed) 5 else 3,
     )
 }
 
@@ -159,7 +161,11 @@ internal fun weakNetworkVideoMessage(
     null
 }
 
-internal fun callControlColumns(videoAllowed: Boolean): Int = if (videoAllowed) 4 else 3
+internal fun callControlColumns(videoAllowed: Boolean, videoModeActive: Boolean = false): Int = when {
+    videoModeActive -> 5
+    videoAllowed -> 4
+    else -> 3
+}
 
 internal fun callControlLayout(
     videoAllowed: Boolean,
@@ -172,16 +178,17 @@ internal fun callControlLayout(
         if (videoModeActive) {
             add(CallControlAction.SwitchCamera)
             add(CallControlAction.Camera)
+            add(CallControlAction.AudioRoute)
             add(CallControlAction.Mute)
             add(CallControlAction.End)
         } else if (videoAllowed) {
-            add(CallControlAction.AudioRoute)
             add(CallControlAction.Camera)
+            add(CallControlAction.AudioRoute)
             add(CallControlAction.Mute)
             add(CallControlAction.End)
         } else {
-            add(CallControlAction.Mute)
             add(CallControlAction.AudioRoute)
+            add(CallControlAction.Mute)
             add(CallControlAction.End)
         }
     }
@@ -191,8 +198,13 @@ internal fun callControlLayout(
         .coerceAtMost(heightDp.coerceAtLeast(CompactCallActionSizeDp.toFloat()))
         .toInt()
     return CallControlLayout(
-        columns = callControlColumns(videoAllowed),
+        columns = callControlColumns(videoAllowed, videoModeActive),
         actions = actions,
+        buttonSizeDp = if (videoModeActive && widthDp < CompactCallActionSizeDp * 5) {
+            DenseVideoCallActionSizeDp
+        } else {
+            CompactCallActionSizeDp
+        },
         scrollable = heightDp < 560f || fontScale >= 1.3f,
         viewportHeightDp = viewportHeight,
     )

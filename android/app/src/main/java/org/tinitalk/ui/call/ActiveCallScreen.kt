@@ -61,6 +61,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntOffset
@@ -118,9 +119,8 @@ fun ActiveCallScreen(
         onCamera(requested)
     }
 
-    LaunchedEffect(videoState.callId, videoMode, currentEndpoint, availableEndpoints) {
+    LaunchedEffect(videoState.callId, videoMode) {
         if (videoMode) {
-            routePickerVisible = false
             speakerRouteOnCameraPress(true, currentEndpoint, availableEndpoints)?.let(onSelectEndpoint)
         }
     }
@@ -133,8 +133,11 @@ fun ActiveCallScreen(
             statusColor = statusColor,
             muted = muted,
             currentEndpoint = currentEndpoint,
+            availableEndpoints = availableEndpoints,
             videoState = videoState,
             onMute = onMute,
+            onSelectEndpoint = onSelectEndpoint,
+            onShowRoutePicker = { routePickerVisible = true },
             onCamera = cameraPressed,
             onSwitchCamera = onSwitchCamera,
             onVideoVisibilityChanged = onVideoVisibilityChanged,
@@ -374,8 +377,11 @@ private fun VideoActiveCallScreen(
     statusColor: Color,
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
     videoState: CallVideoState<VideoRenderSource>,
     onMute: (Boolean) -> Unit,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onShowRoutePicker: () -> Unit,
     onCamera: (Boolean) -> Unit,
     onSwitchCamera: () -> Unit,
     onVideoVisibilityChanged: (Boolean) -> Unit,
@@ -437,10 +443,11 @@ private fun VideoActiveCallScreen(
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
         val safeDrawingInsets = WindowInsets.safeDrawing
+        val controlHorizontalPadding = if (maxWidth.value < 360f) 8.dp else 12.dp
         val controlLayout = callControlLayout(
             videoAllowed = true,
             videoModeActive = true,
-            widthDp = (maxWidth.value - 24f).coerceAtLeast(0f),
+            widthDp = (maxWidth.value - controlHorizontalPadding.value * 2f).coerceAtLeast(0f),
             heightDp = maxHeight.value,
             fontScale = density.fontScale,
         )
@@ -637,7 +644,7 @@ private fun VideoActiveCallScreen(
                             Modifier
                         },
                     )
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                    .padding(horizontal = controlHorizontalPadding, vertical = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 weakNetworkVideoMessage(
@@ -670,10 +677,14 @@ private fun VideoActiveCallScreen(
                 Spacer(Modifier.height(8.dp))
                 AdaptiveVideoControls(
                     muted = muted,
+                    currentEndpoint = currentEndpoint,
+                    availableEndpoints = availableEndpoints,
                     layout = controlLayout,
                     cameraRequested = videoState.requested,
                     switchCameraEnabled = presentation.switchCameraEnabled,
                     onMute = onMute,
+                    onSelectEndpoint = onSelectEndpoint,
+                    onShowRoutePicker = onShowRoutePicker,
                     onSwitchCamera = onSwitchCamera,
                     onCamera = onCamera,
                     onEnd = onEnd,
@@ -727,6 +738,7 @@ private fun AdaptiveAudioControls(
     val compact = layout.columns == 2
     if (videoAllowed && !compact) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
             AudioRouteAction(
                 currentEndpoint,
                 availableEndpoints,
@@ -735,13 +747,13 @@ private fun AdaptiveAudioControls(
                 onShowRoutePicker,
                 compact = true,
             )
-            CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
             MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
             EndCallAction(Modifier.weight(1f), onEnd, compact = true)
         }
     } else if (videoAllowed) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth()) {
+                CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
                 AudioRouteAction(
                     currentEndpoint,
                     availableEndpoints,
@@ -750,7 +762,6 @@ private fun AdaptiveAudioControls(
                     onShowRoutePicker,
                     compact = true,
                 )
-                CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
             }
             Row(modifier = Modifier.fillMaxWidth()) {
                 MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
@@ -759,7 +770,6 @@ private fun AdaptiveAudioControls(
         }
     } else if (!compact) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            MuteCallAction(muted, Modifier.weight(1f), onMute)
             AudioRouteAction(
                 currentEndpoint,
                 availableEndpoints,
@@ -767,12 +777,12 @@ private fun AdaptiveAudioControls(
                 onSelectEndpoint,
                 onShowRoutePicker,
             )
+            MuteCallAction(muted, Modifier.weight(1f), onMute)
             EndCallAction(Modifier.weight(1f), onEnd)
         }
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth()) {
-                MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
                 AudioRouteAction(
                     currentEndpoint,
                     availableEndpoints,
@@ -781,6 +791,7 @@ private fun AdaptiveAudioControls(
                     onShowRoutePicker,
                     compact = true,
                 )
+                MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
             }
             Row(modifier = Modifier.fillMaxWidth()) {
                 Spacer(Modifier.weight(1f))
@@ -794,32 +805,33 @@ private fun AdaptiveAudioControls(
 @Composable
 private fun AdaptiveVideoControls(
     muted: Boolean,
+    currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
     layout: CallControlLayout,
     cameraRequested: Boolean,
     switchCameraEnabled: Boolean,
     onMute: (Boolean) -> Unit,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onShowRoutePicker: () -> Unit,
     onSwitchCamera: () -> Unit,
     onCamera: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
-    if (layout.columns == 4) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            SwitchCameraCallAction(switchCameraEnabled, Modifier.weight(1f), onSwitchCamera)
-            CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
-            MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
-            EndCallAction(Modifier.weight(1f), onEnd, compact = true)
-        }
-    } else {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(modifier = Modifier.fillMaxWidth()) {
-                SwitchCameraCallAction(switchCameraEnabled, Modifier.weight(1f), onSwitchCamera)
-                CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
-            }
-            Row(modifier = Modifier.fillMaxWidth()) {
-                MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
-                EndCallAction(Modifier.weight(1f), onEnd, compact = true)
-            }
-        }
+    val buttonSize = layout.buttonSizeDp.dp
+    Row(modifier = Modifier.fillMaxWidth()) {
+        SwitchCameraCallAction(switchCameraEnabled, Modifier.weight(1f), onSwitchCamera, buttonSize)
+        CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera, buttonSize)
+        AudioRouteAction(
+            currentEndpoint = currentEndpoint,
+            availableEndpoints = availableEndpoints,
+            modifier = Modifier.weight(1f),
+            onSelectEndpoint = onSelectEndpoint,
+            onShowPicker = onShowRoutePicker,
+            compact = true,
+            buttonSize = buttonSize,
+        )
+        MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true, buttonSize = buttonSize)
+        EndCallAction(Modifier.weight(1f), onEnd, compact = true, buttonSize = buttonSize)
     }
 }
 
@@ -828,6 +840,7 @@ private fun SwitchCameraCallAction(
     enabled: Boolean,
     modifier: Modifier,
     onSwitchCamera: () -> Unit,
+    buttonSize: Dp = CompactCallActionSizeDp.dp,
 ) {
     RoundCallAction(
         label = "Повернуть",
@@ -837,7 +850,7 @@ private fun SwitchCameraCallAction(
         enabled = enabled,
         onClick = onSwitchCamera,
         iconResource = R.drawable.ic_camera_switch,
-        buttonSize = CompactCallActionSizeDp.dp,
+        buttonSize = buttonSize,
         labelMaxLines = 1,
     )
 }
@@ -847,6 +860,7 @@ private fun CameraCallAction(
     requested: Boolean,
     modifier: Modifier,
     onCamera: (Boolean) -> Unit,
+    buttonSize: Dp = CompactCallActionSizeDp.dp,
 ) {
     RoundCallAction(
         label = "Камера",
@@ -855,7 +869,7 @@ private fun CameraCallAction(
         color = if (requested) Color(0xFF2A8C76) else Color(0xFF33465F),
         onClick = { onCamera(!requested) },
         iconResource = R.drawable.ic_videocam,
-        buttonSize = CompactCallActionSizeDp.dp,
+        buttonSize = buttonSize,
         labelMaxLines = 1,
     )
 }
@@ -865,6 +879,7 @@ private fun EndCallAction(
     modifier: Modifier,
     onEnd: () -> Unit,
     compact: Boolean = false,
+    buttonSize: Dp = if (compact) CompactCallActionSizeDp.dp else 72.dp,
 ) {
     RoundCallAction(
         label = "Завершить",
@@ -872,7 +887,7 @@ private fun EndCallAction(
         color = CallRejectRed,
         onClick = onEnd,
         iconRotation = 135f,
-        buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
+        buttonSize = buttonSize,
         labelMaxLines = 1,
     )
 }
@@ -883,6 +898,7 @@ internal fun MuteCallAction(
     modifier: Modifier = Modifier,
     onMute: (Boolean) -> Unit,
     compact: Boolean = false,
+    buttonSize: Dp = if (compact) CompactCallActionSizeDp.dp else 72.dp,
 ) {
     RoundCallAction(
         label = "Микрофон",
@@ -891,7 +907,7 @@ internal fun MuteCallAction(
         color = if (muted) Color(0xFF55708F) else Color(0xFF33465F),
         onClick = { onMute(!muted) },
         iconResource = if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
-        buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
+        buttonSize = buttonSize,
         labelMaxLines = 1,
     )
 }
@@ -904,6 +920,7 @@ internal fun AudioRouteAction(
     onSelectEndpoint: (AudioEndpoint) -> Unit,
     onShowPicker: () -> Unit,
     compact: Boolean = false,
+    buttonSize: Dp = if (compact) CompactCallActionSizeDp.dp else 72.dp,
 ) {
     val directRoute = directAudioRoute(currentEndpoint, availableEndpoints)
     RoundCallAction(
@@ -924,7 +941,7 @@ internal fun AudioRouteAction(
             }
         },
         iconResource = audioEndpointIcon(currentEndpoint),
-        buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
+        buttonSize = buttonSize,
         labelMaxLines = 1,
     )
 }
@@ -1016,6 +1033,7 @@ private fun audioEndpointIcon(endpoint: AudioEndpoint?): Int = when (endpoint?.t
     CallEndpointCompat.TYPE_BLUETOOTH -> R.drawable.ic_bluetooth
     CallEndpointCompat.TYPE_WIRED_HEADSET -> R.drawable.ic_headset
     CallEndpointCompat.TYPE_SPEAKER -> R.drawable.ic_volume_up
+    CallEndpointCompat.TYPE_EARPIECE -> R.drawable.ic_phone_in_talk
     else -> R.drawable.ic_call
 }
 

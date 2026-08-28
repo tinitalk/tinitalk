@@ -193,18 +193,29 @@ class VideoCallPresentationTest {
         )
 
         assertEquals(
-            listOf(CallControlAction.SwitchCamera, CallControlAction.Camera, CallControlAction.Mute, CallControlAction.End),
+            listOf(
+                CallControlAction.SwitchCamera,
+                CallControlAction.Camera,
+                CallControlAction.AudioRoute,
+                CallControlAction.Mute,
+                CallControlAction.End,
+            ),
             video.actions,
         )
         assertEquals(
-            listOf(CallControlAction.AudioRoute, CallControlAction.Camera, CallControlAction.Mute, CallControlAction.End),
+            listOf(
+                CallControlAction.Camera,
+                CallControlAction.AudioRoute,
+                CallControlAction.Mute,
+                CallControlAction.End,
+            ),
             cameraReady.actions,
         )
         assertEquals(
-            listOf(CallControlAction.Mute, CallControlAction.AudioRoute, CallControlAction.End),
+            listOf(CallControlAction.AudioRoute, CallControlAction.Mute, CallControlAction.End),
             audio.actions,
         )
-        assertEquals(4, video.columns)
+        assertEquals(5, video.columns)
         assertEquals(4, cameraReady.columns)
         assertEquals(3, audio.columns)
         assertTrue(video.scrollable)
