@@ -12,6 +12,7 @@ const (
 
 type replayEntry struct {
 	recipient string
+	deviceID  string
 	event     DeliveredEvent
 }
 
@@ -19,6 +20,8 @@ type call struct {
 	id                  string
 	caller              string
 	callee              string
+	callerDeviceID      string
+	calleeDeviceID      string
 	nextSeq             uint64
 	seen                map[string]struct{}
 	seenOrder           []string
@@ -57,4 +60,15 @@ func (c *call) other(user string) string {
 		return c.callee
 	}
 	return c.caller
+}
+
+func (c *call) deviceID(user string) string {
+	if user == c.caller {
+		return c.callerDeviceID
+	}
+	return c.calleeDeviceID
+}
+
+func (c *call) devicesBound() bool {
+	return c.callerDeviceID != "" && c.calleeDeviceID != ""
 }

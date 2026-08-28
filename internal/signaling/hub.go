@@ -133,7 +133,9 @@ func (h *Hub) Connected(client *Client) bool {
 	client.online = true
 	if callID, ok := h.activeByUser[client.user]; ok {
 		if c := h.calls[callID]; c != nil && c.state == callActive {
-			delete(c.offlineSince, client.user)
+			if h.clientBelongsToCall(c, client) {
+				delete(c.offlineSince, client.user)
+			}
 		}
 	}
 	return true
@@ -155,11 +157,13 @@ func (h *Hub) disconnectLocked(client *Client) {
 	if len(h.clients[client.user]) == 0 {
 		delete(h.clients, client.user)
 	}
-	if !h.hasOnlineClient(client.user) {
-		if callID, ok := h.activeByUser[client.user]; ok {
-			if c := h.calls[callID]; c != nil && c.state == callActive {
+	if callID, ok := h.activeByUser[client.user]; ok {
+		if c := h.calls[callID]; c != nil && c.state == callActive {
+			if !h.hasOnlineCallClient(c, client.user) {
 				_, alreadyOffline := c.offlineSince[client.user]
-				if wasOnline || !alreadyOffline {
+				if c.devicesBound() && h.clientBelongsToCall(c, client) && wasOnline {
+					c.offlineSince[client.user] = h.now()
+				} else if !c.devicesBound() && (wasOnline || !alreadyOffline) {
 					c.offlineSince[client.user] = h.now()
 				}
 			}
@@ -177,6 +181,23 @@ func (h *Hub) hasOnlineClient(user string) bool {
 	return false
 }
 
+func (h *Hub) hasOnlineCallClient(c *call, user string) bool {
+	if !c.devicesBound() {
+		return h.hasOnlineClient(user)
+	}
+	deviceID := c.deviceID(user)
+	for client := range h.clients[user] {
+		if client.deviceID == deviceID && client.online && !client.closed {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Hub) clientBelongsToCall(c *call, client *Client) bool {
+	return !c.devicesBound() || c.deviceID(client.user) == client.deviceID
+}
+
 func (h *Hub) SetNow(now func() time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -189,8 +210,30 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.handleLocked(sender, "", false, event)
+}
+
+func (h *Hub) HandleClient(client *Client, event protocol.Event) error {
+	if client == nil {
+		return errors.New("client is required")
+	}
+	if err := event.Validate(); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if client.closed || !client.online {
+		return errors.New("client is not connected")
+	}
+	if _, ok := h.clients[client.user][client]; !ok {
+		return errors.New("client is not connected")
+	}
+	return h.handleLocked(client.user, client.deviceID, true, event)
+}
+
+func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, event protocol.Event) error {
 	if event.Type == "call.start" {
-		return h.start(sender, event)
+		return h.start(sender, senderDeviceID, event)
 	}
 	c, ok := h.callByID(event.CallID)
 	if !ok {
@@ -210,10 +253,21 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		for _, delivered := range c.after(sender, payload.LastSeq) {
-			h.deliver(sender, delivered)
+		replayed := c.after(sender, payload.LastSeq)
+		if clientAware {
+			replayed = c.afterDevice(sender, senderDeviceID, payload.LastSeq)
+		}
+		for _, delivered := range replayed {
+			if clientAware && senderDeviceID != "" {
+				h.deliverDevice(sender, senderDeviceID, delivered)
+			} else {
+				h.deliver(sender, delivered)
+			}
 		}
 		return nil
+	}
+	if c.devicesBound() && isDeviceBoundEvent(event.Type) && c.deviceID(sender) != senderDeviceID {
+		return errors.New("event is not from the active call device")
 	}
 	if err := c.validateTransition(sender, event.Type); err != nil {
 		return err
@@ -226,6 +280,7 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 			return err
 		}
 		c.calleeSupportsVideo = payload.SupportsVideo
+		c.calleeDeviceID = senderDeviceID
 	}
 	if event.Type == "rtc.ice" {
 		if err := h.checkICERate(c); err != nil {
@@ -275,12 +330,18 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	}
 	c.remember(event.ID)
 	recipient := c.other(sender)
-	delivered := h.next(c, event, recipient)
-	h.deliver(recipient, delivered)
+	var delivered DeliveredEvent
+	if isDeviceBoundEvent(event.Type) && c.devicesBound() {
+		delivered = h.nextDevice(c, event, recipient, c.deviceID(recipient))
+		h.deliverDevice(recipient, c.deviceID(recipient), delivered)
+	} else {
+		delivered = h.next(c, event, recipient)
+		h.deliver(recipient, delivered)
+	}
 	if event.Type == "call.accept" {
 		c.state = callActive
 		for _, participant := range []string{c.caller, c.callee} {
-			if !h.hasOnlineClient(participant) {
+			if !h.hasOnlineCallClient(c, participant) {
 				c.offlineSince[participant] = h.now()
 			}
 		}
@@ -304,7 +365,7 @@ func (h *Hub) deliverICEConfig(c *call, restartID string) {
 		if h.iceConfig != nil {
 			payload = h.iceConfig.ICEConfig(c.id, participant)
 		}
-		payload = withVideoAllowed(payload, c.callerSupportsVideo && c.calleeSupportsVideo)
+		payload = withVideoAllowed(payload, c.devicesBound() && c.callerSupportsVideo && c.calleeSupportsVideo)
 		if restartID != "" {
 			payload = withRestartID(payload, restartID)
 		}
@@ -315,7 +376,12 @@ func (h *Hub) deliverICEConfig(c *call, restartID string) {
 			SentAt:  h.now().UnixMilli(),
 			Payload: payload,
 		}
-		h.deliver(participant, h.next(c, event, participant))
+		if c.devicesBound() {
+			deviceID := c.deviceID(participant)
+			h.deliverDevice(participant, deviceID, h.nextDevice(c, event, participant, deviceID))
+		} else {
+			h.deliver(participant, h.next(c, event, participant))
+		}
 	}
 }
 
@@ -366,7 +432,7 @@ func (h *Hub) Resume(user, callID string, lastSeq uint64) ([]DeliveredEvent, err
 	return c.after(user, lastSeq), nil
 }
 
-func (h *Hub) start(sender string, event protocol.Event) error {
+func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	if existing, ok := h.callByID(event.CallID); ok {
 		if _, seen := existing.seen[event.ID]; seen {
 			return nil
@@ -397,7 +463,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 				existing.caller == payload.CalleeID &&
 				existing.callee == sender &&
 				existing.supportsCrossCall && payload.SupportsCrossCall {
-				return h.acceptCrossed(existing, event, payload.SupportsVideo)
+				return h.acceptCrossed(existing, senderDeviceID, event, payload.SupportsVideo)
 			}
 		}
 		return ErrCalleeBusy
@@ -424,6 +490,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 		id:                  event.CallID,
 		caller:              sender,
 		callee:              payload.CalleeID,
+		callerDeviceID:      senderDeviceID,
 		seen:                map[string]struct{}{},
 		offlineSince:        map[string]time.Time{},
 		nextSeq:             1,
@@ -446,7 +513,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 	return nil
 }
 
-func (h *Hub) acceptCrossed(c *call, source protocol.Event, calleeSupportsVideo bool) error {
+func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Event, calleeSupportsVideo bool) error {
 	if h.history != nil {
 		if err := h.history.MarkCallAccepted(c.id); err != nil {
 			return err
@@ -454,11 +521,12 @@ func (h *Hub) acceptCrossed(c *call, source protocol.Event, calleeSupportsVideo 
 	}
 	c.remember(source.ID)
 	c.calleeSupportsVideo = calleeSupportsVideo
+	c.calleeDeviceID = calleeDeviceID
 	h.callAliases[source.CallID] = c.id
 	c.aliases = append(c.aliases, source.CallID)
 	c.state = callActive
 	for _, participant := range []string{c.caller, c.callee} {
-		if !h.hasOnlineClient(participant) {
+		if !h.hasOnlineCallClient(c, participant) {
 			c.offlineSince[participant] = h.now()
 		}
 	}
@@ -467,11 +535,23 @@ func (h *Hub) acceptCrossed(c *call, source protocol.Event, calleeSupportsVideo 
 	accept.Type = "call.accept"
 	accept.SentAt = h.now().UnixMilli()
 	accept.Payload = json.RawMessage(`{"crossed":true,"offerer":true}`)
-	callerEvent := h.next(c, accept, c.caller)
-	h.deliver(c.caller, callerEvent)
+	var callerEvent DeliveredEvent
+	if c.devicesBound() {
+		callerEvent = h.nextDevice(c, accept, c.caller, c.callerDeviceID)
+		h.deliverDevice(c.caller, c.callerDeviceID, callerEvent)
+	} else {
+		callerEvent = h.next(c, accept, c.caller)
+		h.deliver(c.caller, callerEvent)
+	}
 	accept.Payload = json.RawMessage(`{"crossed":true,"offerer":false}`)
-	calleeEvent := h.next(c, accept, c.callee)
-	h.deliver(c.callee, calleeEvent)
+	var calleeEvent DeliveredEvent
+	if c.devicesBound() {
+		calleeEvent = h.nextDevice(c, accept, c.callee, c.calleeDeviceID)
+		h.deliverDevice(c.callee, c.calleeDeviceID, calleeEvent)
+	} else {
+		calleeEvent = h.next(c, accept, c.callee)
+		h.deliver(c.callee, calleeEvent)
+	}
 	h.deliverICEConfig(c, "")
 	h.enqueueNotification(notification{callee: c.callee, event: calleeEvent, cancel: true})
 	return nil
@@ -701,6 +781,13 @@ func (h *Hub) next(c *call, event protocol.Event, recipients ...string) Delivere
 	return delivered
 }
 
+func (h *Hub) nextDevice(c *call, event protocol.Event, recipient, deviceID string) DeliveredEvent {
+	delivered := DeliveredEvent{Event: event, Seq: c.nextSeq}
+	c.nextSeq++
+	c.appendDeviceReplay(recipient, deviceID, delivered)
+	return delivered
+}
+
 func (h *Hub) callByID(callID string) (*call, bool) {
 	if c, ok := h.calls[callID]; ok {
 		return c, true
@@ -720,6 +807,32 @@ func (h *Hub) deliver(user string, event DeliveredEvent) {
 		default:
 			h.disconnectLocked(client)
 		}
+	}
+}
+
+func (h *Hub) deliverDevice(user, deviceID string, event DeliveredEvent) {
+	if deviceID == "" {
+		h.deliver(user, event)
+		return
+	}
+	for client := range h.clients[user] {
+		if client.deviceID != deviceID {
+			continue
+		}
+		select {
+		case client.inbox <- event:
+		default:
+			h.disconnectLocked(client)
+		}
+	}
+}
+
+func isDeviceBoundEvent(eventType string) bool {
+	switch eventType {
+	case "call.accept", "rtc.offer", "rtc.answer", "rtc.ice", "rtc.restart", "rtc.restart.request":
+		return true
+	default:
+		return false
 	}
 }
 

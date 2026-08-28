@@ -251,15 +251,15 @@ func TestHubNegotiatesVideoCapability(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			hub := NewHub(NoopNotifier{})
-			alice := hub.Connect("alice")
-			bob := hub.Connect("bob")
+			alice := connectDevice(t, hub, "alice", "phone")
+			bob := connectDevice(t, hub, "bob", "phone")
 
 			startPayload := map[string]any{"callee_id": "bob"}
 			if test.callerSupports {
 				startPayload["supports_video"] = true
 			}
 			start := event(uuid(2201), uuid(2202), "call.start", startPayload)
-			if err := hub.Handle("alice", start); err != nil {
+			if err := hub.HandleClient(alice, start); err != nil {
 				t.Fatal(err)
 			}
 			_ = next(t, bob)
@@ -268,7 +268,7 @@ func TestHubNegotiatesVideoCapability(t *testing.T) {
 			if test.calleeSupports {
 				acceptPayload["supports_video"] = true
 			}
-			if err := hub.Handle("bob", event(uuid(2203), start.CallID, "call.accept", acceptPayload)); err != nil {
+			if err := hub.HandleClient(bob, event(uuid(2203), start.CallID, "call.accept", acceptPayload)); err != nil {
 				t.Fatal(err)
 			}
 			_ = next(t, alice) // call.accept
@@ -292,15 +292,15 @@ func TestHubNegotiatesVideoCapabilityForCrossedCalls(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			hub := NewHub(NoopNotifier{})
-			alice := hub.Connect("alice")
-			bob := hub.Connect("bob")
+			alice := connectDevice(t, hub, "alice", "phone")
+			bob := connectDevice(t, hub, "bob", "phone")
 
 			firstPayload := map[string]any{"callee_id": "bob", "supports_cross_call": true}
 			if test.callerSupports {
 				firstPayload["supports_video"] = true
 			}
 			first := event(uuid(2301), uuid(2302), "call.start", firstPayload)
-			if err := hub.Handle("alice", first); err != nil {
+			if err := hub.HandleClient(alice, first); err != nil {
 				t.Fatal(err)
 			}
 			_ = next(t, bob)
@@ -309,7 +309,7 @@ func TestHubNegotiatesVideoCapabilityForCrossedCalls(t *testing.T) {
 			if test.calleeSupports {
 				reversePayload["supports_video"] = true
 			}
-			if err := hub.Handle("bob", event(uuid(2303), uuid(2304), "call.start", reversePayload)); err != nil {
+			if err := hub.HandleClient(bob, event(uuid(2303), uuid(2304), "call.start", reversePayload)); err != nil {
 				t.Fatal(err)
 			}
 			_ = next(t, alice) // crossed call.accept

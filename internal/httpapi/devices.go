@@ -140,7 +140,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			_ = writeJSON(map[string]string{"error": err.Error()})
 			continue
 		}
-		if err := s.hub.Handle(user, event); err != nil {
+		if err := s.hub.HandleClient(client, event); err != nil {
 			failure := map[string]any{"error": err.Error(), "call_id": event.CallID, "event_id": event.ID}
 			if errors.Is(err, signaling.ErrCalleeBusy) {
 				failure["code"] = "busy"
