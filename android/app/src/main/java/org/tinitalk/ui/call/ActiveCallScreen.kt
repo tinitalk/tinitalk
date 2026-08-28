@@ -1,5 +1,6 @@
 package org.tinitalk.ui.call
 
+import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateIntOffsetAsState
 import androidx.compose.animation.core.snap
@@ -55,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
@@ -398,8 +400,16 @@ private fun VideoActiveCallScreen(
         remoteFrameVisible = remoteFrameVisible,
     )
     val controlsMayAutoHide = presentation.controlsMayAutoHide
+    val context = LocalContext.current
+    val previewPreferences = remember(context) {
+        context.applicationContext.getSharedPreferences(SelfPreviewPreferencesName, Context.MODE_PRIVATE)
+    }
     var controlsVisible by remember(videoState.callId) { mutableStateOf(true) }
-    var previewCorner by remember(videoState.callId) { mutableStateOf(SelfPreviewCorner.TopRight) }
+    var previewCorner by remember(videoState.callId, previewPreferences) {
+        mutableStateOf(
+            storedSelfPreviewCorner(previewPreferences.getString(SelfPreviewCornerKey, null)),
+        )
+    }
     var draggedPreviewPosition by remember(videoState.callId) { mutableStateOf<SelfPreviewPosition?>(null) }
     var previewDragging by remember(videoState.callId) { mutableStateOf(false) }
     var topControlsHeight by remember(videoState.callId) { mutableIntStateOf(0) }
@@ -559,7 +569,9 @@ private fun VideoActiveCallScreen(
             )
             val finishPreviewDrag = {
                 draggedPreviewPosition?.let { position ->
-                    previewCorner = nearestSelfPreviewCorner(position, previewBounds)
+                    val corner = nearestSelfPreviewCorner(position, previewBounds)
+                    previewCorner = corner
+                    previewPreferences.edit().putString(SelfPreviewCornerKey, corner.name).apply()
                 }
                 draggedPreviewPosition = null
                 previewDragging = false
@@ -699,6 +711,8 @@ private const val VideoControlsFadeInMillis = 180
 private const val VideoControlsFadeOutMillis = 220
 private const val VideoControlsSlideMillis = 260
 private const val VideoPreviewSnapMillis = 220
+private const val SelfPreviewPreferencesName = "call_ui"
+private const val SelfPreviewCornerKey = "self_preview_corner"
 private val SelfPreviewEdgeSpacing = 12.dp
 
 @Composable

@@ -122,6 +122,20 @@ class VideoCallPresentationTest {
     }
 
     @Test
+    fun selfiePreviewRestoresSavedCorner() {
+        assertEquals(
+            SelfPreviewCorner.TopLeft,
+            storedSelfPreviewCorner("TopLeft"),
+        )
+    }
+
+    @Test
+    fun selfiePreviewDefaultsToBottomRightForMissingOrUnknownCorner() {
+        assertEquals(SelfPreviewCorner.BottomRight, storedSelfPreviewCorner(null))
+        assertEquals(SelfPreviewCorner.BottomRight, storedSelfPreviewCorner("unknown"))
+    }
+
+    @Test
     fun selfiePreviewStaysInsideSafeAreaAndSnapsToNearestCorner() {
         val visibleBounds = selfPreviewBounds(
             containerWidth = 360f,

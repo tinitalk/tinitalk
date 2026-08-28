@@ -20,6 +20,10 @@ internal enum class SelfPreviewCorner {
     BottomRight,
 }
 
+internal fun storedSelfPreviewCorner(value: String?): SelfPreviewCorner =
+    SelfPreviewCorner.entries.firstOrNull { it.name == value }
+        ?: SelfPreviewCorner.BottomRight
+
 internal data class SelfPreviewPosition(
     val x: Float,
     val y: Float,
