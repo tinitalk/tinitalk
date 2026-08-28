@@ -37,6 +37,28 @@ class WebRtcPolicyTest {
     }
 
     @Test
+    fun bundlesAudioAndVideoOnOneRtpTransport() {
+        val configuration = PeerConnection.RTCConfiguration(emptyList()).apply {
+            bundlePolicy = PeerConnection.BundlePolicy.MAXCOMPAT
+        }
+
+        WebRtcPolicy.configureConnection(configuration, forceRelay = false)
+
+        assertEquals(PeerConnection.BundlePolicy.MAXBUNDLE, configuration.bundlePolicy)
+    }
+
+    @Test
+    fun requiresRtcpMux() {
+        val configuration = PeerConnection.RTCConfiguration(emptyList()).apply {
+            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.NEGOTIATE
+        }
+
+        WebRtcPolicy.configureConnection(configuration, forceRelay = false)
+
+        assertEquals(PeerConnection.RtcpMuxPolicy.REQUIRE, configuration.rtcpMuxPolicy)
+    }
+
+    @Test
     fun adaptsAudioPacketTimeToNetworkConditions() {
         val encoding = RtpParameters.Encoding("audio", true, null)
         assertFalse(encoding.adaptiveAudioPacketTime)

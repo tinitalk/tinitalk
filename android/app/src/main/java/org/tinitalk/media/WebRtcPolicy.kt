@@ -9,6 +9,8 @@ object WebRtcPolicy {
 
     fun configureConnection(configuration: PeerConnection.RTCConfiguration, forceRelay: Boolean) {
         configuration.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        configuration.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+        configuration.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
         configuration.iceTransportsType = iceTransport(forceRelay)
         configuration.continualGatheringPolicy = continualGatheringPolicy
         configuration.audioJitterBufferFastAccelerate = true

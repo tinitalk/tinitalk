@@ -4,13 +4,19 @@ import android.content.Context
 import android.util.Log
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.DefaultVideoEncoderFactory
+import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
+import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpSender
+import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.VideoTrack
 import org.webrtc.audio.JavaAudioDeviceModule
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -24,14 +30,18 @@ class WebRtcCallSession private constructor(
     private val onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit,
     private val onIceRestartNeeded: () -> Unit,
     private val onConnectionStateChanged: (MediaConnectionState) -> Unit,
+    private val onRemoteVideoTrack: (VideoTrack) -> Unit,
     private val forceRelay: Boolean,
 ) : MediaSession {
     private val iceQueue = IceQueue()
+    private val resources = NativeResourceOwner()
     private val factory: PeerConnectionFactory
     private val audioDeviceModule: JavaAudioDeviceModule
+    private val eglBase: EglBase?
     private val audioSource: AudioSource
     private val audioTrack: AudioTrack
     private val sender: RtpSender?
+    private val videoSender: RtpSender?
     private val peerConnection: PeerConnection
     private val restartGate = IceRestartGate(ExecutorTaskScheduler())
     private val statsCollector = CallStatsCollector()
@@ -40,32 +50,78 @@ class WebRtcCallSession private constructor(
     private var muted = false
 
     init {
-        prepareFactory(context.applicationContext)
-        audioDeviceModule = JavaAudioDeviceModule.builder(context.applicationContext)
-            .setUseLowLatency(WebRtcPolicy.useLowLatencyAudio)
-            .setUseHardwareAcousticEchoCanceler(true)
-            .setUseHardwareNoiseSuppressor(true)
-            .createAudioDeviceModule()
+        try {
+            prepareFactory(context.applicationContext)
+            audioDeviceModule = JavaAudioDeviceModule.builder(context.applicationContext)
+                .setUseLowLatency(WebRtcPolicy.useLowLatencyAudio)
+                .setUseHardwareAcousticEchoCanceler(true)
+                .setUseHardwareNoiseSuppressor(true)
+                .createAudioDeviceModule()
+            resources.own(audioDeviceModule::release)
 
-        factory = PeerConnectionFactory.builder()
-            .setAudioDeviceModule(audioDeviceModule)
-            .createPeerConnectionFactory()
+            eglBase = if (videoAllowed) EglBase.create() else null
+            eglBase?.let { resources.own(it::release) }
+            factory = if (eglBase == null) {
+                PeerConnectionFactory.builder()
+                    .setAudioDeviceModule(audioDeviceModule)
+                    .createPeerConnectionFactory()
+            } else {
+                PeerConnectionFactory.builder()
+                    .setAudioDeviceModule(audioDeviceModule)
+                    .setVideoEncoderFactory(
+                        DefaultVideoEncoderFactory(
+                            eglBase.eglBaseContext,
+                            true,
+                            true,
+                        ),
+                    )
+                    .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
+                    .createPeerConnectionFactory()
+            }
+            resources.own(factory::dispose)
 
-        peerConnection = requireNotNull(
-            factory.createPeerConnection(
-                rtcConfiguration(iceServers),
-                PeerConnectionObserver(
-                    onLocalIceCandidate = onLocalIceCandidate,
-                    onLocalIceCandidatesRemoved = onLocalIceCandidatesRemoved,
-                    onConnectionChange = { state -> onIceConnectionState(state) },
+            peerConnection = requireNotNull(
+                factory.createPeerConnection(
+                    rtcConfiguration(iceServers),
+                    PeerConnectionObserver(
+                        onLocalIceCandidate = onLocalIceCandidate,
+                        onLocalIceCandidatesRemoved = onLocalIceCandidatesRemoved,
+                        onConnectionChange = { state -> onIceConnectionState(state) },
+                        onRemoteVideoTrack = { track ->
+                            if (!closed) onRemoteVideoTrack(track)
+                        },
+                    ),
                 ),
-            ),
-        )
-        audioSource = factory.createAudioSource(audioConstraints())
-        audioTrack = factory.createAudioTrack("local_audio", audioSource)
-        sender = peerConnection.addTrack(audioTrack, listOf("audio"))
-        sender?.let(::configureAudioSender)
-        applyAudioTrackState()
+            )
+            resources.own(peerConnection::dispose)
+            resources.own(peerConnection::close)
+
+            audioSource = factory.createAudioSource(audioConstraints())
+            resources.own(audioSource::dispose)
+            audioTrack = factory.createAudioTrack("local_audio", audioSource)
+            resources.own(audioTrack::dispose)
+            sender = peerConnection.addTrack(audioTrack, listOf("audio"))
+            sender?.let { audioSender ->
+                resources.own { peerConnection.removeTrack(audioSender) }
+                configureAudioSender(audioSender)
+            }
+            videoSender = if (videoAllowed) {
+                requireNotNull(
+                    peerConnection.addTransceiver(
+                        MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                        RtpTransceiver.RtpTransceiverInit(
+                            RtpTransceiver.RtpTransceiverDirection.SEND_RECV,
+                        ),
+                    ),
+                ).sender
+            } else {
+                null
+            }
+            applyAudioTrackState()
+        } catch (failure: Throwable) {
+            cleanupResources(failure)
+            throw failure
+        }
     }
 
     override suspend fun createOffer(): String {
@@ -156,15 +212,15 @@ class WebRtcCallSession private constructor(
     override suspend fun close() {
         if (closed) return
         closed = true
-        restartGate.close()
-        iceQueue.clear()
-        sender?.let { peerConnection.removeTrack(it) }
-        audioTrack.dispose()
-        audioSource.dispose()
-        peerConnection.close()
-        peerConnection.dispose()
-        factory.dispose()
-        audioDeviceModule.release()
+        cleanupResources()
+    }
+
+    private fun cleanupResources(primaryFailure: Throwable? = null) {
+        val cleanup = NativeResourceOwner()
+        cleanup.own { resources.close(primaryFailure) }
+        cleanup.own(iceQueue::clear)
+        cleanup.own(restartGate::close)
+        cleanup.close(primaryFailure)
     }
 
     private suspend fun setLocalDescription(description: SessionDescription) {
@@ -191,7 +247,7 @@ class WebRtcCallSession private constructor(
                 override fun onCreateFailure(error: String) = continuation.resumeWithException(IllegalStateException(error))
                 override fun onSetFailure(error: String) = continuation.resumeWithException(IllegalStateException(error))
             },
-            offerConstraints(),
+            offerConstraints(videoAllowed),
         )
     }
 
@@ -278,6 +334,7 @@ class WebRtcCallSession private constructor(
             onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit = {},
             onIceRestartNeeded: () -> Unit = {},
             onConnectionStateChanged: (MediaConnectionState) -> Unit = {},
+            onRemoteVideoTrack: (VideoTrack) -> Unit = {},
         ): WebRtcCallSession = WebRtcCallSession(
             context,
             videoAllowed,
@@ -286,6 +343,7 @@ class WebRtcCallSession private constructor(
             onLocalIceCandidatesRemoved,
             onIceRestartNeeded,
             onConnectionStateChanged,
+            onRemoteVideoTrack,
             forceRelay,
         )
 
@@ -305,9 +363,11 @@ class WebRtcCallSession private constructor(
             optional.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
         }
 
-        private fun offerConstraints() = MediaConstraints().apply {
+        private fun offerConstraints(videoAllowed: Boolean) = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            if (!videoAllowed) {
+                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            }
         }
     }
 }
