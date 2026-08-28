@@ -43,8 +43,8 @@ android {
         applicationId = "org.tinitalk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.5"
+        versionCode = 10
+        versionName = "0.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
         buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
@@ -113,6 +113,7 @@ dependencies {
 }
 
 val requiredWebRtcJniStrings = listOf(
+    // Existing audio-call JNI contract.
     "Lorg/jni_zero/JniInit;",
     "Lorg/webrtc/PeerConnection;",
     "Lorg/webrtc/PeerConnection\$RTCConfiguration;",
@@ -120,6 +121,86 @@ val requiredWebRtcJniStrings = listOf(
     "Lorg/webrtc/SdpObserver;",
     "onIceCandidate",
     "onCreateSuccess",
+
+    // Negotiated video tracks and RTP parameters used by the call session.
+    "Lorg/webrtc/PeerConnectionFactory;",
+    "Lorg/webrtc/MediaStreamTrack\$MediaType;",
+    "Lorg/webrtc/RtpSender;",
+    "Lorg/webrtc/RtpReceiver;",
+    "Lorg/webrtc/RtpTransceiver;",
+    "Lorg/webrtc/RtpTransceiver\$RtpTransceiverInit;",
+    "Lorg/webrtc/RtpTransceiver\$RtpTransceiverDirection;",
+    "Lorg/webrtc/RtpParameters;",
+    "Lorg/webrtc/RtpParameters\$Encoding;",
+    "Lorg/webrtc/RtpParameters\$Codec;",
+    "Lorg/webrtc/RtpParameters\$HeaderExtension;",
+    "Lorg/webrtc/RtpParameters\$Rtcp;",
+    "Lorg/webrtc/RtpParameters\$DegradationPreference;",
+    "Lorg/webrtc/VideoSource;",
+    "Lorg/webrtc/NativeAndroidVideoTrackSource;",
+    "Lorg/webrtc/VideoTrack;",
+    "Lorg/webrtc/VideoSink;",
+    "Lorg/webrtc/VideoFrame;",
+
+    // Camera2 primary path, Camera1 fallback, and asynchronous camera callbacks.
+    "Lorg/webrtc/CameraEnumerator;",
+    "Lorg/webrtc/Camera1Enumerator;",
+    "Lorg/webrtc/Camera1Capturer;",
+    "Lorg/webrtc/Camera2Enumerator;",
+    "Lorg/webrtc/Camera2Capturer;",
+    "Lorg/webrtc/CameraVideoCapturer;",
+    "Lorg/webrtc/CameraVideoCapturer\$CameraEventsHandler;",
+    "Lorg/webrtc/CameraVideoCapturer\$CameraSwitchHandler;",
+    "Lorg/webrtc/CapturerObserver;",
+    "Lorg/webrtc/VideoCapturer;",
+    "Lorg/webrtc/SurfaceTextureHelper;",
+    "onCapturerStarted",
+    "onCapturerStopped",
+    "onFrameCaptured",
+    "onCameraError",
+    "onCameraDisconnected",
+    "onCameraFreezed",
+    "onCameraOpening",
+    "onFirstFrameAvailable",
+    "onCameraClosed",
+    "onCameraSwitchDone",
+    "onCameraSwitchError",
+
+    // Shared EGL context and the Compose-hosted rendering path.
+    "Lorg/webrtc/EglBase;",
+    "Lorg/webrtc/EglBase\$Context;",
+    "Lorg/webrtc/RendererCommon;",
+    "Lorg/webrtc/RendererCommon\$ScalingType;",
+    "Lorg/webrtc/EglRenderer;",
+    "Lorg/webrtc/SurfaceEglRenderer;",
+    "Lorg/webrtc/SurfaceViewRenderer;",
+    "onFrame",
+
+    // Default encoder/decoder factories and their hardware/software closures.
+    "Lorg/webrtc/DefaultVideoEncoderFactory;",
+    "Lorg/webrtc/DefaultVideoDecoderFactory;",
+    "Lorg/webrtc/VideoEncoderFactory;",
+    "Lorg/webrtc/VideoDecoderFactory;",
+    "Lorg/webrtc/HardwareVideoEncoderFactory;",
+    "Lorg/webrtc/HardwareVideoDecoderFactory;",
+    "Lorg/webrtc/SoftwareVideoEncoderFactory;",
+    "Lorg/webrtc/SoftwareVideoDecoderFactory;",
+    "Lorg/webrtc/PlatformSoftwareVideoDecoderFactory;",
+    "Lorg/webrtc/VideoEncoder;",
+    "Lorg/webrtc/VideoEncoder\$Callback;",
+    "Lorg/webrtc/VideoDecoder;",
+    "Lorg/webrtc/VideoDecoder\$Callback;",
+    "Lorg/webrtc/VideoCodecInfo;",
+    "Lorg/webrtc/VideoCodecStatus;",
+    "createEncoder",
+    "createDecoder",
+    "initEncode",
+    "encode",
+    "onEncodedFrame",
+    "initDecode",
+    "decode",
+    "onDecodedFrame",
+    "release",
 )
 
 tasks.register("verifyWebRtcJni") {
