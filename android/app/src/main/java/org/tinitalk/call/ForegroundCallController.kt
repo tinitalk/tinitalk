@@ -275,20 +275,12 @@ class ForegroundCallController(
     fun onMediaConnection(callId: String, epoch: Long, state: MediaConnectionState) {
         val gate = when (state) {
             MediaConnectionState.Connected -> weakNetworkVideoGate.onTransportConnected(callId, epoch)
-            MediaConnectionState.Connecting,
+            MediaConnectionState.Connecting -> weakNetworkVideoGate.snapshot()
             MediaConnectionState.Disconnected,
             MediaConnectionState.Failed,
             MediaConnectionState.Closed -> weakNetworkVideoGate.onTransportUnavailable(callId, epoch)
         }
         applyWeakNetworkGate(callId, gate)
-    }
-
-    @Synchronized
-    fun onNetworkQualitySample(callId: String, epoch: Long, quality: NetworkQuality) {
-        applyWeakNetworkGate(
-            callId,
-            weakNetworkVideoGate.onQualitySample(callId, epoch, quality),
-        )
     }
 
     @Synchronized

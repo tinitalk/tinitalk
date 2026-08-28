@@ -33,7 +33,6 @@ import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ForegroundCallController
-import org.tinitalk.call.NetworkQuality
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SharedPreferencesKeyValueStore
@@ -45,7 +44,6 @@ import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.media.CameraMediaCallbacks
-import org.tinitalk.media.isPoorNetworkSample
 import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
@@ -168,11 +166,6 @@ class CallForegroundService : Service() {
                                 val currentHealth = CallUiStateStore.snapshot().connectionHealth
                                 val health = connectionHealthClassifier.update(stats, currentHealth)
                                 CallUiStateStore.setConnectionHealth(activeCallId, health)
-                                currentMedia.onNetworkQualitySample(
-                                    activeCallId,
-                                    request.epoch,
-                                    if (stats.isPoorNetworkSample()) NetworkQuality.Poor else NetworkQuality.Good,
-                                )
                             }
                         }
                     }

@@ -46,5 +46,4 @@ internal fun CallStats.isPoorNetworkSample(): Boolean =
     rttMs >= 550L ||
         jitterMs >= 100L ||
         packetLossPercent >= 8.0 ||
-        concealedSamplesPercent >= 8.0 ||
-        jitterBufferTargetDelayMs >= 250L
+        concealedSamplesPercent >= 8.0

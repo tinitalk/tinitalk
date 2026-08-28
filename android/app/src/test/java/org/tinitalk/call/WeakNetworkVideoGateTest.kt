@@ -20,59 +20,20 @@ class WeakNetworkVideoGateTest {
     }
 
     @Test
-    fun threePoorSamplesBlockAndTwoGoodSamplesRecover() {
+    fun connectedTransportImmediatelyRestoresVideoAfterInterruption() {
         val gate = WeakNetworkVideoGate()
         gate.reset(CurrentCall)
         gate.onTransportConnected(CurrentCall, epoch = 1)
-
-        gate.onQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor)
-        gate.onQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor)
-        assertFalse(gate.snapshot().networkGated)
-
-        gate.onQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor)
-        assertTrue(gate.snapshot().networkGated)
-
-        gate.onQualitySample(CurrentCall, epoch = 1, NetworkQuality.Good)
-        assertTrue(gate.snapshot().networkGated)
-        gate.onQualitySample(CurrentCall, epoch = 1, NetworkQuality.Good)
-        assertFalse(gate.snapshot().networkGated)
-    }
-
-    @Test
-    fun oppositeAndAlternatingSamplesResetTheConsecutiveCounter() {
-        val gate = WeakNetworkVideoGate()
-        gate.reset(CurrentCall)
-        gate.onTransportConnected(CurrentCall, epoch = 1)
-
-        repeat(4) {
-            gate.onQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor)
-            gate.onQualitySample(CurrentCall, epoch = 1, NetworkQuality.Good)
-        }
-
-        assertFalse(gate.snapshot().networkGated)
-    }
-
-    @Test
-    fun reconnectBlocksImmediatelyAndDuplicateConnectedKeepsRecoveryProgress() {
-        val gate = WeakNetworkVideoGate()
-        gate.reset(CurrentCall)
-        gate.onTransportConnected(CurrentCall, epoch = 1)
-
         gate.onTransportUnavailable(CurrentCall, epoch = 2)
         assertTrue(gate.snapshot().networkGated)
-        assertFalse(gate.snapshot().transportReady)
 
         gate.onTransportConnected(CurrentCall, epoch = 2)
-        gate.onQualitySample(CurrentCall, epoch = 2, NetworkQuality.Good)
-        gate.onTransportConnected(CurrentCall, epoch = 2)
-        gate.onQualitySample(CurrentCall, epoch = 2, NetworkQuality.Good)
 
         assertFalse(gate.snapshot().networkGated)
-        assertTrue(gate.snapshot().transportReady)
     }
 
     @Test
-    fun staleCallEpochAndSamplesWhileDisconnectedCannotChangeReplacementState() {
+    fun staleCallAndEpochCannotChangeReplacementState() {
         val gate = WeakNetworkVideoGate()
         gate.reset(CurrentCall)
         gate.onTransportUnavailable(CurrentCall, epoch = 3)
@@ -81,10 +42,9 @@ class WeakNetworkVideoGateTest {
 
         gate.onTransportConnected(CurrentCall, epoch = 4)
         gate.onTransportConnected(ReplacementCall, epoch = 2)
-        gate.onQualitySample(ReplacementCall, epoch = 1, NetworkQuality.Poor)
+        gate.onTransportConnected(ReplacementCall, epoch = 1)
         gate.onTransportUnavailable(ReplacementCall, epoch = 3)
-        gate.onQualitySample(ReplacementCall, epoch = 3, NetworkQuality.Good)
-        gate.onQualitySample(ReplacementCall, epoch = 3, NetworkQuality.Good)
+        gate.onTransportConnected(ReplacementCall, epoch = 2)
 
         val state = gate.snapshot()
         assertTrue(state.networkGated)
