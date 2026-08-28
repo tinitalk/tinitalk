@@ -43,8 +43,8 @@ android {
         applicationId = "org.tinitalk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.4"
+        versionCode = 9
+        versionName = "0.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
         buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
