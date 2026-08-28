@@ -20,6 +20,17 @@ object WebRtcPolicy {
         encodings.forEach { it.adaptiveAudioPacketTime = true }
     }
 
+    fun configureVideoSender(
+        encodings: List<RtpParameters.Encoding>,
+        commit: () -> Boolean,
+    ): Boolean {
+        val encoding = encodings.singleOrNull() ?: return false
+        encoding.maxBitrateBps = VideoMaxBitrateBps
+        encoding.maxFramerate = VideoMaxFramerate
+        encoding.scaleResolutionDownBy = VideoScaleResolutionDownBy
+        return runCatching(commit).getOrDefault(false)
+    }
+
     fun iceTransport(forceRelay: Boolean): PeerConnection.IceTransportsType =
         if (forceRelay) PeerConnection.IceTransportsType.RELAY else PeerConnection.IceTransportsType.ALL
 
@@ -28,4 +39,8 @@ object WebRtcPolicy {
     fun microphoneMuted(active: Boolean, muted: Boolean): Boolean = !active || muted
 
     fun speakerMuted(active: Boolean): Boolean = !active
+
+    private const val VideoMaxBitrateBps = 600_000
+    private const val VideoMaxFramerate = 15
+    private const val VideoScaleResolutionDownBy = 1.0
 }

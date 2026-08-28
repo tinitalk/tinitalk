@@ -16,6 +16,7 @@ import org.tinitalk.media.CameraTaskQueue
 import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
 import org.tinitalk.media.MediaSession
+import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.media.SerializedCameraLifecycle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -302,6 +303,138 @@ class ForegroundCallVideoControllerTest {
         assertEquals(listOf("foreground", "capture"), order)
     }
 
+    @Test
+    fun sustainedPoorNetworkPausesVideoButPreservesRequestAndRecoversAfterTwoGoodSamples() {
+        val session = FakeCameraMediaSession()
+        val states = mutableListOf<CallVideoState<*>>()
+        val controller = controller(session, states::add)
+        configureVideoSession(controller)
+        prepareHealthyTransport(controller)
+        controller.setCameraForeground(CurrentCall, foreground = true, permissionGranted = true)
+        controller.setCameraRequested(CurrentCall, requested = true)
+
+        repeat(2) { controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor) }
+        assertEquals(0, session.pauses)
+        controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor)
+
+        assertEquals(1, session.pauses)
+        assertTrue(states.last().requested)
+        assertTrue(states.last().networkGated)
+        assertFalse(session.closed)
+
+        controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Good)
+        assertEquals(1, session.starts)
+        controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Good)
+
+        assertFalse(states.last().networkGated)
+        assertEquals(2, session.starts)
+    }
+
+    @Test
+    fun reconnectRecoverySurvivesDuplicateConnectedAndWaitsForPhysicalRelease() {
+        val session = FakeCameraMediaSession(deferRelease = true)
+        val states = mutableListOf<CallVideoState<*>>()
+        val controller = controller(session, states::add)
+        configureVideoSession(controller)
+        prepareHealthyTransport(controller)
+        controller.setCameraForeground(CurrentCall, foreground = true, permissionGranted = true)
+        controller.setCameraRequested(CurrentCall, requested = true)
+
+        controller.onMediaConnection(CurrentCall, epoch = 2, MediaConnectionState.Disconnected)
+        controller.onMediaConnection(CurrentCall, epoch = 2, MediaConnectionState.Connected)
+        controller.onNetworkQualitySample(CurrentCall, epoch = 2, NetworkQuality.Good)
+        controller.onMediaConnection(CurrentCall, epoch = 2, MediaConnectionState.Connected)
+        controller.onNetworkQualitySample(CurrentCall, epoch = 2, NetworkQuality.Good)
+
+        assertFalse(states.last().networkGated)
+        assertEquals(1, session.starts)
+        session.completeCameraRelease()
+        assertEquals(2, session.starts)
+    }
+
+    @Test
+    fun userOffHidesGateStateButReRequestCannotBypassPoorNetwork() {
+        val session = FakeCameraMediaSession()
+        val states = mutableListOf<CallVideoState<*>>()
+        val controller = controller(session, states::add)
+        configureVideoSession(controller)
+        prepareHealthyTransport(controller)
+        controller.setCameraForeground(CurrentCall, foreground = true, permissionGranted = true)
+        controller.setCameraRequested(CurrentCall, requested = true)
+        repeat(3) { controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor) }
+
+        controller.setCameraRequested(CurrentCall, requested = false)
+        assertFalse(states.last().requested)
+        assertTrue(states.last().networkGated)
+        val starts = session.starts
+
+        controller.setCameraRequested(CurrentCall, requested = true)
+
+        assertTrue(states.last().requested)
+        assertTrue(states.last().networkGated)
+        assertEquals(starts, session.starts)
+        assertFalse(session.closed)
+    }
+
+    @Test
+    fun replacementCallResetsGateAndRejectsStaleNetworkEvents() {
+        val session = FakeCameraMediaSession()
+        val states = mutableListOf<CallVideoState<*>>()
+        val controller = controller(session, states::add)
+        configureVideoSession(controller)
+        prepareHealthyTransport(controller)
+        repeat(3) { controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor) }
+        assertTrue(states.last().networkGated)
+
+        controller.onSignalEvent(
+            CallSnapshot(CallPhase.Active, ReplacementCall, 2),
+            event(ReplacementCall, "rtc.config", videoConfig()),
+        )
+        controller.onMediaConnection(CurrentCall, epoch = 99, MediaConnectionState.Disconnected)
+
+        assertEquals(ReplacementCall, states.last().callId)
+        assertFalse(states.last().networkGated)
+    }
+
+    @Test
+    fun callCloseResetsABlockedNetworkGate() {
+        val session = FakeCameraMediaSession()
+        val states = mutableListOf<CallVideoState<*>>()
+        val controller = controller(session, states::add)
+        configureVideoSession(controller)
+        controller.onMediaConnection(CurrentCall, epoch = 1, MediaConnectionState.Connected)
+        repeat(3) { controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor) }
+        assertTrue(states.last().networkGated)
+
+        controller.close()
+
+        assertFalse(states.last().networkGated)
+        assertNull(states.last().callId)
+    }
+
+    @Test
+    fun gateAndRecoveryBeforeFirstCameraStartDoNotCreateAPendingRetirement() {
+        val session = FakeCameraMediaSession()
+        val states = mutableListOf<CallVideoState<*>>()
+        val controller = controller(session, states::add)
+        configureVideoSession(controller)
+        controller.onMediaConnection(CurrentCall, epoch = 1, MediaConnectionState.Connected)
+        controller.setCameraRequested(CurrentCall, requested = true)
+
+        repeat(3) { controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Poor) }
+        controller.setCameraForeground(CurrentCall, foreground = true, permissionGranted = true)
+
+        assertTrue(states.last().networkGated)
+        assertEquals(0, session.starts)
+        assertEquals(0, session.pauses)
+
+        repeat(2) { controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Good) }
+
+        assertFalse(states.last().networkGated)
+        assertEquals(1, session.starts)
+        assertEquals(0, session.pauses)
+    }
+
     private fun controller(
         session: FakeCameraMediaSession,
         onState: (CallVideoState<*>) -> Unit,
@@ -319,6 +452,12 @@ class ForegroundCallVideoControllerTest {
             snapshot,
             event(CurrentCall, "rtc.offer", JsonObject().apply { addProperty("sdp", "remote-offer") }),
         )
+    }
+
+    private fun prepareHealthyTransport(controller: ForegroundCallController) {
+        controller.onMediaConnection(CurrentCall, epoch = 1, MediaConnectionState.Connected)
+        controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Good)
+        controller.onNetworkQualitySample(CurrentCall, epoch = 1, NetworkQuality.Good)
     }
 
     private fun videoConfig() = JsonObject().apply {

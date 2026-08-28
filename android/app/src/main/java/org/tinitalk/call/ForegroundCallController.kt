@@ -6,6 +6,7 @@ import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
 import org.tinitalk.media.CallStats
+import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.media.MediaSession
 import org.tinitalk.media.CameraMediaSession
 import org.tinitalk.media.CancellableTask
@@ -86,6 +87,7 @@ class ForegroundCallController(
     private val recentLocalIceEvents = linkedMapOf<String, LocalIceEvent>()
     private val rateLimitedIceEvents = linkedMapOf<String, LocalIceEvent>()
     private var videoState = CallVideoState<VideoRenderSource>()
+    private val weakNetworkVideoGate = WeakNetworkVideoGate()
     private var foregroundCallId: String? = null
     private var cameraStartBlocked = false
     private var cameraStartSubmitted = false
@@ -259,6 +261,26 @@ class ForegroundCallController(
     }
 
     @Synchronized
+    fun onMediaConnection(callId: String, epoch: Long, state: MediaConnectionState) {
+        val gate = when (state) {
+            MediaConnectionState.Connected -> weakNetworkVideoGate.onTransportConnected(callId, epoch)
+            MediaConnectionState.Connecting,
+            MediaConnectionState.Disconnected,
+            MediaConnectionState.Failed,
+            MediaConnectionState.Closed -> weakNetworkVideoGate.onTransportUnavailable(callId, epoch)
+        }
+        applyWeakNetworkGate(callId, gate)
+    }
+
+    @Synchronized
+    fun onNetworkQualitySample(callId: String, epoch: Long, quality: NetworkQuality) {
+        applyWeakNetworkGate(
+            callId,
+            weakNetworkVideoGate.onQualitySample(callId, epoch, quality),
+        )
+    }
+
+    @Synchronized
     fun getStats(onResult: (CallStats) -> Unit) {
         val current = session ?: return
         current.getStats { stats ->
@@ -311,6 +333,7 @@ class ForegroundCallController(
         foregroundCallId = null
         cameraStartBlocked = false
         cameraStartSubmitted = false
+        weakNetworkVideoGate.reset(null)
         updateVideoState(CallVideoState())
         requestCameraStop(
             target = media,
@@ -361,7 +384,14 @@ class ForegroundCallController(
     ) {
         iceServers = nextIceServers
         videoAllowed = nextVideoAllowed
-        updateVideoState(videoState.configured(event.callId, videoAllowed))
+        if (weakNetworkVideoGate.snapshot().callId != event.callId) {
+            weakNetworkVideoGate.reset(event.callId)
+        }
+        updateVideoState(
+            videoState
+                .configured(event.callId, videoAllowed)
+                .withNetworkGate(event.callId, weakNetworkVideoGate.snapshot().networkGated),
+        )
         configuredCallId = event.callId
         event.payload.restartID()?.let { localIceGeneration = it }
         session?.takeIf { callId == event.callId }?.let { media ->
@@ -455,7 +485,21 @@ class ForegroundCallController(
             videoState.allowed &&
             videoState.requested &&
             videoState.permissionGranted &&
+            !videoState.networkGated &&
             foregroundCallId == nextCallId
+
+    private fun applyWeakNetworkGate(callId: String, gate: WeakNetworkVideoGateState) {
+        if (gate.callId != callId || videoState.callId != callId) return
+        val wasGated = videoState.networkGated
+        if (wasGated == gate.networkGated) return
+        updateVideoState(videoState.withNetworkGate(callId, gate.networkGated))
+        val cameraActiveOrStarting = videoState.sending || cameraStartSubmitted || videoState.localTrack != null
+        if (gate.networkGated && cameraActiveOrStarting) {
+            pauseCamera(callId)
+        } else {
+            reconcileCamera(callId)
+        }
+    }
 
     private fun requestCameraStop(
         target: MediaSession?,

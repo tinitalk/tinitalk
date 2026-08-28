@@ -48,6 +48,26 @@ class VideoCallPresentationTest {
     }
 
     @Test
+    fun weakNetworkCopyRequiresAllowedRequestedAndGatedVideo() {
+        assertEquals(
+            "Видео временно приостановлено — слабая связь",
+            weakNetworkVideoMessage(videoAllowed = true, cameraRequested = true, networkGated = true),
+        )
+        assertEquals(
+            null,
+            weakNetworkVideoMessage(videoAllowed = true, cameraRequested = false, networkGated = true),
+        )
+        assertEquals(
+            null,
+            weakNetworkVideoMessage(videoAllowed = false, cameraRequested = true, networkGated = true),
+        )
+        assertEquals(
+            null,
+            weakNetworkVideoMessage(videoAllowed = true, cameraRequested = true, networkGated = false),
+        )
+    }
+
+    @Test
     fun videoControlsUseOneRowOnlyWhenWidthAndFontAllowIt() {
         assertEquals(4, callControlColumns(videoAllowed = true, widthDp = 420f, fontScale = 1f))
         assertEquals(2, callControlColumns(videoAllowed = true, widthDp = 359f, fontScale = 1f))

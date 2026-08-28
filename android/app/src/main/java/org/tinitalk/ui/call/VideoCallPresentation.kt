@@ -43,6 +43,16 @@ internal fun videoCallPresentation(
     )
 }
 
+internal fun weakNetworkVideoMessage(
+    videoAllowed: Boolean,
+    cameraRequested: Boolean,
+    networkGated: Boolean,
+): String? = if (videoAllowed && cameraRequested && networkGated) {
+    "Видео временно приостановлено — слабая связь"
+} else {
+    null
+}
+
 internal fun callControlColumns(
     videoAllowed: Boolean,
     widthDp: Float,

@@ -69,6 +69,55 @@ class WebRtcPolicyTest {
     }
 
     @Test
+    fun capsTheSingleVideoEncodingWithoutTouchingAudioPolicy() {
+        val video = RtpParameters.Encoding("video", true, null)
+        val audio = RtpParameters.Encoding("audio", true, null)
+        var committed = false
+
+        val applied = WebRtcPolicy.configureVideoSender(listOf(video)) {
+            committed = true
+            true
+        }
+
+        assertTrue(applied)
+        assertTrue(committed)
+        assertEquals(600_000, video.maxBitrateBps)
+        assertEquals(15, video.maxFramerate)
+        assertEquals(1.0, video.scaleResolutionDownBy)
+        assertFalse(audio.adaptiveAudioPacketTime)
+        assertEquals(null, audio.maxBitrateBps)
+        assertEquals(null, audio.maxFramerate)
+    }
+
+    @Test
+    fun rejectsMissingOrSimulcastVideoEncodingsWithoutCommitting() {
+        var commits = 0
+        val commit = {
+            commits++
+            true
+        }
+
+        assertFalse(WebRtcPolicy.configureVideoSender(emptyList(), commit))
+        assertFalse(
+            WebRtcPolicy.configureVideoSender(
+                listOf(
+                    RtpParameters.Encoding("low", true, null),
+                    RtpParameters.Encoding("high", true, null),
+                ),
+                commit,
+            ),
+        )
+        assertEquals(0, commits)
+    }
+
+    @Test
+    fun videoSenderCommitFailureIsReportedToTheCameraBoundary() {
+        val video = RtpParameters.Encoding("video", true, null)
+
+        assertFalse(WebRtcPolicy.configureVideoSender(listOf(video)) { false })
+    }
+
+    @Test
     fun audioTrackIsEnabledOnlyForActiveUnmutedCalls() {
         assertEquals(true, WebRtcPolicy.audioTrackEnabled(active = true, muted = false))
         assertEquals(false, WebRtcPolicy.audioTrackEnabled(active = true, muted = true))

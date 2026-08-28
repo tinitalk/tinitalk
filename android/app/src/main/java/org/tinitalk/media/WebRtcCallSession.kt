@@ -244,11 +244,18 @@ class WebRtcCallSession private constructor(
     override fun startCamera() {
         ensureOpen()
         check(videoAllowed) { "video is not allowed for this call" }
+        val retainedVideoSender = requireNotNull(videoSender)
+        val videoParameters = retainedVideoSender.parameters
+        check(
+            WebRtcPolicy.configureVideoSender(videoParameters.encodings) {
+                retainedVideoSender.setParameters(videoParameters)
+            },
+        ) { "failed to configure local video sender" }
         val controller = cameraController ?: WebRtcCameraController(
             context = appContext,
             factory = factory,
             eglContext = requireNotNull(eglBase).eglBaseContext,
-            sender = requireNotNull(videoSender),
+            sender = retainedVideoSender,
             controlQueue = requireNotNull(cameraQueue),
             blockingQueue = requireNotNull(cameraCleanupQueue),
             callbacks = cameraCallbacks,
@@ -258,10 +265,7 @@ class WebRtcCallSession private constructor(
 
     @Synchronized
     override fun pauseCamera(onDetached: () -> Unit, onReleased: () -> Unit) {
-        if (!closed) cameraController?.pause(onDetached, onReleased) else {
-            onDetached()
-            onReleased()
-        }
+        pauseCameraOrComplete(cameraController.takeUnless { closed }, onDetached, onReleased)
     }
 
     @Synchronized
@@ -507,5 +511,18 @@ class WebRtcCallSession private constructor(
                 mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
             }
         }
+    }
+}
+
+internal fun pauseCameraOrComplete(
+    controller: WebRtcCameraController?,
+    onDetached: () -> Unit,
+    onReleased: () -> Unit,
+) {
+    if (controller != null) {
+        controller.pause(onDetached, onReleased)
+    } else {
+        onDetached()
+        onReleased()
     }
 }

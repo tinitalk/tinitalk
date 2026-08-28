@@ -466,6 +466,19 @@ private fun VideoActiveCallScreen(
                 .padding(horizontal = 12.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            weakNetworkVideoMessage(
+                videoAllowed = videoState.allowed,
+                cameraRequested = videoState.requested,
+                networkGated = videoState.networkGated,
+            )?.let { message ->
+                Text(
+                    text = message,
+                    color = Color(0xFFFFCA6A),
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(6.dp))
+            }
             if (videoState.failure != null && !videoState.sending) {
                 Text(
                     text = "Не удалось включить камеру",

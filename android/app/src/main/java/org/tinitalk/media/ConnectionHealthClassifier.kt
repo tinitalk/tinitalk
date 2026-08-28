@@ -12,7 +12,7 @@ class ConnectionHealthClassifier {
             return current
         }
 
-        if (stats.isPoor()) {
+        if (stats.isPoorNetworkSample()) {
             poorSamples++
             goodSamples = 0
             return if (current == ConnectionHealth.Poor || poorSamples >= PoorSamplesRequired) {
@@ -36,15 +36,15 @@ class ConnectionHealthClassifier {
         goodSamples = 0
     }
 
-    private fun CallStats.isPoor(): Boolean =
-        rttMs >= 550L ||
-            jitterMs >= 100L ||
-            packetLossPercent >= 8.0 ||
-            concealedSamplesPercent >= 8.0 ||
-            jitterBufferTargetDelayMs >= 250L
-
     private companion object {
         const val PoorSamplesRequired = 3
         const val GoodSamplesRequired = 2
     }
 }
+
+internal fun CallStats.isPoorNetworkSample(): Boolean =
+    rttMs >= 550L ||
+        jitterMs >= 100L ||
+        packetLossPercent >= 8.0 ||
+        concealedSamplesPercent >= 8.0 ||
+        jitterBufferTargetDelayMs >= 250L

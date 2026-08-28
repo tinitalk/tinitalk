@@ -33,6 +33,7 @@ import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ForegroundCallController
+import org.tinitalk.call.NetworkQuality
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SharedPreferencesKeyValueStore
@@ -44,6 +45,7 @@ import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.media.CameraMediaCallbacks
+import org.tinitalk.media.isPoorNetworkSample
 import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
@@ -109,6 +111,8 @@ class CallForegroundService : Service() {
     private var callResourcesReleaseComplete = false
     private val callResourcesReleaseCallbacks = mutableListOf<() -> Unit>()
     private var statsPolling = false
+    private val statsRequestGate = MediaStatsRequestGate()
+    private var statsSession: MediaStatsSession? = null
     private var cameraForegroundTypeEnabled = false
     private var cameraForegroundLease: Long? = null
     private var telecomCallId: String? = null
@@ -142,19 +146,38 @@ class CallForegroundService : Service() {
                 .takeIf { it.phase == CallPhase.Active }
                 ?.callId
             val currentMedia = media
-            if (activeCallId != null && currentMedia != null) {
-                currentMedia.getStats { stats ->
-                    handler.post {
-                        val snapshot = CallServiceState.snapshot()
-                        val stillActive = statsPolling && !finishing &&
-                            snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
-                        if (stillActive && media === currentMedia) {
-                            Log.i(CallLogTag, CallDiagnostics.format(stats))
-                            val currentHealth = CallUiStateStore.snapshot().connectionHealth
-                            val health = connectionHealthClassifier.update(stats, currentHealth)
-                            CallUiStateStore.setConnectionHealth(activeCallId, health)
+            val currentStatsSession = statsSession
+            val request = if (
+                activeCallId != null && currentMedia != null &&
+                currentStatsSession?.callId == activeCallId
+            ) {
+                statsRequestGate.begin(currentStatsSession)
+            } else {
+                null
+            }
+            if (activeCallId != null && currentMedia != null && request != null) {
+                runCatching {
+                    currentMedia.getStats { stats ->
+                        handler.post {
+                            val accepted = statsRequestGate.complete(request)
+                            val snapshot = CallServiceState.snapshot()
+                            val stillActive = statsPolling && !finishing &&
+                                snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
+                            if (accepted && stillActive && media === currentMedia) {
+                                Log.i(CallLogTag, CallDiagnostics.format(stats))
+                                val currentHealth = CallUiStateStore.snapshot().connectionHealth
+                                val health = connectionHealthClassifier.update(stats, currentHealth)
+                                CallUiStateStore.setConnectionHealth(activeCallId, health)
+                                currentMedia.onNetworkQualitySample(
+                                    activeCallId,
+                                    request.epoch,
+                                    if (stats.isPoorNetworkSample()) NetworkQuality.Poor else NetworkQuality.Good,
+                                )
+                            }
                         }
                     }
+                }.onFailure {
+                    statsRequestGate.complete(request)
                 }
             }
             if (statsPolling) handler.postDelayed(this, CallDiagnostics.IntervalMillis)
@@ -248,6 +271,7 @@ class CallForegroundService : Service() {
         newMedia = ForegroundCallController(
             signal = newSocket,
             mediaFactory = { callId, videoAllowed, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
+                val mediaStatsSession = statsRequestGate.openSession(callId).also { statsSession = it }
                 WebRtcCallSession.create(
                     this,
                     videoAllowed = videoAllowed,
@@ -258,12 +282,16 @@ class CallForegroundService : Service() {
                     onIceRestartNeeded = onIceRestartNeeded,
                     onConnectionStateChanged = { state ->
                         handler.post {
-                            if (!finishing && state == MediaConnectionState.Connected) {
+                            if (finishing || media !== newMedia) return@post
+                            val connection = statsRequestGate.onConnection(mediaStatsSession, state) ?: return@post
+                            newMedia.onMediaConnection(callId, connection.epoch, state)
+                            if (state == MediaConnectionState.Connected) {
                                 newCoordinator.mediaConnected()
                             }
-                            val callId = newCoordinator.snapshot().callId
-                            if (!finishing && callId != null && CallUiStateStore.snapshot().callId == callId) {
-                                connectionHealthClassifier.reset()
+                            if (CallUiStateStore.snapshot().callId == callId) {
+                                if (!connection.transportReady || connection.becameReady) {
+                                    connectionHealthClassifier.reset()
+                                }
                                 CallUiStateStore.onMediaConnection(state)
                             }
                         }
@@ -595,6 +623,8 @@ class CallForegroundService : Service() {
     private fun stopStatsPolling() {
         statsPolling = false
         handler.removeCallbacks(statsTask)
+        statsRequestGate.reset()
+        statsSession = null
         callNetworkLock?.setActive(false)
         connectionHealthClassifier.reset()
     }
