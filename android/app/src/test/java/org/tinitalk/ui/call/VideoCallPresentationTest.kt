@@ -122,6 +122,26 @@ class VideoCallPresentationTest {
     }
 
     @Test
+    fun largeVideoSurfaceKeepsScreenAspectRatioAt1080pLimit() {
+        assertEquals(
+            StableVideoSurfaceSize(width = 864, height = 1920),
+            stableVideoSurfaceSize(viewWidth = 1440, viewHeight = 3200),
+        )
+        assertEquals(
+            StableVideoSurfaceSize(width = 1920, height = 864),
+            stableVideoSurfaceSize(viewWidth = 3200, viewHeight = 1440),
+        )
+    }
+
+    @Test
+    fun smallVideoSurfaceKeepsActualScreenPixels() {
+        assertEquals(
+            StableVideoSurfaceSize(width = 720, height = 1600),
+            stableVideoSurfaceSize(viewWidth = 720, viewHeight = 1600),
+        )
+    }
+
+    @Test
     fun selfiePreviewRestoresSavedCorner() {
         assertEquals(
             SelfPreviewCorner.TopLeft,

@@ -1,5 +1,7 @@
 package org.tinitalk.ui.call
 
+import kotlin.math.roundToInt
+
 internal const val CompactCallActionSizeDp = 64
 internal const val DenseVideoCallActionSizeDp = 56
 
@@ -7,6 +9,27 @@ internal data class SelfPreviewSize(
     val widthDp: Float,
     val heightDp: Float,
 )
+
+internal data class StableVideoSurfaceSize(
+    val width: Int,
+    val height: Int,
+)
+
+internal fun stableVideoSurfaceSize(
+    viewWidth: Int,
+    viewHeight: Int,
+): StableVideoSurfaceSize? {
+    if (viewWidth <= 0 || viewHeight <= 0) return null
+    val longestEdge = maxOf(viewWidth, viewHeight)
+    if (longestEdge <= StableVideoSurfaceMaxEdgePx) {
+        return StableVideoSurfaceSize(width = viewWidth, height = viewHeight)
+    }
+    val scale = StableVideoSurfaceMaxEdgePx.toFloat() / longestEdge
+    return StableVideoSurfaceSize(
+        width = (viewWidth * scale).roundToInt().coerceAtLeast(1),
+        height = (viewHeight * scale).roundToInt().coerceAtLeast(1),
+    )
+}
 
 internal fun selfPreviewSize(compact: Boolean): SelfPreviewSize {
     val widthDp = if (compact) 84f else 96f
@@ -213,3 +236,5 @@ internal fun callControlLayout(
         viewportHeightDp = viewportHeight,
     )
 }
+
+private const val StableVideoSurfaceMaxEdgePx = 1920

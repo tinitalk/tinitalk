@@ -184,9 +184,16 @@ private class VideoRendererHandle(
     private val localOverlay: Boolean,
     private val onVisibilityChanged: (Boolean) -> Unit,
 ) : AutoCloseable {
-    val renderer = SurfaceViewRenderer(context)
+    private val stableRemoteRenderer = if (localOverlay) {
+        null
+    } else {
+        StableSurfaceViewRenderer(context, ::onStableSurfaceReady)
+    }
+    val renderer = stableRemoteRenderer ?: SurfaceViewRenderer(context)
     private var sink: GuardedRendererSink? = null
     private var started = false
+    private var stableSurfaceReady = localOverlay
+    private var frameVisible = false
 
     fun start() {
         if (started) return
@@ -195,21 +202,14 @@ private class VideoRendererHandle(
         renderer.setEnableHardwareScaler(true)
         renderer.visibility = View.INVISIBLE
         renderer.init(source.eglContext, null)
+        stableRemoteRenderer?.markInitialized()
         val nextSink = GuardedRendererSink(renderer) { visible ->
-            if (visible) {
-                renderer.visibility = View.VISIBLE
-            } else {
-                renderer.clearImage()
-                renderer.visibility = View.INVISIBLE
-            }
-            onVisibilityChanged(visible)
+            setFrameVisible(visible)
         }
         sink = nextSink
         if (!source.attach(nextSink)) {
             nextSink.close()
-            renderer.clearImage()
-            renderer.visibility = View.INVISIBLE
-            onVisibilityChanged(false)
+            setFrameVisible(false)
         }
     }
 
@@ -222,8 +222,64 @@ private class VideoRendererHandle(
             source.detach(attachedSink)
             attachedSink.close()
         }
+        stableRemoteRenderer?.markReleased()
         renderer.clearImage()
         renderer.release()
+    }
+
+    private fun setFrameVisible(visible: Boolean) {
+        frameVisible = visible
+        if (visible && !stableSurfaceReady) return
+        if (visible) {
+            renderer.visibility = View.VISIBLE
+        } else {
+            renderer.clearImage()
+            renderer.visibility = View.INVISIBLE
+        }
+        onVisibilityChanged(visible)
+    }
+
+    private fun onStableSurfaceReady() {
+        stableSurfaceReady = true
+        if (frameVisible) setFrameVisible(true)
+    }
+}
+
+/** Keeps adaptive incoming resolutions from repeatedly resizing the full-screen Surface. */
+private class StableSurfaceViewRenderer(
+    context: Context,
+    private val onSurfaceReady: () -> Unit,
+) : SurfaceViewRenderer(context) {
+    private var initialized = false
+    private var ready = false
+    private var appliedSize: StableVideoSurfaceSize? = null
+
+    fun markInitialized() {
+        initialized = true
+        applyStableSize()
+    }
+
+    fun markReleased() {
+        initialized = false
+    }
+
+    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+        super.onSizeChanged(width, height, oldWidth, oldHeight)
+        applyStableSize()
+    }
+
+    override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) = Unit
+
+    private fun applyStableSize() {
+        if (!initialized) return
+        val nextSize = stableVideoSurfaceSize(width, height) ?: return
+        if (nextSize == appliedSize) return
+        appliedSize = nextSize
+        super.onFrameResolutionChanged(nextSize.width, nextSize.height, 0)
+        if (!ready) {
+            ready = true
+            onSurfaceReady()
+        }
     }
 }
 
