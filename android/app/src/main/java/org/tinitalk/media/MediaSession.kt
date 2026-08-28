@@ -1,5 +1,7 @@
 package org.tinitalk.media
 
+import org.tinitalk.call.CameraFacing
+import org.webrtc.VideoTrack
 import java.time.Instant
 
 data class IceCandidateData(
@@ -38,3 +40,27 @@ interface MediaSession {
     fun getStats(onResult: (CallStats) -> Unit)
     suspend fun close()
 }
+
+interface CameraMediaSession {
+    fun startCamera()
+    /** [onDetached] is logical/nonblocking; [onReleased] follows native stop and safe disposal. */
+    fun pauseCamera(
+        onDetached: () -> Unit = {},
+        onReleased: () -> Unit = {},
+    )
+    /** [onDetached] is logical/nonblocking; [onReleased] follows native stop and safe disposal. */
+    fun stopCamera(
+        onDetached: () -> Unit = {},
+        onReleased: () -> Unit = {},
+    )
+    fun switchCamera()
+}
+
+data class CameraMediaCallbacks(
+    val onLocalTrackChanged: (VideoTrack?) -> Unit = {},
+    val onCaptureStarted: (CameraFacing) -> Unit = {},
+    val onCaptureInvalidated: () -> Unit = {},
+    val onCaptureStopped: () -> Unit = {},
+    val onFacingChanged: (CameraFacing) -> Unit = {},
+    val onFailure: (String) -> Unit = {},
+)

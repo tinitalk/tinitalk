@@ -28,10 +28,14 @@ class CallForegroundServiceManifestTest {
         )
         assertTrue(packageInfo.requestedPermissions.orEmpty().contains(Manifest.permission.RECORD_AUDIO))
         assertTrue(packageInfo.requestedPermissions.orEmpty().contains(Manifest.permission.FOREGROUND_SERVICE_MICROPHONE))
+        assertTrue(packageInfo.requestedPermissions.orEmpty().contains(Manifest.permission.CAMERA))
+        assertTrue(packageInfo.requestedPermissions.orEmpty().contains(Manifest.permission.FOREGROUND_SERVICE_CAMERA))
 
         val activeCallTypes = serviceInfo(context, CallForegroundService::class.java).foregroundServiceType
         assertEquals(
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA,
             activeCallTypes,
         )
 
@@ -41,6 +45,12 @@ class CallForegroundServiceManifestTest {
         assertEquals(
             ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
             service.foregroundServiceType,
+        )
+        assertEquals(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA,
+            callForegroundServiceType(cameraSending = true),
         )
     }
 

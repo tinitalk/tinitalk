@@ -1,14 +1,15 @@
 package org.tinitalk.media
 
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
 class ManifestPermissionTest {
     @Test
-    fun appDoesNotRequestCameraPermission() {
+    fun appDeclaresCameraAndCameraForegroundServicePermissions() {
         val manifest = File("src/main/AndroidManifest.xml").readText()
 
-        assertFalse(manifest.contains("android.permission.CAMERA"))
+        assertTrue(manifest.contains("android.permission.CAMERA"))
+        assertTrue(manifest.contains("android.permission.FOREGROUND_SERVICE_CAMERA"))
     }
 }

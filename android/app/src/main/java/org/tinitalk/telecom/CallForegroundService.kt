@@ -1,5 +1,6 @@
 package org.tinitalk.telecom
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,6 +10,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -16,6 +18,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import org.tinitalk.BuildConfig
 import org.tinitalk.CallActivity
 import org.tinitalk.R
@@ -28,6 +31,7 @@ import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.CallUiState
+import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
@@ -39,6 +43,7 @@ import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
+import org.tinitalk.media.CameraMediaCallbacks
 import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
@@ -58,6 +63,40 @@ internal fun migrateCallNetwork(
     restartMedia()
 }
 
+internal fun callForegroundServiceType(cameraSending: Boolean): Int =
+    ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+        if (cameraSending) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0
+
+internal sealed interface CameraCallAction {
+    val callId: String
+
+    data class Request(override val callId: String, val requested: Boolean) : CameraCallAction
+    data class Foreground(
+        override val callId: String,
+        val foreground: Boolean,
+        val permissionGranted: Boolean,
+    ) : CameraCallAction
+    data class Switch(override val callId: String) : CameraCallAction
+}
+
+internal fun cameraCallAction(intent: Intent): CameraCallAction? {
+    val callId = intent.getStringExtra(CallForegroundService.ExtraCallId) ?: return null
+    return when (intent.action) {
+        CallForegroundService.ActionCameraRequest -> CameraCallAction.Request(
+            callId,
+            intent.getBooleanExtra(CallForegroundService.ExtraCameraRequested, false),
+        )
+        CallForegroundService.ActionCameraForeground -> CameraCallAction.Foreground(
+            callId,
+            intent.getBooleanExtra(CallForegroundService.ExtraCameraForeground, false),
+            intent.getBooleanExtra(CallForegroundService.ExtraCameraPermission, false),
+        )
+        CallForegroundService.ActionCameraSwitch -> CameraCallAction.Switch(callId)
+        else -> null
+    }
+}
+
 class CallForegroundService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var socket: SignalSocket? = null
@@ -67,7 +106,11 @@ class CallForegroundService : Service() {
     @Volatile private var connected = false
     private var finishing = false
     private var callResourcesReleased = false
+    private var callResourcesReleaseComplete = false
+    private val callResourcesReleaseCallbacks = mutableListOf<() -> Unit>()
     private var statsPolling = false
+    private var cameraForegroundTypeEnabled = false
+    private var cameraForegroundLease: Long? = null
     private var telecomCallId: String? = null
     private var outgoingPeer: CallPeer? = null
     private var callNetworkLock: CallNetworkLock? = null
@@ -128,12 +171,7 @@ class CallForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (finishing) return START_NOT_STICKY
-        ServiceCompat.startForeground(
-            this,
-            NotificationId,
-            notification(CallUiStateStore.snapshot()),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-        )
+        updateForegroundType(cameraSending = cameraForegroundTypeEnabled)
         if (intent == null || !ensureRuntime()) {
             stopSelf()
             return START_NOT_STICKY
@@ -160,6 +198,7 @@ class CallForegroundService : Service() {
             runCatching { coordinator?.hangUp() }
         }
         runCatching { socket?.close() }
+        VideoCallStateStore.reset()
         runCatching { media?.close() }
         runCatching { httpClient?.dispatcher?.executorService?.shutdownNow() }
         runCatching { httpClient?.connectionPool?.evictAll() }
@@ -196,9 +235,16 @@ class CallForegroundService : Service() {
             newSocket,
             serverFeatures = session.features,
         )
-        val newMedia = ForegroundCallController(
+        lateinit var newMedia: ForegroundCallController
+        fun routeMediaCallback(action: (ForegroundCallController) -> Unit) {
+            val route = {
+                if (!finishing && media === newMedia) action(newMedia)
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) route() else handler.post(route)
+        }
+        newMedia = ForegroundCallController(
             signal = newSocket,
-            mediaFactory = { videoAllowed, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
+            mediaFactory = { callId, videoAllowed, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
                 WebRtcCallSession.create(
                     this,
                     videoAllowed = videoAllowed,
@@ -219,7 +265,62 @@ class CallForegroundService : Service() {
                             }
                         }
                     },
+                    onRemoteVideoTrack = { track ->
+                        routeMediaCallback { it.onRemoteVideoTrack(callId, track) }
+                    },
+                    cameraCallbacks = CameraMediaCallbacks(
+                        onLocalTrackChanged = { track ->
+                            routeMediaCallback { it.onLocalVideoTrack(callId, track) }
+                        },
+                        onCaptureStarted = { facing ->
+                            routeMediaCallback { it.onCameraCaptureStarted(callId, facing) }
+                        },
+                        onCaptureInvalidated = {
+                            routeMediaCallback { it.onCameraCaptureInvalidated(callId) }
+                        },
+                        onCaptureStopped = {
+                            routeMediaCallback { it.onCameraCaptureStopped(callId) }
+                        },
+                        onFacingChanged = { facing ->
+                            routeMediaCallback { it.onCameraFacingChanged(callId, facing) }
+                        },
+                        onFailure = { message ->
+                            Log.e(CallLogTag, "camera failed for call $callId: $message")
+                            routeMediaCallback { it.onCameraFailure(callId, message) }
+                        },
+                    ),
                 )
+            },
+            onVideoStateChanged = { state ->
+                val publish = {
+                    if (!finishing && media === newMedia) {
+                        state.failure?.let { message ->
+                            Log.e(CallLogTag, "camera state failed for call ${state.callId}: $message")
+                        }
+                        VideoCallStateStore.publish(state)
+                    }
+                }
+                if (Looper.myLooper() == Looper.getMainLooper()) publish() else handler.post(publish)
+            },
+            prepareCameraStart = { callId, lease ->
+                val snapshot = newCoordinator.snapshot()
+                val permissionGranted = ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.CAMERA,
+                ) == PackageManager.PERMISSION_GRANTED
+                val prepared = media === newMedia &&
+                    snapshot.callId == callId &&
+                    snapshot.phase == CallPhase.Active &&
+                    permissionGranted &&
+                    updateForegroundType(cameraSending = true)
+                if (prepared) cameraForegroundLease = lease
+                prepared
+            },
+            onCameraLeaseReleased = { lease ->
+                if (cameraForegroundLease == lease) {
+                    cameraForegroundLease = null
+                    updateForegroundType(cameraSending = false)
+                }
             },
         )
         socket = newSocket
@@ -327,6 +428,7 @@ class CallForegroundService : Service() {
                 CallServiceState.publish(call.snapshot())
                 CallUiStateStore.reset()
                 CallAudioState.reset()
+                VideoCallStateStore.reset()
                 val callee = intent.getStringExtra(ExtraCallee) ?: return
                 val displayName = intent.getStringExtra(ExtraDisplayName).orEmpty().ifEmpty { callee }
                 call.startCall(callee)
@@ -435,6 +537,26 @@ class CallForegroundService : Service() {
                 val localCallId = TelecomActionScope.telecomCallForSelection(call.snapshot(), callId, telecomCallId) ?: return
                 intent.getStringExtra(ExtraEndpointId)?.let { telecom.selectEndpoint(localCallId, it) }
             }
+            ActionCameraRequest,
+            ActionCameraForeground,
+            ActionCameraSwitch -> {
+                val cameraAction = cameraCallAction(intent) ?: return
+                val activeCallId = call.snapshot().takeIf { it.phase == CallPhase.Active }?.callId ?: return
+                if (cameraAction.callId != activeCallId) return
+                when (cameraAction) {
+                    is CameraCallAction.Request -> media?.setCameraRequested(
+                        cameraAction.callId,
+                        cameraAction.requested,
+                        permissionGranted = cameraAction.requested,
+                    )
+                    is CameraCallAction.Foreground -> media?.setCameraForeground(
+                        cameraAction.callId,
+                        cameraAction.foreground,
+                        cameraAction.permissionGranted,
+                    )
+                    is CameraCallAction.Switch -> media?.switchCamera(cameraAction.callId)
+                }
+            }
         }
         publish(endReason)
         if (call.snapshot().phase == CallPhase.Ended) {
@@ -486,11 +608,15 @@ class CallForegroundService : Service() {
         if (finishing) return
         finishing = true
         terminalSignalGate.close()
-        releaseCallResources()
-        stopSelf()
+        releaseCallResources(::stopSelf)
     }
 
-    private fun releaseCallResources() {
+    private fun releaseCallResources(afterReleased: () -> Unit = {}) {
+        if (callResourcesReleaseComplete) {
+            afterReleased()
+            return
+        }
+        callResourcesReleaseCallbacks += afterReleased
         if (callResourcesReleased) return
         callResourcesReleased = true
         stopStatsPolling()
@@ -498,12 +624,30 @@ class CallForegroundService : Service() {
         val callId = snapshot?.callId
         CallAudioState.reset()
         val currentMedia = media
-        media = null
-        currentMedia?.close()
+        VideoCallStateStore.reset()
+        if (currentMedia == null) {
+            completeCallResourceRelease(null, callId)
+        } else {
+            currentMedia.close { completeCallResourceRelease(currentMedia, callId) }
+        }
+    }
+
+    private fun completeCallResourceRelease(
+        releasedMedia: ForegroundCallController?,
+        callId: String?,
+    ) {
+        if (callResourcesReleaseComplete) return
+        callResourcesReleaseComplete = true
+        if (media === releasedMedia) media = null
+        cameraForegroundLease = null
+        updateForegroundType(cameraSending = false)
         IncomingCallNotifier(this).cancel()
         callId?.let { IncomingCallController().clear(this, it) }
         (telecomCallId ?: callId)?.let(telecom::cancel)
         telecomCallId = null
+        val callbacks = callResourcesReleaseCallbacks.toList()
+        callResourcesReleaseCallbacks.clear()
+        callbacks.forEach { it() }
     }
 
     private fun telecomCallbacks(callId: String, onDisconnect: () -> Unit) = TelecomCallCallbacks(
@@ -589,6 +733,23 @@ class CallForegroundService : Service() {
         )
     }
 
+    private fun updateForegroundType(cameraSending: Boolean): Boolean {
+        val state = CallUiStateStore.snapshot()
+        return try {
+            ServiceCompat.startForeground(
+                this,
+                NotificationId,
+                notification(state),
+                callForegroundServiceType(cameraSending),
+            )
+            cameraForegroundTypeEnabled = cameraSending
+            true
+        } catch (failure: Throwable) {
+            Log.e(CallLogTag, "failed to update foreground service type", failure)
+            false
+        }
+    }
+
     companion object {
         const val ActionStart = "org.tinitalk.action.START_CALL"
         const val ActionAnswer = "org.tinitalk.action.SERVICE_ANSWER_CALL"
@@ -599,11 +760,17 @@ class CallForegroundService : Service() {
         const val ActionTelecomActive = "org.tinitalk.action.TELECOM_ACTIVE"
         const val ActionTelecomInactive = "org.tinitalk.action.TELECOM_INACTIVE"
         const val ActionSelectEndpoint = "org.tinitalk.action.SELECT_AUDIO_ENDPOINT"
+        const val ActionCameraRequest = "org.tinitalk.action.CAMERA_REQUEST"
+        const val ActionCameraForeground = "org.tinitalk.action.CAMERA_FOREGROUND"
+        const val ActionCameraSwitch = "org.tinitalk.action.CAMERA_SWITCH"
         private const val ExtraCallee = "callee"
         private const val ExtraDisplayName = "display_name"
         private const val ExtraMuted = "muted"
-        private const val ExtraCallId = "call_id"
+        internal const val ExtraCallId = "call_id"
         private const val ExtraEndpointId = "endpoint_id"
+        internal const val ExtraCameraRequested = "camera_requested"
+        internal const val ExtraCameraForeground = "camera_foreground"
+        internal const val ExtraCameraPermission = "camera_permission"
         const val ChannelId = "calls"
         const val NotificationId = 10
         private const val TerminalSignalTimeoutMillis = 20_000L
@@ -646,6 +813,45 @@ class CallForegroundService : Service() {
                     .putExtra(ExtraEndpointId, endpointId),
             )
         }
+
+        fun cameraRequested(context: Context, callId: String, requested: Boolean) {
+            start(context, cameraRequestIntent(context, callId, requested))
+        }
+
+        fun cameraForeground(
+            context: Context,
+            callId: String,
+            foreground: Boolean,
+            permissionGranted: Boolean,
+        ) {
+            start(context, cameraForegroundIntent(context, callId, foreground, permissionGranted))
+        }
+
+        fun switchCamera(context: Context, callId: String) {
+            start(context, cameraSwitchIntent(context, callId))
+        }
+
+        internal fun cameraRequestIntent(context: Context, callId: String, requested: Boolean): Intent =
+            Intent(context, CallForegroundService::class.java)
+                .setAction(ActionCameraRequest)
+                .putExtra(ExtraCallId, callId)
+                .putExtra(ExtraCameraRequested, requested)
+
+        internal fun cameraForegroundIntent(
+            context: Context,
+            callId: String,
+            foreground: Boolean,
+            permissionGranted: Boolean,
+        ): Intent = Intent(context, CallForegroundService::class.java)
+            .setAction(ActionCameraForeground)
+            .putExtra(ExtraCallId, callId)
+            .putExtra(ExtraCameraForeground, foreground)
+            .putExtra(ExtraCameraPermission, permissionGranted)
+
+        internal fun cameraSwitchIntent(context: Context, callId: String): Intent =
+            Intent(context, CallForegroundService::class.java)
+                .setAction(ActionCameraSwitch)
+                .putExtra(ExtraCallId, callId)
 
         fun start(context: Context, intent: Intent) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)

@@ -7,6 +7,7 @@ import org.tinitalk.media.IceCandidateData
 import org.tinitalk.media.IceServerData
 import org.tinitalk.media.CallStats
 import org.tinitalk.media.MediaSession
+import org.tinitalk.media.CameraMediaSession
 import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.ExecutorTaskScheduler
 import org.tinitalk.media.TaskScheduler
@@ -16,12 +17,14 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.startCoroutine
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import org.webrtc.VideoTrack
 
 internal const val CredentialRefreshLeadMillis = 60_000L
 
 class ForegroundCallController(
     private val signal: SignalClient,
     private val mediaFactory: (
+        String,
         Boolean,
         List<IceServerData>,
         (IceCandidateData) -> Unit,
@@ -30,7 +33,30 @@ class ForegroundCallController(
     ) -> MediaSession,
     private val ids: EventIds = UuidEventIds(),
     private val scheduler: TaskScheduler = ExecutorTaskScheduler(),
+    private val onVideoStateChanged: (CallVideoState<VideoTrack>) -> Unit = {},
+    private val prepareCameraStart: (String, Long) -> Boolean = { _, _ -> true },
+    private val onCameraLeaseReleased: (Long) -> Unit = {},
 ) {
+    constructor(
+        signal: SignalClient,
+        mediaFactory: (
+            Boolean,
+            List<IceServerData>,
+            (IceCandidateData) -> Unit,
+            (List<IceCandidateData>) -> Unit,
+            () -> Unit,
+        ) -> MediaSession,
+        ids: EventIds = UuidEventIds(),
+        scheduler: TaskScheduler = ExecutorTaskScheduler(),
+    ) : this(
+        signal = signal,
+        mediaFactory = { _, videoAllowed, servers, onIce, onIceRemoved, onRestart ->
+            mediaFactory(videoAllowed, servers, onIce, onIceRemoved, onRestart)
+        },
+        ids = ids,
+        scheduler = scheduler,
+    )
+
     private data class LocalIceEvent(val sequence: Long, val event: SignalEvent)
 
     private var session: MediaSession? = null
@@ -59,6 +85,22 @@ class ForegroundCallController(
     private var nextLocalIceSequence = 0L
     private val recentLocalIceEvents = linkedMapOf<String, LocalIceEvent>()
     private val rateLimitedIceEvents = linkedMapOf<String, LocalIceEvent>()
+    private var videoState = CallVideoState<VideoTrack>()
+    private var foregroundCallId: String? = null
+    private var cameraStartBlocked = false
+    private var cameraStartSubmitted = false
+    private var nextCameraLease = 0L
+    private var activeCameraLease: Long? = null
+    private var nextCameraRetirement = 0L
+    private var cameraRetirement: Long? = null
+    private var cameraDetachPending = false
+    private var cameraReleasePending = false
+    private val cameraDetachWaiters = ArrayDeque<() -> Unit>()
+    private val cameraReleaseWaiters = ArrayDeque<() -> Unit>()
+    private var cameraTransitionGeneration = 0L
+    private var closing = false
+    private var closed = false
+    private val closeWaiters = ArrayDeque<() -> Unit>()
 
     @Synchronized
     fun onSignalEvent(snapshot: CallSnapshot, event: SignalEvent) {
@@ -75,33 +117,7 @@ class ForegroundCallController(
                     pendingOffer = event
                 }
             }
-            "rtc.config" -> {
-                iceServers = event.payload.parseIceServers()
-                videoAllowed = event.payload["video_allowed"]
-                    ?.takeUnless { it.isJsonNull }
-                    ?.asBoolean == true
-                configuredCallId = event.callId
-                event.payload.restartID()?.let { localIceGeneration = it }
-                session?.takeIf { callId == event.callId }?.let { media ->
-                    runBlockingLite { media.updateIceServers(iceServers) }
-                }
-                if (restartRequestedCallId == event.callId && restartRequestID == event.payload.restartID()) {
-                    restartRetryTask?.cancel()
-                    restartRetryTask = null
-                    val offer = runBlockingLite { ensureSession(event.callId).restartIce() }
-                    restartRequestedCallId = null
-                    restartRequestID = null
-                    pendingRestart = null
-                    sendSdp(event.callId, "rtc.offer", offer)
-                } else {
-                    startOfferWhenReady(event.callId)
-                }
-                scheduleCredentialRefresh(event.callId)
-                pendingOffer?.takeIf { it.callId == event.callId }?.let {
-                    pendingOffer = null
-                    answerOffer(it)
-                }
-            }
+            "rtc.config" -> handleRtcConfig(event)
             "rtc.answer" -> session?.let { media ->
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
             }
@@ -148,6 +164,88 @@ class ForegroundCallController(
     }
 
     @Synchronized
+    fun setCameraForeground(callId: String, foreground: Boolean, permissionGranted: Boolean) {
+        val wasForeground = foregroundCallId == callId
+        if (foreground) {
+            foregroundCallId = callId
+            if (!wasForeground) cameraStartBlocked = false
+        } else if (foregroundCallId == callId) {
+            foregroundCallId = null
+            cameraStartSubmitted = false
+        }
+        updateVideoState(videoState.withPermission(callId, permissionGranted))
+        if (!foreground || !permissionGranted) {
+            pauseCamera(callId)
+        } else {
+            reconcileCamera(callId)
+        }
+    }
+
+    @Synchronized
+    fun setCameraRequested(callId: String, requested: Boolean, permissionGranted: Boolean = true) {
+        if (videoState.callId != callId || !videoState.allowed) return
+        cameraStartBlocked = false
+        if (requested) {
+            updateVideoState(videoState.request(callId, permissionGranted))
+            reconcileCamera(callId)
+        } else {
+            cameraStartSubmitted = false
+            updateVideoState(videoState.manualOff(callId))
+            requestCameraStop(session)
+        }
+    }
+
+    @Synchronized
+    fun switchCamera(callId: String) {
+        if (!cameraEligible(callId)) return
+        try {
+            (session as? CameraMediaSession)?.switchCamera()
+        } catch (failure: Throwable) {
+            cameraFailed(callId, failure.message ?: "camera switch failed")
+        }
+    }
+
+    @Synchronized
+    fun onLocalVideoTrack(callId: String, track: VideoTrack?) {
+        updateVideoState(videoState.withLocalTrack(callId, track))
+    }
+
+    @Synchronized
+    fun onRemoteVideoTrack(callId: String, track: VideoTrack?) {
+        updateVideoState(videoState.withRemoteTrack(callId, track))
+    }
+
+    @Synchronized
+    fun onCameraCaptureStarted(callId: String, facing: CameraFacing) {
+        if (!cameraEligible(callId)) {
+            pauseCamera(callId)
+            return
+        }
+        cameraStartSubmitted = false
+        updateVideoState(videoState.captureStarted(callId, facing))
+    }
+
+    @Synchronized
+    fun onCameraCaptureInvalidated(callId: String) {
+        updateVideoState(videoState.captureStopped(callId))
+    }
+
+    @Synchronized
+    fun onCameraCaptureStopped(callId: String) {
+        updateVideoState(videoState.captureStopped(callId))
+    }
+
+    @Synchronized
+    fun onCameraFacingChanged(callId: String, facing: CameraFacing) {
+        updateVideoState(videoState.withFacing(callId, facing))
+    }
+
+    @Synchronized
+    fun onCameraFailure(callId: String, message: String) {
+        cameraFailed(callId, message)
+    }
+
+    @Synchronized
     fun onNetworkChanged() {
         session?.onNetworkChanged()
     }
@@ -161,7 +259,15 @@ class ForegroundCallController(
     }
 
     @Synchronized
-    fun close() {
+    fun close(onClosed: () -> Unit = {}) {
+        if (closed) {
+            onClosed()
+            return
+        }
+        closeWaiters += onClosed
+        if (closing) return
+        closing = true
+        cameraTransitionGeneration++
         credentialRefreshTask?.cancel()
         credentialRefreshTask = null
         iceRetryTask?.cancel()
@@ -194,7 +300,81 @@ class ForegroundCallController(
         rateLimitedIceEvents.clear()
         active = false
         muted = false
-        if (media != null) runBlockingLite { media.close() }
+        foregroundCallId = null
+        cameraStartBlocked = false
+        cameraStartSubmitted = false
+        updateVideoState(CallVideoState())
+        requestCameraStop(
+            target = media,
+            afterDetached = {
+                runCatching { if (media != null) runBlockingLite { media.close() } }
+            },
+            afterReleased = {
+                closed = true
+                closing = false
+                val waiters = closeWaiters.toList()
+                closeWaiters.clear()
+                waiters.forEach { waiter -> runCatching(waiter) }
+            },
+        )
+    }
+
+    private fun handleRtcConfig(event: SignalEvent) {
+        val nextIceServers = event.payload.parseIceServers()
+        val nextVideoAllowed = event.payload["video_allowed"]
+            ?.takeUnless { it.isJsonNull }
+            ?.asBoolean == true
+        val previousVideoCallId = videoState.callId
+        val requiresCameraStop = previousVideoCallId != null &&
+            (previousVideoCallId != event.callId || videoState.allowed && !nextVideoAllowed)
+        if (!requiresCameraStop) {
+            applyRtcConfig(event, nextIceServers, nextVideoAllowed)
+            return
+        }
+
+        cameraStartSubmitted = false
+        updateVideoState(
+            videoState
+                .withLocalTrack(requireNotNull(previousVideoCallId), null)
+                .captureStopped(previousVideoCallId),
+        )
+        val transition = ++cameraTransitionGeneration
+        val previousSession = session
+        requestCameraStop(previousSession, afterDetached = {
+            if (closing || transition != cameraTransitionGeneration) return@requestCameraStop
+            applyRtcConfig(event, nextIceServers, nextVideoAllowed)
+        })
+    }
+
+    private fun applyRtcConfig(
+        event: SignalEvent,
+        nextIceServers: List<IceServerData>,
+        nextVideoAllowed: Boolean,
+    ) {
+        iceServers = nextIceServers
+        videoAllowed = nextVideoAllowed
+        updateVideoState(videoState.configured(event.callId, videoAllowed))
+        configuredCallId = event.callId
+        event.payload.restartID()?.let { localIceGeneration = it }
+        session?.takeIf { callId == event.callId }?.let { media ->
+            runBlockingLite { media.updateIceServers(iceServers) }
+        }
+        if (restartRequestedCallId == event.callId && restartRequestID == event.payload.restartID()) {
+            restartRetryTask?.cancel()
+            restartRetryTask = null
+            val offer = runBlockingLite { ensureSession(event.callId).restartIce() }
+            restartRequestedCallId = null
+            restartRequestID = null
+            pendingRestart = null
+            sendSdp(event.callId, "rtc.offer", offer)
+        } else {
+            startOfferWhenReady(event.callId)
+        }
+        scheduleCredentialRefresh(event.callId)
+        pendingOffer?.takeIf { it.callId == event.callId }?.let {
+            pendingOffer = null
+            answerOffer(it)
+        }
     }
 
     private fun startOfferWhenReady(nextCallId: String) {
@@ -212,9 +392,14 @@ class ForegroundCallController(
     private fun ensureSession(nextCallId: String): MediaSession {
         val current = session
         if (current != null && callId == nextCallId) return current
-        if (current != null) close()
+        if (current != null) {
+            runBlockingLite { current.close() }
+            session = null
+            callId = null
+        }
         callId = nextCallId
         val created = mediaFactory(
+            nextCallId,
             videoAllowed,
             iceServers,
             { candidate -> sendIce(nextCallId, candidate) },
@@ -230,6 +415,119 @@ class ForegroundCallController(
             queued.forEach { created.addIceCandidate(it) }
         }
         return created
+    }
+
+    private fun reconcileCamera(nextCallId: String) {
+        if (
+            !cameraEligible(nextCallId) ||
+            cameraStartBlocked ||
+            cameraStartSubmitted ||
+            cameraDetachPending ||
+            cameraReleasePending ||
+            videoState.sending
+        ) return
+        val camera = session as? CameraMediaSession ?: return
+        val lease = ++nextCameraLease
+        if (!prepareCameraStart(nextCallId, lease)) {
+            cameraFailed(nextCallId, "camera foreground service failed")
+            return
+        }
+        activeCameraLease = lease
+        cameraStartSubmitted = true
+        try {
+            camera.startCamera()
+        } catch (failure: Throwable) {
+            cameraStartSubmitted = false
+            cameraFailed(nextCallId, failure.message ?: "camera start failed")
+        }
+    }
+
+    private fun cameraEligible(nextCallId: String): Boolean =
+        videoState.callId == nextCallId &&
+            videoState.allowed &&
+            videoState.requested &&
+            videoState.permissionGranted &&
+            foregroundCallId == nextCallId
+
+    private fun requestCameraStop(
+        target: MediaSession?,
+        usePause: Boolean = false,
+        afterDetached: () -> Unit = {},
+        afterReleased: () -> Unit = {},
+    ) {
+        if (cameraReleasePending) {
+            cameraReleaseWaiters += afterReleased
+            if (cameraDetachPending) cameraDetachWaiters += afterDetached else afterDetached()
+            return
+        }
+        cameraDetachWaiters += afterDetached
+        cameraReleaseWaiters += afterReleased
+        val retirement = ++nextCameraRetirement
+        cameraRetirement = retirement
+        cameraDetachPending = true
+        cameraReleasePending = true
+        cameraStartSubmitted = false
+        val lease = activeCameraLease
+        activeCameraLease = null
+        val camera = target as? CameraMediaSession
+        if (camera == null) {
+            completeCameraDetach(retirement)
+            completeCameraRelease(retirement, lease)
+            return
+        }
+        runCatching {
+            val detached = { completeCameraDetach(retirement) }
+            val released = { completeCameraRelease(retirement, lease) }
+            if (usePause) camera.pauseCamera(detached, released) else camera.stopCamera(detached, released)
+        }.onFailure {
+            completeCameraDetach(retirement)
+        }
+    }
+
+    @Synchronized
+    private fun completeCameraDetach(retirement: Long) {
+        if (cameraRetirement != retirement || !cameraDetachPending) return
+        cameraDetachPending = false
+        val waiters = cameraDetachWaiters.toList()
+        cameraDetachWaiters.clear()
+        waiters.forEach { it() }
+    }
+
+    @Synchronized
+    private fun completeCameraRelease(retirement: Long, lease: Long?) {
+        if (cameraRetirement != retirement || !cameraReleasePending) return
+        if (cameraDetachPending) completeCameraDetach(retirement)
+        cameraReleasePending = false
+        lease?.let(onCameraLeaseReleased)
+        val waiters = cameraReleaseWaiters.toList()
+        cameraReleaseWaiters.clear()
+        waiters.forEach { it() }
+        if (!closing) videoState.callId?.let(::reconcileCamera)
+    }
+
+    private fun pauseCamera(nextCallId: String) {
+        if (videoState.callId != nextCallId) return
+        cameraStartSubmitted = false
+        updateVideoState(videoState.withLocalTrack(nextCallId, null).captureStopped(nextCallId))
+        try {
+            requestCameraStop(session, usePause = true)
+        } catch (failure: Throwable) {
+            cameraFailed(nextCallId, failure.message ?: "camera pause failed")
+        }
+    }
+
+    private fun cameraFailed(nextCallId: String, message: String) {
+        if (videoState.callId != nextCallId) return
+        cameraStartBlocked = true
+        cameraStartSubmitted = false
+        updateVideoState(videoState.failed(nextCallId, message))
+        requestCameraStop(session)
+    }
+
+    private fun updateVideoState(next: CallVideoState<VideoTrack>) {
+        if (next == videoState) return
+        videoState = next
+        onVideoStateChanged(next)
     }
 
     @Synchronized

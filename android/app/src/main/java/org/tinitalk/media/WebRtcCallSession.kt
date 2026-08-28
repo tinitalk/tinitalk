@@ -21,6 +21,8 @@ import org.webrtc.audio.JavaAudioDeviceModule
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class WebRtcCallSession private constructor(
     context: Context,
@@ -31,10 +33,14 @@ class WebRtcCallSession private constructor(
     private val onIceRestartNeeded: () -> Unit,
     private val onConnectionStateChanged: (MediaConnectionState) -> Unit,
     private val onRemoteVideoTrack: (VideoTrack) -> Unit,
+    private val cameraCallbacks: CameraMediaCallbacks,
     private val forceRelay: Boolean,
-) : MediaSession {
+) : MediaSession, CameraMediaSession {
+    private val appContext = context.applicationContext
     private val iceQueue = IceQueue()
-    private val resources = NativeResourceOwner()
+    private val coreResources = NativeResourceOwner()
+    private val peerResources = NativeResourceOwner()
+    private val mediaResources = NativeResourceOwner()
     private val factory: PeerConnectionFactory
     private val audioDeviceModule: JavaAudioDeviceModule
     private val eglBase: EglBase?
@@ -45,9 +51,32 @@ class WebRtcCallSession private constructor(
     private val peerConnection: PeerConnection
     private val restartGate = IceRestartGate(ExecutorTaskScheduler())
     private val statsCollector = CallStatsCollector()
-    @Volatile private var closed = false
+    private val closeGate = SessionCloseGate()
+    private val closed: Boolean get() = closeGate.closed
     private var active = false
     private var muted = false
+    private var cameraController: WebRtcCameraController? = null
+    private val cameraExecutor: ExecutorService? = if (videoAllowed) {
+        Executors.newSingleThreadExecutor { task ->
+            Thread(task, CameraControlThreadName).apply { isDaemon = true }
+        }
+    } else {
+        null
+    }
+    private val cameraCleanupExecutor: ExecutorService? = if (videoAllowed) {
+        Executors.newCachedThreadPool { task ->
+            Thread(task, CameraCleanupThreadName).apply { isDaemon = true }
+        }
+    } else {
+        null
+    }
+    private val cameraQueue = cameraExecutor?.let { executor ->
+        CloseableCameraTaskQueue(CameraTaskQueue { task -> executor.execute(task) })
+    }
+    private val cameraCleanupQueue = cameraCleanupExecutor?.let { executor ->
+        CloseableCameraTaskQueue(CameraTaskQueue { task -> executor.execute(task) })
+    }
+    private var cleanupStarted = false
 
     init {
         try {
@@ -57,10 +86,10 @@ class WebRtcCallSession private constructor(
                 .setUseHardwareAcousticEchoCanceler(true)
                 .setUseHardwareNoiseSuppressor(true)
                 .createAudioDeviceModule()
-            resources.own(audioDeviceModule::release)
+            coreResources.own(audioDeviceModule::release)
 
             eglBase = if (videoAllowed) EglBase.create() else null
-            eglBase?.let { resources.own(it::release) }
+            eglBase?.let { coreResources.own(it::release) }
             factory = if (eglBase == null) {
                 PeerConnectionFactory.builder()
                     .setAudioDeviceModule(audioDeviceModule)
@@ -78,7 +107,7 @@ class WebRtcCallSession private constructor(
                     .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
                     .createPeerConnectionFactory()
             }
-            resources.own(factory::dispose)
+            coreResources.own(factory::dispose)
 
             peerConnection = requireNotNull(
                 factory.createPeerConnection(
@@ -93,16 +122,16 @@ class WebRtcCallSession private constructor(
                     ),
                 ),
             )
-            resources.own(peerConnection::dispose)
-            resources.own(peerConnection::close)
+            peerResources.own(peerConnection::dispose)
+            peerResources.own(peerConnection::close)
 
             audioSource = factory.createAudioSource(audioConstraints())
-            resources.own(audioSource::dispose)
+            mediaResources.own(audioSource::dispose)
             audioTrack = factory.createAudioTrack("local_audio", audioSource)
-            resources.own(audioTrack::dispose)
+            mediaResources.own(audioTrack::dispose)
             sender = peerConnection.addTrack(audioTrack, listOf("audio"))
             sender?.let { audioSender ->
-                resources.own { peerConnection.removeTrack(audioSender) }
+                mediaResources.own { peerConnection.removeTrack(audioSender) }
                 configureAudioSender(audioSender)
             }
             videoSender = if (videoAllowed) {
@@ -209,18 +238,92 @@ class WebRtcCallSession private constructor(
         }
     }
 
-    override suspend fun close() {
-        if (closed) return
-        closed = true
-        cleanupResources()
+    @Synchronized
+    override fun startCamera() {
+        ensureOpen()
+        check(videoAllowed) { "video is not allowed for this call" }
+        val controller = cameraController ?: WebRtcCameraController(
+            context = appContext,
+            factory = factory,
+            eglContext = requireNotNull(eglBase).eglBaseContext,
+            sender = requireNotNull(videoSender),
+            controlQueue = requireNotNull(cameraQueue),
+            blockingQueue = requireNotNull(cameraCleanupQueue),
+            callbacks = cameraCallbacks,
+        ).also { cameraController = it }
+        controller.start()
     }
 
-    private fun cleanupResources(primaryFailure: Throwable? = null) {
+    @Synchronized
+    override fun pauseCamera(onDetached: () -> Unit, onReleased: () -> Unit) {
+        if (!closed) cameraController?.pause(onDetached, onReleased) else {
+            onDetached()
+            onReleased()
+        }
+    }
+
+    @Synchronized
+    override fun stopCamera(onDetached: () -> Unit, onReleased: () -> Unit) {
+        cameraController?.stop(onDetached, onReleased) ?: run {
+            onDetached()
+            onReleased()
+        }
+    }
+
+    @Synchronized
+    override fun switchCamera() {
+        if (!closed) cameraController?.switchCamera()
+    }
+
+    override suspend fun close() {
+        closeGate.runOnce(::startClose)
+    }
+
+    private fun startClose() {
+        runCatching { audioTrack.setEnabled(false) }
+        runCatching { audioDeviceModule.setMicrophoneMute(true) }
+        runCatching { audioDeviceModule.setSpeakerMute(true) }
+        val camera = cameraController
+        if (camera == null) {
+            cleanupResources()
+        } else {
+            camera.close(
+                afterDetached = { cleanupResources(camera = camera) },
+                afterReleased = {},
+            )
+        }
+    }
+
+    @Synchronized
+    private fun cleanupResources(
+        primaryFailure: Throwable? = null,
+        camera: WebRtcCameraController? = cameraController,
+    ) {
+        if (cleanupStarted) return
+        cleanupStarted = true
         val cleanup = NativeResourceOwner()
-        cleanup.own { resources.close(primaryFailure) }
+        cleanup.own { peerResources.close(primaryFailure) }
+        cleanup.own { mediaResources.close(primaryFailure) }
         cleanup.own(iceQueue::clear)
         cleanup.own(restartGate::close)
-        cleanup.close(primaryFailure)
+        cameraController = null
+        try {
+            cleanup.close(primaryFailure)
+        } finally {
+            val releaseCore = {
+                runCatching { coreResources.close(primaryFailure) }
+                cameraCleanupQueue?.close()
+                cameraCleanupExecutor?.shutdown()
+                Unit
+            }
+            if (camera == null) {
+                releaseCore()
+            } else {
+                camera.disposeAfterPeerClosed(releaseCore)
+            }
+            cameraQueue?.close()
+            cameraExecutor?.shutdown()
+        }
     }
 
     private suspend fun setLocalDescription(description: SessionDescription) {
@@ -323,6 +426,8 @@ class WebRtcCallSession private constructor(
 
     companion object {
         private const val LogTag = "TiniTalkCall"
+        private const val CameraControlThreadName = "TiniTalkCameraControl"
+        private const val CameraCleanupThreadName = "TiniTalkCameraCleanup"
         @Volatile private var factoryReady = false
 
         fun create(
@@ -335,6 +440,7 @@ class WebRtcCallSession private constructor(
             onIceRestartNeeded: () -> Unit = {},
             onConnectionStateChanged: (MediaConnectionState) -> Unit = {},
             onRemoteVideoTrack: (VideoTrack) -> Unit = {},
+            cameraCallbacks: CameraMediaCallbacks = CameraMediaCallbacks(),
         ): WebRtcCallSession = WebRtcCallSession(
             context,
             videoAllowed,
@@ -344,6 +450,7 @@ class WebRtcCallSession private constructor(
             onIceRestartNeeded,
             onConnectionStateChanged,
             onRemoteVideoTrack,
+            cameraCallbacks,
             forceRelay,
         )
 
