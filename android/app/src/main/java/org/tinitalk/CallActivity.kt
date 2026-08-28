@@ -1,7 +1,6 @@
 package org.tinitalk
 
 import android.Manifest
-import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -11,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -67,9 +67,9 @@ class CallActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var proximityController: ProximityController
     private var activityStarted = false
-    private var activityResumed = false
     private val cameraForegroundPublicationGate = CameraForegroundPublicationGate()
     private lateinit var cameraPermissionRouter: CameraPermissionActionRouter
+    private lateinit var cameraForegroundLifecycle: CallActivityCameraForeground
     private val actionGate = CallScreenActionGate()
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
     private var videoState by mutableStateOf(VideoCallStateStore.snapshot())
@@ -92,11 +92,9 @@ class CallActivity : ComponentActivity() {
     private val screenStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                Intent.ACTION_SCREEN_OFF -> publishCameraForeground(foreground = false)
-                Intent.ACTION_USER_PRESENT -> if (activityResumed) {
-                    cameraPermissionRouter.onVisible(visibleCallState(), VideoCallStateStore.snapshot())
-                    publishCameraForeground(foreground = true)
-                }
+                Intent.ACTION_SCREEN_OFF -> cameraForegroundLifecycle.onScreenOff()
+                Intent.ACTION_SCREEN_ON -> cameraForegroundLifecycle.onScreenOn()
+                Intent.ACTION_USER_PRESENT -> cameraForegroundLifecycle.onUserPresent()
             }
         }
     }
@@ -110,7 +108,7 @@ class CallActivity : ComponentActivity() {
                 renderedVideoVisible = false
             }
             updateProximity()
-            if (activityResumed) publishCameraForeground(foreground = true)
+            cameraForegroundLifecycle.onCallStateChanged()
         }
     }
 
@@ -145,14 +143,22 @@ class CallActivity : ComponentActivity() {
             permissionGranted = ::cameraPermissionGranted,
             requestPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
             enableCamera = { callId -> CallForegroundService.cameraRequested(this, callId, requested = true) },
-            cameraVisibleAndUnlocked = ::cameraVisibleAndUnlocked,
+            cameraVisible = ::cameraVisible,
             restoredPendingCallId = savedInstanceState?.getString(StatePendingCameraCallId),
+        )
+        cameraForegroundLifecycle = CallActivityCameraForeground(
+            screenInteractive = ::screenInteractive,
+            retryPendingCamera = {
+                cameraPermissionRouter.onVisible(visibleCallState(), VideoCallStateStore.snapshot())
+            },
+            publish = ::publishCameraForeground,
         )
         ContextCompat.registerReceiver(
             this,
             screenStateReceiver,
             IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
                 addAction(Intent.ACTION_USER_PRESENT)
             },
             ContextCompat.RECEIVER_NOT_EXPORTED,
@@ -280,14 +286,11 @@ class CallActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        activityResumed = true
-        cameraPermissionRouter.onVisible(visibleCallState(), VideoCallStateStore.snapshot())
-        publishCameraForeground(foreground = true)
+        cameraForegroundLifecycle.onResume()
     }
 
     override fun onPause() {
-        publishCameraForeground(foreground = false)
-        activityResumed = false
+        cameraForegroundLifecycle.onPause()
         super.onPause()
     }
 
@@ -419,12 +422,10 @@ class CallActivity : ComponentActivity() {
         if (state.phase == CallPhase.Active) CallForegroundService.switchCamera(this, callId)
     }
 
-    private fun publishCameraForeground(foreground: Boolean) {
+    private fun publishCameraForeground(visible: Boolean) {
         val state = visibleCallState()
         val callId = state.callId ?: return
         if (state.phase != CallPhase.Active) return
-        val unlocked = !getSystemService(KeyguardManager::class.java).isDeviceLocked
-        val visible = foreground && unlocked
         val permissionGranted = cameraPermissionGranted()
         if (!cameraForegroundPublicationGate.shouldPublish(callId, visible, permissionGranted)) return
         CallForegroundService.cameraForeground(
@@ -438,8 +439,11 @@ class CallActivity : ComponentActivity() {
     private fun cameraPermissionGranted(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
-    private fun cameraVisibleAndUnlocked(): Boolean =
-        activityResumed && !getSystemService(KeyguardManager::class.java).isDeviceLocked
+    private fun cameraVisible(): Boolean =
+        ::cameraForegroundLifecycle.isInitialized && cameraForegroundLifecycle.visible
+
+    private fun screenInteractive(): Boolean =
+        getSystemService(PowerManager::class.java).isInteractive
 
     private fun updateProximity() {
         if (!::proximityController.isInitialized) return
@@ -528,6 +532,48 @@ internal class CameraForegroundPublicationGate {
         if (next == published) return false
         published = next
         return true
+    }
+}
+
+internal class CallActivityCameraForeground(
+    private val screenInteractive: () -> Boolean,
+    private val retryPendingCamera: () -> Unit,
+    private val publish: (Boolean) -> Unit,
+) {
+    private var resumed = false
+
+    val visible: Boolean
+        get() = resumed && screenInteractive()
+
+    fun onResume() {
+        resumed = true
+        publishVisible()
+    }
+
+    fun onPause() {
+        resumed = false
+        publish(false)
+    }
+
+    fun onScreenOff() {
+        publish(false)
+    }
+
+    fun onScreenOn() {
+        if (resumed) publishVisible()
+    }
+
+    fun onUserPresent() {
+        if (resumed) publishVisible()
+    }
+
+    fun onCallStateChanged() {
+        if (resumed) publish(visible)
+    }
+
+    private fun publishVisible() {
+        if (visible) retryPendingCamera()
+        publish(visible)
     }
 }
 

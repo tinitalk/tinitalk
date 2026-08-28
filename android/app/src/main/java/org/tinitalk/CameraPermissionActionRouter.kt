@@ -8,7 +8,7 @@ internal class CameraPermissionActionRouter(
     private val permissionGranted: () -> Boolean,
     private val requestPermission: () -> Unit,
     private val enableCamera: (String) -> Unit,
-    private val cameraVisibleAndUnlocked: () -> Boolean = { true },
+    private val cameraVisible: () -> Boolean = { true },
     restoredPendingCallId: String? = null,
 ) {
     private var pendingCallId: String? = restoredPendingCallId
@@ -39,7 +39,7 @@ internal class CameraPermissionActionRouter(
 
     private fun enablePendingIfEligible(call: CallUiState, video: CallVideoState<*>) {
         val requestedCallId = pendingCallId ?: return
-        if (!permissionGranted() || !cameraVisibleAndUnlocked()) return
+        if (!permissionGranted() || !cameraVisible()) return
         if (eligibleCallId(call, video) != requestedCallId) {
             pendingCallId = null
             return

@@ -64,7 +64,7 @@ class CameraPermissionActionRouterTest {
             permissionGranted = { permissionGranted },
             requestPermission = {},
             enableCamera = {},
-            cameraVisibleAndUnlocked = { true },
+            cameraVisible = { true },
         )
         first.request(activeCall(CurrentCall), videoState(CurrentCall))
         val savedCallId = first.pendingCallId()
@@ -74,7 +74,7 @@ class CameraPermissionActionRouterTest {
             permissionGranted = { permissionGranted },
             requestPermission = {},
             enableCamera = enabledCalls::add,
-            cameraVisibleAndUnlocked = { true },
+            cameraVisible = { true },
             restoredPendingCallId = savedCallId,
         )
 
@@ -84,14 +84,14 @@ class CameraPermissionActionRouterTest {
     }
 
     @Test
-    fun recreatedPermissionResultIsIgnoredWhileLockedOrNotVisible() {
+    fun recreatedPermissionResultIsIgnoredWhileNotVisible() {
         val enabledCalls = mutableListOf<String>()
         var visible = false
         val recreated = CameraPermissionActionRouter(
             permissionGranted = { true },
             requestPermission = {},
             enableCamera = enabledCalls::add,
-            cameraVisibleAndUnlocked = { visible },
+            cameraVisible = { visible },
             restoredPendingCallId = CurrentCall,
         )
 
