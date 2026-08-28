@@ -82,13 +82,13 @@ internal class MissedBadgeUpdater(
     }
 
     @Synchronized
-    fun update(refreshId: Long, count: Int, publish: (Int) -> Unit): Int {
+    fun update(refreshId: Long, count: Int, publish: (Int) -> Unit): MissedBadgeUpdate {
         val update = counter.update(refreshId, count)
         if (update.applied) {
             notifyObservers(update.count)
             execute { publish(update.count) }
         }
-        return update.count
+        return update
     }
 
     @Synchronized
@@ -290,7 +290,7 @@ class IncomingCallNotifier(private val context: Context) {
 
     fun removeMissedCountObserver(observer: (Int) -> Unit) = MissedBadges.removeObserver(observer)
 
-    fun updateMissedCount(count: Int, refreshId: Long, latest: IncomingInvite? = null): Int =
+    internal fun updateMissedCount(count: Int, refreshId: Long, latest: IncomingInvite? = null): MissedBadgeUpdate =
         MissedBadges.update(refreshId, count) { publishMissedCount(it, latest) }
 
     fun clearMissedCount() {

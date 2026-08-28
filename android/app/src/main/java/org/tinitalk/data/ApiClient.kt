@@ -49,15 +49,42 @@ data class CallHistoryItem(
     @SerializedName("started_at") val startedAt: Long,
     @SerializedName("duration_seconds") val durationSeconds: Long,
 )
+data class UnreadMissedContact(
+    @SerializedName("peer_login") val peerLogin: String,
+    @SerializedName("started_at") val startedAt: Long,
+)
+data class CallUnreadState(
+    @SerializedName("unread_missed_count") val unreadMissedCount: Int,
+    @SerializedName("unread_missed") val unreadMissed: List<UnreadMissedContact>,
+)
 data class CallHistoryPage(
     val items: List<CallHistoryItem>,
     @SerializedName("next_before") val nextBefore: Long,
     @SerializedName("latest_id") val latestId: Long,
     @SerializedName("unread_missed_count") val unreadMissedCount: Int,
+    @SerializedName("unread_missed") val unreadMissed: List<UnreadMissedContact> = emptyList(),
 )
+private data class CallHistoryPageWire(
+    val items: List<CallHistoryItem>?,
+    @SerializedName("next_before") val nextBefore: Long,
+    @SerializedName("latest_id") val latestId: Long,
+    @SerializedName("unread_missed_count") val unreadMissedCount: Int,
+    @SerializedName("unread_missed") val unreadMissed: List<UnreadMissedContact>?,
+) {
+    fun toCallHistoryPage() = CallHistoryPage(
+        items.orEmpty(),
+        nextBefore,
+        latestId,
+        unreadMissedCount,
+        unreadMissed.orEmpty(),
+    )
+}
 private data class CallHistoryReadResult(
     @SerializedName("unread_missed_count") val unreadMissedCount: Int,
-)
+    @SerializedName("unread_missed") val unreadMissed: List<UnreadMissedContact>?,
+) {
+    fun toCallUnreadState() = CallUnreadState(unreadMissedCount, unreadMissed.orEmpty())
+}
 
 class ApiException(val code: Int, message: String) : RuntimeException(message)
 
@@ -67,7 +94,7 @@ interface HouseholdApi {
     fun contactsPage(limit: Int = 20, cursor: String = ""): ContactPage
     fun updateContactName(login: String, customName: String?): Contact
     fun calls(limit: Int = 50, before: Long = 0, peerLogin: String? = null): CallHistoryPage
-    fun markCallsRead(throughId: Long, peerLogin: String? = null): Int
+    fun markCallsRead(throughId: Long, peerLogin: String? = null): CallUnreadState
     fun putDevice(deviceId: String, fcmToken: String)
 }
 
@@ -100,13 +127,13 @@ class UrlConnectionApiClient(
         get(
             "/api/calls?limit=$limit&before=$before" +
                 (peerLogin?.let { "&peer=${encode(it)}" } ?: ""),
-            CallHistoryPage::class.java,
-        )
+            CallHistoryPageWire::class.java,
+        ).toCallHistoryPage()
 
-    override fun markCallsRead(throughId: Long, peerLogin: String?): Int {
+    override fun markCallsRead(throughId: Long, peerLogin: String?): CallUnreadState {
         val request = linkedMapOf<String, Any>("through_id" to throughId)
         peerLogin?.let { request["peer_login"] = it }
-        return put("/api/calls/read", request, CallHistoryReadResult::class.java).unreadMissedCount
+        return put("/api/calls/read", request, CallHistoryReadResult::class.java).toCallUnreadState()
     }
 
     override fun putDevice(deviceId: String, fcmToken: String) {

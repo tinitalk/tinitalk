@@ -83,6 +83,20 @@ fun historyDayLabel(
 fun historyTime(startedAt: Long, zone: ZoneId = ZoneId.systemDefault()): String =
     Instant.ofEpochSecond(startedAt).atZone(zone).format(TimeFormatter)
 
+fun missedContactSubtitle(
+    startedAt: Long,
+    now: Instant = Instant.now(),
+    zone: ZoneId = ZoneId.systemDefault(),
+): String {
+    val call = Instant.ofEpochSecond(startedAt).atZone(zone)
+    val today = now.atZone(zone).toLocalDate()
+    return when (call.toLocalDate()) {
+        today -> "Пропущенный в ${call.format(TimeFormatter)}"
+        today.minusDays(1) -> "Пропущенный вчера"
+        else -> "Пропущенный ${call.format(ContactDateFormatter)}"
+    }
+}
+
 private fun historyDuration(seconds: Long): String {
     val safe = seconds.coerceAtLeast(0)
     val hours = safe / 3600
@@ -97,3 +111,4 @@ private fun historyDuration(seconds: Long): String {
 
 private val RussianLocale = Locale.forLanguageTag("ru-RU")
 private val TimeFormatter = DateTimeFormatter.ofPattern("HH:mm", RussianLocale)
+private val ContactDateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy", RussianLocale)

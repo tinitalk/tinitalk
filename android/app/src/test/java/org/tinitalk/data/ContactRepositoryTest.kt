@@ -216,11 +216,12 @@ class ContactRepositoryTest {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         store.save(Session("https://host", "alice", "token"))
         val updated = Contact("bob", "Мама", "Bob", "Мама")
-        val api = FakeApiClient(updatedContact = updated, unreadAfterRead = 2)
+        val unreadAfterRead = CallUnreadState(2, listOf(UnreadMissedContact("carol", 1_787_743_800)))
+        val api = FakeApiClient(updatedContact = updated, unreadAfterRead = unreadAfterRead)
         val repo = ContactRepository(store) { _, _, _ -> api }
 
         assertEquals(updated, repo.updateContactName("bob", "Мама"))
-        assertEquals(2, repo.markCallHistoryRead(42, peerLogin = "bob"))
+        assertEquals(unreadAfterRead, repo.markCallHistoryRead(42, peerLogin = "bob"))
         assertEquals("bob", api.updatedLogin)
         assertEquals("Мама", api.updatedName)
         assertEquals("bob", api.readPeer)
@@ -234,7 +235,7 @@ private class FakeApiClient(
     private val contacts: List<Contact> = emptyList(),
     private val callHistory: CallHistoryPage = CallHistoryPage(emptyList(), 0, 0, 0),
     private val updatedContact: Contact = Contact("bob", "Bob"),
-    private val unreadAfterRead: Int = 0,
+    private val unreadAfterRead: CallUnreadState = CallUnreadState(0, emptyList()),
     private val error: RuntimeException? = null,
     private val beforeError: (() -> Unit)? = null,
 ) : HouseholdApi {
@@ -275,7 +276,7 @@ private class FakeApiClient(
         return callHistory
     }
 
-    override fun markCallsRead(throughId: Long, peerLogin: String?): Int {
+    override fun markCallsRead(throughId: Long, peerLogin: String?): CallUnreadState {
         readPeer = peerLogin
         return unreadAfterRead
     }

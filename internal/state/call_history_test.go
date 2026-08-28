@@ -521,6 +521,36 @@ func TestCallHistoryForPeerFiltersAndMarksOnlyThatPeerRead(t *testing.T) {
 	}
 }
 
+func TestCallHistoryIncludesLatestUnreadMissedForEachContact(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	if _, err := db.AddUser("carol", "Carol"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	recordMissedCallFrom(t, db, "alice-old", "alice", "bob", started)
+	recordMissedCallFrom(t, db, "carol", "carol", "bob", started.Add(time.Hour))
+	recordMissedCallFrom(t, db, "alice-new", "alice", "bob", started.Add(2*time.Hour))
+
+	page, err := db.CallHistory("bob", 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []UnreadMissedContact{
+		{PeerLogin: "alice", StartedAt: started.Add(2 * time.Hour)},
+		{PeerLogin: "carol", StartedAt: started.Add(time.Hour)},
+	}
+	if len(page.LatestUnreadMissed) != len(want) {
+		t.Fatalf("latest unread missed = %+v, want %+v", page.LatestUnreadMissed, want)
+	}
+	for i := range want {
+		if page.LatestUnreadMissed[i].PeerLogin != want[i].PeerLogin ||
+			!page.LatestUnreadMissed[i].StartedAt.Equal(want[i].StartedAt) {
+			t.Fatalf("latest unread missed = %+v, want %+v", page.LatestUnreadMissed, want)
+		}
+	}
+}
+
 func TestRecordBusyCallIsCompleteAndIdempotent(t *testing.T) {
 	db := openCallHistoryTestDB(t)
 	defer db.Close()

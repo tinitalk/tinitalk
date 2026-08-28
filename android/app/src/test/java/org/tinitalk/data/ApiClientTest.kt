@@ -68,7 +68,8 @@ class ApiClientTest {
                   }],
                   "next_before":5,
                   "latest_id":7,
-                  "unread_missed_count":1
+                  "unread_missed_count":1,
+                  "unread_missed":[{"peer_login":"alice","started_at":1787740200}]
                 }
                 """.trimIndent(),
             ),
@@ -85,6 +86,7 @@ class ApiClientTest {
             assertEquals(5, page.nextBefore)
             assertEquals(7, page.latestId)
             assertEquals(1, page.unreadMissedCount)
+            assertEquals(listOf(UnreadMissedContact("alice", 1787740200)), page.unreadMissed)
             val request = server.takeRequest()
             assertEquals("/api/calls?limit=50&before=0&peer=alice", request.path)
             assertEquals("Basic Ym9iOnRva2Vu", request.getHeader("Authorization"))
@@ -96,14 +98,21 @@ class ApiClientTest {
     @Test
     fun marksCallHistoryReadThroughRequestedItem() {
         val server = MockWebServer()
-        server.enqueue(MockResponse().setBody("""{"unread_missed_count":3}"""))
+        server.enqueue(
+            MockResponse().setBody(
+                """{"unread_missed_count":1,"unread_missed":[{"peer_login":"carol","started_at":1787743800}]}""",
+            ),
+        )
         server.start()
         try {
             val unread = UrlConnectionApiClient(server.url("/").toString(), "bob", "token")
                 .markCallsRead(42, peerLogin = "alice")
 
             val request = server.takeRequest()
-            assertEquals(3, unread)
+            assertEquals(
+                CallUnreadState(1, listOf(UnreadMissedContact("carol", 1787743800))),
+                unread,
+            )
             assertEquals("PUT", request.method)
             assertEquals("/api/calls/read", request.path)
             assertEquals("{\"through_id\":42,\"peer_login\":\"alice\"}", request.body.readUtf8())

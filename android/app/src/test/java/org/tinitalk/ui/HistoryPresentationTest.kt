@@ -71,6 +71,25 @@ class HistoryPresentationTest {
     }
 
     @Test
+    fun labelsLatestUnreadMissedCallForContact() {
+        val zone = ZoneId.of("Europe/Moscow")
+        val now = Instant.parse("2026-08-26T19:00:00Z")
+
+        assertEquals(
+            "Пропущенный в 21:30",
+            missedContactSubtitle(Instant.parse("2026-08-26T18:30:00Z").epochSecond, now, zone),
+        )
+        assertEquals(
+            "Пропущенный вчера",
+            missedContactSubtitle(Instant.parse("2026-08-25T18:30:00Z").epochSecond, now, zone),
+        )
+        assertEquals(
+            "Пропущенный 20.08.2026",
+            missedContactSubtitle(Instant.parse("2026-08-20T18:30:00Z").epochSecond, now, zone),
+        )
+    }
+
+    @Test
     fun formatsUnreadBadgeWithoutOverflowingTheTab() {
         assertNull(historyBadgeText(0))
         assertEquals("7", historyBadgeText(7))

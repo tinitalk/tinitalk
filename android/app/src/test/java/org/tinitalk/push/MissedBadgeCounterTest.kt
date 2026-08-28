@@ -49,7 +49,7 @@ class MissedBadgeCounterTest {
         val badges = MissedBadgeUpdater(MissedBadgeCounter()) { task -> pending.addLast(task) }
         val refreshId = badges.beginRefresh()
 
-        assertEquals(3, badges.update(refreshId, count = 3, publish = published::add))
+        assertEquals(3, badges.update(refreshId, count = 3, publish = published::add).count)
         assertTrue(published.isEmpty())
 
         pending.removeFirst().invoke()

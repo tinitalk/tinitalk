@@ -30,6 +30,7 @@ import org.tinitalk.data.AuthStore
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactPage
 import org.tinitalk.data.ContactRepository
+import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.CompatibilityProblem
 import org.tinitalk.data.ServerCompatibilityException
 import org.tinitalk.data.SharedPreferencesKeyValueStore
@@ -45,6 +46,7 @@ import org.tinitalk.ui.isCurrentContactHistoryRequest
 import org.tinitalk.ui.isCurrentSessionRequest
 import org.tinitalk.ui.withContactsPage
 import org.tinitalk.ui.withRefreshedContacts
+import org.tinitalk.ui.withUnreadMissedState
 import org.tinitalk.ui.withPage
 import org.tinitalk.ui.theme.TiniTalkTheme
 import java.net.MalformedURLException
@@ -216,6 +218,7 @@ class MainActivity : ComponentActivity() {
                 historyErrorMessage = null,
                 contactHistory = ContactHistoryState(),
                 unreadMissedCount = 0,
+                latestUnreadMissedByContact = emptyMap(),
                 errorMessage = null,
             )
             refreshPermissions()
@@ -356,8 +359,8 @@ class MainActivity : ComponentActivity() {
                     if (page == null) return@onSuccess
                     runOnUiThread {
                         if (!screenState.signedIn || generation != historyLoadGeneration) return@runOnUiThread
-                        val unreadMissedCount = IncomingCallNotifier(this).updateMissedCount(
-                            page.unreadMissedCount,
+                        applyUnreadMissedState(
+                            CallUnreadState(page.unreadMissedCount, page.unreadMissed),
                             badgeRefreshId,
                         )
                         val combined = if (reset) {
@@ -373,15 +376,16 @@ class MainActivity : ComponentActivity() {
                             historyNextBefore = page.nextBefore,
                             historyLatestId = page.latestId,
                             historyErrorMessage = null,
-                            unreadMissedCount = unreadMissedCount,
                         )
                     }
                     if (reset && page.latestId > 0) {
+                        val readRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
                         runCatching { repository.markCallHistoryRead(page.latestId) }
-                            .onSuccess {
+                            .onSuccess { unread ->
+                                if (unread == null) return@onSuccess
                                 runOnUiThread {
                                     if (generation == historyLoadGeneration) {
-                                        refreshMissedCount()
+                                        applyUnreadMissedState(unread, readRefreshId)
                                     }
                                 }
                             }
@@ -474,13 +478,12 @@ class MainActivity : ComponentActivity() {
                         ) {
                             return@runOnUiThread
                         }
-                        val badgeCount = IncomingCallNotifier(this).updateMissedCount(
-                            page.unreadMissedCount,
+                        applyUnreadMissedState(
+                            CallUnreadState(page.unreadMissedCount, page.unreadMissed),
                             badgeRefreshId,
                         )
                         screenState = screenState.copy(
                             contactHistory = screenState.contactHistory.withPage(login, page, reset),
-                            unreadMissedCount = badgeCount,
                         )
                         if (reset && page.latestId > 0) {
                             markContactHistoryRead(login, page.latestId, generation, requestAuthGeneration)
@@ -533,22 +536,18 @@ class MainActivity : ComponentActivity() {
         ) {
             return
         }
+        val badgeRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
         Thread {
             runCatching { repository.markCallHistoryRead(throughId, peerLogin = login) }
-                .onSuccess { unreadMissedCount ->
-                    if (unreadMissedCount == null) return@onSuccess
+                .onSuccess { unread ->
+                    if (unread == null) return@onSuccess
                     runOnUiThread {
                         if (!screenState.signedIn ||
                             !isCurrentSessionRequest(requestAuthGeneration, authGeneration)
                         ) {
                             return@runOnUiThread
                         }
-                        val badgeRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
-                        val badgeCount = IncomingCallNotifier(this).updateMissedCount(
-                            unreadMissedCount,
-                            badgeRefreshId,
-                        )
-                        screenState = screenState.copy(unreadMissedCount = badgeCount)
+                        applyUnreadMissedState(unread, badgeRefreshId)
                     }
                 }
                 .onFailure {
@@ -637,15 +636,24 @@ class MainActivity : ComponentActivity() {
                     if (page == null) return@onSuccess
                     runOnUiThread {
                         if (!screenState.signedIn || generation != historyLoadGeneration) return@runOnUiThread
-                        val unreadMissedCount = IncomingCallNotifier(this).updateMissedCount(
-                            page.unreadMissedCount,
+                        applyUnreadMissedState(
+                            CallUnreadState(page.unreadMissedCount, page.unreadMissed),
                             badgeRefreshId,
                         )
-                        screenState = screenState.copy(unreadMissedCount = unreadMissedCount)
                     }
                 }
                 .onFailure { if (it is ApiException && it.code == 401) showError(it) }
         }.start()
+    }
+
+    private fun applyUnreadMissedState(unread: CallUnreadState, badgeRefreshId: Long) {
+        val update = IncomingCallNotifier(this).updateMissedCount(
+            unread.unreadMissedCount,
+            badgeRefreshId,
+        )
+        if (update.applied) {
+            screenState = screenState.withUnreadMissedState(unread, update.count)
+        }
     }
 
     override fun onDestroy() {

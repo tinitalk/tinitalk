@@ -118,7 +118,7 @@ class ContactRepository(
         }
     }
 
-    fun markCallHistoryRead(throughId: Long, peerLogin: String? = null): Int? {
+    fun markCallHistoryRead(throughId: Long, peerLogin: String? = null): CallUnreadState? {
         val session = authStore.load() ?: return null
         return try {
             apiFactory(session.url, session.login, session.token).markCallsRead(throughId, peerLogin)

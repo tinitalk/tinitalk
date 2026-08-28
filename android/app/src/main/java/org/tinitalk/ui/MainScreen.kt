@@ -88,6 +88,7 @@ import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.data.CallHistoryItem
+import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactPage
 import org.tinitalk.data.ServerCheckDetails
@@ -156,6 +157,7 @@ data class MainScreenState(
     val historyErrorMessage: String? = null,
     val contactHistory: ContactHistoryState = ContactHistoryState(),
     val unreadMissedCount: Int = 0,
+    val latestUnreadMissedByContact: Map<String, Long> = emptyMap(),
     val permissions: AppPermissionsState = AppPermissionsState(),
     val errorMessage: String? = null,
 )
@@ -174,6 +176,14 @@ fun MainScreenState.withContactsPage(page: ContactPage): MainScreenState = copy(
     contactsLoadingMore = false,
     contactsNextCursor = page.nextCursor,
     contactsLoadMoreErrorMessage = null,
+)
+
+fun MainScreenState.withUnreadMissedState(
+    unread: CallUnreadState,
+    appliedBadgeCount: Int,
+): MainScreenState = copy(
+    unreadMissedCount = appliedBadgeCount,
+    latestUnreadMissedByContact = unread.unreadMissed.associate { it.peerLogin to it.startedAt },
 )
 
 @Composable
@@ -646,6 +656,7 @@ private fun HomeScreen(
                         if (page == 0) {
                             ContactsPage(
                                 contacts = state.contacts,
+                                latestUnreadMissedByContact = state.latestUnreadMissedByContact,
                                 listState = contactsListState,
                                 refreshing = state.contactsRefreshing,
                                 loadingMore = state.contactsLoadingMore,
@@ -746,6 +757,7 @@ private fun HomeScreen(
 @Composable
 private fun ContactsPage(
     contacts: List<Contact>,
+    latestUnreadMissedByContact: Map<String, Long>,
     listState: LazyListState,
     refreshing: Boolean,
     loadingMore: Boolean,
@@ -785,7 +797,7 @@ private fun ContactsPage(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 itemsIndexed(contacts, key = { _, contact -> contact.login }) { index, contact ->
-                    ContactRow(contact, onContactSelected)
+                    ContactRow(contact, latestUnreadMissedByContact[contact.login], onContactSelected)
                     if (shouldLoadMoreContacts(
                             index = index,
                             itemCount = contacts.size,
@@ -890,16 +902,19 @@ private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
 }
 
 @Composable
-private fun ContactRow(contact: Contact, onOpen: (Contact) -> Unit) {
+private fun ContactRow(contact: Contact, latestUnreadMissedAt: Long?, onOpen: (Contact) -> Unit) {
     val avatarColors = listOf(
         Color(0xFF394A67), Color(0xFF514464), Color(0xFF30514D),
         Color(0xFF60443B), Color(0xFF4E5337), Color(0xFF593F4C),
     )
     val name = contactDisplayName(contact.displayName)
+    val missedSubtitle = latestUnreadMissedAt?.let(::missedContactSubtitle)
     val avatarColor = avatarColors[contactColorIndex(contact.login, avatarColors.size)]
     Surface(
         onClick = { onOpen(contact) },
-        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Открыть контакт: $name" },
+        modifier = Modifier.fillMaxWidth().semantics {
+            contentDescription = listOfNotNull("Открыть контакт: $name", missedSubtitle).joinToString(". ")
+        },
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.78f)),
@@ -924,14 +939,26 @@ private fun ContactRow(contact: Contact, onOpen: (Contact) -> Unit) {
                 }
             }
             Spacer(Modifier.width(16.dp))
-            Text(
-                name,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (missedSubtitle != null) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        missedSubtitle,
+                        color = CallRejectRed.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             Spacer(Modifier.width(12.dp))
             Box(
                 modifier = Modifier

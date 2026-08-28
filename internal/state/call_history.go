@@ -42,11 +42,27 @@ type CallHistoryItem struct {
 	DurationSeconds int64
 }
 
+type UnreadMissedContact struct {
+	PeerLogin string
+	StartedAt time.Time
+}
+
+type CallUnreadState struct {
+	Count                 int
+	LatestUnreadByContact []UnreadMissedContact
+}
+
 type CallHistoryPage struct {
-	Items        []CallHistoryItem
-	NextBefore   int64
-	LatestID     int64
-	UnreadMissed int
+	Items              []CallHistoryItem
+	NextBefore         int64
+	LatestID           int64
+	UnreadMissed       int
+	LatestUnreadMissed []UnreadMissedContact
+}
+
+type callHistoryQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
 type callStage uint8
@@ -272,11 +288,12 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 	`, userID, userID, peerID, userID, peerID, peerID, userID).Scan(&page.LatestID); err != nil {
 		return page, err
 	}
-	if err := db.sql.QueryRow(`
-		SELECT COUNT(*) FROM call_history_unread WHERE user_id = ?
-	`, userID).Scan(&page.UnreadMissed); err != nil {
+	unread, err := unreadMissedState(db.sql, userID)
+	if err != nil {
 		return page, err
 	}
+	page.UnreadMissed = unread.Count
+	page.LatestUnreadMissed = unread.LatestUnreadByContact
 
 	rows, err := db.sql.Query(`
 		SELECT h.id, h.call_id, h.caller_id, peer.login,
@@ -347,6 +364,11 @@ func (db *DB) MarkCallHistoryRead(login string, throughID int64) error {
 }
 
 func (db *DB) MarkCallHistoryReadAndCount(login string, throughID int64) (int, error) {
+	state, err := db.markCallHistoryRead(login, "", throughID)
+	return state.Count, err
+}
+
+func (db *DB) MarkCallHistoryReadAndState(login string, throughID int64) (CallUnreadState, error) {
 	return db.markCallHistoryRead(login, "", throughID)
 }
 
@@ -354,28 +376,36 @@ func (db *DB) MarkCallHistoryReadForPeer(login, peer string, throughID int64) (i
 	if peer == "" {
 		return 0, errors.New("history peer is required")
 	}
+	state, err := db.markCallHistoryRead(login, peer, throughID)
+	return state.Count, err
+}
+
+func (db *DB) MarkCallHistoryReadForPeerAndState(login, peer string, throughID int64) (CallUnreadState, error) {
+	if peer == "" {
+		return CallUnreadState{}, errors.New("history peer is required")
+	}
 	return db.markCallHistoryRead(login, peer, throughID)
 }
 
-func (db *DB) markCallHistoryRead(login, peer string, throughID int64) (int, error) {
+func (db *DB) markCallHistoryRead(login, peer string, throughID int64) (CallUnreadState, error) {
 	if throughID < 0 {
-		return 0, errors.New("history marker must be non-negative")
+		return CallUnreadState{}, errors.New("history marker must be non-negative")
 	}
 	tx, err := db.sql.Begin()
 	if err != nil {
-		return 0, err
+		return CallUnreadState{}, err
 	}
 	defer tx.Rollback()
 	var userID, peerID, latestID int64
 	if err := tx.QueryRow("SELECT id FROM users WHERE login = ? AND disabled = 0", login).Scan(&userID); err != nil {
-		return 0, err
+		return CallUnreadState{}, err
 	}
 	if peer != "" {
 		if err := tx.QueryRow("SELECT id FROM users WHERE login = ? AND disabled = 0", peer).Scan(&peerID); err != nil {
-			return 0, err
+			return CallUnreadState{}, err
 		}
 		if peerID == userID {
-			return 0, errors.New("history peer must be another user")
+			return CallUnreadState{}, errors.New("history peer must be another user")
 		}
 	}
 	if err := tx.QueryRow(`
@@ -384,7 +414,7 @@ func (db *DB) markCallHistoryRead(login, peer string, throughID int64) (int, err
 			AND (caller_id = ? OR callee_id = ?)
 			AND (? = 0 OR (caller_id = ? AND callee_id = ?) OR (caller_id = ? AND callee_id = ?))
 	`, userID, userID, peerID, userID, peerID, peerID, userID).Scan(&latestID); err != nil {
-		return 0, err
+		return CallUnreadState{}, err
 	}
 	if throughID > latestID {
 		throughID = latestID
@@ -395,7 +425,7 @@ func (db *DB) markCallHistoryRead(login, peer string, throughID int64) (int, err
 			ON CONFLICT(user_id) DO UPDATE SET
 				through_id = MAX(call_history_reads.through_id, excluded.through_id)
 		`, userID, throughID); err != nil {
-			return 0, err
+			return CallUnreadState{}, err
 		}
 	}
 	if _, err := tx.Exec(`
@@ -405,16 +435,49 @@ func (db *DB) markCallHistoryRead(login, peer string, throughID int64) (int, err
 				SELECT id FROM call_history WHERE caller_id = ? AND callee_id = ?
 			))
 	`, userID, throughID, peerID, peerID, userID); err != nil {
-		return 0, err
+		return CallUnreadState{}, err
 	}
-	var unread int
-	if err := tx.QueryRow("SELECT COUNT(*) FROM call_history_unread WHERE user_id = ?", userID).Scan(&unread); err != nil {
-		return 0, err
+	unread, err := unreadMissedState(tx, userID)
+	if err != nil {
+		return CallUnreadState{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return CallUnreadState{}, err
 	}
 	return unread, nil
+}
+
+func unreadMissedState(queryer callHistoryQueryer, userID int64) (CallUnreadState, error) {
+	var state CallUnreadState
+	if err := queryer.QueryRow(
+		"SELECT COUNT(*) FROM call_history_unread WHERE user_id = ?",
+		userID,
+	).Scan(&state.Count); err != nil {
+		return state, err
+	}
+	rows, err := queryer.Query(`
+		SELECT caller.login, MAX(history.started_at)
+		FROM call_history_unread unread
+		JOIN call_history history ON history.id = unread.call_history_id
+		JOIN users caller ON caller.id = history.caller_id
+		WHERE unread.user_id = ?
+		GROUP BY caller.id, caller.login
+		ORDER BY MAX(history.id) DESC
+	`, userID)
+	if err != nil {
+		return state, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var contact UnreadMissedContact
+		var startedAt int64
+		if err := rows.Scan(&contact.PeerLogin, &startedAt); err != nil {
+			return state, err
+		}
+		contact.StartedAt = time.Unix(startedAt, 0).UTC()
+		state.LatestUnreadByContact = append(state.LatestUnreadByContact, contact)
+	}
+	return state, rows.Err()
 }
 
 func (db *DB) userID(login string) (int64, error) {

@@ -1,8 +1,10 @@
 package org.tinitalk.ui
 
 import org.tinitalk.data.CallHistoryItem
+import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactPage
+import org.tinitalk.data.UnreadMissedContact
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,6 +12,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ContactRefreshStateTest {
+    @Test
+    fun unreadMissedStateReplacesContactSubtitles() {
+        val state = MainScreenState(
+            unreadMissedCount = 3,
+            latestUnreadMissedByContact = mapOf("old" to 10L),
+        )
+
+        val updated = state.withUnreadMissedState(
+            CallUnreadState(
+                unreadMissedCount = 2,
+                unreadMissed = listOf(
+                    UnreadMissedContact("anna", 100L),
+                    UnreadMissedContact("ira", 90L),
+                ),
+            ),
+            appliedBadgeCount = 2,
+        )
+
+        assertEquals(2, updated.unreadMissedCount)
+        assertEquals(mapOf("anna" to 100L, "ira" to 90L), updated.latestUnreadMissedByContact)
+    }
+
     @Test
     fun refreshedContactsReplaceOnlyContactData() {
         val historyItem = CallHistoryItem(

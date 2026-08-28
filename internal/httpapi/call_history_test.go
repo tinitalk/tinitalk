@@ -34,6 +34,10 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 		NextBefore        int64 `json:"next_before"`
 		LatestID          int64 `json:"latest_id"`
 		UnreadMissedCount int   `json:"unread_missed_count"`
+		UnreadMissed      []struct {
+			PeerLogin string `json:"peer_login"`
+			StartedAt int64  `json:"started_at"`
+		} `json:"unread_missed"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
@@ -54,6 +58,9 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 	if page.LatestID != item.ID || page.NextBefore != 0 || page.UnreadMissedCount != 1 {
 		t.Fatalf("history metadata = %+v", page)
 	}
+	if len(page.UnreadMissed) != 1 || page.UnreadMissed[0].PeerLogin != "alice" || page.UnreadMissed[0].StartedAt != started.Unix() {
+		t.Fatalf("unread missed contacts = %+v", page.UnreadMissed)
+	}
 }
 
 func TestCallHistoryReadEndpointClearsMissedCounter(t *testing.T) {
@@ -72,6 +79,10 @@ func TestCallHistoryReadEndpointClearsMissedCounter(t *testing.T) {
 	}
 	var result struct {
 		UnreadMissedCount int `json:"unread_missed_count"`
+		UnreadMissed      []struct {
+			PeerLogin string `json:"peer_login"`
+			StartedAt int64  `json:"started_at"`
+		} `json:"unread_missed"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
@@ -117,12 +128,19 @@ func TestCallHistoryEndpointFiltersAndMarksOneContactRead(t *testing.T) {
 	}
 	var result struct {
 		UnreadMissedCount int `json:"unread_missed_count"`
+		UnreadMissed      []struct {
+			PeerLogin string `json:"peer_login"`
+			StartedAt int64  `json:"started_at"`
+		} `json:"unread_missed"`
 	}
 	if err := json.Unmarshal(read.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
 	if result.UnreadMissedCount != 1 {
 		t.Fatalf("unread after reading alice = %d, want 1", result.UnreadMissedCount)
+	}
+	if len(result.UnreadMissed) != 1 || result.UnreadMissed[0].PeerLogin != "carol" || result.UnreadMissed[0].StartedAt != started.Add(time.Hour).Unix() {
+		t.Fatalf("unread contacts after reading alice = %+v", result.UnreadMissed)
 	}
 
 	unknown := request(t, server, http.MethodGet, "/api/calls?peer=unknown", nil, "bob", tokens["bob"])

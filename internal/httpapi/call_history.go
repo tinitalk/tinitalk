@@ -20,10 +20,21 @@ type callHistoryItem struct {
 }
 
 type callHistoryResponse struct {
-	Items             []callHistoryItem `json:"items"`
-	NextBefore        int64             `json:"next_before"`
-	LatestID          int64             `json:"latest_id"`
-	UnreadMissedCount int               `json:"unread_missed_count"`
+	Items             []callHistoryItem     `json:"items"`
+	NextBefore        int64                 `json:"next_before"`
+	LatestID          int64                 `json:"latest_id"`
+	UnreadMissedCount int                   `json:"unread_missed_count"`
+	UnreadMissed      []unreadMissedContact `json:"unread_missed"`
+}
+
+type unreadMissedContact struct {
+	PeerLogin string `json:"peer_login"`
+	StartedAt int64  `json:"started_at"`
+}
+
+type callUnreadStateResponse struct {
+	UnreadMissedCount int                   `json:"unread_missed_count"`
+	UnreadMissed      []unreadMissedContact `json:"unread_missed"`
 }
 
 func (s *Server) calls(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +73,7 @@ func (s *Server) calls(w http.ResponseWriter, r *http.Request) {
 		NextBefore:        page.NextBefore,
 		LatestID:          page.LatestID,
 		UnreadMissedCount: page.UnreadMissed,
+		UnreadMissed:      unreadMissedJSON(page.LatestUnreadMissed),
 	}
 	for _, item := range page.Items {
 		response.Items = append(response.Items, callHistoryItem{
@@ -92,12 +104,12 @@ func (s *Server) readCalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	login := currentUser(r).Login
-	var unread int
+	var unread state.CallUnreadState
 	var err error
 	if request.PeerLogin == "" {
-		unread, err = s.db.MarkCallHistoryReadAndCount(login, *request.ThroughID)
+		unread, err = s.db.MarkCallHistoryReadAndState(login, *request.ThroughID)
 	} else {
-		unread, err = s.db.MarkCallHistoryReadForPeer(login, request.PeerLogin, *request.ThroughID)
+		unread, err = s.db.MarkCallHistoryReadForPeerAndState(login, request.PeerLogin, *request.ThroughID)
 	}
 	if err != nil {
 		if request.PeerLogin != "" {
@@ -107,7 +119,21 @@ func (s *Server) readCalls(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "call history unavailable", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]int{"unread_missed_count": unread})
+	writeJSON(w, callUnreadStateResponse{
+		UnreadMissedCount: unread.Count,
+		UnreadMissed:      unreadMissedJSON(unread.LatestUnreadByContact),
+	})
+}
+
+func unreadMissedJSON(items []state.UnreadMissedContact) []unreadMissedContact {
+	result := make([]unreadMissedContact, 0, len(items))
+	for _, item := range items {
+		result = append(result, unreadMissedContact{
+			PeerLogin: item.PeerLogin,
+			StartedAt: item.StartedAt.Unix(),
+		})
+	}
+	return result
 }
 
 func queryInt(r *http.Request, name string, fallback int) (int, error) {
