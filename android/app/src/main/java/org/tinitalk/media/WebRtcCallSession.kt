@@ -47,7 +47,8 @@ class WebRtcCallSession private constructor(
     private val audioSource: AudioSource
     private val audioTrack: AudioTrack
     private val sender: RtpSender?
-    private val videoSender: RtpSender?
+    private var videoTransceiver: RtpTransceiver? = null
+    private var videoSender: RtpSender? = null
     private val peerConnection: PeerConnection
     private val restartGate = IceRestartGate(ExecutorTaskScheduler())
     private val statsCollector = CallStatsCollector()
@@ -136,18 +137,6 @@ class WebRtcCallSession private constructor(
                 mediaResources.own { peerConnection.removeTrack(audioSender) }
                 configureAudioSender(audioSender)
             }
-            videoSender = if (videoAllowed) {
-                requireNotNull(
-                    peerConnection.addTransceiver(
-                        MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-                        RtpTransceiver.RtpTransceiverInit(
-                            RtpTransceiver.RtpTransceiverDirection.SEND_RECV,
-                        ),
-                    ),
-                ).sender
-            } else {
-                null
-            }
             applyAudioTrackState()
         } catch (failure: Throwable) {
             cleanupResources(failure)
@@ -157,6 +146,7 @@ class WebRtcCallSession private constructor(
 
     override suspend fun createOffer(): String {
         ensureOpen()
+        prepareVideoOffer()
         val description = createDescription { observer, constraints ->
             peerConnection.createOffer(observer, constraints)
         }.withOpusOptions()
@@ -167,6 +157,7 @@ class WebRtcCallSession private constructor(
     override suspend fun acceptOffer(sdp: String): String {
         ensureOpen()
         setRemoteDescription(SessionDescription(SessionDescription.Type.OFFER, sdp))
+        prepareVideoAnswer()
         val description = createDescription { observer, constraints ->
             peerConnection.createAnswer(observer, constraints)
         }.withOpusOptions()
@@ -345,6 +336,36 @@ class WebRtcCallSession private constructor(
 
     private fun addRemoteIceCandidate(candidate: IceCandidateData) {
         check(peerConnection.addIceCandidate(candidate.toWebRtc())) { "failed to add remote ICE candidate" }
+    }
+
+    private fun prepareVideoOffer() {
+        if (!videoAllowed || videoTransceiver != null) return
+        val transceiver = requireNotNull(
+            peerConnection.addTransceiver(
+                MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                RtpTransceiver.RtpTransceiverInit(
+                    RtpTransceiver.RtpTransceiverDirection.SEND_RECV,
+                ),
+            ),
+        )
+        videoTransceiver = transceiver
+        videoSender = transceiver.sender
+    }
+
+    private fun prepareVideoAnswer() {
+        if (!videoAllowed || videoTransceiver != null) return
+        val transceiver = requireNotNull(
+            peerConnection.transceivers.singleOrNull {
+                it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO &&
+                    it.mid != null &&
+                    !it.isStopped
+            },
+        ) { "negotiated video transceiver is missing" }
+        check(transceiver.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_RECV)) {
+            "failed to enable outgoing video on the negotiated transceiver"
+        }
+        videoTransceiver = transceiver
+        videoSender = transceiver.sender
     }
 
     private suspend fun createDescription(

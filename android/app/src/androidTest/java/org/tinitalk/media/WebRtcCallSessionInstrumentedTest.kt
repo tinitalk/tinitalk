@@ -19,12 +19,12 @@ class WebRtcCallSessionInstrumentedTest {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val session = WebRtcCallSession.create(context, videoAllowed = false)
 
-        runBlockingLite {
-            try {
-                val offer = session.createOffer()
+        try {
+            val offer = runBlockingLite { session.createOffer() }
 
-                assertEquals(0, videoMediaSectionCount(offer))
-            } finally {
+            assertEquals(0, videoMediaSectionCount(offer))
+        } finally {
+            runBlockingLite {
                 session.close()
                 session.close()
             }
@@ -36,16 +36,37 @@ class WebRtcCallSessionInstrumentedTest {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val session = WebRtcCallSession.create(context, videoAllowed = true)
 
-        runBlockingLite {
-            try {
-                val offer = session.createOffer()
+        try {
+            val offer = runBlockingLite { session.createOffer() }
 
-                assertEquals(1, videoMediaSectionCount(offer))
-                assertTrue(videoMediaSection(offer).lineSequence().any { it == "a=sendrecv" })
-                assertTrue(encodedOfferSize(offer) <= SignalEvent.MAX_EVENT_BYTES)
-            } finally {
+            assertEquals(1, videoMediaSectionCount(offer))
+            assertTrue(videoMediaSection(offer).lineSequence().any { it == "a=sendrecv" })
+            assertTrue(encodedOfferSize(offer) <= SignalEvent.MAX_EVENT_BYTES)
+        } finally {
+            runBlockingLite {
                 session.close()
                 session.close()
+            }
+        }
+    }
+
+    @Test
+    fun answerNegotiatesBidirectionalVideoWithoutOpeningCamera() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val offerer = WebRtcCallSession.create(context, videoAllowed = true)
+        val answerer = WebRtcCallSession.create(context, videoAllowed = true)
+
+        try {
+            val offer = runBlockingLite { offerer.createOffer() }
+            val answer = runBlockingLite { answerer.acceptOffer(offer) }
+            runBlockingLite { offerer.setAnswer(answer) }
+
+            assertEquals(1, videoMediaSectionCount(answer))
+            assertTrue(videoMediaSection(answer).lineSequence().any { it == "a=sendrecv" })
+        } finally {
+            runBlockingLite {
+                answerer.close()
+                offerer.close()
             }
         }
     }
@@ -64,19 +85,19 @@ class WebRtcCallSessionInstrumentedTest {
         payload = JsonObject().apply { addProperty("sdp", sdp) },
     ).encode().toByteArray(Charsets.UTF_8).size
 
-    private fun runBlockingLite(block: suspend () -> Unit) {
+    private fun <T> runBlockingLite(block: suspend () -> T): T {
         val done = CountDownLatch(1)
-        var failure: Throwable? = null
+        var outcome: Result<T>? = null
         block.startCoroutine(
-            object : Continuation<Unit> {
+            object : Continuation<T> {
                 override val context = EmptyCoroutineContext
-                override fun resumeWith(result: Result<Unit>) {
-                    failure = result.exceptionOrNull()
+                override fun resumeWith(result: Result<T>) {
+                    outcome = result
                     done.countDown()
                 }
             },
         )
         check(done.await(10, TimeUnit.SECONDS)) { "Timed out waiting for media session" }
-        failure?.let { throw it }
+        return requireNotNull(outcome).getOrThrow()
     }
 }
