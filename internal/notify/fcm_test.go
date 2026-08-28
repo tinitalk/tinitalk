@@ -57,14 +57,49 @@ func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
 }
 
 func TestNotifierSendsCallCancellation(t *testing.T) {
+	for _, eventType := range []string{"call.cancel", "call.expire"} {
+		t.Run(eventType, func(t *testing.T) {
+			store := &fakeTokenStore{tokens: []DeviceToken{{Token: "token-1"}}}
+			sender := &fakeSender{}
+			notifier := NewFCMNotifier(store, sender, "project-1")
+
+			notifier.CancelCall("bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1", Type: eventType}})
+
+			if sender.last.Message.Data["type"] != "call_cancel" || sender.last.Message.Data["call_id"] != "call-1" {
+				t.Fatalf("data = %+v", sender.last.Message.Data)
+			}
+			if sender.last.Message.Android.TTL != "2419200s" {
+				t.Fatalf("missed call TTL = %q, want 2419200s", sender.last.Message.Android.TTL)
+			}
+		})
+	}
+}
+
+func TestNotifierKeepsBusyHistoryRefreshLongLived(t *testing.T) {
 	store := &fakeTokenStore{tokens: []DeviceToken{{Token: "token-1"}}}
 	sender := &fakeSender{}
 	notifier := NewFCMNotifier(store, sender, "project-1")
 
-	notifier.CancelCall("bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1"}})
+	notifier.CancelCall("bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1", Type: "call.busy"}})
 
-	if sender.last.Message.Data["type"] != "call_cancel" || sender.last.Message.Data["call_id"] != "call-1" {
-		t.Fatalf("data = %+v", sender.last.Message.Data)
+	if sender.last.Message.Android.TTL != "2419200s" {
+		t.Fatalf("busy history refresh TTL = %q, want 2419200s", sender.last.Message.Android.TTL)
+	}
+}
+
+func TestNotifierKeepsHandledCallCancellationShortLived(t *testing.T) {
+	for _, eventType := range []string{"call.accept", "call.reject"} {
+		t.Run(eventType, func(t *testing.T) {
+			store := &fakeTokenStore{tokens: []DeviceToken{{Token: "token-1"}}}
+			sender := &fakeSender{}
+			notifier := NewFCMNotifier(store, sender, "project-1")
+
+			notifier.CancelCall("bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1", Type: eventType}})
+
+			if sender.last.Message.Android.TTL != "30s" {
+				t.Fatalf("handled call TTL = %q, want 30s", sender.last.Message.Android.TTL)
+			}
+		})
 	}
 }
 

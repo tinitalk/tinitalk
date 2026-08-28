@@ -16,6 +16,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class IncomingCallNotifierTest {
+    @Suppress("DEPRECATION")
     @Test
     fun answerActionOpensCallScreenDirectly() {
         val context = RuntimeEnvironment.getApplication()

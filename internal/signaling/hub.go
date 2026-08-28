@@ -380,6 +380,10 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 				return err
 			}
 		}
+		busy := DeliveredEvent{Event: event}
+		busy.Type = "call.busy"
+		busy.SentAt = h.now().UnixMilli()
+		h.enqueueNotification(notification{callee: payload.CalleeID, event: busy, cancel: true})
 		return ErrCalleeBusy
 	}
 	now := h.now()

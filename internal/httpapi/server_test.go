@@ -73,8 +73,8 @@ func TestHealthIdentifiesTiniTalkVersionAndCommit(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil {
 		t.Fatal(err)
 	}
-	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 2 || health.Commit != "01234567" {
-		t.Fatalf("health = %+v, want tinitalk, ok, API version 2, commit 01234567", health)
+	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 3 || health.Commit != "01234567" {
+		t.Fatalf("health = %+v, want tinitalk, ok, API version 3, commit 01234567", health)
 	}
 }
 

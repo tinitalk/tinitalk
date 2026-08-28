@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
@@ -44,8 +45,8 @@ func TestOpenMigratesVersionOneDatabaseWithoutLosingUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.UserVersion != 3 {
-		t.Fatalf("schema version = %d, want 3", check.UserVersion)
+	if check.UserVersion != 5 {
+		t.Fatalf("schema version = %d, want 5", check.UserVersion)
 	}
 	users, err := db.ListUsers()
 	if err != nil {
@@ -57,6 +58,164 @@ func TestOpenMigratesVersionOneDatabaseWithoutLosingUsers(t *testing.T) {
 	var historyRows int
 	if err := db.sql.QueryRow("SELECT COUNT(*) FROM call_history").Scan(&historyRows); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVersionFourMigrationBackfillsEveryPassiveMissedCall(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range []struct{ login, name string }{{"alice", "Alice"}, {"bob", "Bob"}} {
+		if _, err := db.AddUser(user.login, user.name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	outcomes := []CallOutcome{
+		CallOutcomeUnreachable,
+		CallOutcomeUnanswered,
+		CallOutcomeCancelledBeforeRinging,
+		CallOutcomeCancelledAfterRinging,
+		CallOutcomeInterruptedBeforeAnswer,
+	}
+	for i, outcome := range outcomes {
+		callID := fmt.Sprintf("missed-%d", i)
+		if err := db.StartCall(callID, "alice", "bob", started.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.FinishCall(callID, outcome, started.Add(time.Duration(i+1)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.sql.Exec(`
+		DELETE FROM call_history_unread
+		WHERE call_history_id IN (
+			SELECT id FROM call_history WHERE outcome IN (1, 5, 9)
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec("PRAGMA user_version = 3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var unreadRows int
+	if err := db.sql.QueryRow("SELECT COUNT(*) FROM call_history_unread").Scan(&unreadRows); err != nil {
+		t.Fatal(err)
+	}
+	if unreadRows != len(outcomes) {
+		t.Fatalf("migrated unread rows = %d, want %d", unreadRows, len(outcomes))
+	}
+}
+
+func TestVersionFourMigrationDoesNotRestorePeerReadMissedCall(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range []struct{ login, name string }{{"alice", "Alice"}, {"bob", "Bob"}} {
+		if _, err := db.AddUser(user.login, user.name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	if err := db.StartCall("read-missed", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCallRinging("read-missed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("read-missed", CallOutcomeUnanswered, started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MarkCallHistoryReadForPeer("bob", "alice", math.MaxInt64); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec("PRAGMA user_version = 3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	page, err := db.CallHistory("bob", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.UnreadMissed != 0 {
+		t.Fatalf("unread missed after migration = %d, want 0", page.UnreadMissed)
+	}
+}
+
+func TestVersionFiveMigrationBackfillsUnreadBusyCallsOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range []struct{ login, name string }{{"alice", "Alice"}, {"bob", "Bob"}} {
+		if _, err := db.AddUser(user.login, user.name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	if err := db.RecordBusyCall("read-busy", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCallHistoryRead("bob", math.MaxInt64); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StartCall("rejected", "alice", "bob", started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("rejected", CallOutcomeRejected, started.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordBusyCall("unread-busy", "alice", "bob", started.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec("DELETE FROM call_history_unread"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec("PRAGMA user_version = 4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var unreadRows int
+	var unreadOutcome CallOutcome
+	if err := db.sql.QueryRow(`
+		SELECT COUNT(*), COALESCE(MAX(history.outcome), 0)
+		FROM call_history_unread unread
+		JOIN call_history history ON history.id = unread.call_history_id
+	`).Scan(&unreadRows, &unreadOutcome); err != nil {
+		t.Fatal(err)
+	}
+	if unreadRows != 1 || unreadOutcome != CallOutcomeBusy {
+		t.Fatalf("migrated unread = %d outcome %d, want one busy", unreadRows, unreadOutcome)
 	}
 }
 
@@ -135,6 +294,52 @@ func TestUnreadMissedRowsAreRemovedAfterHistoryIsRead(t *testing.T) {
 	}
 }
 
+func TestEveryUnansweredIncomingCallIsUnreadMissed(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	outcomes := []CallOutcome{
+		CallOutcomeUnreachable,
+		CallOutcomeUnanswered,
+		CallOutcomeBusy,
+		CallOutcomeCancelledBeforeRinging,
+		CallOutcomeCancelledAfterRinging,
+		CallOutcomeInterruptedBeforeAnswer,
+	}
+	for i, outcome := range outcomes {
+		callID := fmt.Sprintf("passive-%d", i)
+		if err := db.StartCall(callID, "alice", "bob", started.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.FinishCall(callID, outcome, started.Add(time.Duration(i+1)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.StartCall("rejected", "alice", "bob", started.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("rejected", CallOutcomeRejected, started.Add(11*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StartCall("connection-failed", "alice", "bob", started.Add(12*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCallAccepted("connection-failed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("connection-failed", CallOutcomeConnectionFailed, started.Add(13*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := db.CallHistory("bob", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.UnreadMissed != len(outcomes) {
+		t.Fatalf("unread missed = %d, want %d", page.UnreadMissed, len(outcomes))
+	}
+}
+
 func TestCallHistoryPagesNewestFirstAndCountsMissed(t *testing.T) {
 	db := openCallHistoryTestDB(t)
 	defer db.Close()
@@ -193,6 +398,70 @@ func TestCallHistoryPagesNewestFirstAndCountsMissed(t *testing.T) {
 	}
 	if page.NextBefore != 0 || page.UnreadMissed != 1 {
 		t.Fatalf("second page metadata = %+v", page)
+	}
+}
+
+func TestCallHistoryReportsWhetherCalleeWasReached(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+
+	if err := db.StartCall("offline", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("offline", CallOutcomeUnreachable, started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StartCall("rang", "alice", "bob", started.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCallRinging("rang"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("rang", CallOutcomeUnanswered, started.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordBusyCall("busy", "alice", "bob", started.Add(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StartCall("rejected", "alice", "bob", started.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("rejected", CallOutcomeRejected, started.Add(6*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StartCall("accepted", "alice", "bob", started.Add(7*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCallAccepted("accepted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("accepted", CallOutcomeConnectionFailed, started.Add(8*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := db.CallHistory("alice", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reachedByCall := make(map[string]bool, len(page.Items))
+	for _, item := range page.Items {
+		reachedByCall[item.CallID] = item.Reached
+	}
+	want := map[string]bool{
+		"offline":  false,
+		"rang":     true,
+		"busy":     true,
+		"rejected": true,
+		"accepted": true,
+	}
+	if len(reachedByCall) != len(want) {
+		t.Fatalf("reached by call = %v, want %v", reachedByCall, want)
+	}
+	for callID, wantReached := range want {
+		if got, ok := reachedByCall[callID]; !ok || got != wantReached {
+			t.Fatalf("call %q reached = %v (present %v), want %v", callID, got, ok, wantReached)
+		}
 	}
 }
 
@@ -270,6 +539,13 @@ func TestRecordBusyCallIsCompleteAndIdempotent(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].Outcome != CallOutcomeBusy {
 		t.Fatalf("busy history = %+v", page.Items)
 	}
+	calleePage, err := db.CallHistory("bob", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calleePage.UnreadMissed != 1 {
+		t.Fatalf("callee unread missed = %d, want 1", calleePage.UnreadMissed)
+	}
 }
 
 func TestRecoverCallHistoryFinalizesUnfinishedCalls(t *testing.T) {
@@ -318,6 +594,41 @@ func TestRecoverCallHistoryFinalizesUnfinishedCalls(t *testing.T) {
 	}
 	if items["interrupted"].Outcome != CallOutcomeInterrupted || items["interrupted"].DurationSeconds != 120 {
 		t.Fatalf("interrupted = %+v", items["interrupted"])
+	}
+}
+
+func TestRecoveryMarksAnEarlierActiveCallUnreadAfterLaterHistoryWasRead(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	if err := db.StartCall("still-ringing", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StartCall("later-completed", "alice", "bob", started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCallAccepted("later-completed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCallConnected("later-completed", started.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("later-completed", CallOutcomeCompleted, started.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCallHistoryRead("bob", math.MaxInt64); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.RecoverCallHistory(started.Add(4 * time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	page, err := db.CallHistory("bob", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.UnreadMissed != 1 {
+		t.Fatalf("unread missed after recovery = %d, want 1", page.UnreadMissed)
 	}
 }
 

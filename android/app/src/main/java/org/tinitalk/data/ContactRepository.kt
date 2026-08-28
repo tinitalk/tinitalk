@@ -1,7 +1,7 @@
 package org.tinitalk.data
 
 private const val TINITALK_SERVICE = "tinitalk"
-private const val SUPPORTED_API_VERSION = 2
+private const val SUPPORTED_API_VERSION = 3
 
 enum class CompatibilityProblem {
     WrongServer,

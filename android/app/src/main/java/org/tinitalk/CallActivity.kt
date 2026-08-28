@@ -38,7 +38,6 @@ import org.tinitalk.call.outgoingVisibleState
 import org.tinitalk.call.shouldDismissIncomingOverlay
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
-import org.tinitalk.push.IncomingRingingAcknowledger
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingAnswerClaim
 import org.tinitalk.telecom.IncomingCallController
@@ -59,7 +58,6 @@ class CallActivity : ComponentActivity() {
     private lateinit var proximityController: ProximityController
     private var activityStarted = false
     private val actionGate = CallScreenActionGate()
-    private lateinit var ringingAcknowledger: IncomingRingingAcknowledger
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
     private var incomingInvite by mutableStateOf<IncomingInvite?>(null)
     private var outgoingLogin by mutableStateOf<String?>(null)
@@ -69,9 +67,6 @@ class CallActivity : ComponentActivity() {
         runOnUiThread {
             actionGate.onCallState(state)
             callState = state
-            if (incomingInvite?.callId == state.callId && state.phase != CallPhase.Ringing) {
-                ringingAcknowledger.stop()
-            }
             updateProximity()
         }
     }
@@ -92,7 +87,6 @@ class CallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         proximityController = ProximityController(this)
-        ringingAcknowledger = IncomingRingingAcknowledger(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -219,7 +213,6 @@ class CallActivity : ComponentActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(inviteMonitor)
-        ringingAcknowledger.close()
         proximityController.close()
         CallUiStateStore.removeObserver(callObserver)
         super.onDestroy()
@@ -324,7 +317,6 @@ class CallActivity : ComponentActivity() {
         if (!isCurrentIncoming(invite)) return
         if (shouldDismissIncomingOverlay(activityStarted, visibleCallState())) {
             IncomingCallNotifier(this).fullScreenShown(invite)
-            ringingAcknowledger.acknowledge(invite)
         }
     }
 

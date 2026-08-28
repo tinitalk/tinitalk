@@ -27,6 +27,7 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 			PeerName        string `json:"peer_name"`
 			Direction       string `json:"direction"`
 			Outcome         string `json:"outcome"`
+			Reached         bool   `json:"reached"`
 			StartedAt       int64  `json:"started_at"`
 			DurationSeconds int64  `json:"duration_seconds"`
 		} `json:"items"`
@@ -43,6 +44,9 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 	item := page.Items[0]
 	if item.PeerLogin != "alice" || item.PeerName != "Alice" || item.Direction != "incoming" || item.Outcome != "cancelled_after_ringing" {
 		t.Fatalf("history item = %+v", item)
+	}
+	if !item.Reached {
+		t.Fatalf("history reached = false, want true")
 	}
 	if item.ID == 0 || item.StartedAt != 1787740200 || item.DurationSeconds != 0 {
 		t.Fatalf("history timing = %+v", item)

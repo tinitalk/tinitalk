@@ -4,41 +4,59 @@ import org.tinitalk.data.CallHistoryItem
 import java.time.Instant
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HistoryPresentationTest {
     @Test
     fun usesClearRussianStatusForDirectionAndOutcome() {
         val outgoing = mapOf(
-            "unreachable" to "Не удалось дозвониться",
-            "unanswered" to "Не ответили",
-            "busy" to "Абонент занят",
+            "busy" to "Занято",
             "rejected" to "Вызов отклонён",
-            "cancelled_before_ringing" to "Вызов отменён",
-            "cancelled_after_ringing" to "Вызов отменён",
             "connection_failed" to "Связь не установлена",
-            "interrupted_before_answer" to "Не удалось дозвониться",
         )
         val incoming = mapOf(
-            "unreachable" to "Вызов не состоялся",
-            "unanswered" to "Пропущенный вызов",
-            "busy" to "Вы были заняты",
+            "busy" to "Пропущенный (вы были заняты)",
             "rejected" to "Вы отклонили вызов",
-            "cancelled_before_ringing" to "Вызов не состоялся",
-            "cancelled_after_ringing" to "Пропущенный вызов",
             "connection_failed" to "Связь не установлена",
-            "interrupted_before_answer" to "Вызов не состоялся",
         )
 
         outgoing.forEach { (outcome, expected) ->
-            assertEquals(expected, historyStatus(item("outgoing", outcome)))
+            assertEquals(expected, historyStatus(item("outgoing", outcome, reached = true)))
         }
         incoming.forEach { (outcome, expected) ->
-            assertEquals(expected, historyStatus(item("incoming", outcome)))
+            assertEquals(expected, historyStatus(item("incoming", outcome, reached = true)))
         }
-        assertEquals("Разговор · 1:05", historyStatus(item("outgoing", "completed", 65)))
-        assertEquals("Связь прервалась · 1:01:01", historyStatus(item("incoming", "interrupted", 3661)))
+        assertEquals("Разговор · 1:05", historyStatus(item("outgoing", "completed", duration = 65)))
+        assertEquals("Связь прервалась · 1:01:01", historyStatus(item("incoming", "interrupted", duration = 3661)))
+    }
+
+    @Test
+    fun labelsEveryPassivePreAnswerOutcomeByDirectionAndReachability() {
+        listOf(
+            "unreachable",
+            "unanswered",
+            "cancelled_before_ringing",
+            "cancelled_after_ringing",
+            "interrupted_before_answer",
+        ).forEach { outcome ->
+            assertEquals("Пропущенный", historyStatus(item("incoming", outcome, reached = true)))
+            assertEquals("Пропущенный (не в сети)", historyStatus(item("incoming", outcome, reached = false)))
+            assertEquals("Неотвеченный", historyStatus(item("outgoing", outcome, reached = true)))
+            assertEquals("Неотвеченный (не в сети)", historyStatus(item("outgoing", outcome, reached = false)))
+        }
+    }
+
+    @Test
+    fun incomingNoAnswerAndBusyOutcomesAreMarkedAsMissed() {
+        assertTrue(isMissedIncoming(item("incoming", "unanswered", reached = true)))
+        assertTrue(isMissedIncoming(item("incoming", "unreachable", reached = false)))
+        assertTrue(isMissedIncoming(item("incoming", "busy", reached = true)))
+        assertFalse(isMissedIncoming(item("incoming", "rejected", reached = true)))
+        assertFalse(isMissedIncoming(item("incoming", "connection_failed", reached = true)))
+        assertFalse(isMissedIncoming(item("outgoing", "unanswered", reached = true)))
     }
 
     @Test
@@ -60,6 +78,20 @@ class HistoryPresentationTest {
         assertEquals("99+", historyBadgeText(100))
     }
 
-    private fun item(direction: String, outcome: String, duration: Long = 0) =
-        CallHistoryItem(1, "alice", "Alice", direction, outcome, 1787740200, duration)
+    @Test
+    fun describesMissedCountForHistoryTab() {
+        assertEquals("История", historyTabDescription(0))
+        assertEquals("История, 1 пропущенный вызов", historyTabDescription(1))
+        assertEquals("История, 2 пропущенных вызова", historyTabDescription(2))
+        assertEquals("История, 5 пропущенных вызовов", historyTabDescription(5))
+        assertEquals("История, 11 пропущенных вызовов", historyTabDescription(11))
+        assertEquals("История, 21 пропущенный вызов", historyTabDescription(21))
+    }
+
+    private fun item(
+        direction: String,
+        outcome: String,
+        reached: Boolean = true,
+        duration: Long = 0,
+    ) = CallHistoryItem(1, "alice", "Alice", direction, outcome, reached, 1787740200, duration)
 }

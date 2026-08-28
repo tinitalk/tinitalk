@@ -87,13 +87,18 @@ class CallCoordinator(
         signal.send(event(callId, "call.resume", payload))
     }
 
-    fun restoreIncoming(callId: String, lastSeq: Long = 0) {
+    fun restoreIncoming(
+        callId: String,
+        lastSeq: Long = 0,
+        acknowledgeRinging: Boolean = true,
+        onRingingSettled: (() -> Unit)? = null,
+    ) {
         if (machine.snapshot().phase == CallPhase.Idle) {
             machine.transition(CallPhase.Ringing, callId)
         }
         machine.recordSeq(lastSeq)
-        if (machine.snapshot().phase == CallPhase.Ringing) {
-            signal.send(event(callId, "call.ringing", JsonObject()))
+        if (acknowledgeRinging && machine.snapshot().phase == CallPhase.Ringing) {
+            signal.send(event(callId, "call.ringing", JsonObject()), onRingingSettled)
         }
     }
 

@@ -108,8 +108,7 @@ fun HistoryScreen(
 internal fun HistoryRow(item: CallHistoryItem, showPeer: Boolean = true) {
     val name = contactDisplayName(item.peerName)
     val direction = if (item.direction == "incoming") "Входящий" else "Исходящий"
-    val missed = item.direction == "incoming" &&
-        (item.outcome == "unanswered" || item.outcome == "cancelled_after_ringing")
+    val missed = isMissedIncoming(item)
     val successful = item.outcome == "completed"
     val statusColor = when {
         missed -> CallRejectRed

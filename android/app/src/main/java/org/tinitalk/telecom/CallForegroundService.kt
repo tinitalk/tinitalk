@@ -350,7 +350,7 @@ class CallForegroundService : Service() {
                     CallPhase.Ringing,
                 )
                 CallUiStateStore.setAudioEndpoints(invite.callId, CallAudioState.snapshot())
-                call.restoreIncoming(invite.callId, invite.lastSeq)
+                call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
                 if (call.snapshot().phase == CallPhase.Active) media?.setActive(true)
@@ -367,7 +367,7 @@ class CallForegroundService : Service() {
                     CallDirection.Incoming,
                     CallPhase.Ringing,
                 )
-                call.restoreIncoming(invite.callId, invite.lastSeq)
+                call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.reject(terminalSettlement())
                 endReason = CallEndReason.Rejected
@@ -377,7 +377,7 @@ class CallForegroundService : Service() {
                 if (invite != null) {
                     if (telecomCallId != null && telecomCallId != invite.callId) return
                     telecomCallId = invite.callId
-                    call.restoreIncoming(invite.callId, invite.lastSeq)
+                    call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
                 }
                 if (invite != null && call.snapshot().callId != invite.callId) return
                 if (call.snapshot().phase == CallPhase.Active) {

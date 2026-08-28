@@ -91,6 +91,33 @@ class IncomingPushPayloadTest {
     }
 
     @Test
+    fun offlineCancellationStillRequestsMissedCountRefresh() {
+        assertTrue(CallCancellation("call-1", "call.cancel").shouldRefreshMissedCount())
+        assertTrue(CallCancellation("call-1", "call.expire").shouldRefreshMissedCount())
+        assertTrue(CallCancellation("call-1", "call.busy").shouldRefreshMissedCount())
+        assertFalse(CallCancellation("call-1", "call.accept").shouldRefreshMissedCount())
+        assertFalse(CallCancellation("call-1", "call.reject").shouldRefreshMissedCount())
+    }
+
+    @Test
+    fun delayedCancellationDoesNotUseExpiredInviteAsMissedFallback() {
+        val cancellation = CallCancellation("call-1", "call.cancel")
+        val invite = IncomingInvite(
+            callId = "call-1",
+            caller = "Alice",
+            expiresAt = Instant.parse("2026-08-26T10:00:30Z"),
+        )
+
+        assertNull(
+            cancellation.missedFallback(
+                invite,
+                CallSnapshot(CallPhase.Ringing, "call-1"),
+                now = Instant.parse("2026-08-26T10:01:00Z"),
+            ),
+        )
+    }
+
+    @Test
     fun terminalBeforeInviteSuppressesOnlyMatchingCallUntilExpiry() {
         val remembered = TerminalCallTombstones.remember(emptySet(), "call-1", nowMillis = 1_000)
 
@@ -106,10 +133,11 @@ class IncomingPushPayloadTest {
 
         IncomingCallForegroundPresentation(
             enterForeground = { steps += "foreground" },
+            acknowledgeRinging = { steps += "ringing" },
             openFullScreen = { steps += "full_screen" },
         ).present(invite)
 
-        assertEquals(listOf("foreground", "full_screen"), steps)
+        assertEquals(listOf("foreground", "ringing", "full_screen"), steps)
     }
 
     @Test

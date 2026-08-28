@@ -7,6 +7,7 @@ import android.app.Person
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
@@ -24,6 +25,7 @@ import org.tinitalk.call.CallSnapshot
 import org.tinitalk.telecom.IncomingCallController
 import java.time.Instant
 import java.time.Duration
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.Executors
 
 data class IncomingInvite(
@@ -55,25 +57,49 @@ internal class MissedBadgeCounter {
         nextRefreshId++
         count = 0
     }
+
+    @Synchronized
+    fun snapshot(): Int = count
 }
 
 internal class MissedBadgeUpdater(
     private val counter: MissedBadgeCounter,
     private val execute: ((() -> Unit) -> Unit),
 ) {
+    private val observers = CopyOnWriteArraySet<(Int) -> Unit>()
+
     fun beginRefresh(): Long = counter.beginRefresh()
+
+    @Synchronized
+    fun observe(observer: (Int) -> Unit) {
+        observers += observer
+        observer(counter.snapshot())
+    }
+
+    @Synchronized
+    fun removeObserver(observer: (Int) -> Unit) {
+        observers -= observer
+    }
 
     @Synchronized
     fun update(refreshId: Long, count: Int, publish: (Int) -> Unit): Int {
         val update = counter.update(refreshId, count)
-        if (update.applied) execute { publish(update.count) }
+        if (update.applied) {
+            notifyObservers(update.count)
+            execute { publish(update.count) }
+        }
         return update.count
     }
 
     @Synchronized
     fun clear(publish: (Int) -> Unit) {
         counter.reset()
+        notifyObservers(0)
         execute { publish(0) }
+    }
+
+    private fun notifyObservers(count: Int) {
+        observers.forEach { observer -> runCatching { observer(count) } }
     }
 }
 
@@ -86,10 +112,12 @@ private val MissedBadges = MissedBadgeUpdater(MissedBadgeCounter()) { task ->
 
 internal class IncomingCallForegroundPresentation(
     private val enterForeground: (IncomingInvite) -> Unit,
+    private val acknowledgeRinging: (IncomingInvite) -> Unit,
     private val openFullScreen: (IncomingInvite) -> Unit,
 ) {
     fun present(invite: IncomingInvite) {
         enterForeground(invite)
+        acknowledgeRinging(invite)
         openFullScreen(invite)
     }
 }
@@ -229,19 +257,26 @@ class IncomingCallNotifier(private val context: Context) {
             )
         } else {
             builder
-                .addAction(Notification.Action.Builder(R.drawable.ic_call, "Отклонить", reject).build())
-                .addAction(Notification.Action.Builder(R.drawable.ic_call, "Ответить", answer).build())
-        }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            builder
-                .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
-                .setVibrate(longArrayOf(0, 500, 500, 500))
+                .addAction(
+                    Notification.Action.Builder(
+                        Icon.createWithResource(context, R.drawable.ic_call),
+                        "Отклонить",
+                        reject,
+                    ).build(),
+                )
+                .addAction(
+                    Notification.Action.Builder(
+                        Icon.createWithResource(context, R.drawable.ic_call),
+                        "Ответить",
+                        answer,
+                    ).build(),
+                )
         }
         return builder.build()
     }
 
-    fun showMissed(invite: IncomingInvite) {
-        publishMissedCount(1, invite)
+    fun showMissed(invite: IncomingInvite? = null) {
+        updateMissedCount(1, beginMissedCountRefresh(), invite)
     }
 
     fun showMissedIfAbsent(invite: IncomingInvite) {
@@ -250,6 +285,10 @@ class IncomingCallNotifier(private val context: Context) {
     }
 
     fun beginMissedCountRefresh(): Long = MissedBadges.beginRefresh()
+
+    fun observeMissedCount(observer: (Int) -> Unit) = MissedBadges.observe(observer)
+
+    fun removeMissedCountObserver(observer: (Int) -> Unit) = MissedBadges.removeObserver(observer)
 
     fun updateMissedCount(count: Int, refreshId: Long, latest: IncomingInvite? = null): Int =
         MissedBadges.update(refreshId, count) { publishMissedCount(it, latest) }
@@ -299,7 +338,13 @@ class IncomingCallNotifier(private val context: Context) {
                 CallActivity.redialIntent(context, login, latest.caller.ifBlank { login }),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            builder.addAction(Notification.Action.Builder(R.drawable.ic_call, "Перезвонить", redial).build())
+            builder.addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(context, R.drawable.ic_call),
+                    "Перезвонить",
+                    redial,
+                ).build(),
+            )
         }
         manager.notify(MissedNotificationId, builder.build())
     }
@@ -414,6 +459,17 @@ data class CallCancellation(val callId: String, val eventType: String) {
         if (pendingCallId != callId || (eventType != "call.cancel" && eventType != "call.expire")) return false
         return snapshot.callId != callId || snapshot.phase == CallPhase.Idle || snapshot.phase == CallPhase.Ringing
     }
+
+    fun missedFallback(
+        pending: IncomingInvite?,
+        snapshot: CallSnapshot,
+        now: Instant = Instant.now(),
+    ): IncomingInvite? = pending?.takeIf {
+        it.expiresAt.isAfter(now) && shouldShowMissed(it.callId, snapshot)
+    }
+
+    fun shouldRefreshMissedCount(): Boolean =
+        eventType == "call.cancel" || eventType == "call.expire" || eventType == "call.busy"
 }
 
 enum class PushAction {

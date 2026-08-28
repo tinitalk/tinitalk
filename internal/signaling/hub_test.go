@@ -52,6 +52,47 @@ func TestHubReportsBusyCallee(t *testing.T) {
 	}
 }
 
+func TestHubNotifiesBusyCalleeWithoutDisturbingActiveCall(t *testing.T) {
+	notifier := &recordingNotifier{notifications: make(chan recordedNotification, 3)}
+	hub := NewHub(notifier)
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	active := event(uuid(106), uuid(107), "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", active); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+
+	if got := awaitNotification(t, notifier.notifications); got.kind != "incoming" || got.event.CallID != active.CallID {
+		t.Fatalf("incoming notification = %+v", got)
+	}
+	if err := hub.Handle("bob", event(uuid(108), active.CallID, "call.accept", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice)
+	_ = next(t, alice)
+	_ = next(t, bob)
+	if got := awaitNotification(t, notifier.notifications); got.kind != "cancel" || got.event.Type != "call.accept" {
+		t.Fatalf("accepted notification = %+v", got)
+	}
+
+	busy := event(uuid(109), uuid(110), "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("carol", busy); !errors.Is(err, ErrCalleeBusy) {
+		t.Fatalf("Handle() error = %v, want ErrCalleeBusy", err)
+	}
+
+	got := awaitNotification(t, notifier.notifications)
+	if got.kind != "cancel" || got.callee != "bob" || got.event.CallID != busy.CallID || got.event.Type != "call.busy" {
+		t.Fatalf("busy notification = %+v", got)
+	}
+	if callID, err := hub.ActiveCall("bob"); err != nil || callID != active.CallID {
+		t.Fatalf("ActiveCall(bob) = %q, %v; want %q, nil", callID, err, active.CallID)
+	}
+	if unexpected, ok := bob.TryNext(); ok {
+		t.Fatalf("busy refresh reached active call signaling: %+v", unexpected)
+	}
+}
+
 func TestHubMergesSupportedCrossedCalls(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alice := hub.Connect("alice")
@@ -1065,6 +1106,36 @@ func configRestartID(t *testing.T, event protocol.Event) string {
 type blockingNotifier struct {
 	started chan struct{}
 	release chan struct{}
+}
+
+type recordedNotification struct {
+	kind   string
+	caller string
+	callee string
+	event  DeliveredEvent
+}
+
+type recordingNotifier struct {
+	notifications chan recordedNotification
+}
+
+func (n *recordingNotifier) IncomingCall(caller, callee string, event DeliveredEvent) {
+	n.notifications <- recordedNotification{kind: "incoming", caller: caller, callee: callee, event: event}
+}
+
+func (n *recordingNotifier) CancelCall(callee string, event DeliveredEvent) {
+	n.notifications <- recordedNotification{kind: "cancel", callee: callee, event: event}
+}
+
+func awaitNotification(t *testing.T, notifications <-chan recordedNotification) recordedNotification {
+	t.Helper()
+	select {
+	case notification := <-notifications:
+		return notification
+	case <-time.After(time.Second):
+		t.Fatal("notification was not delivered")
+		return recordedNotification{}
+	}
 }
 
 func (n *blockingNotifier) IncomingCall(string, string, DeliveredEvent) {

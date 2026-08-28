@@ -17,7 +17,11 @@ import (
 
 var ErrInvalidRegistration = errors.New("invalid FCM registration token")
 
-const RequestTimeout = 5 * time.Second
+const (
+	RequestTimeout        = 5 * time.Second
+	callNotificationTTL   = 30 * time.Second
+	missedNotificationTTL = 28 * 24 * time.Hour
+)
 
 type DeviceToken struct {
 	DeviceID string
@@ -73,11 +77,15 @@ func (n *FCMNotifier) IncomingCall(caller, callee string, event signaling.Delive
 	if err != nil || name == "" {
 		name = caller
 	}
-	n.send(callee, WakeMessage(n.project, "", event, caller, name, 30*time.Second))
+	n.send(callee, WakeMessage(n.project, "", event, caller, name, callNotificationTTL))
 }
 
 func (n *FCMNotifier) CancelCall(callee string, event signaling.DeliveredEvent) {
-	n.send(callee, CancelMessage(n.project, "", event, 30*time.Second))
+	ttl := callNotificationTTL
+	if event.Type == "call.cancel" || event.Type == "call.expire" || event.Type == "call.busy" {
+		ttl = missedNotificationTTL
+	}
+	n.send(callee, CancelMessage(n.project, "", event, ttl))
 }
 
 func (n *FCMNotifier) send(callee string, request WakeRequest) {
@@ -117,7 +125,7 @@ func WakeMessage(_ string, token string, event signaling.DeliveredEvent, callerL
 		"expires_at":   time.UnixMilli(event.SentAt).Add(ttl).Format(time.RFC3339),
 	}
 	request.Message.Android.Priority = "HIGH"
-	request.Message.Android.TTL = ttl.String()
+	request.Message.Android.TTL = fcmTTL(ttl)
 	return request
 }
 
@@ -130,8 +138,12 @@ func CancelMessage(_ string, token string, event signaling.DeliveredEvent, ttl t
 		"call_event": event.Type,
 	}
 	request.Message.Android.Priority = "HIGH"
-	request.Message.Android.TTL = ttl.String()
+	request.Message.Android.TTL = fcmTTL(ttl)
 	return request
+}
+
+func fcmTTL(ttl time.Duration) string {
+	return strconv.FormatInt(int64(ttl/time.Second), 10) + "s"
 }
 
 type HTTPv1Sender struct {

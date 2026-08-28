@@ -36,7 +36,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -677,7 +676,7 @@ private fun HomeScreen(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_contacts),
                                     contentDescription = null,
-                                    modifier = Modifier.size(24.dp),
+                                    modifier = Modifier.size(28.dp),
                                 )
                             },
                             label = { Text("Контакты") },
@@ -685,22 +684,37 @@ private fun HomeScreen(
                         NavigationBarItem(
                             selected = pagerState.currentPage == 1,
                             onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                            modifier = Modifier.semantics {
+                                contentDescription = historyTabDescription(state.unreadMissedCount)
+                            },
                             icon = {
-                                BadgedBox(
-                                    badge = {
-                                        historyBadgeText(state.unreadMissedCount)?.let { count ->
-                                            Badge { Text(count) }
-                                        }
-                                    },
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_history),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(28.dp),
+                                )
+                            },
+                            label = {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_history),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(24.dp),
-                                    )
+                                    Text("История", maxLines = 1)
+                                    historyBadgeText(state.unreadMissedCount)?.let { count ->
+                                        Badge(
+                                            modifier = Modifier.clearAndSetSemantics { },
+                                            containerColor = CallRejectRed,
+                                            contentColor = Color.White,
+                                        ) {
+                                            Text(
+                                                text = count,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                            )
+                                        }
+                                    }
                                 }
                             },
-                            label = { Text("История") },
                         )
                     }
                 }

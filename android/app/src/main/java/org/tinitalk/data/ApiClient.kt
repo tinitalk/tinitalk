@@ -45,6 +45,7 @@ data class CallHistoryItem(
     @SerializedName("peer_name") val peerName: String,
     val direction: String,
     val outcome: String,
+    val reached: Boolean,
     @SerializedName("started_at") val startedAt: Long,
     @SerializedName("duration_seconds") val durationSeconds: Long,
 )

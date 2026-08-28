@@ -12,26 +12,50 @@ fun historyBadgeText(count: Int): String? = when {
     else -> count.toString()
 }
 
+fun historyTabDescription(count: Int): String {
+    if (count <= 0) return "История"
+    val calls = when {
+        count % 100 in 11..14 -> "пропущенных вызовов"
+        count % 10 == 1 -> "пропущенный вызов"
+        count % 10 in 2..4 -> "пропущенных вызова"
+        else -> "пропущенных вызовов"
+    }
+    return "История, $count $calls"
+}
+
+private val NoAnswerOutcomes = setOf(
+    "unreachable",
+    "unanswered",
+    "cancelled_before_ringing",
+    "cancelled_after_ringing",
+    "interrupted_before_answer",
+)
+
+fun isMissedIncoming(item: CallHistoryItem): Boolean =
+    item.direction == "incoming" && (item.outcome in NoAnswerOutcomes || item.outcome == "busy")
+
 fun historyStatus(item: CallHistoryItem): String {
     if (item.outcome == "completed") return "Разговор · ${historyDuration(item.durationSeconds)}"
     if (item.outcome == "interrupted") return "Связь прервалась · ${historyDuration(item.durationSeconds)}"
+    if (item.outcome in NoAnswerOutcomes) {
+        return if (item.direction == "incoming") {
+            if (item.reached) "Пропущенный" else "Пропущенный (не в сети)"
+        } else {
+            if (item.reached) "Неотвеченный" else "Неотвеченный (не в сети)"
+        }
+    }
     return if (item.direction == "incoming") {
         when (item.outcome) {
-            "unanswered", "cancelled_after_ringing" -> "Пропущенный вызов"
-            "busy" -> "Вы были заняты"
+            "busy" -> "Пропущенный (вы были заняты)"
             "rejected" -> "Вы отклонили вызов"
             "connection_failed" -> "Связь не установлена"
-            "unreachable", "cancelled_before_ringing", "interrupted_before_answer" -> "Вызов не состоялся"
             else -> "Вызов завершён"
         }
     } else {
         when (item.outcome) {
-            "unanswered" -> "Не ответили"
-            "busy" -> "Абонент занят"
+            "busy" -> "Занято"
             "rejected" -> "Вызов отклонён"
-            "cancelled_before_ringing", "cancelled_after_ringing" -> "Вызов отменён"
             "connection_failed" -> "Связь не установлена"
-            "unreachable", "interrupted_before_answer" -> "Не удалось дозвониться"
             else -> "Вызов завершён"
         }
     }

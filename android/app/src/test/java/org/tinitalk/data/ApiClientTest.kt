@@ -62,6 +62,7 @@ class ApiClientTest {
                     "peer_name":"Alice",
                     "direction":"incoming",
                     "outcome":"cancelled_after_ringing",
+                    "reached":true,
                     "started_at":1787740200,
                     "duration_seconds":0
                   }],
@@ -77,7 +78,10 @@ class ApiClientTest {
             val page = UrlConnectionApiClient(server.url("/").toString(), "bob", "token").calls(peerLogin = "alice")
 
             assertEquals(1, page.items.size)
-            assertEquals(CallHistoryItem(7, "alice", "Alice", "incoming", "cancelled_after_ringing", 1787740200, 0), page.items.single())
+            assertEquals(
+                CallHistoryItem(7, "alice", "Alice", "incoming", "cancelled_after_ringing", true, 1787740200, 0),
+                page.items.single(),
+            )
             assertEquals(5, page.nextBefore)
             assertEquals(7, page.latestId)
             assertEquals(1, page.unreadMissedCount)

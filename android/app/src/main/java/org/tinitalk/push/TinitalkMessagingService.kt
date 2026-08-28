@@ -13,6 +13,7 @@ import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.TelecomCallController
 import org.tinitalk.telecom.TelecomCallCallbacks
 import org.tinitalk.telecom.CallForegroundService
+import java.time.Instant
 
 @Suppress("OVERRIDE_DEPRECATION")
 class TinitalkMessagingService : FirebaseMessagingService() {
@@ -31,13 +32,17 @@ class TinitalkMessagingService : FirebaseMessagingService() {
             incoming.rememberTerminal(this, cancellation.callId)
             val pending = incoming.load(this)?.invite
             val snapshot = CallServiceState.snapshot()
+            val now = Instant.now()
+            val latest = cancellation.missedFallback(pending, snapshot, now)
+            if (pending != null && !pending.expiresAt.isAfter(now)) {
+                incoming.clear(this, pending.callId)
+            }
             if (cancellation.shouldDismiss(pending?.callId, snapshot)) {
-                val missed = pending?.takeIf { cancellation.shouldShowMissed(it.callId, snapshot) }
                 TelecomCallController(AndroidTelecomRegistrar(this)).cancel(cancellation.callId)
                 notifier.cancel()
                 incoming.clear(this, cancellation.callId)
-                missed?.let { refreshMissedCount(notifier, it) }
             }
+            if (cancellation.shouldRefreshMissedCount()) refreshMissedCount(notifier, latest)
             return
         }
         val invite = IncomingPushPayload.parse(message.data) ?: return
@@ -53,18 +58,19 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         ))
         if (!IncomingCallForegroundService.show(this, invite)) {
             notifier.show(invite)
+            IncomingRingingAcknowledger(this).acknowledge(invite)
             incoming.openScreen(this, invite)
         }
     }
 
-    private fun refreshMissedCount(notifier: IncomingCallNotifier, latest: IncomingInvite) {
+    private fun refreshMissedCount(notifier: IncomingCallNotifier, latest: IncomingInvite?) {
         val refreshId = notifier.beginMissedCountRefresh()
         val store = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         val page = runCatching { ContactRepository(store).loadCallHistory(limit = 1) }.getOrNull()
         if (page != null) {
             notifier.updateMissedCount(page.unreadMissedCount, refreshId, latest)
         } else {
-            notifier.showMissedIfAbsent(latest)
+            latest?.let(notifier::showMissedIfAbsent)
         }
     }
 }

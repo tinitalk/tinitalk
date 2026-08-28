@@ -81,6 +81,24 @@ var schemaMigrations = [][]string{
 			AND history.outcome IN (2, 6)
 			AND history.id > COALESCE(reads.through_id, 0)`,
 	},
+	{
+		`INSERT OR IGNORE INTO call_history_unread(call_history_id, user_id)
+		 SELECT history.id, history.callee_id
+		 FROM call_history history
+		 LEFT JOIN call_history_reads reads ON reads.user_id = history.callee_id
+		 WHERE history.ended_at IS NOT NULL
+			AND history.outcome IN (1, 5, 9)
+			AND history.id > COALESCE(reads.through_id, 0)`,
+	},
+	{
+		`INSERT OR IGNORE INTO call_history_unread(call_history_id, user_id)
+		 SELECT history.id, history.callee_id
+		 FROM call_history history
+		 LEFT JOIN call_history_reads reads ON reads.user_id = history.callee_id
+		 WHERE history.ended_at IS NOT NULL
+			AND history.outcome = 3
+			AND history.id > COALESCE(reads.through_id, 0)`,
+	},
 }
 
 func (db *DB) migrate() error {

@@ -14,6 +14,7 @@ import java.time.Instant
 
 class IncomingCallForegroundService : Service() {
     private val handler = Handler(Looper.getMainLooper())
+    private val ringingAcknowledger by lazy { IncomingRingingAcknowledger(this) }
     private var stopTask: Runnable? = null
     private var foreground = false
 
@@ -43,13 +44,17 @@ class IncomingCallForegroundService : Service() {
                     )
                     foreground = true
                 },
+                acknowledgeRinging = ringingAcknowledger::acknowledge,
                 openFullScreen = { incoming.openScreen(this, it) },
             ).present(invite)
         }.isSuccess
 
         if (!foregroundStarted) {
-            notifier.show(invite)
-            incoming.openScreen(this, invite)
+            IncomingCallForegroundPresentation(
+                enterForeground = notifier::show,
+                acknowledgeRinging = ringingAcknowledger::acknowledge,
+                openFullScreen = { incoming.openScreen(this, it) },
+            ).present(invite)
             stopSelf()
         } else {
             scheduleStop(invite)

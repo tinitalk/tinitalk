@@ -37,6 +37,7 @@ type CallHistoryItem struct {
 	PeerName        string
 	Direction       CallDirection
 	Outcome         CallOutcome
+	Reached         bool
 	StartedAt       time.Time
 	DurationSeconds int64
 }
@@ -72,7 +73,12 @@ func (db *DB) StartCall(callID, caller, callee string, startedAt time.Time) erro
 }
 
 func (db *DB) RecordBusyCall(callID, caller, callee string, startedAt time.Time) error {
-	result, err := db.sql.Exec(`
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`
 		INSERT OR IGNORE INTO call_history(
 			call_id, caller_id, callee_id, stage, outcome, started_at, ended_at
 		)
@@ -85,12 +91,21 @@ func (db *DB) RecordBusyCall(callID, caller, callee string, startedAt time.Time)
 		return err
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected > 0 {
+	if err != nil {
 		return err
+	}
+	if affected > 0 {
+		if _, err := tx.Exec(`
+			INSERT INTO call_history_unread(call_history_id, user_id)
+			SELECT id, callee_id FROM call_history WHERE call_id = ?
+		`, callID); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	var storedCaller, storedCallee string
 	var outcome CallOutcome
-	err = db.sql.QueryRow(`
+	err = tx.QueryRow(`
 		SELECT caller.login, callee.login, h.outcome
 		FROM call_history h
 		JOIN users caller ON caller.id = h.caller_id
@@ -106,7 +121,7 @@ func (db *DB) RecordBusyCall(callID, caller, callee string, startedAt time.Time)
 	if storedCaller != caller || storedCallee != callee || outcome != CallOutcomeBusy {
 		return errors.New("call ID is already in use")
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (db *DB) MarkCallRinging(callID string) error {
@@ -160,7 +175,7 @@ func (db *DB) FinishCall(callID string, outcome CallOutcome, endedAt time.Time) 
 	if err := requireAffected(result, "active call not found"); err != nil {
 		return err
 	}
-	if outcome == CallOutcomeUnanswered || outcome == CallOutcomeCancelledAfterRinging {
+	if isUnreadMissedOutcome(outcome) {
 		if _, err := tx.Exec(`
 			INSERT INTO call_history_unread(call_history_id, user_id)
 			SELECT id, callee_id FROM call_history WHERE call_id = ?
@@ -172,7 +187,21 @@ func (db *DB) FinishCall(callID string, outcome CallOutcome, endedAt time.Time) 
 }
 
 func (db *DB) RecoverCallHistory(endedAt time.Time) error {
-	_, err := db.sql.Exec(`
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO call_history_unread(call_history_id, user_id)
+		SELECT history.id, history.callee_id
+		FROM call_history history
+		WHERE history.ended_at IS NULL
+			AND history.stage < ?
+	`, callStageAccepted); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
 		UPDATE call_history
 		SET outcome = CASE stage
 			WHEN ? THEN ?
@@ -185,8 +214,24 @@ func (db *DB) RecoverCallHistory(endedAt time.Time) error {
 		callStageAccepted, CallOutcomeConnectionFailed,
 		CallOutcomeInterruptedBeforeAnswer,
 		endedAt.Unix(),
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func isUnreadMissedOutcome(outcome CallOutcome) bool {
+	switch outcome {
+	case CallOutcomeUnreachable,
+		CallOutcomeUnanswered,
+		CallOutcomeBusy,
+		CallOutcomeCancelledBeforeRinging,
+		CallOutcomeCancelledAfterRinging,
+		CallOutcomeInterruptedBeforeAnswer:
+		return true
+	default:
+		return false
+	}
 }
 
 func (db *DB) CallHistory(login string, before int64, limit int) (CallHistoryPage, error) {
@@ -236,7 +281,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 	rows, err := db.sql.Query(`
 		SELECT h.id, h.call_id, h.caller_id, peer.login,
 			COALESCE(personal.custom_name, peer.display_name),
-			h.outcome, h.started_at, h.connected_at, h.ended_at
+			h.outcome, h.stage, h.started_at, h.connected_at, h.ended_at
 		FROM call_history h
 		JOIN users peer ON peer.id = CASE WHEN h.caller_id = ? THEN h.callee_id ELSE h.caller_id END
 		LEFT JOIN user_contacts personal
@@ -257,6 +302,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 	for rows.Next() {
 		var item CallHistoryItem
 		var callerID, startedAt, endedAt int64
+		var stage callStage
 		var connectedAt sql.NullInt64
 		if err := rows.Scan(
 			&item.ID,
@@ -265,6 +311,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 			&item.PeerLogin,
 			&item.PeerName,
 			&item.Outcome,
+			&stage,
 			&startedAt,
 			&connectedAt,
 			&endedAt,
@@ -276,6 +323,8 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 		} else {
 			item.Direction = CallDirectionIncoming
 		}
+		item.Reached = stage >= callStageRinging ||
+			item.Outcome == CallOutcomeBusy || item.Outcome == CallOutcomeRejected
 		item.StartedAt = time.Unix(startedAt, 0).UTC()
 		if connectedAt.Valid && endedAt > connectedAt.Int64 {
 			item.DurationSeconds = endedAt - connectedAt.Int64

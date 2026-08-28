@@ -74,6 +74,13 @@ class MainActivity : ComponentActivity() {
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread { callUiState = state }
     }
+    private val missedCountObserver: (Int) -> Unit = { count ->
+        runOnUiThread {
+            if (!isDestroyed && screenState.signedIn && screenState.unreadMissedCount != count) {
+                screenState = screenState.copy(unreadMissedCount = count)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,6 +140,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         CallUiStateStore.observe(callUiObserver)
+        IncomingCallNotifier(this).observeMissedCount(missedCountObserver)
         refreshPermissions()
         restoreContacts()
     }
@@ -641,6 +649,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        IncomingCallNotifier(this).removeMissedCountObserver(missedCountObserver)
         CallUiStateStore.removeObserver(callUiObserver)
         super.onDestroy()
     }

@@ -8,11 +8,11 @@ class ContactRepositoryTest {
     @Test
     fun reportsServerApiAndCommitDetails() {
         val repo = ContactRepository(AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())) { _, _, _ ->
-            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 2, commit = "01234567"))
+            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, commit = "01234567"))
         }
 
         assertEquals(
-            ServerCheckDetails(ServerCheckResult.Available, apiVersion = 2, commit = "01234567"),
+            ServerCheckDetails(ServerCheckResult.Available, apiVersion = 3, commit = "01234567"),
             repo.checkServerDetails("https://host"),
         )
     }
@@ -20,11 +20,11 @@ class ContactRepositoryTest {
     @Test
     fun reportsServerAddressHealthWithoutStartingAuthentication() {
         val cases = listOf(
-            ServerInfo("tinitalk", "ok", 2) to ServerCheckResult.Available,
-            ServerInfo("another-service", "ok", 2) to ServerCheckResult.WrongServer,
-            ServerInfo("tinitalk", "ok", 1) to ServerCheckResult.ServerOutdated,
-            ServerInfo("tinitalk", "ok", 3) to ServerCheckResult.AppOutdated,
-            ServerInfo("tinitalk", "maintenance", 2) to ServerCheckResult.Unavailable,
+            ServerInfo("tinitalk", "ok", 3) to ServerCheckResult.Available,
+            ServerInfo("another-service", "ok", 3) to ServerCheckResult.WrongServer,
+            ServerInfo("tinitalk", "ok", 2) to ServerCheckResult.ServerOutdated,
+            ServerInfo("tinitalk", "ok", 4) to ServerCheckResult.AppOutdated,
+            ServerInfo("tinitalk", "maintenance", 3) to ServerCheckResult.Unavailable,
         )
 
         cases.forEach { (serverInfo, expected) ->
@@ -50,9 +50,9 @@ class ContactRepositoryTest {
     @Test
     fun rejectsWrongServerOrIncompatibleApiBeforeAuthentication() {
         val cases = listOf(
-            ServerInfo("another-service", "ok", 2) to CompatibilityProblem.WrongServer,
-            ServerInfo("tinitalk", "ok", 1) to CompatibilityProblem.ServerOutdated,
-            ServerInfo("tinitalk", "ok", 3) to CompatibilityProblem.AppOutdated,
+            ServerInfo("another-service", "ok", 3) to CompatibilityProblem.WrongServer,
+            ServerInfo("tinitalk", "ok", 2) to CompatibilityProblem.ServerOutdated,
+            ServerInfo("tinitalk", "ok", 4) to CompatibilityProblem.AppOutdated,
         )
 
         cases.forEach { (serverInfo, expectedProblem) ->
@@ -74,7 +74,7 @@ class ContactRepositoryTest {
     fun checksServerCompatibilityWhenRestoringSavedSession() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         store.save(Session("https://host", "alice", "token"))
-        val api = FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 1))
+        val api = FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 2))
         val repo = ContactRepository(store) { _, _, _ -> api }
 
         val error = runCatching { repo.restoreContacts() }
@@ -179,7 +179,7 @@ class ContactRepositoryTest {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         store.save(Session("https://host", "alice", "token"))
         val expected = CallHistoryPage(
-            items = listOf(CallHistoryItem(7, "bob", "Bob", "outgoing", "completed", 1787740200, 65)),
+            items = listOf(CallHistoryItem(7, "bob", "Bob", "outgoing", "completed", true, 1787740200, 65)),
             nextBefore = 5,
             latestId = 7,
             unreadMissedCount = 1,
@@ -228,7 +228,7 @@ class ContactRepositoryTest {
 }
 
 private class FakeApiClient(
-    private val serverInfo: ServerInfo = ServerInfo("tinitalk", "ok", 2),
+    private val serverInfo: ServerInfo = ServerInfo("tinitalk", "ok", 3),
     private val serverInfoError: RuntimeException? = null,
     private val profile: Profile = Profile("alice", "Alice"),
     private val contacts: List<Contact> = emptyList(),

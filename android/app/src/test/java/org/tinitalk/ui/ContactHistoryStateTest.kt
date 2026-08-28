@@ -51,6 +51,7 @@ class ContactHistoryStateTest {
         peerName = "Анна",
         direction = "incoming",
         outcome = "completed",
+        reached = true,
         startedAt = 1_787_740_200,
         durationSeconds = 10,
     )

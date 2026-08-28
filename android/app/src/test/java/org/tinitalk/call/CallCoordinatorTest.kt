@@ -75,6 +75,34 @@ class CallCoordinatorTest {
     }
 
     @Test
+    fun reportsWhenRingingAcknowledgementIsSettled() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("bob", signal, ids = FixedIds())
+        var settled = false
+
+        coordinator.restoreIncoming("018f7d51-40a1-7bb5-a2d0-7e47f9181000") { settled = true }
+
+        assertFalse(settled)
+        signal.settle(signal.sent.single().id)
+        assertTrue(settled)
+    }
+
+    @Test
+    fun restoresAlreadyAcknowledgedIncomingWithoutSendingRingingAgain() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("bob", signal, ids = FixedIds())
+
+        coordinator.restoreIncoming(
+            "018f7d51-40a1-7bb5-a2d0-7e47f9181000",
+            lastSeq = 1,
+            acknowledgeRinging = false,
+        )
+
+        assertEquals(CallPhase.Ringing, coordinator.snapshot().phase)
+        assertTrue(signal.sent.isEmpty())
+    }
+
+    @Test
     fun outgoingCallBecomesRingingAfterTheOtherPhoneAcknowledgesIt() {
         val coordinator = CallCoordinator("alice", FakeSignalClient(), ids = FixedIds())
         coordinator.startCall("bob")
