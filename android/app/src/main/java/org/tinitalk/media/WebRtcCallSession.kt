@@ -32,7 +32,7 @@ class WebRtcCallSession private constructor(
     private val onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit,
     private val onIceRestartNeeded: () -> Unit,
     private val onConnectionStateChanged: (MediaConnectionState) -> Unit,
-    private val onRemoteVideoTrack: (VideoTrack) -> Unit,
+    private val onRemoteVideoTrack: (VideoRenderSource) -> Unit,
     private val cameraCallbacks: CameraMediaCallbacks,
     private val forceRelay: Boolean,
 ) : MediaSession, CameraMediaSession {
@@ -76,7 +76,9 @@ class WebRtcCallSession private constructor(
     private val cameraCleanupQueue = cameraCleanupExecutor?.let { executor ->
         CloseableCameraTaskQueue(CameraTaskQueue { task -> executor.execute(task) })
     }
-    private var cleanupStarted = false
+    @Volatile private var cleanupStarted = false
+    private val remoteVideoLock = Any()
+    private var remoteVideoSource: VideoRenderSource? = null
 
     init {
         try {
@@ -117,7 +119,7 @@ class WebRtcCallSession private constructor(
                         onLocalIceCandidatesRemoved = onLocalIceCandidatesRemoved,
                         onConnectionChange = { state -> onIceConnectionState(state) },
                         onRemoteVideoTrack = { track ->
-                            if (!closed) onRemoteVideoTrack(track)
+                            publishRemoteVideoTrack(track)
                         },
                     ),
                 ),
@@ -301,6 +303,7 @@ class WebRtcCallSession private constructor(
     ) {
         if (cleanupStarted) return
         cleanupStarted = true
+        closeRemoteVideoSource()
         val cleanup = NativeResourceOwner()
         cleanup.own { peerResources.close(primaryFailure) }
         cleanup.own { mediaResources.close(primaryFailure) }
@@ -375,6 +378,34 @@ class WebRtcCallSession private constructor(
         audioDeviceModule.setSpeakerMute(WebRtcPolicy.speakerMuted(active))
     }
 
+    private fun publishRemoteVideoTrack(track: VideoTrack) {
+        val renderContext = eglBase?.eglBaseContext
+        if (!shouldExposeRemoteVideo(videoAllowed, renderContext != null, closed || cleanupStarted)) return
+        val source = VideoRenderSource(track, requireNotNull(renderContext))
+        val previous = synchronized(remoteVideoLock) {
+            if (closed || cleanupStarted) {
+                source.close()
+                return
+            }
+            remoteVideoSource.also { remoteVideoSource = source }
+        }
+        previous?.close()
+        runCatching { onRemoteVideoTrack(source) }
+            .onFailure {
+                synchronized(remoteVideoLock) {
+                    if (remoteVideoSource === source) remoteVideoSource = null
+                }
+                source.close()
+            }
+    }
+
+    private fun closeRemoteVideoSource() {
+        val source = synchronized(remoteVideoLock) {
+            remoteVideoSource.also { remoteVideoSource = null }
+        }
+        source?.close()
+    }
+
     private fun configureAudioSender(sender: RtpSender) {
         val parameters = sender.parameters
         WebRtcPolicy.configureAudioEncodings(parameters.encodings)
@@ -439,7 +470,7 @@ class WebRtcCallSession private constructor(
             onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit = {},
             onIceRestartNeeded: () -> Unit = {},
             onConnectionStateChanged: (MediaConnectionState) -> Unit = {},
-            onRemoteVideoTrack: (VideoTrack) -> Unit = {},
+            onRemoteVideoTrack: (VideoRenderSource) -> Unit = {},
             cameraCallbacks: CameraMediaCallbacks = CameraMediaCallbacks(),
         ): WebRtcCallSession = WebRtcCallSession(
             context,

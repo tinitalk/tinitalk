@@ -115,7 +115,7 @@ private class WebRtcCameraAttemptProvider(
     private val factory: PeerConnectionFactory,
     private val eglContext: EglBase.Context,
     private val sender: RtpSender,
-) : CameraAttemptProvider<VideoTrack> {
+) : CameraAttemptProvider<VideoRenderSource> {
     private data class Descriptor(
         val enumerator: CameraEnumerator,
         val deviceName: String,
@@ -141,7 +141,7 @@ private class WebRtcCameraAttemptProvider(
     override fun create(
         candidate: CameraAttemptCandidate,
         events: CameraAttemptEvents,
-    ): CameraAttempt<VideoTrack> {
+    ): CameraAttempt<VideoRenderSource> {
         val descriptor = requireNotNull(descriptors[candidate.id]) { "stale camera candidate" }
         val owner = NativeResourceOwner()
         try {
@@ -163,6 +163,8 @@ private class WebRtcCameraAttemptProvider(
             )
             val track = factory.createVideoTrack(LocalVideoTrackId, source)
             owner.own(track::dispose)
+            val renderSource = VideoRenderSource(track, eglContext)
+            owner.own(renderSource::close)
             val lease = SenderTrackLease(
                 track = track,
                 attach = { localTrack -> sender.setTrack(localTrack, false) },
@@ -179,7 +181,7 @@ private class WebRtcCameraAttemptProvider(
             return WebRtcCameraAttempt(
                 enumerator = descriptor.enumerator,
                 capturer = capturer,
-                localTrack = track,
+                localTrack = renderSource,
                 lease = lease,
                 openingState = opening,
                 initialFacing = candidate.facing,
@@ -201,11 +203,11 @@ private class WebRtcCameraAttemptProvider(
 private class WebRtcCameraAttempt(
     private val enumerator: CameraEnumerator,
     private val capturer: CameraVideoCapturer,
-    override val localTrack: VideoTrack,
+    override val localTrack: VideoRenderSource,
     private val lease: SenderTrackLease<VideoTrack>,
     private val openingState: AtomicBoolean,
     initialFacing: CameraFacing,
-) : CameraAttempt<VideoTrack> {
+) : CameraAttempt<VideoRenderSource> {
     override var facing = initialFacing
     private val capturing = AtomicBoolean(false)
     private val detached = AtomicBoolean(false)

@@ -40,12 +40,14 @@ import org.tinitalk.call.CallScreenActionGate
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
+import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.call.outgoingVisibleState
 import org.tinitalk.call.shouldDismissIncomingOverlay
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
+import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingAnswerClaim
 import org.tinitalk.telecom.IncomingCallController
@@ -69,6 +71,9 @@ class CallActivity : ComponentActivity() {
     private lateinit var cameraPermissionRouter: CameraPermissionActionRouter
     private val actionGate = CallScreenActionGate()
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
+    private var videoState by mutableStateOf(VideoCallStateStore.snapshot())
+    private var renderedVideoCallId: String? = null
+    private var renderedVideoVisible = false
     private var incomingInvite by mutableStateOf<IncomingInvite?>(null)
     private var outgoingLogin by mutableStateOf<String?>(null)
     private var outgoingName by mutableStateOf<String?>(null)
@@ -99,8 +104,23 @@ class CallActivity : ComponentActivity() {
         runOnUiThread {
             actionGate.onCallState(state)
             callState = state
+            if (state.callId != renderedVideoCallId || state.phase != CallPhase.Active) {
+                renderedVideoCallId = null
+                renderedVideoVisible = false
+            }
             updateProximity()
             if (activityResumed) publishCameraForeground(foreground = true)
+        }
+    }
+
+    private val videoObserver: (CallVideoState<VideoRenderSource>) -> Unit = { state ->
+        runOnUiThread {
+            videoState = state
+            if (state.callId != renderedVideoCallId) {
+                renderedVideoCallId = null
+                renderedVideoVisible = false
+                updateProximity()
+            }
         }
     }
 
@@ -149,6 +169,7 @@ class CallActivity : ComponentActivity() {
         }
         applyIntent(intent)
         CallUiStateStore.observe(callObserver)
+        VideoCallStateStore.observe(videoObserver)
 
         setContent {
             TiniTalkTheme(darkTheme = true) {
@@ -166,6 +187,8 @@ class CallActivity : ComponentActivity() {
                     ?: outgoingName?.takeIf { it.isNotBlank() }
                     ?: "TiniTalk"
                 val durationText = rememberDurationText(visibleState)
+                val visibleVideoState = videoState.takeIf { it.callId == visibleState.callId }
+                    ?: CallVideoState()
 
                 when {
                     visibleState.phase == CallPhase.Ended -> EndedCallScreen(peerName, visibleState.endReason)
@@ -176,11 +199,19 @@ class CallActivity : ComponentActivity() {
                         connectionHealth = visibleState.connectionHealth,
                         currentEndpoint = visibleState.currentAudioEndpoint,
                         availableEndpoints = visibleState.availableAudioEndpoints,
+                        videoState = visibleVideoState,
                         onMute = { CallForegroundService.mute(this, it) },
                         onSelectEndpoint = { endpoint ->
                             visibleState.callId?.let { callId ->
                                 CallForegroundService.selectAudioEndpoint(this, callId, endpoint.id)
                             }
+                        },
+                        onCamera = { enabled ->
+                            if (enabled) requestCamera() else disableCamera()
+                        },
+                        onSwitchCamera = ::switchCamera,
+                        onVideoVisibilityChanged = { visible ->
+                            updateRenderedVideoVisibility(visibleState.callId, visible)
                         },
                         onEnd = { endCall(visibleState) },
                     )
@@ -277,6 +308,7 @@ class CallActivity : ComponentActivity() {
         handler.removeCallbacks(inviteMonitor)
         proximityController.close()
         CallUiStateStore.removeObserver(callObserver)
+        VideoCallStateStore.removeObserver(videoObserver)
         unregisterReceiver(screenStateReceiver)
         super.onDestroy()
     }
@@ -414,9 +446,18 @@ class CallActivity : ComponentActivity() {
             (callState.phase == CallPhase.Connecting || callState.phase == CallPhase.Ringing)
         val activeConversation = callState.phase == CallPhase.Active &&
             callState.connectedAtElapsedMs != null && connected
+        val videoVisible = renderedVideoCallId == callState.callId && renderedVideoVisible
         proximityController.setEnabled(
-            activityStarted && earpiece && (outgoingDial || activeConversation),
+            activityStarted && !videoVisible && earpiece && (outgoingDial || activeConversation),
         )
+    }
+
+    private fun updateRenderedVideoVisibility(callId: String?, visible: Boolean) {
+        val current = visibleCallState()
+        if (callId == null || current.callId != callId || current.phase != CallPhase.Active) return
+        renderedVideoCallId = callId
+        renderedVideoVisible = visible
+        updateProximity()
     }
 
     private fun showIncomingCallFullScreen() {

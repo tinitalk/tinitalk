@@ -1,6 +1,6 @@
 package org.tinitalk.call
 
-import org.webrtc.VideoTrack
+import org.tinitalk.media.VideoRenderSource
 import java.util.concurrent.CopyOnWriteArraySet
 
 enum class CameraFacing {
@@ -77,24 +77,27 @@ data class CallVideoState<out Track>(
 }
 
 object VideoCallStateStore {
-    private val listeners = CopyOnWriteArraySet<(CallVideoState<VideoTrack>) -> Unit>()
+    private val listeners = CopyOnWriteArraySet<(CallVideoState<VideoRenderSource>) -> Unit>()
 
     @Volatile
-    private var current = CallVideoState<VideoTrack>()
+    private var current = CallVideoState<VideoRenderSource>()
 
-    fun snapshot(): CallVideoState<VideoTrack> = current
+    fun snapshot(): CallVideoState<VideoRenderSource> = current
 
-    fun observe(listener: (CallVideoState<VideoTrack>) -> Unit) {
+    fun observe(listener: (CallVideoState<VideoRenderSource>) -> Unit) {
         listeners += listener
         listener(current)
     }
 
-    fun removeObserver(listener: (CallVideoState<VideoTrack>) -> Unit) {
+    fun removeObserver(listener: (CallVideoState<VideoRenderSource>) -> Unit) {
         listeners -= listener
     }
 
     @Synchronized
-    fun publish(state: CallVideoState<VideoTrack>) {
+    fun publish(state: CallVideoState<VideoRenderSource>) {
+        val previous = current
+        if (previous.localTrack !== state.localTrack) previous.localTrack?.close()
+        if (previous.remoteTrack !== state.remoteTrack) previous.remoteTrack?.close()
         current = state
         listeners.forEach { it(state) }
     }

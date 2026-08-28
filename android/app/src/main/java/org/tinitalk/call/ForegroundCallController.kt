@@ -11,13 +11,13 @@ import org.tinitalk.media.CameraMediaSession
 import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.ExecutorTaskScheduler
 import org.tinitalk.media.TaskScheduler
+import org.tinitalk.media.VideoRenderSource
 import java.time.Instant
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.startCoroutine
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import org.webrtc.VideoTrack
 
 internal const val CredentialRefreshLeadMillis = 60_000L
 
@@ -33,7 +33,7 @@ class ForegroundCallController(
     ) -> MediaSession,
     private val ids: EventIds = UuidEventIds(),
     private val scheduler: TaskScheduler = ExecutorTaskScheduler(),
-    private val onVideoStateChanged: (CallVideoState<VideoTrack>) -> Unit = {},
+    private val onVideoStateChanged: (CallVideoState<VideoRenderSource>) -> Unit = {},
     private val prepareCameraStart: (String, Long) -> Boolean = { _, _ -> true },
     private val onCameraLeaseReleased: (Long) -> Unit = {},
 ) {
@@ -85,7 +85,7 @@ class ForegroundCallController(
     private var nextLocalIceSequence = 0L
     private val recentLocalIceEvents = linkedMapOf<String, LocalIceEvent>()
     private val rateLimitedIceEvents = linkedMapOf<String, LocalIceEvent>()
-    private var videoState = CallVideoState<VideoTrack>()
+    private var videoState = CallVideoState<VideoRenderSource>()
     private var foregroundCallId: String? = null
     private var cameraStartBlocked = false
     private var cameraStartSubmitted = false
@@ -206,12 +206,20 @@ class ForegroundCallController(
     }
 
     @Synchronized
-    fun onLocalVideoTrack(callId: String, track: VideoTrack?) {
+    fun onLocalVideoTrack(callId: String, track: VideoRenderSource?) {
+        if (videoState.callId != callId) {
+            track?.close()
+            return
+        }
         updateVideoState(videoState.withLocalTrack(callId, track))
     }
 
     @Synchronized
-    fun onRemoteVideoTrack(callId: String, track: VideoTrack?) {
+    fun onRemoteVideoTrack(callId: String, track: VideoRenderSource?) {
+        if (videoState.callId != callId) {
+            track?.close()
+            return
+        }
         updateVideoState(videoState.withRemoteTrack(callId, track))
     }
 
@@ -524,8 +532,10 @@ class ForegroundCallController(
         requestCameraStop(session)
     }
 
-    private fun updateVideoState(next: CallVideoState<VideoTrack>) {
+    private fun updateVideoState(next: CallVideoState<VideoRenderSource>) {
         if (next == videoState) return
+        if (videoState.localTrack !== next.localTrack) videoState.localTrack?.close()
+        if (videoState.remoteTrack !== next.remoteTrack) videoState.remoteTrack?.close()
         videoState = next
         onVideoStateChanged(next)
     }

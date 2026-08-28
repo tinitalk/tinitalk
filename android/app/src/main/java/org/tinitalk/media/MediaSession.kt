@@ -1,7 +1,6 @@
 package org.tinitalk.media
 
 import org.tinitalk.call.CameraFacing
-import org.webrtc.VideoTrack
 import java.time.Instant
 
 data class IceCandidateData(
@@ -57,7 +56,7 @@ interface CameraMediaSession {
 }
 
 data class CameraMediaCallbacks(
-    val onLocalTrackChanged: (VideoTrack?) -> Unit = {},
+    val onLocalTrackChanged: (VideoRenderSource?) -> Unit = {},
     val onCaptureStarted: (CameraFacing) -> Unit = {},
     val onCaptureInvalidated: () -> Unit = {},
     val onCaptureStopped: () -> Unit = {},

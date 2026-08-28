@@ -236,9 +236,12 @@ class CallForegroundService : Service() {
             serverFeatures = session.features,
         )
         lateinit var newMedia: ForegroundCallController
-        fun routeMediaCallback(action: (ForegroundCallController) -> Unit) {
+        fun routeMediaCallback(
+            onDropped: () -> Unit = {},
+            action: (ForegroundCallController) -> Unit,
+        ) {
             val route = {
-                if (!finishing && media === newMedia) action(newMedia)
+                if (!finishing && media === newMedia) action(newMedia) else onDropped()
             }
             if (Looper.myLooper() == Looper.getMainLooper()) route() else handler.post(route)
         }
@@ -266,11 +269,15 @@ class CallForegroundService : Service() {
                         }
                     },
                     onRemoteVideoTrack = { track ->
-                        routeMediaCallback { it.onRemoteVideoTrack(callId, track) }
+                        routeMediaCallback(onDropped = track::close) {
+                            it.onRemoteVideoTrack(callId, track)
+                        }
                     },
                     cameraCallbacks = CameraMediaCallbacks(
                         onLocalTrackChanged = { track ->
-                            routeMediaCallback { it.onLocalVideoTrack(callId, track) }
+                            routeMediaCallback(onDropped = { track?.close() }) {
+                                it.onLocalVideoTrack(callId, track)
+                            }
                         },
                         onCaptureStarted = { facing ->
                             routeMediaCallback { it.onCameraCaptureStarted(callId, facing) }

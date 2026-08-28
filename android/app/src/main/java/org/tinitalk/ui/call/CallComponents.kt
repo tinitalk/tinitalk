@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
 import org.tinitalk.ui.contactInitial
@@ -141,13 +142,15 @@ internal fun RoundCallAction(
     enabled: Boolean = true,
     iconRotation: Float = 0f,
     iconResource: Int = R.drawable.ic_call,
+    buttonSize: Dp = 72.dp,
+    labelMaxLines: Int = 1,
 ) {
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         IconButton(
             onClick = onClick,
             enabled = enabled,
             modifier = Modifier
-                .size(72.dp)
+                .size(buttonSize)
                 .clip(CircleShape)
                 .background(if (enabled) color else color.copy(alpha = 0.42f)),
         ) {
@@ -155,7 +158,9 @@ internal fun RoundCallAction(
                 painter = painterResource(iconResource),
                 contentDescription = contentDescription,
                 tint = Color.White,
-                modifier = Modifier.size(31.dp).graphicsLayer(rotationZ = iconRotation),
+                modifier = Modifier
+                    .size(if (buttonSize == 72.dp) 31.dp else 28.dp)
+                    .graphicsLayer(rotationZ = iconRotation),
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -165,7 +170,7 @@ internal fun RoundCallAction(
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Center,
-            maxLines = 1,
+            maxLines = labelMaxLines,
             overflow = TextOverflow.Ellipsis,
         )
     }

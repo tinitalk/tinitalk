@@ -1,37 +1,62 @@
 package org.tinitalk.ui.call
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.R
+import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.CallEndReason
+import org.tinitalk.call.CameraFacing
 import org.tinitalk.call.ConnectionHealth
+import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.telecom.AudioEndpoint
+import org.tinitalk.ui.contactInitial
+import org.tinitalk.ui.theme.CallBackgroundBottom
+import org.tinitalk.ui.theme.CallBackgroundTop
 import org.tinitalk.ui.theme.CallRejectRed
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,8 +68,12 @@ fun ActiveCallScreen(
     connectionHealth: ConnectionHealth,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
+    videoState: CallVideoState<VideoRenderSource>,
     onMute: (Boolean) -> Unit,
     onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onCamera: (Boolean) -> Unit,
+    onSwitchCamera: () -> Unit,
+    onVideoVisibilityChanged: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
     var routePickerVisible by remember { mutableStateOf(false) }
@@ -60,43 +89,38 @@ fun ActiveCallScreen(
         Color.White.copy(alpha = 0.76f)
     }
 
-    CallScreenSurface(
-        status = status,
-        peerName = peerName,
-        detail = durationText,
-        statusColor = statusColor,
-    ) {
-        Text(
-            text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
-            color = Color.White.copy(alpha = 0.68f),
-            style = MaterialTheme.typography.bodyMedium,
+    if (videoState.allowed) {
+        VideoActiveCallScreen(
+            peerName = peerName,
+            durationText = durationText,
+            status = status,
+            statusColor = statusColor,
+            muted = muted,
+            currentEndpoint = currentEndpoint,
+            availableEndpoints = availableEndpoints,
+            videoState = videoState,
+            onMute = onMute,
+            onSelectEndpoint = onSelectEndpoint,
+            onShowRoutePicker = { routePickerVisible = true },
+            onCamera = onCamera,
+            onSwitchCamera = onSwitchCamera,
+            onVideoVisibilityChanged = onVideoVisibilityChanged,
+            onEnd = onEnd,
         )
-        Spacer(Modifier.height(14.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            MuteCallAction(
-                muted = muted,
-                modifier = Modifier.weight(1f),
-                onMute = onMute,
-            )
-            AudioRouteAction(
-                currentEndpoint = currentEndpoint,
-                availableEndpoints = availableEndpoints,
-                modifier = Modifier.weight(1f),
-                onSelectEndpoint = onSelectEndpoint,
-                onShowPicker = { routePickerVisible = true },
-            )
-            RoundCallAction(
-                label = "Завершить",
-                modifier = Modifier.weight(1f),
-                color = CallRejectRed,
-                onClick = onEnd,
-                iconRotation = 135f,
-            )
-        }
-        Spacer(Modifier.height(18.dp))
+    } else {
+        AudioActiveCallScreen(
+            peerName = peerName,
+            durationText = durationText,
+            status = status,
+            statusColor = statusColor,
+            muted = muted,
+            currentEndpoint = currentEndpoint,
+            availableEndpoints = availableEndpoints,
+            onMute = onMute,
+            onSelectEndpoint = onSelectEndpoint,
+            onShowRoutePicker = { routePickerVisible = true },
+            onEnd = onEnd,
+        )
     }
 
     AudioRoutePicker(
@@ -109,10 +133,525 @@ fun ActiveCallScreen(
 }
 
 @Composable
+private fun AudioActiveCallScreen(
+    peerName: String,
+    durationText: String,
+    status: String,
+    statusColor: Color,
+    muted: Boolean,
+    currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
+    onMute: (Boolean) -> Unit,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onShowRoutePicker: () -> Unit,
+    onEnd: () -> Unit,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val layout = callControlLayout(
+            videoAllowed = false,
+            widthDp = (maxWidth.value - 40f).coerceAtLeast(0f),
+            heightDp = maxHeight.value,
+            fontScale = LocalDensity.current.fontScale,
+        )
+        if (layout.scrollable) {
+            ConstrainedAudioActiveCallScreen(
+                peerName = peerName,
+                durationText = durationText,
+                status = status,
+                statusColor = statusColor,
+                muted = muted,
+                currentEndpoint = currentEndpoint,
+                availableEndpoints = availableEndpoints,
+                layout = layout,
+                onMute = onMute,
+                onSelectEndpoint = onSelectEndpoint,
+                onShowRoutePicker = onShowRoutePicker,
+                onEnd = onEnd,
+            )
+        } else {
+            RegularAudioActiveCallScreen(
+                peerName = peerName,
+                durationText = durationText,
+                status = status,
+                statusColor = statusColor,
+                muted = muted,
+                currentEndpoint = currentEndpoint,
+                availableEndpoints = availableEndpoints,
+                layout = layout,
+                onMute = onMute,
+                onSelectEndpoint = onSelectEndpoint,
+                onShowRoutePicker = onShowRoutePicker,
+                onEnd = onEnd,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RegularAudioActiveCallScreen(
+    peerName: String,
+    durationText: String,
+    status: String,
+    statusColor: Color,
+    muted: Boolean,
+    currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
+    layout: CallControlLayout,
+    onMute: (Boolean) -> Unit,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onShowRoutePicker: () -> Unit,
+    onEnd: () -> Unit,
+) {
+    CallScreenSurface(
+        status = status,
+        peerName = peerName,
+        detail = durationText,
+        statusColor = statusColor,
+    ) {
+        Text(
+            text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
+            color = Color.White.copy(alpha = 0.68f),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Spacer(Modifier.height(14.dp))
+        AdaptiveAudioControls(
+            muted = muted,
+            currentEndpoint = currentEndpoint,
+            availableEndpoints = availableEndpoints,
+            layout = layout,
+            onMute = onMute,
+            onSelectEndpoint = onSelectEndpoint,
+            onShowRoutePicker = onShowRoutePicker,
+            onEnd = onEnd,
+        )
+        Spacer(Modifier.height(18.dp))
+    }
+}
+
+@Composable
+private fun ConstrainedAudioActiveCallScreen(
+    peerName: String,
+    durationText: String,
+    status: String,
+    statusColor: Color,
+    muted: Boolean,
+    currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
+    layout: CallControlLayout,
+    onMute: (Boolean) -> Unit,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onShowRoutePicker: () -> Unit,
+    onEnd: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(CallBackgroundTop, CallBackgroundBottom))),
+    ) {
+        VideoFallbackContent(peerName)
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = status,
+                color = statusColor,
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = peerName,
+                color = Color.White,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = durationText,
+                color = Color.White.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.titleSmall,
+            )
+        }
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.34f))
+                .navigationBarsPadding()
+                .heightIn(max = layout.viewportHeightDp.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
+                color = Color.White.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            AdaptiveAudioControls(
+                muted = muted,
+                currentEndpoint = currentEndpoint,
+                availableEndpoints = availableEndpoints,
+                layout = layout,
+                onMute = onMute,
+                onSelectEndpoint = onSelectEndpoint,
+                onShowRoutePicker = onShowRoutePicker,
+                onEnd = onEnd,
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoActiveCallScreen(
+    peerName: String,
+    durationText: String,
+    status: String,
+    statusColor: Color,
+    muted: Boolean,
+    currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
+    videoState: CallVideoState<VideoRenderSource>,
+    onMute: (Boolean) -> Unit,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onShowRoutePicker: () -> Unit,
+    onCamera: (Boolean) -> Unit,
+    onSwitchCamera: () -> Unit,
+    onVideoVisibilityChanged: (Boolean) -> Unit,
+    onEnd: () -> Unit,
+) {
+    val localSource = videoState.localTrack
+    val remoteSource = videoState.remoteTrack
+    var localFrameVisible by remember(localSource) { mutableStateOf(false) }
+    var remoteFrameVisible by remember(remoteSource) { mutableStateOf(false) }
+    val presentation = videoCallPresentation(
+        videoAllowed = videoState.allowed,
+        cameraRequested = videoState.requested,
+        localFrameVisible = localFrameVisible,
+        remoteFrameVisible = remoteFrameVisible,
+    )
+
+    LaunchedEffect(videoState.callId, localSource, remoteSource, presentation.blockProximity) {
+        onVideoVisibilityChanged(presentation.blockProximity)
+    }
+    DisposableEffect(videoState.callId) {
+        onDispose { onVideoVisibilityChanged(false) }
+    }
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(CallBackgroundTop, CallBackgroundBottom))),
+    ) {
+        val controlLayout = callControlLayout(
+            videoAllowed = true,
+            widthDp = (maxWidth.value - 24f).coerceAtLeast(0f),
+            heightDp = maxHeight.value,
+            fontScale = LocalDensity.current.fontScale,
+        )
+        if (remoteSource != null) {
+            VideoCallRenderer(
+                source = remoteSource,
+                mirror = false,
+                localOverlay = false,
+                modifier = Modifier.fillMaxSize(),
+                onFrameVisibilityChanged = { remoteFrameVisible = it },
+            )
+        }
+        if (!presentation.remoteVideoVisible) {
+            VideoFallbackContent(peerName)
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = status,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color.Black.copy(alpha = 0.32f))
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                color = statusColor,
+                style = MaterialTheme.typography.titleSmall,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = peerName,
+                color = Color.White,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = durationText,
+                color = Color.White.copy(alpha = 0.82f),
+                style = MaterialTheme.typography.titleSmall,
+            )
+        }
+
+        if (localSource != null && videoState.requested) {
+            val compactPreview = LocalDensity.current.fontScale >= 1.3f
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = if (compactPreview) 96.dp else 112.dp, end = 14.dp)
+                    .size(
+                        width = if (compactPreview) 88.dp else 104.dp,
+                        height = if (compactPreview) 124.dp else 148.dp,
+                    )
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF172438))
+                    .border(1.dp, Color.White.copy(alpha = 0.34f), RoundedCornerShape(16.dp)),
+            ) {
+                VideoCallRenderer(
+                    source = localSource,
+                    mirror = videoState.facing == CameraFacing.Front,
+                    localOverlay = true,
+                    modifier = Modifier.fillMaxSize(),
+                    onClick = onSwitchCamera.takeIf { presentation.switchCameraEnabled },
+                    contentDescription = "Сменить камеру",
+                    onFrameVisibilityChanged = { localFrameVisible = it },
+                )
+                if (presentation.switchCameraEnabled) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.52f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_camera_switch),
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.34f))
+                .navigationBarsPadding()
+                .then(
+                    if (controlLayout.scrollable) {
+                        Modifier
+                            .heightIn(max = controlLayout.viewportHeightDp.dp)
+                            .verticalScroll(rememberScrollState())
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (videoState.failure != null && !videoState.sending) {
+                Text(
+                    text = "Не удалось включить камеру",
+                    color = Color(0xFFFFCA6A),
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+            Text(
+                text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
+                color = Color.White.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            AdaptiveVideoControls(
+                muted = muted,
+                currentEndpoint = currentEndpoint,
+                availableEndpoints = availableEndpoints,
+                layout = controlLayout,
+                cameraRequested = videoState.requested,
+                onMute = onMute,
+                onSelectEndpoint = onSelectEndpoint,
+                onShowRoutePicker = onShowRoutePicker,
+                onCamera = onCamera,
+                onEnd = onEnd,
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoFallbackContent(peerName: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .size(120.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.13f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = contactInitial(peerName, peerName),
+                color = Color.White,
+                fontSize = 44.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveAudioControls(
+    muted: Boolean,
+    currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
+    layout: CallControlLayout,
+    onMute: (Boolean) -> Unit,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onShowRoutePicker: () -> Unit,
+    onEnd: () -> Unit,
+) {
+    val compact = layout.columns == 2
+    if (!compact) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            MuteCallAction(muted, Modifier.weight(1f), onMute)
+            AudioRouteAction(
+                currentEndpoint,
+                availableEndpoints,
+                Modifier.weight(1f),
+                onSelectEndpoint,
+                onShowRoutePicker,
+            )
+            EndCallAction(Modifier.weight(1f), onEnd)
+        }
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
+                AudioRouteAction(
+                    currentEndpoint,
+                    availableEndpoints,
+                    Modifier.weight(1f),
+                    onSelectEndpoint,
+                    onShowRoutePicker,
+                    compact = true,
+                )
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Spacer(Modifier.weight(1f))
+                EndCallAction(Modifier.weight(1f), onEnd, compact = true)
+                Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveVideoControls(
+    muted: Boolean,
+    currentEndpoint: AudioEndpoint?,
+    availableEndpoints: List<AudioEndpoint>,
+    layout: CallControlLayout,
+    cameraRequested: Boolean,
+    onMute: (Boolean) -> Unit,
+    onSelectEndpoint: (AudioEndpoint) -> Unit,
+    onShowRoutePicker: () -> Unit,
+    onCamera: (Boolean) -> Unit,
+    onEnd: () -> Unit,
+) {
+    if (layout.columns == 4) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
+            AudioRouteAction(
+                currentEndpoint,
+                availableEndpoints,
+                Modifier.weight(1f),
+                onSelectEndpoint,
+                onShowRoutePicker,
+                compact = true,
+            )
+            CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
+            EndCallAction(Modifier.weight(1f), onEnd, compact = true)
+        }
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
+                AudioRouteAction(
+                    currentEndpoint,
+                    availableEndpoints,
+                    Modifier.weight(1f),
+                    onSelectEndpoint,
+                    onShowRoutePicker,
+                    compact = true,
+                )
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
+                EndCallAction(Modifier.weight(1f), onEnd, compact = true)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CameraCallAction(
+    requested: Boolean,
+    modifier: Modifier,
+    onCamera: (Boolean) -> Unit,
+) {
+    RoundCallAction(
+        label = "Камера",
+        modifier = modifier,
+        contentDescription = if (requested) "Выключить камеру" else "Включить камеру",
+        color = if (requested) Color(0xFF2A8C76) else Color(0xFF33465F),
+        onClick = { onCamera(!requested) },
+        iconResource = R.drawable.ic_videocam,
+        buttonSize = CompactCallActionSizeDp.dp,
+        labelMaxLines = 2,
+    )
+}
+
+@Composable
+private fun EndCallAction(
+    modifier: Modifier,
+    onEnd: () -> Unit,
+    compact: Boolean = false,
+) {
+    RoundCallAction(
+        label = "Завершить",
+        modifier = modifier,
+        color = CallRejectRed,
+        onClick = onEnd,
+        iconRotation = 135f,
+        buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
+        labelMaxLines = if (compact) 2 else 1,
+    )
+}
+
+@Composable
 internal fun MuteCallAction(
     muted: Boolean,
     modifier: Modifier = Modifier,
     onMute: (Boolean) -> Unit,
+    compact: Boolean = false,
 ) {
     RoundCallAction(
         label = "Микрофон",
@@ -121,6 +660,8 @@ internal fun MuteCallAction(
         color = if (muted) Color(0xFF55708F) else Color(0xFF33465F),
         onClick = { onMute(!muted) },
         iconResource = if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
+        buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
+        labelMaxLines = if (compact) 2 else 1,
     )
 }
 
@@ -131,6 +672,7 @@ internal fun AudioRouteAction(
     modifier: Modifier = Modifier,
     onSelectEndpoint: (AudioEndpoint) -> Unit,
     onShowPicker: () -> Unit,
+    compact: Boolean = false,
 ) {
     val directRoute = directAudioRoute(currentEndpoint, availableEndpoints)
     RoundCallAction(
@@ -151,6 +693,8 @@ internal fun AudioRouteAction(
             }
         },
         iconResource = audioEndpointIcon(currentEndpoint),
+        buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
+        labelMaxLines = if (compact) 2 else 1,
     )
 }
 
