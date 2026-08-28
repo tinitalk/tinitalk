@@ -65,6 +65,14 @@ func TestDecodeRejectsOversizedPayload(t *testing.T) {
 	}
 }
 
+func TestDecodeAcceptsEventUpTo32KiB(t *testing.T) {
+	raw := `{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.start","sent_at":1787666400000,"payload":{"callee_id":"bob","blob":"` + strings.Repeat("a", 20*1024) + `"}}`
+
+	if _, err := Decode([]byte(raw)); err != nil {
+		t.Fatalf("Decode() error = %v, want 20 KiB event accepted", err)
+	}
+}
+
 func TestDecodeValidatesPayloadShape(t *testing.T) {
 	cases := []string{
 		`{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.start","sent_at":1787666400000,"payload":{}}`,

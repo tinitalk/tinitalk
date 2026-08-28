@@ -71,15 +71,17 @@ func (s *Server) routes() {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, struct {
-		Service    string `json:"service"`
-		Status     string `json:"status"`
-		APIVersion int    `json:"api_version"`
-		Commit     string `json:"commit"`
+		Service    string   `json:"service"`
+		Status     string   `json:"status"`
+		APIVersion int      `json:"api_version"`
+		Commit     string   `json:"commit"`
+		Features   []string `json:"features"`
 	}{
 		Service:    "tinitalk",
 		Status:     "ok",
 		APIVersion: apiVersion,
 		Commit:     serverCommit,
+		Features:   []string{"video_1to1"},
 	})
 }
 

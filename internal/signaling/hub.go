@@ -218,6 +218,15 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	if err := c.validateTransition(sender, event.Type); err != nil {
 		return err
 	}
+	if event.Type == "call.accept" {
+		var payload struct {
+			SupportsVideo bool `json:"supports_video"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		c.calleeSupportsVideo = payload.SupportsVideo
+	}
 	if event.Type == "rtc.ice" {
 		if err := h.checkICERate(c); err != nil {
 			return err
@@ -295,6 +304,7 @@ func (h *Hub) deliverICEConfig(c *call, restartID string) {
 		if h.iceConfig != nil {
 			payload = h.iceConfig.ICEConfig(c.id, participant)
 		}
+		payload = withVideoAllowed(payload, c.callerSupportsVideo && c.calleeSupportsVideo)
 		if restartID != "" {
 			payload = withRestartID(payload, restartID)
 		}
@@ -307,6 +317,23 @@ func (h *Hub) deliverICEConfig(c *call, restartID string) {
 		}
 		h.deliver(participant, h.next(c, event, participant))
 	}
+}
+
+func withVideoAllowed(payload json.RawMessage, videoAllowed bool) json.RawMessage {
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &config); err != nil {
+		return payload
+	}
+	encoded, err := json.Marshal(videoAllowed)
+	if err != nil {
+		return payload
+	}
+	config["video_allowed"] = encoded
+	updated, err := json.Marshal(config)
+	if err != nil {
+		return payload
+	}
+	return updated
 }
 
 func withRestartID(payload json.RawMessage, restartID string) json.RawMessage {
@@ -349,6 +376,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 	var payload struct {
 		CalleeID          string `json:"callee_id"`
 		SupportsCrossCall bool   `json:"supports_cross_call"`
+		SupportsVideo     bool   `json:"supports_video"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return err
@@ -369,7 +397,7 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 				existing.caller == payload.CalleeID &&
 				existing.callee == sender &&
 				existing.supportsCrossCall && payload.SupportsCrossCall {
-				return h.acceptCrossed(existing, event)
+				return h.acceptCrossed(existing, event, payload.SupportsVideo)
 			}
 		}
 		return ErrCalleeBusy
@@ -393,15 +421,16 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 		}
 	}
 	c := &call{
-		id:                event.CallID,
-		caller:            sender,
-		callee:            payload.CalleeID,
-		seen:              map[string]struct{}{},
-		offlineSince:      map[string]time.Time{},
-		nextSeq:           1,
-		startedAt:         now,
-		state:             callRinging,
-		supportsCrossCall: payload.SupportsCrossCall,
+		id:                  event.CallID,
+		caller:              sender,
+		callee:              payload.CalleeID,
+		seen:                map[string]struct{}{},
+		offlineSince:        map[string]time.Time{},
+		nextSeq:             1,
+		startedAt:           now,
+		state:               callRinging,
+		supportsCrossCall:   payload.SupportsCrossCall,
+		callerSupportsVideo: payload.SupportsVideo,
 	}
 	c.remember(event.ID)
 	h.calls[event.CallID] = c
@@ -417,13 +446,14 @@ func (h *Hub) start(sender string, event protocol.Event) error {
 	return nil
 }
 
-func (h *Hub) acceptCrossed(c *call, source protocol.Event) error {
+func (h *Hub) acceptCrossed(c *call, source protocol.Event, calleeSupportsVideo bool) error {
 	if h.history != nil {
 		if err := h.history.MarkCallAccepted(c.id); err != nil {
 			return err
 		}
 	}
 	c.remember(source.ID)
+	c.calleeSupportsVideo = calleeSupportsVideo
 	h.callAliases[source.CallID] = c.id
 	c.aliases = append(c.aliases, source.CallID)
 	c.state = callActive

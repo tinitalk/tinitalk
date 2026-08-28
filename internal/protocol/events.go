@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	MaxEventBytes    = 16 * 1024
+	MaxEventBytes    = 32 * 1024
 	RingTimeoutSecs  = 45
 	EventBufferLimit = 256
 )
@@ -94,13 +94,21 @@ func (e Event) validatePayload() error {
 	switch e.Type {
 	case "call.start":
 		var payload struct {
-			CalleeID string `json:"callee_id"`
+			CalleeID      string `json:"callee_id"`
+			SupportsVideo bool   `json:"supports_video"`
 		}
 		if err := json.Unmarshal(e.Payload, &payload); err != nil {
 			return err
 		}
 		if payload.CalleeID == "" {
 			return errors.New("callee_id is required")
+		}
+	case "call.accept":
+		var payload struct {
+			SupportsVideo bool `json:"supports_video"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
 		}
 	case "call.resume":
 		var payload struct {
