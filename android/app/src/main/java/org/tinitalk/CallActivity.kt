@@ -68,6 +68,7 @@ class CallActivity : ComponentActivity() {
     private lateinit var proximityController: ProximityController
     private var activityStarted = false
     private var activityResumed = false
+    private val cameraForegroundPublicationGate = CameraForegroundPublicationGate()
     private lateinit var cameraPermissionRouter: CameraPermissionActionRouter
     private val actionGate = CallScreenActionGate()
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
@@ -423,11 +424,14 @@ class CallActivity : ComponentActivity() {
         val callId = state.callId ?: return
         if (state.phase != CallPhase.Active) return
         val unlocked = !getSystemService(KeyguardManager::class.java).isDeviceLocked
+        val visible = foreground && unlocked
+        val permissionGranted = cameraPermissionGranted()
+        if (!cameraForegroundPublicationGate.shouldPublish(callId, visible, permissionGranted)) return
         CallForegroundService.cameraForeground(
             this,
             callId,
-            foreground = foreground && unlocked,
-            permissionGranted = cameraPermissionGranted(),
+            foreground = visible,
+            permissionGranted = permissionGranted,
         )
     }
 
@@ -515,6 +519,23 @@ class CallActivity : ComponentActivity() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
     }
 }
+
+internal class CameraForegroundPublicationGate {
+    private var published: CameraForegroundPublication? = null
+
+    fun shouldPublish(callId: String, foreground: Boolean, permissionGranted: Boolean): Boolean {
+        val next = CameraForegroundPublication(callId, foreground, permissionGranted)
+        if (next == published) return false
+        published = next
+        return true
+    }
+}
+
+private data class CameraForegroundPublication(
+    val callId: String,
+    val foreground: Boolean,
+    val permissionGranted: Boolean,
+)
 
 @androidx.compose.runtime.Composable
 private fun EmptyCallSurface() {
