@@ -8,6 +8,36 @@ import org.junit.Test
 
 class CallVideoStateTest {
     @Test
+    fun matchingAllowedRemoteVideoEventUpdatesTransmissionState() {
+        val configured = CallVideoState<String>(callId = CurrentCall, allowed = true)
+
+        val enabled = configured.withRemoteSending(CurrentCall, enabled = true)
+        val disabled = enabled.withRemoteSending(CurrentCall, enabled = false)
+
+        assertTrue(enabled.remoteSending)
+        assertFalse(disabled.remoteSending)
+    }
+
+    @Test
+    fun staleOrDisallowedRemoteVideoEventsCannotChangeTransmissionState() {
+        val configured = CallVideoState<String>(callId = CurrentCall, allowed = true)
+        val disallowed = CallVideoState<String>(callId = CurrentCall, allowed = false)
+
+        assertFalse(configured.withRemoteSending(ReplacementCall, enabled = true).remoteSending)
+        assertFalse(disallowed.withRemoteSending(CurrentCall, enabled = true).remoteSending)
+    }
+
+    @Test
+    fun replacementCallConfigurationClearsRemoteTransmissionState() {
+        val receiving = CallVideoState<String>(callId = CurrentCall, allowed = true)
+            .withRemoteSending(CurrentCall, enabled = true)
+
+        val replacement = receiving.configured(ReplacementCall, videoAllowed = true)
+
+        assertFalse(replacement.remoteSending)
+    }
+
+    @Test
     fun backgroundPauseKeepsRequestedIntentAndLocalTrackForResume() {
         val active = CallVideoState<String>(callId = CurrentCall, allowed = true)
             .request(CurrentCall, permissionGranted = true)

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,43 @@ func TestRestartRequestIsAValidEventType(t *testing.T) {
 
 	if err := event.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestRTCVideoIsAValidEventType(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		event := Event{
+			ID:      "018f7d51-3f90-7e63-b657-4a83a6a90210",
+			CallID:  "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+			Type:    "rtc.video",
+			SentAt:  1787666400000,
+			Payload: json.RawMessage(fmt.Sprintf(`{"enabled":%t}`, enabled)),
+		}
+
+		if err := event.Validate(); err != nil {
+			t.Fatalf("Validate(enabled=%t) error = %v", enabled, err)
+		}
+	}
+}
+
+func TestRTCVideoRequiresBooleanEnabled(t *testing.T) {
+	for _, payload := range []string{
+		`{}`,
+		`{"enabled":null}`,
+		`{"enabled":"true"}`,
+		`{"enabled":1}`,
+	} {
+		event := Event{
+			ID:      "018f7d51-3f90-7e63-b657-4a83a6a90210",
+			CallID:  "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+			Type:    "rtc.video",
+			SentAt:  1787666400000,
+			Payload: json.RawMessage(payload),
+		}
+
+		if err := event.Validate(); err == nil {
+			t.Fatalf("Validate(payload=%s) error = nil, want rejection", payload)
+		}
 	}
 }
 

@@ -17,7 +17,7 @@ func (c *call) afterDevice(recipient, deviceID string, seq uint64) []DeliveredEv
 	for _, entry := range c.replay {
 		if entry.recipient == recipient &&
 			(entry.deviceID == "" || entry.deviceID == deviceID) &&
-			entry.event.Seq > seq {
+			c.canReplay(entry.event, seq) {
 			out = append(out, entry.event)
 		}
 	}
@@ -27,9 +27,13 @@ func (c *call) afterDevice(recipient, deviceID string, seq uint64) []DeliveredEv
 func (c *call) after(recipient string, seq uint64) []DeliveredEvent {
 	var out []DeliveredEvent
 	for _, entry := range c.replay {
-		if entry.recipient == recipient && entry.event.Seq > seq {
+		if entry.recipient == recipient && c.canReplay(entry.event, seq) {
 			out = append(out, entry.event)
 		}
 	}
 	return out
+}
+
+func (c *call) canReplay(event DeliveredEvent, seq uint64) bool {
+	return event.Seq > seq && (c.state != callEnded || event.Type != "rtc.video")
 }

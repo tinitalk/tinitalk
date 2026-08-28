@@ -87,6 +87,7 @@ class ForegroundCallController(
     private val recentLocalIceEvents = linkedMapOf<String, LocalIceEvent>()
     private val rateLimitedIceEvents = linkedMapOf<String, LocalIceEvent>()
     private var videoState = CallVideoState<VideoRenderSource>()
+    private var capturingVideoCallId: String? = null
     private val weakNetworkVideoGate = WeakNetworkVideoGate()
     private var foregroundCallId: String? = null
     private var cameraStartBlocked = false
@@ -122,6 +123,13 @@ class ForegroundCallController(
             "rtc.config" -> handleRtcConfig(event)
             "rtc.answer" -> session?.let { media ->
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
+            }
+            "rtc.video" -> {
+                val enabled = event.payload["enabled"]
+                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
+                    ?.asBoolean
+                    ?: return
+                updateVideoState(videoState.withRemoteSending(event.callId, enabled))
             }
             "rtc.restart" -> {
                 clearPendingRestartRequest(event.callId)
@@ -233,16 +241,19 @@ class ForegroundCallController(
         }
         cameraStartSubmitted = false
         updateVideoState(videoState.captureStarted(callId, facing))
+        updateCapturingVideoCall(callId, enabled = true)
     }
 
     @Synchronized
     fun onCameraCaptureInvalidated(callId: String) {
         updateVideoState(videoState.captureStopped(callId))
+        updateCapturingVideoCall(callId, enabled = false)
     }
 
     @Synchronized
     fun onCameraCaptureStopped(callId: String) {
         updateVideoState(videoState.captureStopped(callId))
+        updateCapturingVideoCall(callId, enabled = false)
     }
 
     @Synchronized
@@ -330,6 +341,7 @@ class ForegroundCallController(
         rateLimitedIceEvents.clear()
         active = false
         muted = false
+        capturingVideoCallId = null
         foregroundCallId = null
         cameraStartBlocked = false
         cameraStartSubmitted = false
@@ -584,6 +596,18 @@ class ForegroundCallController(
         onVideoStateChanged(next)
     }
 
+    private fun updateCapturingVideoCall(callbackCallId: String, enabled: Boolean) {
+        if (enabled) {
+            if (capturingVideoCallId == callbackCallId) return
+            if (videoState.callId != callbackCallId || !videoState.allowed) return
+            capturingVideoCallId = callbackCallId
+        } else {
+            if (capturingVideoCallId != callbackCallId) return
+            capturingVideoCallId = null
+        }
+        sendVideoState(callbackCallId, enabled)
+    }
+
     @Synchronized
     private fun isCurrentSession(candidate: MediaSession): Boolean = session === candidate
 
@@ -591,6 +615,24 @@ class ForegroundCallController(
     fun onSignalConnected() {
         if (restartRetryTask == null) pendingRestart?.let { signal.send(it) }
         if (restartRequestRetryTask == null) pendingRestartRequest?.let { signal.send(it) }
+        sendVideoState(videoState.callId, capturingVideoCallId == videoState.callId)
+    }
+
+    private fun sendVideoState(nextCallId: String?, enabled: Boolean) {
+        val currentCallId = callId ?: return
+        if (
+            closing || closed ||
+            nextCallId != currentCallId ||
+            configuredCallId != currentCallId ||
+            !videoAllowed || !videoState.allowed
+        ) return
+        signal.send(
+            event(
+                currentCallId,
+                "rtc.video",
+                JsonObject().apply { addProperty("enabled", enabled) },
+            ),
+        )
     }
 
     @Synchronized

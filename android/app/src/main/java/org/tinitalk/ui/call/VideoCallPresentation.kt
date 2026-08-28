@@ -2,6 +2,16 @@ package org.tinitalk.ui.call
 
 internal const val CompactCallActionSizeDp = 64
 
+internal data class SelfPreviewSize(
+    val widthDp: Float,
+    val heightDp: Float,
+)
+
+internal fun selfPreviewSize(compact: Boolean): SelfPreviewSize {
+    val widthDp = if (compact) 84f else 96f
+    return SelfPreviewSize(widthDp = widthDp, heightDp = widthDp * 16f / 9f)
+}
+
 internal enum class VideoControlsVisibilityEvent {
     VideoChanged,
     AutoHideElapsed,
@@ -20,6 +30,7 @@ internal fun nextVideoControlsVisibility(
 }
 
 internal enum class CallControlAction {
+    SwitchCamera,
     Mute,
     AudioRoute,
     Camera,
@@ -42,6 +53,12 @@ internal data class VideoCallPresentation(
     val blockProximity: Boolean,
     val actionCount: Int,
 )
+
+internal fun videoModeActive(
+    videoAllowed: Boolean,
+    localSending: Boolean,
+    remoteSending: Boolean,
+): Boolean = videoAllowed && (localSending || remoteSending)
 
 internal fun videoCallPresentation(
     videoAllowed: Boolean,
@@ -86,15 +103,27 @@ internal fun callControlColumns(
 
 internal fun callControlLayout(
     videoAllowed: Boolean,
+    videoModeActive: Boolean,
     widthDp: Float,
     heightDp: Float,
     fontScale: Float,
 ): CallControlLayout {
     val actions = buildList {
-        add(CallControlAction.Mute)
-        add(CallControlAction.AudioRoute)
-        if (videoAllowed) add(CallControlAction.Camera)
-        add(CallControlAction.End)
+        if (videoModeActive) {
+            add(CallControlAction.SwitchCamera)
+            add(CallControlAction.Camera)
+            add(CallControlAction.Mute)
+            add(CallControlAction.End)
+        } else if (videoAllowed) {
+            add(CallControlAction.AudioRoute)
+            add(CallControlAction.Camera)
+            add(CallControlAction.Mute)
+            add(CallControlAction.End)
+        } else {
+            add(CallControlAction.Mute)
+            add(CallControlAction.AudioRoute)
+            add(CallControlAction.End)
+        }
     }
     val viewportHeight = (heightDp - 150f)
         .coerceAtLeast(CompactCallActionSizeDp.toFloat())

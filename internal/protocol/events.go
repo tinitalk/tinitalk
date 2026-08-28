@@ -36,6 +36,7 @@ var allowedTypes = map[string]struct{}{
 	"rtc.offer":           {},
 	"rtc.answer":          {},
 	"rtc.ice":             {},
+	"rtc.video":           {},
 	"rtc.restart":         {},
 	"rtc.restart.request": {},
 }
@@ -119,6 +120,16 @@ func (e Event) validatePayload() error {
 		}
 		if payload.LastSeq < 0 {
 			return errors.New("last_seq must be non-negative")
+		}
+	case "rtc.video":
+		var payload struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Enabled == nil {
+			return errors.New("enabled must be a boolean")
 		}
 	case "rtc.ice":
 		type iceCandidate struct {

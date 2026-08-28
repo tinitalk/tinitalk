@@ -72,3 +72,7 @@ func (c *call) deviceID(user string) string {
 func (c *call) devicesBound() bool {
 	return c.callerDeviceID != "" && c.calleeDeviceID != ""
 }
+
+func (c *call) videoAllowed() bool {
+	return c.devicesBound() && c.callerSupportsVideo && c.calleeSupportsVideo
+}

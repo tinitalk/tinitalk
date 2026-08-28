@@ -31,6 +31,172 @@ import java.util.concurrent.atomic.AtomicLong
 
 class ForegroundCallVideoControllerTest {
     @Test
+    fun cameraLifecyclePublishesVideoStateWithoutDuplicates() {
+        val signal = RecordingSignalClient()
+        val session = FakeCameraMediaSession()
+        val controller = controller(session, signal)
+        configureVideoSession(controller)
+        controller.setCameraForeground(CurrentCall, foreground = true, permissionGranted = true)
+        controller.setCameraRequested(CurrentCall, requested = true)
+        signal.sent.clear()
+
+        controller.onCameraCaptureStarted(CurrentCall, CameraFacing.Front)
+        controller.onCameraCaptureStarted(CurrentCall, CameraFacing.Front)
+        controller.onCameraCaptureStopped(CurrentCall)
+        controller.onCameraCaptureStopped(CurrentCall)
+
+        assertEquals(listOf(true, false), signal.videoStates())
+    }
+
+    @Test
+    fun cameraOffDoesNotPublishStoppedUntilCaptureIsActuallyInvalidated() {
+        val signal = RecordingSignalClient()
+        val controller = controller(FakeCameraMediaSession(), signal)
+        configureVideoSession(controller)
+        controller.setCameraForeground(CurrentCall, foreground = true, permissionGranted = true)
+        controller.setCameraRequested(CurrentCall, requested = true)
+        controller.onCameraCaptureStarted(CurrentCall, CameraFacing.Front)
+        signal.sent.clear()
+
+        controller.setCameraRequested(CurrentCall, requested = false)
+
+        assertTrue(signal.videoStates().isEmpty())
+
+        controller.onSignalConnected()
+
+        assertEquals(listOf(true), signal.videoStates())
+        signal.sent.clear()
+
+        controller.onCameraCaptureInvalidated(CurrentCall)
+        controller.onCameraCaptureStopped(CurrentCall)
+
+        assertEquals(listOf(false), signal.videoStates())
+    }
+
+    @Test
+    fun stoppedCallbackFromReplacedCallCannotOverwriteCurrentCaptureState() {
+        val signal = RecordingSignalClient()
+        val sessions = mapOf(
+            CurrentCall to FakeCameraMediaSession(),
+            ReplacementCall to FakeCameraMediaSession(),
+        )
+        val controller = ForegroundCallController(
+            signal = signal,
+            mediaFactory = { callId, _, _, _, _, _ -> requireNotNull(sessions[callId]) },
+            ids = FixedIds,
+        )
+        configureVideoSession(controller)
+        controller.setCameraForeground(CurrentCall, foreground = true, permissionGranted = true)
+        controller.setCameraRequested(CurrentCall, requested = true)
+        controller.onCameraCaptureStarted(CurrentCall, CameraFacing.Front)
+
+        val replacement = CallSnapshot(CallPhase.Active, ReplacementCall, 2)
+        controller.onSignalEvent(replacement, event(ReplacementCall, "rtc.config", videoConfig()))
+        controller.onSignalEvent(
+            replacement,
+            event(ReplacementCall, "rtc.offer", JsonObject().apply { addProperty("sdp", "replacement-offer") }),
+        )
+        controller.setCameraForeground(ReplacementCall, foreground = true, permissionGranted = true)
+        controller.setCameraRequested(ReplacementCall, requested = true)
+        controller.onCameraCaptureStarted(ReplacementCall, CameraFacing.Front)
+        signal.sent.clear()
+
+        controller.onCameraCaptureStopped(CurrentCall)
+        controller.onSignalConnected()
+
+        assertEquals(listOf(true), signal.videoStates())
+    }
+
+    @Test
+    fun remoteVideoStateUpdatesTheMatchingAllowedCallWithoutEcho() {
+        val signal = RecordingSignalClient()
+        val states = mutableListOf<CallVideoState<*>>()
+        val controller = controller(FakeCameraMediaSession(), signal, states::add)
+        configureVideoSession(controller)
+        signal.sent.clear()
+
+        controller.onSignalEvent(
+            CallSnapshot(CallPhase.Active, CurrentCall, 2),
+            event(CurrentCall, "rtc.video", videoState(enabled = true)),
+        )
+
+        assertTrue(states.last().remoteSending)
+        assertTrue(signal.videoStates().isEmpty())
+    }
+
+    @Test
+    fun remoteVideoStateIgnoresStaleAndDisallowedCalls() {
+        val states = mutableListOf<CallVideoState<*>>()
+        val controller = controller(FakeCameraMediaSession(), states::add)
+        configureVideoSession(controller)
+
+        controller.onSignalEvent(
+            CallSnapshot(CallPhase.Active, CurrentCall, 2),
+            event(ReplacementCall, "rtc.video", videoState(enabled = true)),
+        )
+        assertFalse(states.last().remoteSending)
+
+        controller.onSignalEvent(
+            CallSnapshot(CallPhase.Active, CurrentCall, 3),
+            event(CurrentCall, "rtc.config", JsonObject().apply { add("ice_servers", JsonArray()) }),
+        )
+        controller.onSignalEvent(
+            CallSnapshot(CallPhase.Active, CurrentCall, 4),
+            event(CurrentCall, "rtc.video", videoState(enabled = true)),
+        )
+
+        assertFalse(states.last().remoteSending)
+    }
+
+    @Test
+    fun signalReconnectResendsEnabledLocalVideoState() {
+        val signal = RecordingSignalClient()
+        val session = FakeCameraMediaSession()
+        val controller = controller(session, signal)
+        configureVideoSession(controller)
+        controller.setCameraForeground(CurrentCall, foreground = true, permissionGranted = true)
+        controller.setCameraRequested(CurrentCall, requested = true)
+        controller.onCameraCaptureStarted(CurrentCall, CameraFacing.Front)
+        signal.sent.clear()
+
+        controller.onSignalConnected()
+
+        assertEquals(listOf(true), signal.videoStates())
+    }
+
+    @Test
+    fun signalReconnectResendsDisabledLocalVideoState() {
+        val signal = RecordingSignalClient()
+        val controller = controller(FakeCameraMediaSession(), signal)
+        configureVideoSession(controller)
+        signal.sent.clear()
+
+        controller.onSignalConnected()
+
+        assertEquals(listOf(false), signal.videoStates())
+    }
+
+    @Test
+    fun disallowedVideoSessionNeverPublishesVideoState() {
+        val signal = RecordingSignalClient()
+        val controller = controller(FakeCameraMediaSession(), signal)
+        val snapshot = CallSnapshot(CallPhase.Active, CurrentCall, 1)
+        controller.onSignalEvent(
+            snapshot,
+            event(CurrentCall, "rtc.config", JsonObject().apply { add("ice_servers", JsonArray()) }),
+        )
+        controller.onSignalEvent(
+            snapshot,
+            event(CurrentCall, "rtc.offer", JsonObject().apply { addProperty("sdp", "remote-offer") }),
+        )
+        signal.sent.clear()
+
+        controller.onSignalConnected()
+
+        assertTrue(signal.videoStates().isEmpty())
+    }
+
+    @Test
     fun routesRequestedVideoThroughTheCurrentCallSessionAndLifecycle() {
         val session = FakeCameraMediaSession()
         val states = mutableListOf<CallVideoState<*>>()
@@ -438,8 +604,14 @@ class ForegroundCallVideoControllerTest {
     private fun controller(
         session: FakeCameraMediaSession,
         onState: (CallVideoState<*>) -> Unit,
+    ) = controller(session, NoopSignalClient, onState)
+
+    private fun controller(
+        session: FakeCameraMediaSession,
+        signal: SignalClient,
+        onState: (CallVideoState<*>) -> Unit = {},
     ) = ForegroundCallController(
-        signal = NoopSignalClient,
+        signal = signal,
         mediaFactory = { _, _, _, _, _, _ -> session },
         ids = FixedIds,
         onVideoStateChanged = onState,
@@ -463,6 +635,10 @@ class ForegroundCallVideoControllerTest {
     private fun videoConfig() = JsonObject().apply {
         add("ice_servers", JsonArray())
         addProperty("video_allowed", true)
+    }
+
+    private fun videoState(enabled: Boolean) = JsonObject().apply {
+        addProperty("enabled", enabled)
     }
 
     private fun event(callId: String, type: String, payload: JsonObject) =
@@ -591,6 +767,18 @@ class ForegroundCallVideoControllerTest {
 
     private object NoopSignalClient : SignalClient {
         override fun send(event: SignalEvent, onSettled: (() -> Unit)?) = Unit
+    }
+
+    private class RecordingSignalClient : SignalClient {
+        val sent = mutableListOf<SignalEvent>()
+
+        override fun send(event: SignalEvent, onSettled: (() -> Unit)?) {
+            sent += event
+        }
+
+        fun videoStates(): List<Boolean> = sent
+            .filter { it.type == "rtc.video" }
+            .map { it.payload["enabled"].asBoolean }
     }
 
     private object FixedIds : EventIds {

@@ -266,6 +266,9 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, even
 		}
 		return nil
 	}
+	if event.Type == "rtc.video" && !c.videoAllowed() {
+		return errors.New("video is not allowed for this call")
+	}
 	if c.devicesBound() && isDeviceBoundEvent(event.Type) && c.deviceID(sender) != senderDeviceID {
 		return errors.New("event is not from the active call device")
 	}
@@ -365,7 +368,7 @@ func (h *Hub) deliverICEConfig(c *call, restartID string) {
 		if h.iceConfig != nil {
 			payload = h.iceConfig.ICEConfig(c.id, participant)
 		}
-		payload = withVideoAllowed(payload, c.devicesBound() && c.callerSupportsVideo && c.calleeSupportsVideo)
+		payload = withVideoAllowed(payload, c.videoAllowed())
 		if restartID != "" {
 			payload = withRestartID(payload, restartID)
 		}
@@ -829,7 +832,7 @@ func (h *Hub) deliverDevice(user, deviceID string, event DeliveredEvent) {
 
 func isDeviceBoundEvent(eventType string) bool {
 	switch eventType {
-	case "call.accept", "rtc.offer", "rtc.answer", "rtc.ice", "rtc.restart", "rtc.restart.request":
+	case "call.accept", "rtc.offer", "rtc.answer", "rtc.ice", "rtc.restart", "rtc.restart.request", "rtc.video":
 		return true
 	default:
 		return false
@@ -904,7 +907,7 @@ func (c *call) validateTransition(sender, eventType string) error {
 		}
 	}
 	switch eventType {
-	case "call.end", "call.connected", "rtc.ice":
+	case "call.end", "call.connected", "rtc.ice", "rtc.video":
 		return nil
 	case "rtc.offer", "rtc.restart":
 		if sender != c.caller {

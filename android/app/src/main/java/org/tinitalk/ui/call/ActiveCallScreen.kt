@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -97,8 +98,24 @@ fun ActiveCallScreen(
     } else {
         Color.White.copy(alpha = 0.76f)
     }
+    val videoMode = videoModeActive(
+        videoAllowed = videoState.allowed,
+        localSending = videoState.sending,
+        remoteSending = videoState.remoteSending,
+    )
+    val cameraPressed: (Boolean) -> Unit = { requested ->
+        speakerRouteOnCameraPress(requested, currentEndpoint, availableEndpoints)?.let(onSelectEndpoint)
+        onCamera(requested)
+    }
 
-    if (videoState.allowed) {
+    LaunchedEffect(videoState.callId, videoMode, currentEndpoint, availableEndpoints) {
+        if (videoMode) {
+            routePickerVisible = false
+            speakerRouteOnCameraPress(true, currentEndpoint, availableEndpoints)?.let(onSelectEndpoint)
+        }
+    }
+
+    if (videoMode) {
         VideoActiveCallScreen(
             peerName = peerName,
             durationText = durationText,
@@ -106,12 +123,9 @@ fun ActiveCallScreen(
             statusColor = statusColor,
             muted = muted,
             currentEndpoint = currentEndpoint,
-            availableEndpoints = availableEndpoints,
             videoState = videoState,
             onMute = onMute,
-            onSelectEndpoint = onSelectEndpoint,
-            onShowRoutePicker = { routePickerVisible = true },
-            onCamera = onCamera,
+            onCamera = cameraPressed,
             onSwitchCamera = onSwitchCamera,
             onVideoVisibilityChanged = onVideoVisibilityChanged,
             onEnd = onEnd,
@@ -125,9 +139,12 @@ fun ActiveCallScreen(
             muted = muted,
             currentEndpoint = currentEndpoint,
             availableEndpoints = availableEndpoints,
+            videoAllowed = videoState.allowed,
+            cameraRequested = videoState.requested,
             onMute = onMute,
             onSelectEndpoint = onSelectEndpoint,
             onShowRoutePicker = { routePickerVisible = true },
+            onCamera = cameraPressed,
             onEnd = onEnd,
         )
     }
@@ -150,14 +167,18 @@ private fun AudioActiveCallScreen(
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
+    videoAllowed: Boolean,
+    cameraRequested: Boolean,
     onMute: (Boolean) -> Unit,
     onSelectEndpoint: (AudioEndpoint) -> Unit,
     onShowRoutePicker: () -> Unit,
+    onCamera: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val layout = callControlLayout(
-            videoAllowed = false,
+            videoAllowed = videoAllowed,
+            videoModeActive = false,
             widthDp = (maxWidth.value - 40f).coerceAtLeast(0f),
             heightDp = maxHeight.value,
             fontScale = LocalDensity.current.fontScale,
@@ -172,9 +193,12 @@ private fun AudioActiveCallScreen(
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
                 layout = layout,
+                videoAllowed = videoAllowed,
+                cameraRequested = cameraRequested,
                 onMute = onMute,
                 onSelectEndpoint = onSelectEndpoint,
                 onShowRoutePicker = onShowRoutePicker,
+                onCamera = onCamera,
                 onEnd = onEnd,
             )
         } else {
@@ -187,9 +211,12 @@ private fun AudioActiveCallScreen(
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
                 layout = layout,
+                videoAllowed = videoAllowed,
+                cameraRequested = cameraRequested,
                 onMute = onMute,
                 onSelectEndpoint = onSelectEndpoint,
                 onShowRoutePicker = onShowRoutePicker,
+                onCamera = onCamera,
                 onEnd = onEnd,
             )
         }
@@ -206,9 +233,12 @@ private fun RegularAudioActiveCallScreen(
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
     layout: CallControlLayout,
+    videoAllowed: Boolean,
+    cameraRequested: Boolean,
     onMute: (Boolean) -> Unit,
     onSelectEndpoint: (AudioEndpoint) -> Unit,
     onShowRoutePicker: () -> Unit,
+    onCamera: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
     CallScreenSurface(
@@ -228,9 +258,12 @@ private fun RegularAudioActiveCallScreen(
             currentEndpoint = currentEndpoint,
             availableEndpoints = availableEndpoints,
             layout = layout,
+            videoAllowed = videoAllowed,
+            cameraRequested = cameraRequested,
             onMute = onMute,
             onSelectEndpoint = onSelectEndpoint,
             onShowRoutePicker = onShowRoutePicker,
+            onCamera = onCamera,
             onEnd = onEnd,
         )
         Spacer(Modifier.height(18.dp))
@@ -247,9 +280,12 @@ private fun ConstrainedAudioActiveCallScreen(
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
     layout: CallControlLayout,
+    videoAllowed: Boolean,
+    cameraRequested: Boolean,
     onMute: (Boolean) -> Unit,
     onSelectEndpoint: (AudioEndpoint) -> Unit,
     onShowRoutePicker: () -> Unit,
+    onCamera: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
     Box(
@@ -308,9 +344,12 @@ private fun ConstrainedAudioActiveCallScreen(
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
                 layout = layout,
+                videoAllowed = videoAllowed,
+                cameraRequested = cameraRequested,
                 onMute = onMute,
                 onSelectEndpoint = onSelectEndpoint,
                 onShowRoutePicker = onShowRoutePicker,
+                onCamera = onCamera,
                 onEnd = onEnd,
             )
         }
@@ -325,11 +364,8 @@ private fun VideoActiveCallScreen(
     statusColor: Color,
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
-    availableEndpoints: List<AudioEndpoint>,
     videoState: CallVideoState<VideoRenderSource>,
     onMute: (Boolean) -> Unit,
-    onSelectEndpoint: (AudioEndpoint) -> Unit,
-    onShowRoutePicker: () -> Unit,
     onCamera: (Boolean) -> Unit,
     onSwitchCamera: () -> Unit,
     onVideoVisibilityChanged: (Boolean) -> Unit,
@@ -385,6 +421,7 @@ private fun VideoActiveCallScreen(
     ) {
         val controlLayout = callControlLayout(
             videoAllowed = true,
+            videoModeActive = true,
             widthDp = (maxWidth.value - 24f).coerceAtLeast(0f),
             heightDp = maxHeight.value,
             fontScale = LocalDensity.current.fontScale,
@@ -455,60 +492,31 @@ private fun VideoActiveCallScreen(
 
         if (localSource != null && videoState.requested) {
             val compactPreview = LocalDensity.current.fontScale >= 1.3f
+            val previewSize = selfPreviewSize(compactPreview)
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .statusBarsPadding()
                     .padding(top = if (compactPreview) 96.dp else 112.dp, end = 14.dp)
                     .size(
-                        width = if (compactPreview) 88.dp else 104.dp,
-                        height = if (compactPreview) 124.dp else 148.dp,
+                        width = previewSize.widthDp.dp,
+                        height = previewSize.heightDp.dp,
                     )
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RectangleShape)
                     .background(Color(0xFF172438))
-                    .border(1.dp, Color.White.copy(alpha = 0.34f), RoundedCornerShape(16.dp)),
+                    .border(1.dp, Color.White.copy(alpha = 0.34f), RectangleShape),
             ) {
                 VideoCallRenderer(
                     source = localSource,
                     mirror = videoState.facing == CameraFacing.Front,
                     localOverlay = true,
                     modifier = Modifier.fillMaxSize(),
-                    onClick = when {
-                        !controlsVisible -> toggleControls
-                        presentation.switchCameraEnabled -> onSwitchCamera
-                        controlsMayAutoHide -> toggleControls
-                        else -> null
-                    },
-                    contentDescription = when {
-                        !controlsVisible -> "Показать элементы управления"
-                        presentation.switchCameraEnabled -> "Сменить камеру"
-                        controlsMayAutoHide -> "Скрыть элементы управления"
-                        else -> null
-                    },
+                    onClick = toggleControls.takeIf { controlsMayAutoHide },
+                    contentDescription = if (controlsMayAutoHide) {
+                        if (controlsVisible) "Скрыть элементы управления" else "Показать элементы управления"
+                    } else null,
                     onFrameVisibilityChanged = { localFrameVisible = it },
                 )
-                AnimatedVisibility(
-                    visible = controlsVisible && presentation.switchCameraEnabled,
-                    modifier = Modifier.align(Alignment.BottomEnd),
-                    enter = fadeIn(tween(VideoControlsFadeInMillis)),
-                    exit = fadeOut(tween(VideoControlsFadeOutMillis)),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .padding(6.dp)
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.52f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_camera_switch),
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
             }
         }
 
@@ -573,13 +581,11 @@ private fun VideoActiveCallScreen(
                 Spacer(Modifier.height(8.dp))
                 AdaptiveVideoControls(
                     muted = muted,
-                    currentEndpoint = currentEndpoint,
-                    availableEndpoints = availableEndpoints,
                     layout = controlLayout,
                     cameraRequested = videoState.requested,
+                    switchCameraEnabled = presentation.switchCameraEnabled,
                     onMute = onMute,
-                    onSelectEndpoint = onSelectEndpoint,
-                    onShowRoutePicker = onShowRoutePicker,
+                    onSwitchCamera = onSwitchCamera,
                     onCamera = onCamera,
                     onEnd = onEnd,
                 )
@@ -619,13 +625,48 @@ private fun AdaptiveAudioControls(
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
     layout: CallControlLayout,
+    videoAllowed: Boolean,
+    cameraRequested: Boolean,
     onMute: (Boolean) -> Unit,
     onSelectEndpoint: (AudioEndpoint) -> Unit,
     onShowRoutePicker: () -> Unit,
+    onCamera: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
     val compact = layout.columns == 2
-    if (!compact) {
+    if (videoAllowed && !compact) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            AudioRouteAction(
+                currentEndpoint,
+                availableEndpoints,
+                Modifier.weight(1f),
+                onSelectEndpoint,
+                onShowRoutePicker,
+                compact = true,
+            )
+            CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
+            MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
+            EndCallAction(Modifier.weight(1f), onEnd, compact = true)
+        }
+    } else if (videoAllowed) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                AudioRouteAction(
+                    currentEndpoint,
+                    availableEndpoints,
+                    Modifier.weight(1f),
+                    onSelectEndpoint,
+                    onShowRoutePicker,
+                    compact = true,
+                )
+                CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
+                EndCallAction(Modifier.weight(1f), onEnd, compact = true)
+            }
+        }
+    } else if (!compact) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             MuteCallAction(muted, Modifier.weight(1f), onMute)
             AudioRouteAction(
@@ -662,49 +703,53 @@ private fun AdaptiveAudioControls(
 @Composable
 private fun AdaptiveVideoControls(
     muted: Boolean,
-    currentEndpoint: AudioEndpoint?,
-    availableEndpoints: List<AudioEndpoint>,
     layout: CallControlLayout,
     cameraRequested: Boolean,
+    switchCameraEnabled: Boolean,
     onMute: (Boolean) -> Unit,
-    onSelectEndpoint: (AudioEndpoint) -> Unit,
-    onShowRoutePicker: () -> Unit,
+    onSwitchCamera: () -> Unit,
     onCamera: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
     if (layout.columns == 4) {
         Row(modifier = Modifier.fillMaxWidth()) {
-            MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
-            AudioRouteAction(
-                currentEndpoint,
-                availableEndpoints,
-                Modifier.weight(1f),
-                onSelectEndpoint,
-                onShowRoutePicker,
-                compact = true,
-            )
+            SwitchCameraCallAction(switchCameraEnabled, Modifier.weight(1f), onSwitchCamera)
             CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
+            MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
             EndCallAction(Modifier.weight(1f), onEnd, compact = true)
         }
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth()) {
-                MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
-                AudioRouteAction(
-                    currentEndpoint,
-                    availableEndpoints,
-                    Modifier.weight(1f),
-                    onSelectEndpoint,
-                    onShowRoutePicker,
-                    compact = true,
-                )
+                SwitchCameraCallAction(switchCameraEnabled, Modifier.weight(1f), onSwitchCamera)
+                CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
             }
             Row(modifier = Modifier.fillMaxWidth()) {
-                CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
+                MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
                 EndCallAction(Modifier.weight(1f), onEnd, compact = true)
             }
         }
     }
+}
+
+@Composable
+private fun SwitchCameraCallAction(
+    enabled: Boolean,
+    modifier: Modifier,
+    onSwitchCamera: () -> Unit,
+) {
+    RoundCallAction(
+        label = "Повернуть",
+        modifier = modifier,
+        contentDescription = "Повернуть камеру",
+        color = Color(0xFF33465F),
+        enabled = enabled,
+        onClick = onSwitchCamera,
+        iconResource = R.drawable.ic_camera_switch,
+        buttonSize = CompactCallActionSizeDp.dp,
+        labelMaxLines = 2,
+        showLabel = false,
+    )
 }
 
 @Composable
@@ -722,6 +767,7 @@ private fun CameraCallAction(
         iconResource = R.drawable.ic_videocam,
         buttonSize = CompactCallActionSizeDp.dp,
         labelMaxLines = 2,
+        showLabel = false,
     )
 }
 
@@ -739,6 +785,7 @@ private fun EndCallAction(
         iconRotation = 135f,
         buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
         labelMaxLines = if (compact) 2 else 1,
+        showLabel = false,
     )
 }
 
@@ -758,6 +805,7 @@ internal fun MuteCallAction(
         iconResource = if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
         buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
         labelMaxLines = if (compact) 2 else 1,
+        showLabel = false,
     )
 }
 
@@ -791,6 +839,7 @@ internal fun AudioRouteAction(
         iconResource = audioEndpointIcon(currentEndpoint),
         buttonSize = if (compact) CompactCallActionSizeDp.dp else 72.dp,
         labelMaxLines = if (compact) 2 else 1,
+        showLabel = false,
     )
 }
 
@@ -856,6 +905,16 @@ internal fun directAudioRoute(current: AudioEndpoint?, available: List<AudioEndp
         CallEndpointCompat.TYPE_SPEAKER
     }
     return available.firstOrNull { it.type == nextType }
+}
+
+internal fun speakerRouteOnCameraPress(
+    cameraRequested: Boolean,
+    current: AudioEndpoint?,
+    available: List<AudioEndpoint>,
+): AudioEndpoint? = if (cameraRequested && current?.type == CallEndpointCompat.TYPE_EARPIECE) {
+    available.firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }
+} else {
+    null
 }
 
 private fun audioEndpointLabel(endpoint: AudioEndpoint?): String = when (endpoint?.type) {

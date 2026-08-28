@@ -144,6 +144,7 @@ internal fun RoundCallAction(
     iconResource: Int = R.drawable.ic_call,
     buttonSize: Dp = 72.dp,
     labelMaxLines: Int = 1,
+    showLabel: Boolean = true,
 ) {
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         IconButton(
@@ -163,15 +164,17 @@ internal fun RoundCallAction(
                     .graphicsLayer(rotationZ = iconRotation),
             )
         }
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = label,
-            color = Color.White.copy(alpha = if (enabled) 1f else 0.52f),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center,
-            maxLines = labelMaxLines,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (showLabel) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = label,
+                color = Color.White.copy(alpha = if (enabled) 1f else 0.52f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                maxLines = labelMaxLines,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }

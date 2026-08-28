@@ -86,6 +86,175 @@ func TestHubRoutesActiveMediaOnlyToBoundDevices(t *testing.T) {
 	}
 }
 
+func TestHubRoutesAndReplaysRTCVideoOnlyToBoundPeerDevice(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alicePhone := connectDevice(t, hub, "alice", "phone")
+	aliceTablet := connectDevice(t, hub, "alice", "tablet")
+	bobPhone := connectDevice(t, hub, "bob", "phone")
+	bobTablet := connectDevice(t, hub, "bob", "tablet")
+
+	start := event(uuid(2501), uuid(2502), "call.start", map[string]any{
+		"callee_id": "bob", "supports_video": true,
+	})
+	if err := hub.HandleClient(alicePhone, start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bobPhone)
+	_ = next(t, bobTablet)
+	accept := event(uuid(2503), start.CallID, "call.accept", map[string]any{"supports_video": true})
+	if err := hub.HandleClient(bobTablet, accept); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alicePhone) // call.accept
+	_ = next(t, alicePhone) // rtc.config
+	_ = next(t, bobTablet)  // rtc.config
+	assertNoEvent(t, aliceTablet)
+	assertNoEvent(t, bobPhone)
+
+	videoOn := event(uuid(2504), start.CallID, "rtc.video", map[string]any{"enabled": true})
+	if err := hub.HandleClient(alicePhone, videoOn); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, bobTablet); got.ID != videoOn.ID || got.Seq != 5 {
+		t.Fatalf("bob tablet video event = %+v", got)
+	}
+	assertNoEvent(t, aliceTablet)
+	assertNoEvent(t, bobPhone)
+
+	wrongDevice := event(uuid(2505), start.CallID, "rtc.video", map[string]any{"enabled": false})
+	if err := hub.HandleClient(aliceTablet, wrongDevice); err == nil {
+		t.Fatal("unbound caller device sent rtc.video")
+	}
+	assertNoEvent(t, bobTablet)
+	assertNoEvent(t, bobPhone)
+
+	bobTabletReplacement := connectDevice(t, hub, "bob", "tablet")
+	resume := event(uuid(2506), start.CallID, "call.resume", map[string]any{"last_seq": 4})
+	if err := hub.HandleClient(bobTabletReplacement, resume); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, bobTabletReplacement); got.ID != videoOn.ID {
+		t.Fatalf("replayed video event = %+v", got)
+	}
+	assertNoEvent(t, bobPhone)
+
+	videoOff := event(uuid(2507), start.CallID, "rtc.video", map[string]any{"enabled": false})
+	if err := hub.HandleClient(bobTabletReplacement, videoOff); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, alicePhone); got.ID != videoOff.ID {
+		t.Fatalf("alice phone video event = %+v", got)
+	}
+	assertNoEvent(t, aliceTablet)
+}
+
+func TestHubResumeAfterCallEndSkipsRTCVideoAndReplaysTerminalEvent(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alicePhone := connectDevice(t, hub, "alice", "phone")
+	bobPhone := connectDevice(t, hub, "bob", "phone")
+
+	start := event(uuid(2591), uuid(2592), "call.start", map[string]any{
+		"callee_id": "bob", "supports_video": true,
+	})
+	if err := hub.HandleClient(alicePhone, start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bobPhone)
+	if err := hub.HandleClient(bobPhone, event(uuid(2593), start.CallID, "call.accept", map[string]any{"supports_video": true})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alicePhone) // call.accept
+	_ = next(t, alicePhone) // rtc.config
+	_ = next(t, bobPhone)   // rtc.config
+
+	video := event(uuid(2594), start.CallID, "rtc.video", map[string]any{"enabled": true})
+	if err := hub.HandleClient(alicePhone, video); err != nil {
+		t.Fatal(err)
+	}
+	deliveredVideo := next(t, bobPhone)
+	end := event(uuid(2595), start.CallID, "call.end", map[string]any{})
+	if err := hub.HandleClient(alicePhone, end); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bobPhone)
+
+	bobReplacement := connectDevice(t, hub, "bob", "phone")
+	resume := event(uuid(2596), start.CallID, "call.resume", map[string]any{"last_seq": deliveredVideo.Seq - 1})
+	if err := hub.HandleClient(bobReplacement, resume); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, bobReplacement); got.ID != end.ID || got.Type != "call.end" {
+		t.Fatalf("terminal replay = %+v", got)
+	}
+	assertNoEvent(t, bobReplacement)
+}
+
+func TestHubRejectsRTCVideoWithoutTwoVideoCapableBoundDevices(t *testing.T) {
+	tests := []struct {
+		name                string
+		callerDeviceID      string
+		calleeDeviceID      string
+		callerSupportsVideo bool
+		calleeSupportsVideo bool
+		sender              string
+	}{
+		{
+			name:                "caller lacks video support",
+			callerDeviceID:      "phone",
+			calleeDeviceID:      "tablet",
+			calleeSupportsVideo: true,
+			sender:              "bob",
+		},
+		{
+			name:                "callee lacks video support",
+			callerDeviceID:      "phone",
+			calleeDeviceID:      "tablet",
+			callerSupportsVideo: true,
+			sender:              "alice",
+		},
+		{
+			name:                "call devices are not bound",
+			callerSupportsVideo: true,
+			calleeSupportsVideo: true,
+			sender:              "alice",
+		},
+	}
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			hub := NewHub(NoopNotifier{})
+			alice := connectDevice(t, hub, "alice", test.callerDeviceID)
+			bob := connectDevice(t, hub, "bob", test.calleeDeviceID)
+			id := 2521 + i*10
+			start := event(uuid(id), uuid(id+1), "call.start", map[string]any{
+				"callee_id": "bob", "supports_video": test.callerSupportsVideo,
+			})
+			if err := hub.HandleClient(alice, start); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, bob)
+			accept := event(uuid(id+2), start.CallID, "call.accept", map[string]any{
+				"supports_video": test.calleeSupportsVideo,
+			})
+			if err := hub.HandleClient(bob, accept); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, alice) // call.accept
+			_ = next(t, alice) // rtc.config
+			_ = next(t, bob)   // rtc.config
+
+			sender, recipient := alice, bob
+			if test.sender == "bob" {
+				sender, recipient = bob, alice
+			}
+			video := event(uuid(id+3), start.CallID, "rtc.video", map[string]any{"enabled": true})
+			if err := hub.HandleClient(sender, video); err == nil {
+				t.Fatal("rtc.video was accepted without two video-capable bound devices")
+			}
+			assertNoEvent(t, recipient)
+		})
+	}
+}
+
 func TestHubRebindsMediaOnSameDeviceReconnectAndFiltersReplay(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alicePhone := connectDevice(t, hub, "alice", "phone")

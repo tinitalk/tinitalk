@@ -15,6 +15,7 @@ data class CallVideoState<out Track>(
     val permissionGranted: Boolean = false,
     val networkGated: Boolean = false,
     val sending: Boolean = false,
+    val remoteSending: Boolean = false,
     val facing: CameraFacing = CameraFacing.Front,
     val localTrack: Track? = null,
     val remoteTrack: Track? = null,
@@ -42,6 +43,9 @@ data class CallVideoState<out Track>(
 
     fun withRemoteTrack(callbackCallId: String, track: @UnsafeVariance Track?): CallVideoState<Track> =
         if (callId == callbackCallId) copy(remoteTrack = track) else this
+
+    fun withRemoteSending(callbackCallId: String, enabled: Boolean): CallVideoState<Track> =
+        if (callId == callbackCallId && allowed) copy(remoteSending = enabled) else this
 
     fun withNetworkGate(callbackCallId: String, gated: Boolean): CallVideoState<Track> =
         if (callId == callbackCallId) copy(networkGated = gated) else this
