@@ -106,6 +106,46 @@ class CallStatsTest {
     }
 
     @Test
+    fun excludesSilentSamplesFromConcealedAudioPercentage() {
+        val collector = CallStatsCollector()
+        collector.collect(
+            audioInbound(
+                lost = 0,
+                received = 100,
+                jitterBufferDelay = 0.0,
+                jitterBufferTargetDelay = 0.0,
+                emitted = 48_000,
+                totalSamples = 48_000,
+                concealedSamples = 0,
+                silentConcealedSamples = 0,
+                packetsDiscarded = 0,
+                concealmentEvents = 0,
+                fecPacketsReceived = 0,
+            ),
+            nowMillis = 1_000,
+        )
+
+        val stats = collector.collect(
+            audioInbound(
+                lost = 0,
+                received = 200,
+                jitterBufferDelay = 0.0,
+                jitterBufferTargetDelay = 0.0,
+                emitted = 96_000,
+                totalSamples = 96_000,
+                concealedSamples = 4_800,
+                silentConcealedSamples = 3_600,
+                packetsDiscarded = 0,
+                concealmentEvents = 1,
+                fecPacketsReceived = 0,
+            ),
+            nowMillis = 2_000,
+        )
+
+        assertEquals(2.5, stats.concealedSamplesPercent, 0.01)
+    }
+
+    @Test
     fun selectsTheActiveAudioStreamInsteadOfAStaleOne() {
         val stats = CallStatsCollector().collect(
             linkedMapOf(
@@ -331,6 +371,7 @@ class CallStatsTest {
         emitted: Number,
         totalSamples: Number,
         concealedSamples: Number,
+        silentConcealedSamples: Number = 0,
         packetsDiscarded: Number,
         concealmentEvents: Number,
         fecPacketsReceived: Number,
@@ -345,6 +386,7 @@ class CallStatsTest {
             "jitterBufferEmittedCount" to emitted,
             "totalSamplesReceived" to totalSamples,
             "concealedSamples" to concealedSamples,
+            "silentConcealedSamples" to silentConcealedSamples,
             "packetsDiscarded" to packetsDiscarded,
             "concealmentEvents" to concealmentEvents,
             "fecPacketsReceived" to fecPacketsReceived,
