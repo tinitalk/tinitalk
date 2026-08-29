@@ -37,6 +37,21 @@ func TestInitAndUserCommands(t *testing.T) {
 	if err := Run(&out, "user", "disable", "--data-dir", dir, "alice"); err != nil {
 		t.Fatal(err)
 	}
+	out.Reset()
+	if err := Run(&out, "user", "enable", "--data-dir", dir, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "enabled: alice\n" {
+		t.Fatalf("enable output = %q", got)
+	}
+	out.Reset()
+	if err := Run(&out, "user", "list", "--data-dir", dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "alice\tAlice\tenabled") {
+		t.Fatalf("list after enable output = %q", got)
+	}
+	out.Reset()
 	if err := Run(&out, "user", "rotate-token", "--data-dir", dir, "alice"); err != nil {
 		t.Fatal(err)
 	}

@@ -26,11 +26,13 @@ sudo -u tinitalk tinitalk user add alice "Alice"
 sudo -u tinitalk tinitalk user list
 sudo -u tinitalk tinitalk user rotate-token alice
 sudo -u tinitalk tinitalk user disable alice
+sudo -u tinitalk tinitalk user enable alice
 sudo -u tinitalk tinitalk user delete alice
 ```
 
-`disable` блокирует вход, но сохраняет пользователя. `delete` физически удаляет
-пользователя, его токены и зарегистрированные устройства. Если удаляемый
+`disable` блокирует вход и новые push, но сохраняет пользователя, его токен и
+зарегистрированное устройство. `enable` снимает блокировку. `delete` физически
+удаляет пользователя, его токены и зарегистрированные устройства. Если удаляемый
 пользователь уже подключен, перезапусти сервер для немедленного разрыва WSS.
 
 Те же Make target'ы работают из Windows и WSL. В WSL сервер собирается Linux

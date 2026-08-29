@@ -82,6 +82,14 @@ func (db *DB) DisableUser(login string) error {
 	return requireAffected(result, "user not found")
 }
 
+func (db *DB) EnableUser(login string) error {
+	result, err := db.sql.Exec("UPDATE users SET disabled = 0 WHERE login = ?", login)
+	if err != nil {
+		return err
+	}
+	return requireAffected(result, "user not found")
+}
+
 func (db *DB) DeleteUser(login string) error {
 	result, err := db.sql.Exec("DELETE FROM users WHERE login = ?", login)
 	if err != nil {

@@ -77,7 +77,7 @@ func (db *DB) TokensForUser(login string) ([]Device, error) {
 		SELECT u.login, d.device_id, d.fcm_token
 		FROM devices d
 		JOIN users u ON u.id = d.user_id
-		WHERE u.login = ? AND d.fcm_token IS NOT NULL AND d.fcm_token != ''
+		WHERE u.login = ? AND u.disabled = 0 AND d.fcm_token IS NOT NULL AND d.fcm_token != ''
 	`, login)
 	if err != nil {
 		return nil, err

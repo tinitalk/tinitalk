@@ -177,6 +177,41 @@ func TestRotateTokenClearsPushRegistrationAndPreservesManagedSession(t *testing.
 	}
 }
 
+func TestDisabledUserPushRegistrationResumesAfterEnable(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.AddUser("alice", "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertDevice("alice", "phone", "fcm-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DisableUser("alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	devices, err := db.TokensForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("disabled user devices = %+v, want none eligible for push", devices)
+	}
+	if err := db.EnableUser("alice"); err != nil {
+		t.Fatal(err)
+	}
+	devices, err = db.TokensForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].DeviceID != "phone" || devices[0].FCMToken != "fcm-token" {
+		t.Fatalf("enabled user devices = %+v, want preserved phone registration", devices)
+	}
+}
+
 func TestUpsertDeviceTransfersOwnershipToCurrentUser(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
