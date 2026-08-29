@@ -140,6 +140,41 @@ func TestDeleteUserRemovesCredentialsAndDevices(t *testing.T) {
 	}
 }
 
+func TestUpsertDeviceTransfersOwnershipToCurrentUser(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.AddUser("alice", "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.AddUser("bob", "Bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertDevice("alice", "same-phone", "same-fcm-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertDevice("bob", "same-phone", "same-fcm-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	aliceDevices, err := db.TokensForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobDevices, err := db.TokensForUser("bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceDevices) != 0 {
+		t.Fatalf("alice devices = %+v, want none after phone changed account", aliceDevices)
+	}
+	if len(bobDevices) != 1 || bobDevices[0].DeviceID != "same-phone" || bobDevices[0].FCMToken != "same-fcm-token" {
+		t.Fatalf("bob devices = %+v, want transferred phone", bobDevices)
+	}
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -122,7 +124,7 @@ func WakeMessage(_ string, token string, event signaling.DeliveredEvent, callerL
 		"caller":       caller,
 		"caller_login": callerLogin,
 		"last_seq":     strconv.FormatUint(event.Seq, 10),
-		"expires_at":   time.UnixMilli(event.SentAt).Add(ttl).Format(time.RFC3339),
+		"expires_at":   time.UnixMilli(event.SentAt).Add(ttl).UTC().Format(time.RFC3339),
 	}
 	request.Message.Android.Priority = "HIGH"
 	request.Message.Android.TTL = fcmTTL(ttl)
@@ -176,13 +178,35 @@ func (s HTTPv1Sender) Send(request WakeRequest) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
-		return ErrInvalidRegistration
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return nil
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return errors.New("FCM send failed")
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return fmt.Errorf("FCM send failed: HTTP %d", resp.StatusCode)
 	}
-	return nil
+	var failure struct {
+		Error struct {
+			Status  string `json:"status"`
+			Details []struct {
+				Type      string `json:"@type"`
+				ErrorCode string `json:"errorCode"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &failure)
+	for _, detail := range failure.Error.Details {
+		if detail.Type != "type.googleapis.com/google.firebase.fcm.v1.FcmError" {
+			continue
+		}
+		if detail.ErrorCode == "INVALID_ARGUMENT" || detail.ErrorCode == "UNREGISTERED" {
+			return ErrInvalidRegistration
+		}
+	}
+	if failure.Error.Status == "" {
+		return fmt.Errorf("FCM send failed: HTTP %d", resp.StatusCode)
+	}
+	return fmt.Errorf("FCM send failed: HTTP %d (%s)", resp.StatusCode, failure.Error.Status)
 }
 
 func BearerTokenFromServiceAccount(ctx context.Context, serviceAccount []byte) (func() (string, error), error) {

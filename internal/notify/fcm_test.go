@@ -2,6 +2,9 @@ package notify
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -32,6 +35,20 @@ func TestWakeMessageUsesHighPriorityAndShortTTL(t *testing.T) {
 	}
 }
 
+func TestWakeMessageFormatsExpiryInUTC(t *testing.T) {
+	originalLocal := time.Local
+	time.Local = time.FixedZone("server-local", 3*60*60)
+	t.Cleanup(func() { time.Local = originalLocal })
+
+	msg := WakeMessage("project-1", "token-1", signaling.DeliveredEvent{
+		Event: protocol.Event{CallID: "call-1", Type: "call.incoming", SentAt: 1000},
+	}, "alice", "Alice", 30*time.Second)
+
+	if got := msg.Message.Data["expires_at"]; got != "1970-01-01T00:00:31Z" {
+		t.Fatalf("expires_at = %q, want canonical UTC time", got)
+	}
+}
+
 func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
 	store := &fakeTokenStore{tokens: []DeviceToken{{Token: "bad-token"}}, displayName: "Мама"}
 	sender := &fakeSender{err: ErrInvalidRegistration}
@@ -53,6 +70,57 @@ func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
 	}
 	if sender.last.Message.Data["caller_login"] != "alice" {
 		t.Fatalf("caller_login = %q", sender.last.Message.Data["caller_login"])
+	}
+}
+
+func TestHTTPv1SenderClassifiesOnlyTokenErrorsAsInvalidRegistration(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		body        string
+		wantInvalid bool
+	}{
+		{
+			name:   "invalid message payload",
+			status: http.StatusBadRequest,
+			body: `{"error":{"status":"INVALID_ARGUMENT","details":[{` +
+				`"@type":"type.googleapis.com/google.rpc.BadRequest"}]}}`,
+		},
+		{
+			name:        "invalid registration token",
+			status:      http.StatusBadRequest,
+			body:        `{"error":{"status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"INVALID_ARGUMENT"}]}}`,
+			wantInvalid: true,
+		},
+		{
+			name:        "unregistered token",
+			status:      http.StatusNotFound,
+			body:        `{"error":{"status":"NOT_FOUND","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}`,
+			wantInvalid: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			sender := HTTPv1Sender{
+				Client:      server.Client(),
+				Endpoint:    server.URL,
+				BearerToken: func() (string, error) { return "access-token", nil },
+			}
+
+			err := sender.Send(WakeRequest{})
+			if err == nil {
+				t.Fatal("Send error = nil, want FCM rejection")
+			}
+			if got := errors.Is(err, ErrInvalidRegistration); got != test.wantInvalid {
+				t.Fatalf("invalid registration = %v, want %v; error = %v", got, test.wantInvalid, err)
+			}
+		})
 	}
 }
 

@@ -7,15 +7,30 @@ type Device struct {
 }
 
 func (db *DB) UpsertDevice(login, deviceID, fcmToken string) error {
-	var userID int64
-	if err := db.sql.QueryRow("SELECT id FROM users WHERE login = ?", login).Scan(&userID); err != nil {
+	tx, err := db.sql.Begin()
+	if err != nil {
 		return err
 	}
-	_, err := db.sql.Exec(`
+	defer tx.Rollback()
+
+	var userID int64
+	if err := tx.QueryRow("SELECT id FROM users WHERE login = ?", login).Scan(&userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM devices
+		WHERE (device_id = ? OR fcm_token = ?)
+			AND NOT (user_id = ? AND device_id = ?)
+	`, deviceID, fcmToken, userID, deviceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
 		INSERT INTO devices(user_id, device_id, fcm_token, updated_at) VALUES(?, ?, ?, unixepoch())
 		ON CONFLICT(user_id, device_id) DO UPDATE SET fcm_token=excluded.fcm_token, updated_at=unixepoch()
-	`, userID, deviceID, fcmToken)
-	return err
+	`, userID, deviceID, fcmToken); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (db *DB) TokensForUser(login string) ([]Device, error) {
