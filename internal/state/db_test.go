@@ -140,6 +140,43 @@ func TestDeleteUserRemovesCredentialsAndDevices(t *testing.T) {
 	}
 }
 
+func TestRotateTokenClearsPushRegistrationAndPreservesManagedSession(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.AddUser("alice", "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := db.ClaimSession("alice", "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertAuthenticatedDevice("alice", claim.Current.SessionID, "phone", "fcm-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.RotateToken("alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	devices, err := db.TokensForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("devices after token rotation = %+v, want none", devices)
+	}
+	current, managed, err := db.CurrentSession("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !managed || current.DeviceID != claim.Current.DeviceID || current.SessionID != claim.Current.SessionID {
+		t.Fatalf("session after token rotation = %+v, managed %v, want unchanged %+v", current, managed, claim.Current)
+	}
+}
+
 func TestUpsertDeviceTransfersOwnershipToCurrentUser(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {

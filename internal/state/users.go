@@ -112,5 +112,9 @@ func (db *DB) RotateToken(login string) (string, error) {
 		_ = tx.Rollback()
 		return "", err
 	}
+	if _, err := tx.Exec("DELETE FROM devices WHERE user_id = ?", userID); err != nil {
+		_ = tx.Rollback()
+		return "", err
+	}
 	return token, tx.Commit()
 }
