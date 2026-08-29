@@ -28,9 +28,10 @@ class IncomingCallForegroundService : Service() {
         }
 
         val notifier = IncomingCallNotifier(this)
+        val mode = currentIncomingCallPresentation(this)
         var foregroundStarted = false
         val presented = runCatching {
-            notifier.presentIncoming(invite) { notification ->
+            notifier.presentIncoming(invite, mode) { notification ->
                 foregroundStarted = runCatching {
                     IncomingCallForegroundPresentation(
                         enterForeground = {
@@ -44,7 +45,7 @@ class IncomingCallForegroundService : Service() {
                         },
                         acknowledgeRinging = ringingAcknowledger::acknowledge,
                         openFullScreen = { incoming.openScreen(this, it) },
-                    ).present(invite)
+                    ).present(invite, mode)
                 }.isSuccess
                 if (!foregroundStarted) {
                     IncomingCallForegroundPresentation(
@@ -54,7 +55,7 @@ class IncomingCallForegroundService : Service() {
                         },
                         acknowledgeRinging = ringingAcknowledger::acknowledge,
                         openFullScreen = { incoming.openScreen(this, it) },
-                    ).present(invite)
+                    ).present(invite, mode)
                 }
             }
         }.getOrDefault(false)

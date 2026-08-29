@@ -115,10 +115,10 @@ internal class IncomingCallForegroundPresentation(
     private val acknowledgeRinging: (IncomingInvite) -> Unit,
     private val openFullScreen: (IncomingInvite) -> Unit,
 ) {
-    fun present(invite: IncomingInvite) {
+    fun present(invite: IncomingInvite, mode: IncomingCallPresentationMode) {
         enterForeground(invite)
         acknowledgeRinging(invite)
-        openFullScreen(invite)
+        if (mode == IncomingCallPresentationMode.InApp) openFullScreen(invite)
     }
 }
 
@@ -184,8 +184,10 @@ private object IncomingVibration {
 }
 
 private object IncomingRingtone {
+    private val handler = Handler(Looper.getMainLooper())
     private var callId: String? = null
     private var ringtone: Ringtone? = null
+    private var stopTask: Runnable? = null
 
     @Synchronized
     fun start(context: Context, invite: IncomingInvite) {
@@ -202,12 +204,20 @@ private object IncomingRingtone {
 
         callId = invite.callId
         ringtone = next
+        val task = Runnable { stop(invite.callId) }
+        stopTask = task
+        handler.postDelayed(
+            task,
+            Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0),
+        )
         runCatching { next.play() }.onFailure { stop(invite.callId) }
     }
 
     @Synchronized
     fun stop(expectedCallId: String? = null) {
         if (expectedCallId != null && callId != expectedCallId) return
+        stopTask?.let(handler::removeCallbacks)
+        stopTask = null
         runCatching { ringtone?.stop() }
         ringtone = null
         callId = null
@@ -216,28 +226,41 @@ private object IncomingRingtone {
 
 class IncomingCallNotifier(private val context: Context) {
     fun show(invite: IncomingInvite) {
-        buildIncomingNotification(invite) { notification ->
+        val mode = currentIncomingCallPresentation(context, appVisible = false)
+        buildIncomingNotification(invite, mode) { notification ->
             context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
         }
     }
 
     internal fun buildIncomingNotification(invite: IncomingInvite): Notification? =
-        buildIncomingNotification(invite) {}
+        buildIncomingNotification(invite, currentIncomingCallPresentation(context)) {}
 
-    internal fun presentIncoming(invite: IncomingInvite, publish: (Notification) -> Unit): Boolean =
-        buildIncomingNotification(invite, publish) != null
+    internal fun buildIncomingNotification(
+        invite: IncomingInvite,
+        mode: IncomingCallPresentationMode,
+    ): Notification? = buildIncomingNotification(invite, mode) {}
+
+    internal fun presentIncoming(
+        invite: IncomingInvite,
+        mode: IncomingCallPresentationMode,
+        publish: (Notification) -> Unit,
+    ): Boolean = buildIncomingNotification(invite, mode, publish) != null
 
     private fun buildIncomingNotification(
         invite: IncomingInvite,
+        mode: IncomingCallPresentationMode,
         publish: (Notification) -> Unit,
     ): Notification? {
-        ensureChannel()
+        ensureChannel(mode)
         val controller = IncomingCallController()
         var notification: Notification? = null
         val presented = controller.presentIncoming(context, invite) {
             IncomingVibration.start(context, invite)
             val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                Notification.Builder(context, ChannelId)
+                Notification.Builder(
+                    context,
+                    if (mode == IncomingCallPresentationMode.InApp) InAppChannelId else ChannelId,
+                )
             } else {
                 @Suppress("DEPRECATION")
                 Notification.Builder(context)
@@ -251,12 +274,20 @@ class IncomingCallNotifier(private val context: Context) {
                 .setContentTitle("Входящий звонок")
                 .setContentText(invite.caller.ifEmpty { "TiniTalk" })
                 .setCategory(Notification.CATEGORY_CALL)
-                .setPriority(Notification.PRIORITY_HIGH)
+                .setPriority(
+                    if (mode == IncomingCallPresentationMode.InApp) {
+                        Notification.PRIORITY_LOW
+                    } else {
+                        Notification.PRIORITY_HIGH
+                    },
+                )
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setContentIntent(fullScreen)
-                .setFullScreenIntent(fullScreen, canUseFullScreenIntent())
                 .setOngoing(true)
                 .setTimeoutAfter(Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0))
+            if (mode == IncomingCallPresentationMode.FullScreen) {
+                builder.setFullScreenIntent(fullScreen, true)
+            }
             if (Build.VERSION.SDK_INT >= 31) {
                 builder.setStyle(
                     Notification.CallStyle.forIncomingCall(
@@ -386,8 +417,23 @@ class IncomingCallNotifier(private val context: Context) {
         context.getSystemService(NotificationManager::class.java).cancel(NotificationId)
     }
 
-    private fun ensureChannel() {
+    private fun ensureChannel(mode: IncomingCallPresentationMode) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (mode == IncomingCallPresentationMode.InApp) {
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(
+                    InAppChannelId,
+                    "Входящий звонок в приложении",
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = "Служебное уведомление во время показа входящего звонка"
+                    enableVibration(false)
+                    setSound(null, null)
+                    setShowBadge(false)
+                },
+            )
+            return
+        }
         val ringtone = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
         val audio = AudioAttributes.Builder()
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -422,13 +468,9 @@ class IncomingCallNotifier(private val context: Context) {
         }
     }
 
-    private fun canUseFullScreenIntent(): Boolean {
-        if (Build.VERSION.SDK_INT < 34) return true
-        return context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
-    }
-
     companion object {
         private const val ChannelId = "incoming_calls_v2"
+        private const val InAppChannelId = "incoming_calls_in_app_v1"
         private const val MissedChannelId = "missed_calls_v2"
         internal const val NotificationId = 11
         private const val MissedNotificationId = 12

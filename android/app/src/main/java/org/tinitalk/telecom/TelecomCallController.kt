@@ -3,6 +3,7 @@ package org.tinitalk.telecom
 import android.content.Context
 import android.net.Uri
 import android.telecom.DisconnectCause
+import android.util.Log
 import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlScope
 import androidx.core.telecom.CallControlResult
@@ -26,6 +27,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+
+private const val TelecomLogTag = "TiniTalkCall"
 
 enum class TelecomCapabilities {
     AudioOnly,
@@ -81,6 +84,19 @@ class TelecomCallController(private val registrar: TelecomRegistrar) {
     fun cancel(callId: String) = registrar.cancel(callId)
 }
 
+internal class IncomingTelecomFailureHandler(
+    private val finishPresentation: () -> Unit,
+    private val reportTelecomFailure: (Throwable) -> Unit,
+) {
+    fun telecomFailed(failure: Throwable) {
+        // Android 13 and older use the legacy Telecom implementation, which can reject or
+        // time out independently. Telecom is optional, so TiniTalk must keep ringing itself.
+        reportTelecomFailure(failure)
+    }
+
+    fun callExpired() = finishPresentation()
+}
+
 class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
     private val context = context.applicationContext
     private val callsManager = CallsManager(context.applicationContext)
@@ -90,19 +106,26 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
     }
 
     override fun addIncoming(invite: IncomingInvite, callbacks: TelecomCallCallbacks) {
-        addCall(
-            callId = invite.callId,
-            displayName = invite.caller,
-            direction = CallAttributesCompat.DIRECTION_INCOMING,
-            callbacks = callbacks,
-            expiresAt = invite.expiresAt,
-            onFailure = {
+        val failures = IncomingTelecomFailureHandler(
+            finishPresentation = {
                 IncomingCallController().finishTerminalPresentation(
                     context,
                     invite.callId,
                     IncomingCallNotifier(context)::cancel,
                 )
             },
+            reportTelecomFailure = { failure ->
+                Log.w(TelecomLogTag, "System Telecom failed; keeping TiniTalk incoming call", failure)
+            },
+        )
+        addCall(
+            callId = invite.callId,
+            displayName = invite.caller,
+            direction = CallAttributesCompat.DIRECTION_INCOMING,
+            callbacks = callbacks,
+            expiresAt = invite.expiresAt,
+            onExpired = failures::callExpired,
+            onTelecomFailure = failures::telecomFailed,
         )
     }
 
@@ -121,7 +144,8 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
         direction: Int,
         callbacks: TelecomCallCallbacks,
         expiresAt: Instant? = null,
-        onFailure: () -> Unit = {},
+        onExpired: () -> Unit = {},
+        onTelecomFailure: (Throwable) -> Unit = {},
     ) {
         val session = TelecomSessions.prepare(callId) ?: return
         val owner = TelecomSessions.scope.launch(start = CoroutineStart.LAZY) {
@@ -131,7 +155,7 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                     try {
                         TelecomSessions.disconnect(callId, DisconnectCause.MISSED)
                         currentCoroutineContext().ensureActive()
-                        onFailure()
+                        onExpired()
                     } catch (failure: CancellationException) {
                         TelecomSessions.abortCancel(callId)
                         throw failure
@@ -175,9 +199,9 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                 }
             } catch (failure: CancellationException) {
                 throw failure
-            } catch (_: Exception) {
-                session.fail(IllegalStateException("Telecom rejected the call"))
-                onFailure()
+            } catch (failure: Exception) {
+                session.fail(failure)
+                onTelecomFailure(failure)
             } finally {
                 TelecomSessions.finishNormally(callId, session)
             }

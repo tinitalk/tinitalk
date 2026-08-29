@@ -8,6 +8,21 @@ import java.time.Instant
 
 class TelecomCallControllerTest {
     @Test
+    fun telecomFailureIsNonTerminalButExpiryIsTerminal() {
+        var presentationFinishes = 0
+        val failures = IncomingTelecomFailureHandler(
+            finishPresentation = { presentationFinishes++ },
+            reportTelecomFailure = {},
+        )
+
+        failures.telecomFailed(IllegalStateException("legacy Telecom rejected the call"))
+        assertEquals(0, presentationFinishes)
+
+        failures.callExpired()
+        assertEquals(1, presentationFinishes)
+    }
+
+    @Test
     fun cachesEndpointsForSelectionWithoutAnotherFlowEmission() {
         val cache = EndpointCache<String>()
         cache.update("call-1", listOf("earpiece", "speaker"))

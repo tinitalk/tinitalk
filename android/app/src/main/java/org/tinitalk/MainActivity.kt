@@ -194,6 +194,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showContacts(page: ContactPage, serverUrl: String) {
         runOnUiThread {
+            pushRegistrationStarted = false
             authGeneration++
             historyLoadGeneration++
             contactHistoryGeneration++

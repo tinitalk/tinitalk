@@ -1,10 +1,17 @@
 package org.tinitalk.push
 
+import android.app.NotificationManager
 import org.tinitalk.CallActivity
 import org.tinitalk.telecom.IncomingAnswerClaim
 import org.tinitalk.telecom.IncomingCallController
+import org.tinitalk.telecom.TelecomCallCallbacks
+import org.tinitalk.telecom.TelecomCallController
+import org.tinitalk.telecom.TelecomCapabilities
+import org.tinitalk.telecom.TelecomRegistrar
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -16,6 +23,47 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class IncomingCallNotifierTest {
+    @Test
+    fun fullScreenIntentAndAlertingChannelMatchTheSelectedPresentation() {
+        val context = RuntimeEnvironment.getApplication()
+        val notifier = IncomingCallNotifier(context)
+        val invite = IncomingInvite(
+            callId = "call-presentation",
+            caller = "Alice",
+            expiresAt = Instant.now().plusSeconds(30),
+        )
+
+        val locked = notifier.buildIncomingNotification(invite, IncomingCallPresentationMode.FullScreen)!!
+        val headsUp = notifier.buildIncomingNotification(invite, IncomingCallPresentationMode.HeadsUp)!!
+        val inApp = notifier.buildIncomingNotification(invite, IncomingCallPresentationMode.InApp)!!
+        val manager = context.getSystemService(NotificationManager::class.java)
+
+        assertNotNull(locked.fullScreenIntent)
+        assertNull(headsUp.fullScreenIntent)
+        assertNull(inApp.fullScreenIntent)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, manager.getNotificationChannel(headsUp.channelId).importance)
+        assertEquals(NotificationManager.IMPORTANCE_LOW, manager.getNotificationChannel(inApp.channelId).importance)
+        notifier.cancel()
+    }
+
+    @Test
+    fun appAcceptsIncomingCallWithoutWaitingForTelecom() {
+        val context = RuntimeEnvironment.getApplication()
+        val controller = IncomingCallController {
+            TelecomCallController(SilentAnswerTelecomRegistrar())
+        }
+        val invite = IncomingInvite(
+            callId = "call-without-telecom",
+            caller = "Alice",
+            expiresAt = Instant.now().plusSeconds(30),
+        )
+        controller.save(context, invite)
+
+        controller.answer(context, invite)
+
+        assertEquals(IncomingCallController.ActionAnswer, controller.load(context)?.action)
+    }
+
     @Suppress("DEPRECATION")
     @Test
     fun answerActionOpensCallScreenDirectly() {
@@ -111,5 +159,16 @@ class IncomingCallNotifierTest {
         assertEquals(false, finished)
         assertEquals(false, cancelled)
         assertEquals(current.callId, controller.load(context)?.invite?.callId)
+    }
+
+    private class SilentAnswerTelecomRegistrar : TelecomRegistrar {
+        override fun register(capabilities: TelecomCapabilities) = Unit
+        override fun addIncoming(invite: IncomingInvite, callbacks: TelecomCallCallbacks) = Unit
+        override fun addOutgoing(callId: String, displayName: String, callbacks: TelecomCallCallbacks) = Unit
+        override fun answer(callId: String, onResult: (Boolean) -> Unit) = Unit
+        override fun reject(callId: String) = Unit
+        override fun setActive(callId: String, onResult: (Boolean) -> Unit) = onResult(false)
+        override fun selectEndpoint(callId: String, endpointId: String) = Unit
+        override fun cancel(callId: String) = Unit
     }
 }

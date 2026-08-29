@@ -76,13 +76,14 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         }
         if (!registered) return
         if (!IncomingCallForegroundService.show(this, invite)) {
-            val shown = notifier.presentIncoming(invite) { notification ->
+            val mode = currentIncomingCallPresentation(this)
+            val shown = notifier.presentIncoming(invite, mode) { notification ->
                 getSystemService(NotificationManager::class.java)
                     .notify(IncomingCallNotifier.NotificationId, notification)
             }
             if (shown) {
                 IncomingRingingAcknowledger(this).acknowledge(invite)
-                incoming.openScreen(this, invite)
+                if (mode == IncomingCallPresentationMode.InApp) incoming.openScreen(this, invite)
             }
         }
     }

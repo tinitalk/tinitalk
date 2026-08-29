@@ -14,7 +14,11 @@ import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import java.time.Instant
 
-class IncomingCallController {
+class IncomingCallController(
+    private val telecomController: (Context) -> TelecomCallController = { context ->
+        TelecomCallController(AndroidTelecomRegistrar(context))
+    },
+) {
     fun save(context: Context, invite: IncomingInvite, action: String? = null) =
         synchronized(PendingActionLock) {
             prefs(context).edit()
@@ -142,15 +146,14 @@ class IncomingCallController {
         )
 
     fun answer(context: Context, invite: IncomingInvite, onComplete: () -> Unit = {}) {
-        runCatching {
-            TelecomCallController(AndroidTelecomRegistrar(context)).answer(invite.callId) { success ->
-                try {
-                    if (success) answerFromTelecom(context, invite) else reject(context, invite)
-                } finally {
-                    onComplete()
-                }
-            }
-        }.onFailure { onComplete() }
+        try {
+            // The user accepted in TiniTalk. Legacy Telecom can fail or never answer its callback,
+            // so the real call must start immediately and Telecom is synchronized only best-effort.
+            answerFromTelecom(context, invite)
+        } finally {
+            onComplete()
+        }
+        runCatching { telecomController(context).answer(invite.callId) }
     }
 
     fun answerFromTelecom(context: Context, invite: IncomingInvite) {
@@ -160,7 +163,7 @@ class IncomingCallController {
             finishTerminalPresentation(context, invite.callId) {
                 IncomingCallNotifier(context).cancel()
             }
-            TelecomCallController(AndroidTelecomRegistrar(context)).cancel(invite.callId)
+            telecomController(context).cancel(invite.callId)
             return
         }
         CallForegroundService.start(
@@ -170,7 +173,7 @@ class IncomingCallController {
     }
 
     fun reject(context: Context, invite: IncomingInvite) {
-        TelecomCallController(AndroidTelecomRegistrar(context)).reject(invite.callId)
+        telecomController(context).reject(invite.callId)
         rejectFromTelecom(context, invite)
     }
 

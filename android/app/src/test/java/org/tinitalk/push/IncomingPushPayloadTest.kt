@@ -138,17 +138,39 @@ class IncomingPushPayloadTest {
     }
 
     @Test
-    fun incomingCallEntersForegroundBeforeFullScreenLaunch() {
+    fun incomingCallUsesOnlyThePresentationSelectedForCurrentPhoneState() {
         val steps = mutableListOf<String>()
         val invite = IncomingInvite("call-1", "Alice", Instant.parse("2026-08-26T10:00:30Z"))
-
-        IncomingCallForegroundPresentation(
+        val presentation = IncomingCallForegroundPresentation(
             enterForeground = { steps += "foreground" },
             acknowledgeRinging = { steps += "ringing" },
             openFullScreen = { steps += "full_screen" },
-        ).present(invite)
+        )
+
+        presentation.present(invite, IncomingCallPresentationMode.HeadsUp)
+
+        assertEquals(listOf("foreground", "ringing"), steps)
+
+        steps.clear()
+        presentation.present(invite, IncomingCallPresentationMode.InApp)
 
         assertEquals(listOf("foreground", "ringing", "full_screen"), steps)
+        assertEquals(
+            IncomingCallPresentationMode.FullScreen,
+            selectIncomingCallPresentation(screenInteractive = true, keyguardLocked = true, appVisible = true),
+        )
+        assertEquals(
+            IncomingCallPresentationMode.FullScreen,
+            selectIncomingCallPresentation(screenInteractive = false, keyguardLocked = false, appVisible = true),
+        )
+        assertEquals(
+            IncomingCallPresentationMode.InApp,
+            selectIncomingCallPresentation(screenInteractive = true, keyguardLocked = false, appVisible = true),
+        )
+        assertEquals(
+            IncomingCallPresentationMode.HeadsUp,
+            selectIncomingCallPresentation(screenInteractive = true, keyguardLocked = false, appVisible = false),
+        )
     }
 
     @Test

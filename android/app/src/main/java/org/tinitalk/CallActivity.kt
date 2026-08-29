@@ -296,7 +296,7 @@ class CallActivity : ComponentActivity() {
 
     override fun onStop() {
         activityStarted = false
-        restoreIncomingCallNotification()
+        if (!isChangingConfigurations) restoreIncomingCallNotification()
         updateProximity()
         handler.removeCallbacks(inviteMonitor)
         super.onStop()
