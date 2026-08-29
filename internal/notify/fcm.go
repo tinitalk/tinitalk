@@ -90,14 +90,44 @@ func (n *FCMNotifier) CancelCall(callee string, event signaling.DeliveredEvent) 
 	n.send(callee, CancelMessage(n.project, "", event, ttl))
 }
 
+func (n *FCMNotifier) SessionReplaced(login, revokedSessionID string, devices []state.Device) {
+	for _, device := range devices {
+		if device.FCMToken == "" {
+			continue
+		}
+		_ = n.sender.Send(SessionReplacedMessage(
+			device.FCMToken,
+			login,
+			revokedSessionID,
+			device.DeviceID,
+		))
+	}
+}
+
 func (n *FCMNotifier) send(callee string, request WakeRequest) {
+	if request.suppress {
+		return
+	}
 	tokens, err := n.store.TokensForUser(callee)
 	if err != nil {
 		return
 	}
 	for _, token := range tokens {
-		request.Message.Token = token.Token
-		err := n.sender.Send(request)
+		targetSessionID, hasSessionTarget := request.Message.Data["target_session_id"]
+		targetDeviceID := request.Message.Data["target_device_id"]
+		if hasSessionTarget && targetSessionID != "" && (targetDeviceID == "" || token.DeviceID != targetDeviceID) {
+			continue
+		}
+		targeted := request
+		targeted.Message.Data = cloneData(request.Message.Data)
+		if hasSessionTarget {
+			targeted.Message.Data["target_login"] = callee
+			if targetSessionID == "" {
+				targeted.Message.Data["target_device_id"] = token.DeviceID
+			}
+		}
+		targeted.Message.Token = token.Token
+		err := n.sender.Send(targeted)
 		if errors.Is(err, ErrInvalidRegistration) {
 			_ = n.store.DisableToken(token.Token)
 		}
@@ -113,6 +143,7 @@ type WakeRequest struct {
 			TTL      string `json:"ttl"`
 		} `json:"android"`
 	} `json:"message"`
+	suppress bool
 }
 
 func WakeMessage(_ string, token string, event signaling.DeliveredEvent, callerLogin, caller string, ttl time.Duration) WakeRequest {
@@ -125,6 +156,13 @@ func WakeMessage(_ string, token string, event signaling.DeliveredEvent, callerL
 		"caller_login": callerLogin,
 		"last_seq":     strconv.FormatUint(event.Seq, 10),
 		"expires_at":   time.UnixMilli(event.SentAt).Add(ttl).UTC().Format(time.RFC3339),
+	}
+	request.suppress = event.TargetResolutionFailed
+	if event.TargetSessionKnown {
+		request.Message.Data["target_session_id"] = event.TargetSessionID
+		if event.TargetSessionID != "" {
+			request.Message.Data["target_device_id"] = event.TargetDeviceID
+		}
 	}
 	request.Message.Android.Priority = "HIGH"
 	request.Message.Android.TTL = fcmTTL(ttl)
@@ -139,13 +177,42 @@ func CancelMessage(_ string, token string, event signaling.DeliveredEvent, ttl t
 		"call_id":    event.CallID,
 		"call_event": event.Type,
 	}
+	request.suppress = event.TargetResolutionFailed
+	if event.TargetSessionKnown {
+		request.Message.Data["target_session_id"] = event.TargetSessionID
+		if event.TargetSessionID != "" {
+			request.Message.Data["target_device_id"] = event.TargetDeviceID
+		}
+	}
 	request.Message.Android.Priority = "HIGH"
 	request.Message.Android.TTL = fcmTTL(ttl)
 	return request
 }
 
+func SessionReplacedMessage(token, login, revokedSessionID, revokedDeviceID string) WakeRequest {
+	var request WakeRequest
+	request.Message.Token = token
+	request.Message.Data = map[string]string{
+		"type":               "session_replaced",
+		"login":              login,
+		"revoked_session_id": revokedSessionID,
+		"revoked_device_id":  revokedDeviceID,
+	}
+	request.Message.Android.Priority = "HIGH"
+	request.Message.Android.TTL = fcmTTL(missedNotificationTTL)
+	return request
+}
+
 func fcmTTL(ttl time.Duration) string {
 	return strconv.FormatInt(int64(ttl/time.Second), 10) + "s"
+}
+
+func cloneData(source map[string]string) map[string]string {
+	cloned := make(map[string]string, len(source)+2)
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 type HTTPv1Sender struct {

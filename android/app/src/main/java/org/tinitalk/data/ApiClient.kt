@@ -8,6 +8,10 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.Base64
 
+internal const val SessionIdHeader = "X-TiniTalk-Session-ID"
+internal const val AuthReasonHeader = "X-TiniTalk-Auth-Reason"
+internal const val SessionReplacedReason = "session_replaced"
+
 data class Profile(val login: String, @SerializedName("display_name") val displayName: String)
 data class ServerInfo(
     val service: String?,
@@ -96,7 +100,13 @@ private data class CallHistoryReadResult(
     fun toCallUnreadState() = CallUnreadState(unreadMissedCount, unreadMissed.orEmpty())
 }
 
-class ApiException(val code: Int, message: String) : RuntimeException(message)
+private data class SessionClaimWire(@SerializedName("session_id") val sessionId: String)
+
+class ApiException(
+    val code: Int,
+    message: String,
+    val authReason: String? = null,
+) : RuntimeException(message)
 
 interface HouseholdApi {
     fun serverInfo(): ServerInfo
@@ -106,12 +116,14 @@ interface HouseholdApi {
     fun calls(limit: Int = 50, before: Long = 0, peerLogin: String? = null): CallHistoryPage
     fun markCallsRead(throughId: Long, peerLogin: String? = null): CallUnreadState
     fun putDevice(deviceId: String, fcmToken: String)
+    fun claimSession(deviceId: String): String
 }
 
 class UrlConnectionApiClient(
     private val baseUrl: String,
     private val login: String,
     private val token: String,
+    private val sessionId: String? = null,
 ) : HouseholdApi {
     override fun serverInfo(): ServerInfo =
         get("/healthz", ServerInfoWire::class.java, authenticated = false).toServerInfo()
@@ -150,20 +162,32 @@ class UrlConnectionApiClient(
         put<Unit>("/api/device", mapOf("device_id" to deviceId, "fcm_token" to fcmToken), null)
     }
 
+    override fun claimSession(deviceId: String): String =
+        write(
+            "POST",
+            "/api/session",
+            mapOf("device_id" to deviceId),
+            SessionClaimWire::class.java,
+        ).sessionId.takeIf(String::isNotBlank) ?: throw IllegalStateException("empty session_id")
+
     private fun <T> put(path: String, value: Any, type: Class<T>?): T {
+        return write("PUT", path, value, type)
+    }
+
+    private fun <T> write(method: String, path: String, value: Any, type: Class<T>?): T {
         val body = gson.toJson(value).toByteArray(Charsets.UTF_8)
         val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
-            requestMethod = "PUT"
+            requestMethod = method
             connectTimeout = 5000
             readTimeout = 5000
             doOutput = true
-            setRequestProperty("Authorization", basicAuth())
+            authenticate(this)
             setRequestProperty("Content-Type", "application/json")
             outputStream.use { it.write(body) }
         }
         val code = connection.responseCode
         if (code !in 200..299) {
-            throw ApiException(code, connection.errorStream?.bufferedReader()?.readText() ?: "request failed")
+            throw connection.apiException(code)
         }
         if (type == null) {
             @Suppress("UNCHECKED_CAST")
@@ -177,14 +201,25 @@ class UrlConnectionApiClient(
             requestMethod = "GET"
             connectTimeout = 5000
             readTimeout = 5000
-            if (authenticated) setRequestProperty("Authorization", basicAuth())
+            if (authenticated) authenticate(this)
         }
         val code = connection.responseCode
         if (code !in 200..299) {
-            throw ApiException(code, connection.errorStream?.bufferedReader()?.readText() ?: "request failed")
+            throw connection.apiException(code)
         }
         return gson.fromJson(connection.inputStream.bufferedReader().readText(), type)
     }
+
+    private fun authenticate(connection: HttpURLConnection) {
+        connection.setRequestProperty("Authorization", basicAuth())
+        sessionId?.let { connection.setRequestProperty(SessionIdHeader, it) }
+    }
+
+    private fun HttpURLConnection.apiException(code: Int): ApiException = ApiException(
+        code,
+        errorStream?.bufferedReader()?.readText() ?: "request failed",
+        getHeaderField(AuthReasonHeader),
+    )
 
     private fun basicAuth(): String {
         val raw = "$login:$token".toByteArray(Charsets.UTF_8)

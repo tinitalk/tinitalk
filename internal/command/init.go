@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"tinitalk/internal/app"
+	"tinitalk/internal/httpapi"
 	"tinitalk/internal/notify"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
@@ -90,6 +91,7 @@ func runServe(args []string) error {
 		return err
 	}
 	notifier := signaling.Notifier(signaling.NoopNotifier{})
+	var sessionNotifier httpapi.SessionReplacementNotifier
 	fcmServiceAccount, err := db.Secret("fcm_service_account")
 	if err != nil {
 		return err
@@ -108,7 +110,9 @@ func runServe(args []string) error {
 			Endpoint:    "https://fcm.googleapis.com/v1/projects/" + project + "/messages:send",
 			BearerToken: bearer,
 		}
-		notifier = notify.NewFCMNotifier(notify.DBTokenStore{DB: db}, sender, project)
+		fcmNotifier := notify.NewFCMNotifier(notify.DBTokenStore{DB: db}, sender, project)
+		notifier = fcmNotifier
+		sessionNotifier = fcmNotifier
 	}
 	hub := signaling.NewHub(notifier)
 	hub.SetCallHistoryStore(db)
@@ -137,7 +141,14 @@ func runServe(args []string) error {
 		defer turn.Close()
 		iceConfig = turnserver.ICEConfigProvider{PublicHost: options.turnPublicHost, Realm: options.turnPublicHost, Issuer: issuer}
 	}
-	server := app.NewHTTPServer(db, app.ServerConfig{Addr: options.addr, AllowInsecureLoopback: options.allowLoopback, Hub: hub, ICEConfigProvider: iceConfig, TLSConfig: tlsConfig})
+	server := app.NewHTTPServer(db, app.ServerConfig{
+		Addr:                  options.addr,
+		AllowInsecureLoopback: options.allowLoopback,
+		Hub:                   hub,
+		SessionNotifier:       sessionNotifier,
+		ICEConfigProvider:     iceConfig,
+		TLSConfig:             tlsConfig,
+	})
 	go hub.Run(ctx)
 	serverDone := make(chan error, 1)
 	go func() {

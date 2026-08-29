@@ -27,6 +27,18 @@ class TinitalkMessagingService : FirebaseMessagingService() {
 
     @Synchronized
     override fun onMessageReceived(message: RemoteMessage) {
+        val authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+        val session = authStore.load()
+        val deviceId = DeviceRegistrar.deviceId(this)
+        val replacement = IncomingPushPayload.sessionReplacement(message.data)
+        if (replacement != null) {
+            if (session != null && replacement.matches(session, deviceId)) {
+                authStore.invalidateIfCurrent(session)
+            }
+            return
+        }
+        if (!IncomingPushPayload.matchesTarget(message.data, session, deviceId)) return
+
         val notifier = IncomingCallNotifier(this)
         val cancellation = IncomingPushPayload.cancellation(message.data)
         if (cancellation != null) {

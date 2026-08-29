@@ -10,6 +10,7 @@ import (
 
 	"tinitalk/internal/protocol"
 	"tinitalk/internal/signaling"
+	"tinitalk/internal/state"
 )
 
 func TestWakeMessageUsesHighPriorityAndShortTTL(t *testing.T) {
@@ -180,6 +181,80 @@ func TestCancelMessageIncludesSignalingEventType(t *testing.T) {
 	}
 }
 
+func TestNotifierTargetsRevokedRegistrationWithSessionReplacementIdentity(t *testing.T) {
+	sender := &fakeSender{}
+	notifier := NewFCMNotifier(&fakeTokenStore{}, sender, "project-1")
+
+	notifier.SessionReplaced("alice", "old-session", []state.Device{
+		{UserLogin: "alice", DeviceID: "old-phone", FCMToken: "old-fcm"},
+		{UserLogin: "alice", DeviceID: "unused", FCMToken: ""},
+	})
+
+	if sender.calls != 1 || sender.last.Message.Token != "old-fcm" {
+		t.Fatalf("targeted sends = %d token %q, want one old-fcm delivery", sender.calls, sender.last.Message.Token)
+	}
+	want := map[string]string{
+		"type":               "session_replaced",
+		"login":              "alice",
+		"revoked_session_id": "old-session",
+		"revoked_device_id":  "old-phone",
+	}
+	for key, value := range want {
+		if sender.last.Message.Data[key] != value {
+			t.Fatalf("session replacement data[%q] = %q, want %q; data = %+v", key, sender.last.Message.Data[key], value, sender.last.Message.Data)
+		}
+	}
+	if sender.last.Message.Android.TTL != "2419200s" {
+		t.Fatalf("session replacement TTL = %q, want 28 days", sender.last.Message.Android.TTL)
+	}
+}
+
+func TestSessionReplacedMessageIncludesEmptyLegacySessionID(t *testing.T) {
+	msg := SessionReplacedMessage("token", "alice", "", "old-phone")
+	value, present := msg.Message.Data["revoked_session_id"]
+	if !present || value != "" {
+		t.Fatalf("revoked_session_id = %q present %v, want present empty legacy value", value, present)
+	}
+}
+
+func TestNotifierAddsExactManagedTargetToEachCallRegistration(t *testing.T) {
+	store := &fakeTokenStore{tokens: []DeviceToken{
+		{DeviceID: "phone", Token: "phone-token"},
+		{DeviceID: "tablet", Token: "tablet-token"},
+	}}
+	sender := &fakeSender{}
+	notifier := NewFCMNotifier(store, sender, "project-1")
+	notifier.IncomingCall("alice", "bob", signaling.DeliveredEvent{
+		Event:              protocol.Event{CallID: "call-1"},
+		TargetSessionKnown: true,
+		TargetSessionID:    "bob-session",
+		TargetDeviceID:     "phone",
+	})
+
+	if len(sender.requests) != 1 {
+		t.Fatalf("targeted requests = %d, want only snapshotted phone registration", len(sender.requests))
+	}
+	request := sender.requests[0]
+	if request.Message.Token != "phone-token" ||
+		request.Message.Data["target_login"] != "bob" ||
+		request.Message.Data["target_device_id"] != "phone" ||
+		request.Message.Data["target_session_id"] != "bob-session" {
+		t.Fatalf("request = token %q data %+v, want exact bob/phone/bob-session target", request.Message.Token, request.Message.Data)
+	}
+}
+
+func TestNotifierSuppressesCallPushAfterTargetResolutionFailure(t *testing.T) {
+	sender := &fakeSender{}
+	notifier := NewFCMNotifier(&fakeTokenStore{tokens: []DeviceToken{{DeviceID: "phone", Token: "token"}}}, sender, "project-1")
+	notifier.IncomingCall("alice", "bob", signaling.DeliveredEvent{
+		Event:                  protocol.Event{CallID: "call-1"},
+		TargetResolutionFailed: true,
+	})
+	if sender.calls != 0 {
+		t.Fatalf("send calls = %d, want fail-closed suppression", sender.calls)
+	}
+}
+
 func TestProjectIDFromServiceAccount(t *testing.T) {
 	project, err := ProjectIDFromServiceAccount([]byte(`{"project_id":"example-project"}`))
 	if err != nil {
@@ -210,13 +285,15 @@ func (s *fakeTokenStore) DisableToken(token string) error {
 }
 
 type fakeSender struct {
-	calls int
-	err   error
-	last  WakeRequest
+	calls    int
+	err      error
+	last     WakeRequest
+	requests []WakeRequest
 }
 
 func (s *fakeSender) Send(request WakeRequest) error {
 	s.calls++
 	s.last = request
+	s.requests = append(s.requests, request)
 	return s.err
 }

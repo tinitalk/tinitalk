@@ -10,14 +10,18 @@ import (
 	"github.com/gorilla/websocket"
 	"tinitalk/internal/protocol"
 	"tinitalk/internal/signaling"
+	"tinitalk/internal/state"
 )
 
 const (
-	deviceIDHeader        = "X-TiniTalk-Device-ID"
-	signalProtocolHeader  = "X-TiniTalk-Signal-Protocol"
-	signalProtocolVersion = "2"
-	signalAckHeader       = "X-TiniTalk-Signal-Ack"
-	signalAckVersion      = "1"
+	deviceIDHeader            = "X-TiniTalk-Device-ID"
+	sessionIDHeader           = "X-TiniTalk-Session-ID"
+	authReasonHeader          = "X-TiniTalk-Auth-Reason"
+	authReasonSessionReplaced = "session_replaced"
+	signalProtocolHeader      = "X-TiniTalk-Signal-Protocol"
+	signalProtocolVersion     = "2"
+	signalAckHeader           = "X-TiniTalk-Signal-Ack"
+	signalAckVersion          = "1"
 )
 
 type deviceRequest struct {
@@ -39,7 +43,18 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := s.db.UpsertDevice(currentUser(r).Login, req.DeviceID, req.FCMToken); err != nil {
+	user := currentUser(r).Login
+	session, managed := currentSession(r)
+	sessionID := ""
+	if managed {
+		sessionID = session.SessionID
+	}
+	err := s.db.UpsertAuthenticatedDevice(user, sessionID, req.DeviceID, req.FCMToken)
+	if errors.Is(err, state.ErrSessionReplaced) {
+		writeSessionReplaced(w)
+		return
+	}
+	if err != nil {
 		http.Error(w, "device unavailable", http.StatusInternalServerError)
 		return
 	}
@@ -61,9 +76,29 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := currentUser(r).Login
-	client, err := s.hub.ConnectDeviceChecked(user, r.Header.Get(deviceIDHeader))
+	session, managed := currentSession(r)
+	sessionID := ""
+	if managed {
+		sessionID = session.SessionID
+	}
+	client, err := s.hub.ConnectSessionChecked(user, r.Header.Get(deviceIDHeader), sessionID)
 	if err != nil {
+		if errors.Is(err, state.ErrSessionReplaced) {
+			writeSessionReplaced(w)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
+	current, currentlyManaged, err := s.db.CurrentSession(user)
+	if err != nil {
+		s.hub.Disconnect(client)
+		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
+		return
+	}
+	if currentlyManaged != managed || (managed && current.SessionID != sessionID) {
+		s.hub.Disconnect(client)
+		writeSessionReplaced(w)
 		return
 	}
 	acknowledgesEvents := r.Header.Get(signalAckHeader) == signalAckVersion

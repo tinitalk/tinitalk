@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,6 +28,8 @@ import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.ApiException
+import org.tinitalk.data.AuthSessionEvent
+import org.tinitalk.data.AuthSessionEvents
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactPage
@@ -33,6 +37,7 @@ import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.CompatibilityProblem
 import org.tinitalk.data.ServerCompatibilityException
+import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.push.DeviceRegistrar
@@ -53,7 +58,10 @@ import java.net.MalformedURLException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
+private const val SessionReplacedMessage = "Вход выполнен на другом устройстве"
+
 class MainActivity : ComponentActivity() {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val contactNameViewModel by viewModels<ContactNameViewModel>()
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -83,6 +91,11 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    private val authSessionObserver: (AuthSessionEvent) -> Unit = {
+        mainHandler.post {
+            if (!isDestroyed && authStore.load() == null) resetToLogin(SessionReplacedMessage)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,7 +109,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(contactNameUpdate.authExpired) {
                     if (contactNameUpdate.authExpired) {
                         contactNameViewModel.reset()
-                        showError(ApiException(401, "unauthorized"))
+                        showError(ApiException(401, "unauthorized", contactNameUpdate.authReason))
                     }
                 }
                 SideEffect {
@@ -143,19 +156,25 @@ class MainActivity : ComponentActivity() {
         }
         CallUiStateStore.observe(callUiObserver)
         IncomingCallNotifier(this).observeMissedCount(missedCountObserver)
+        AuthSessionEvents.observe(authSessionObserver)
         refreshPermissions()
         restoreContacts()
     }
 
     private fun restoreContacts() {
+        val requestAuthGeneration = authGeneration
+        val deviceId = DeviceRegistrar.deviceId(this)
         Thread {
             runCatching {
-                repository.restoreContacts()?.let { contacts ->
+                repository.restoreContacts(deviceId)?.let { contacts ->
                     contacts to authStore.load()?.url.orEmpty()
                 }
             }
                 .onSuccess { restored ->
                     runOnUiThread {
+                        if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
+                            return@runOnUiThread
+                        }
                         if (restored == null) {
                             screenState = MainScreenState(
                                 restoring = false,
@@ -166,19 +185,27 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                .onFailure(::showError)
+                .onFailure { showSessionErrorIfCurrent(it, requestAuthGeneration) }
         }.start()
     }
 
     private fun loadContacts(url: String, login: String, token: String) {
         contactNameViewModel.reset()
         authGeneration++
+        val requestAuthGeneration = authGeneration
         screenState = screenState.copy(signingIn = true, errorMessage = null)
         val serverUrl = url.trim().trimEnd('/')
+        val deviceId = DeviceRegistrar.deviceId(this)
         Thread {
-            runCatching { repository.signIn(url, login, token) }
-                .onSuccess { showContacts(it, serverUrl) }
-                .onFailure(::showError)
+            runCatching { repository.signIn(url, login, token, deviceId) }
+                .onSuccess { page ->
+                    runOnUiThread {
+                        if (isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
+                            showContacts(page, serverUrl)
+                        }
+                    }
+                }
+                .onFailure { showSessionErrorIfCurrent(it, requestAuthGeneration) }
         }.start()
     }
 
@@ -337,6 +364,7 @@ class MainActivity : ComponentActivity() {
 
     private fun loadHistory(reset: Boolean) {
         if (!screenState.signedIn) return
+        val requestAuthGeneration = authGeneration
         val before: Long
         val generation: Int
         val badgeRefreshId: Long
@@ -390,12 +418,16 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
-                            .onFailure { if (it is ApiException && it.code == 401) showError(it) }
+                            .onFailure {
+                                if (it is ApiException && it.code == 401) {
+                                    showSessionErrorIfCurrent(it, requestAuthGeneration)
+                                }
+                            }
                     }
                 }
                 .onFailure { error ->
                     if (error is ApiException && error.code == 401) {
-                        showError(error)
+                        showSessionErrorIfCurrent(error, requestAuthGeneration)
                     } else {
                         runOnUiThread {
                             if (generation != historyLoadGeneration) return@runOnUiThread
@@ -579,7 +611,9 @@ class MainActivity : ComponentActivity() {
                 CompatibilityProblem.AppOutdated -> "Приложение TiniTalk устарело. Установите новую версию"
                 CompatibilityProblem.Unavailable -> "Сервер TiniTalk временно недоступен"
             }
-            is ApiException -> when (error.code) {
+            is ApiException -> if (
+                error.code == 401 && error.authReason == SessionReplacedReason
+            ) SessionReplacedMessage else when (error.code) {
                 401 -> "Неверный логин или токен"
                 404 -> "Сервер TiniTalk не найден"
                 else -> "Сервер вернул ошибку ${error.code}"
@@ -602,6 +636,10 @@ class MainActivity : ComponentActivity() {
 
     private fun signOut() {
         repository.signOut()
+        resetToLogin()
+    }
+
+    private fun resetToLogin(errorMessage: String? = null) {
         authGeneration++
         contactNameViewModel.reset()
         historyLoadGeneration++
@@ -614,6 +652,7 @@ class MainActivity : ComponentActivity() {
         screenState = MainScreenState(
             restoring = false,
             permissions = screenState.permissions,
+            errorMessage = errorMessage,
         )
     }
 
@@ -629,6 +668,7 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshMissedCount() {
         if (!screenState.signedIn) return
+        val requestAuthGeneration = authGeneration
         val generation = historyLoadGeneration
         val badgeRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
         Thread {
@@ -643,7 +683,11 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
-                .onFailure { if (it is ApiException && it.code == 401) showError(it) }
+                .onFailure {
+                    if (it is ApiException && it.code == 401) {
+                        showSessionErrorIfCurrent(it, requestAuthGeneration)
+                    }
+                }
         }.start()
     }
 
@@ -658,6 +702,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        AuthSessionEvents.removeObserver(authSessionObserver)
         IncomingCallNotifier(this).removeMissedCountObserver(missedCountObserver)
         CallUiStateStore.removeObserver(callUiObserver)
         super.onDestroy()

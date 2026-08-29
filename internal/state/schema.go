@@ -99,6 +99,14 @@ var schemaMigrations = [][]string{
 			AND history.outcome = 3
 			AND history.id > COALESCE(reads.through_id, 0)`,
 	},
+	{
+		`CREATE TABLE account_sessions(
+			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			device_id TEXT NOT NULL CHECK(device_id <> ''),
+			session_id TEXT NOT NULL UNIQUE,
+			updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+		)`,
+	},
 }
 
 func (db *DB) migrate() error {

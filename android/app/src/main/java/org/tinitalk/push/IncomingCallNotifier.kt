@@ -22,6 +22,7 @@ import org.tinitalk.MainActivity
 import org.tinitalk.R
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSnapshot
+import org.tinitalk.data.Session
 import org.tinitalk.telecom.IncomingCallController
 import java.time.Instant
 import java.time.Duration
@@ -501,7 +502,48 @@ object IncomingPushPayload {
         if (callId.isEmpty()) return null
         return CallCancellation(callId, data["call_event"].orEmpty())
     }
+
+    fun matchesTarget(data: Map<String, String>, session: Session?, deviceId: String): Boolean {
+        val keys = listOf("target_login", "target_device_id", "target_session_id")
+        if (keys.none(data::containsKey)) return true
+        if (!keys.all(data::containsKey)) return false
+        session ?: return false
+        return data["target_login"] == session.login &&
+            data["target_device_id"] == deviceId &&
+            data["target_session_id"].normalizedSessionId() == session.sessionId
+    }
+
+    fun sessionReplacement(data: Map<String, String>): SessionReplacementPayload? {
+        if (data["type"] != "session_replaced" ||
+            !data.containsKey("login") ||
+            !data.containsKey("revoked_session_id") ||
+            !data.containsKey("revoked_device_id")
+        ) {
+            return null
+        }
+        val login = data["login"].orEmpty()
+        val deviceId = data["revoked_device_id"].orEmpty()
+        if (login.isEmpty() || deviceId.isEmpty()) return null
+        return SessionReplacementPayload(
+            login,
+            data["revoked_session_id"].normalizedSessionId(),
+            deviceId,
+        )
+    }
 }
+
+data class SessionReplacementPayload(
+    val login: String,
+    val revokedSessionId: String?,
+    val revokedDeviceId: String,
+) {
+    fun matches(session: Session, deviceId: String): Boolean =
+        login == session.login &&
+            revokedDeviceId == deviceId &&
+            revokedSessionId == session.sessionId
+}
+
+private fun String?.normalizedSessionId(): String? = this?.takeIf(String::isNotEmpty)
 
 data class CallCancellation(val callId: String, val eventType: String) {
     fun shouldDismiss(pendingCallId: String?, snapshot: CallSnapshot): Boolean {

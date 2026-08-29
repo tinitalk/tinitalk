@@ -4,12 +4,17 @@ import "tinitalk/internal/protocol"
 
 type DeliveredEvent struct {
 	protocol.Event
-	Seq uint64 `json:"seq"`
+	Seq                    uint64 `json:"seq"`
+	TargetSessionID        string `json:"-"`
+	TargetDeviceID         string `json:"-"`
+	TargetSessionKnown     bool   `json:"-"`
+	TargetResolutionFailed bool   `json:"-"`
 }
 
 type Client struct {
 	user                 string
 	deviceID             string
+	sessionID            string
 	inbox                chan DeliveredEvent
 	closed               bool
 	online               bool

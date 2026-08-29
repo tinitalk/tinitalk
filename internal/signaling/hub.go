@@ -35,12 +35,18 @@ type CallHistoryStore interface {
 	FinishCall(callID string, outcome state.CallOutcome, endedAt time.Time) error
 }
 
+type SessionStore interface {
+	CurrentSession(login string) (state.AccountSession, bool, error)
+}
+
 type Hub struct {
 	mu            sync.Mutex
 	notifier      Notifier
 	iceConfig     ICEConfigProvider
 	history       CallHistoryStore
+	sessionStore  SessionStore
 	clients       map[string]map[*Client]struct{}
+	sessions      map[string]string
 	calls         map[string]*call
 	callAliases   map[string]string
 	activeByUser  map[string]string
@@ -68,6 +74,7 @@ func NewHub(notifier Notifier) *Hub {
 	return &Hub{
 		notifier:     notifier,
 		clients:      map[string]map[*Client]struct{}{},
+		sessions:     map[string]string{},
 		calls:        map[string]*call{},
 		callAliases:  map[string]string{},
 		activeByUser: map[string]string{},
@@ -88,6 +95,12 @@ func (h *Hub) SetCallHistoryStore(store CallHistoryStore) {
 	h.history = store
 }
 
+func (h *Hub) SetSessionStore(store SessionStore) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sessionStore = store
+}
+
 func (h *Hub) Connect(user string) *Client {
 	client, err := h.ConnectChecked(user)
 	if err != nil || !h.Connected(client) {
@@ -101,8 +114,18 @@ func (h *Hub) ConnectChecked(user string) (*Client, error) {
 }
 
 func (h *Hub) ConnectDeviceChecked(user, deviceID string) (*Client, error) {
+	return h.ConnectSessionChecked(user, deviceID, "")
+}
+
+func (h *Hub) ConnectSessionChecked(user, deviceID, sessionID string) (*Client, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if currentSessionID, managed := h.sessions[user]; managed && currentSessionID != sessionID {
+		return nil, state.ErrSessionReplaced
+	}
+	if _, known := h.sessions[user]; !known && sessionID != "" {
+		h.sessions[user] = sessionID
+	}
 	if deviceID != "" {
 		for client := range h.clients[user] {
 			if client.deviceID == deviceID {
@@ -113,7 +136,7 @@ func (h *Hub) ConnectDeviceChecked(user, deviceID string) (*Client, error) {
 	if len(h.clients[user]) >= MaxConnectionsPerUser {
 		return nil, errors.New("too many connections for user")
 	}
-	client := &Client{user: user, deviceID: deviceID, inbox: make(chan DeliveredEvent, ReplayLimit)}
+	client := &Client{user: user, deviceID: deviceID, sessionID: sessionID, inbox: make(chan DeliveredEvent, ReplayLimit)}
 	if callID, ok := h.activeByUser[user]; ok && deviceID != "" {
 		if c := h.calls[callID]; c != nil && c.state == callActive &&
 			c.devicesBound() && c.deviceID(user) == deviceID {
@@ -125,6 +148,45 @@ func (h *Hub) ConnectDeviceChecked(user, deviceID string) (*Client, error) {
 	}
 	h.clients[user][client] = struct{}{}
 	return client, nil
+}
+
+func (h *Hub) ReplaceSession(user, currentSessionID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sessions[user] = currentSessionID
+	for client := range h.clients[user] {
+		if client.sessionID != currentSessionID {
+			h.disconnectLocked(client)
+		}
+	}
+	callID, ok := h.activeByUser[user]
+	if !ok {
+		return
+	}
+	c := h.calls[callID]
+	if c == nil || c.state == callEnded {
+		return
+	}
+	now := h.now()
+	event := protocol.Event{
+		ID:      sessionReplacedID(c.id),
+		CallID:  c.id,
+		Type:    "call.end",
+		SentAt:  now.UnixMilli(),
+		Payload: json.RawMessage(`{"reason":"session_replaced"}`),
+	}
+	delivered := h.next(c, event, c.caller, c.callee)
+	outcome := state.CallOutcomeInterruptedBeforeAnswer
+	if c.state == callActive {
+		outcome = disconnectedOutcome(c)
+	}
+	h.finishHistory(c, outcome, now)
+	h.deliver(c.caller, delivered)
+	h.deliver(c.callee, delivered)
+	for _, participant := range []string{c.caller, c.callee} {
+		h.enqueueNotification(notification{callee: participant, event: delivered, cancel: true})
+	}
+	h.end(c)
 }
 
 func (h *Hub) Connected(client *Client) bool {
@@ -649,6 +711,13 @@ func (h *Hub) Sweep() int {
 }
 
 func (h *Hub) enqueueNotification(next notification) {
+	if !next.event.TargetSessionKnown {
+		session, known, failed := h.notificationSession(next.callee)
+		next.event.TargetSessionID = session.SessionID
+		next.event.TargetDeviceID = session.DeviceID
+		next.event.TargetSessionKnown = known
+		next.event.TargetResolutionFailed = failed
+	}
 	for i := range h.notifications {
 		if h.notifications[i].event.CallID != next.event.CallID || h.notifications[i].callee != next.callee {
 			continue
@@ -695,6 +764,24 @@ func (h *Hub) enqueueNotification(next notification) {
 	}
 	h.notifying = true
 	go h.runNotifications()
+}
+
+func (h *Hub) notificationSession(user string) (state.AccountSession, bool, bool) {
+	if h.sessionStore != nil {
+		session, managed, err := h.sessionStore.CurrentSession(user)
+		if err != nil {
+			return state.AccountSession{}, false, true
+		}
+		if managed {
+			h.sessions[user] = session.SessionID
+			return session, true, false
+		}
+		return state.AccountSession{}, true, false
+	}
+	if sessionID, known := h.sessions[user]; known {
+		return state.AccountSession{SessionID: sessionID}, true, false
+	}
+	return state.AccountSession{}, false, false
 }
 
 func (h *Hub) runNotifications() {
@@ -987,6 +1074,10 @@ func expireID(callID string) string {
 
 func disconnectID(callID string) string {
 	return callID[:len(callID)-3] + "998"
+}
+
+func sessionReplacedID(callID string) string {
+	return callID[:len(callID)-3] + "997"
 }
 
 func rtcConfigID(callID, participant string) string {

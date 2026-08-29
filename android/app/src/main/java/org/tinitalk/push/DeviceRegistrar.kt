@@ -3,7 +3,12 @@ package org.tinitalk.push
 import android.content.Context
 import android.provider.Settings
 import com.google.firebase.messaging.FirebaseMessaging
+import org.tinitalk.data.AndroidKeystoreTokenCipher
+import org.tinitalk.data.ApiException
+import org.tinitalk.data.AuthStore
 import org.tinitalk.data.Session
+import org.tinitalk.data.SessionReplacedReason
+import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.UrlConnectionApiClient
 
 class DeviceRegistrar(
@@ -26,11 +31,26 @@ class DeviceRegistrar(
                     .getOrNull()
                     ?.addOnSuccessListener(callback)
             }
+            val authStore = AuthStore(SharedPreferencesKeyValueStore(context), AndroidKeystoreTokenCipher())
             return DeviceRegistrar(
                 tokenProvider = ::fetchToken,
                 register = { deviceId, token ->
                     Thread {
-                        UrlConnectionApiClient(session.url, session.login, session.token).putDevice(deviceId, token)
+                        runCatching {
+                            UrlConnectionApiClient(
+                                session.url,
+                                session.login,
+                                session.token,
+                                session.sessionId,
+                            ).putDevice(deviceId, token)
+                        }.onFailure { error ->
+                            if (error is ApiException &&
+                                error.code == 401 &&
+                                error.authReason == SessionReplacedReason
+                            ) {
+                                authStore.invalidateIfCurrent(session)
+                            }
+                        }
                     }.start()
                 },
             )

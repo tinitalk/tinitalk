@@ -15,6 +15,7 @@ type ServerConfig struct {
 	Addr                  string
 	AllowInsecureLoopback bool
 	Hub                   *signaling.Hub
+	SessionNotifier       httpapi.SessionReplacementNotifier
 	ICEConfigProvider     signaling.ICEConfigProvider
 	TLSConfig             *tls.Config
 }
@@ -29,8 +30,12 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 		hub.SetICEConfigProvider(config.ICEConfigProvider)
 	}
 	return &http.Server{
-		Addr:              addr,
-		Handler:           httpapi.NewServer(db, httpapi.Options{AllowInsecureLoopback: config.AllowInsecureLoopback, Hub: hub}),
+		Addr: addr,
+		Handler: httpapi.NewServer(db, httpapi.Options{
+			AllowInsecureLoopback: config.AllowInsecureLoopback,
+			Hub:                   hub,
+			SessionNotifier:       config.SessionNotifier,
+		}),
 		TLSConfig:         config.TLSConfig,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

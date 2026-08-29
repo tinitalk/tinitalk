@@ -29,9 +29,7 @@ func TestOpenMigratesVersionOneDatabaseWithoutLosingUsers(t *testing.T) {
 	if _, err := db.sql.Exec("DROP TABLE IF EXISTS call_history"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.sql.Exec("PRAGMA user_version = 1"); err != nil {
-		t.Fatal(err)
-	}
+	setMigrationTestVersion(t, db, 1)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +43,8 @@ func TestOpenMigratesVersionOneDatabaseWithoutLosingUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.UserVersion != 5 {
-		t.Fatalf("schema version = %d, want 5", check.UserVersion)
+	if check.UserVersion != 6 {
+		t.Fatalf("schema version = %d, want 6", check.UserVersion)
 	}
 	users, err := db.ListUsers()
 	if err != nil {
@@ -97,9 +95,7 @@ func TestVersionFourMigrationBackfillsEveryPassiveMissedCall(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.sql.Exec("PRAGMA user_version = 3"); err != nil {
-		t.Fatal(err)
-	}
+	setMigrationTestVersion(t, db, 3)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -142,9 +138,7 @@ func TestVersionFourMigrationDoesNotRestorePeerReadMissedCall(t *testing.T) {
 	if _, err := db.MarkCallHistoryReadForPeer("bob", "alice", math.MaxInt64); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.sql.Exec("PRAGMA user_version = 3"); err != nil {
-		t.Fatal(err)
-	}
+	setMigrationTestVersion(t, db, 3)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -193,9 +187,7 @@ func TestVersionFiveMigrationBackfillsUnreadBusyCallsOnly(t *testing.T) {
 	if _, err := db.sql.Exec("DELETE FROM call_history_unread"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.sql.Exec("PRAGMA user_version = 4"); err != nil {
-		t.Fatal(err)
-	}
+	setMigrationTestVersion(t, db, 4)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -242,9 +234,7 @@ func TestVersionThreeMigrationBackfillsOnlyUnreadMissedCalls(t *testing.T) {
 	if _, err := db.sql.Exec("DROP TABLE user_contacts"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.sql.Exec("PRAGMA user_version = 2"); err != nil {
-		t.Fatal(err)
-	}
+	setMigrationTestVersion(t, db, 2)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -713,6 +703,16 @@ func recordMissedCallFrom(t *testing.T, db *DB, callID, caller, callee string, s
 		t.Fatal(err)
 	}
 	if err := db.FinishCall(callID, CallOutcomeUnanswered, started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setMigrationTestVersion(t *testing.T, db *DB, version int) {
+	t.Helper()
+	if _, err := db.sql.Exec("DROP TABLE IF EXISTS account_sessions"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
 		t.Fatal(err)
 	}
 }

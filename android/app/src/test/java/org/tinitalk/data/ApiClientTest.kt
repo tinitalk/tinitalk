@@ -34,7 +34,12 @@ class ApiClientTest {
         )
         server.start()
         try {
-            val info = UrlConnectionApiClient(server.url("/").toString(), "alice", "secret-token")
+            val info = UrlConnectionApiClient(
+                server.url("/").toString(),
+                "alice",
+                "secret-token",
+                sessionId = "session-123",
+            )
                 .serverInfo()
 
             assertEquals(ServerInfo("tinitalk", "ok", 1), info)
@@ -42,6 +47,7 @@ class ApiClientTest {
             val request = server.takeRequest()
             assertEquals("/healthz", request.path)
             assertEquals(null, request.getHeader("Authorization"))
+            assertEquals(null, request.getHeader("X-TiniTalk-Session-ID"))
         } finally {
             server.shutdown()
         }
@@ -57,12 +63,67 @@ class ApiClientTest {
         )
         server.start()
         try {
-            val page = UrlConnectionApiClient(server.url("/").toString(), "alice", "token")
+            val page = UrlConnectionApiClient(
+                server.url("/").toString(),
+                "alice",
+                "token",
+                sessionId = "session-123",
+            )
                 .contactsPage(limit = 20, cursor = "current-page")
 
             assertEquals(listOf(Contact("bob", "Bob", "Bob", null)), page.items)
             assertEquals("next-page", page.nextCursor)
-            assertEquals("/api/contacts/page?limit=20&cursor=current-page", server.takeRequest().path)
+            val request = server.takeRequest()
+            assertEquals("/api/contacts/page?limit=20&cursor=current-page", request.path)
+            assertEquals("session-123", request.getHeader("X-TiniTalk-Session-ID"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun claimsSessionForExactDeviceContract() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"session_id":"opaque-session"}"""))
+        server.start()
+        try {
+            val sessionId = UrlConnectionApiClient(server.url("/").toString(), "alice", "token")
+                .claimSession("android-device")
+
+            val request = server.takeRequest()
+            assertEquals("opaque-session", sessionId)
+            assertEquals("POST", request.method)
+            assertEquals("/api/session", request.path)
+            assertEquals("{\"device_id\":\"android-device\"}", request.body.readUtf8())
+            assertEquals("Basic YWxpY2U6dG9rZW4=", request.getHeader("Authorization"))
+            assertEquals(null, request.getHeader("X-TiniTalk-Session-ID"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun exposesSessionReplacementReasonFromUnauthorizedResponse() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(401)
+                .setHeader("X-TiniTalk-Auth-Reason", "session_replaced")
+                .setBody("unauthorized"),
+        )
+        server.start()
+        try {
+            val error = runCatching {
+                UrlConnectionApiClient(
+                    server.url("/").toString(),
+                    "alice",
+                    "token",
+                    sessionId = "session-old",
+                ).me()
+            }.exceptionOrNull() as ApiException
+
+            assertEquals(401, error.code)
+            assertEquals("session_replaced", error.authReason)
         } finally {
             server.shutdown()
         }

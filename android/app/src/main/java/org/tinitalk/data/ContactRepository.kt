@@ -2,6 +2,7 @@ package org.tinitalk.data
 
 private const val TINITALK_SERVICE = "tinitalk"
 private const val SUPPORTED_API_VERSION = 3
+private const val SINGLE_DEVICE_SESSION_FEATURE = "single_device_session"
 
 enum class CompatibilityProblem {
     WrongServer,
@@ -30,9 +31,14 @@ class ServerCompatibilityException(
 
 class ContactRepository(
     private val authStore: AuthStore,
-    private val apiFactory: (url: String, login: String, token: String) -> HouseholdApi =
-        { url, login, token -> UrlConnectionApiClient(url, login, token) },
+    private val apiFactory: (url: String, login: String, token: String, sessionId: String?) -> HouseholdApi =
+        { url, login, token, sessionId -> UrlConnectionApiClient(url, login, token, sessionId) },
 ) {
+    constructor(
+        authStore: AuthStore,
+        apiFactory: (url: String, login: String, token: String) -> HouseholdApi,
+    ) : this(authStore, { url, login, token, _ -> apiFactory(url, login, token) })
+
     fun checkServer(url: String): ServerCheckResult {
         return checkServerDetails(url).result
     }
@@ -40,7 +46,7 @@ class ContactRepository(
     fun checkServerDetails(url: String): ServerCheckDetails {
         return try {
             val normalizedUrl = url.trim().trimEnd('/')
-            val info = apiFactory(normalizedUrl, "", "").serverInfo()
+            val info = apiFactory(normalizedUrl, "", "", null).serverInfo()
             val result = when (info.compatibilityProblem()) {
                 null -> ServerCheckResult.Available
                 CompatibilityProblem.WrongServer -> ServerCheckResult.WrongServer
@@ -62,32 +68,65 @@ class ContactRepository(
         }
     }
 
-    fun signIn(url: String, login: String, token: String): ContactPage {
-        val session = Session(url.trim().trimEnd('/'), login.trim(), token.trim())
-        val api = apiFactory(session.url, session.login, session.token)
+    fun signIn(url: String, login: String, token: String, deviceId: String = ""): ContactPage {
+        val previous = authStore.load()
+        var session = Session(url.trim().trimEnd('/'), login.trim(), token.trim())
+        var expectedCurrent = previous
+        var api = api(session)
         return try {
             val info = api.requireCompatibleServer()
+            val managed = SINGLE_DEVICE_SESSION_FEATURE in info.features
+            session = session.copy(
+                features = info.features,
+                sessionId = if (managed) {
+                    require(deviceId.isNotBlank()) { "device_id is required for managed sessions" }
+                    api.claimSession(deviceId)
+                } else {
+                    null
+                },
+            )
+            if (managed) {
+                check(authStore.saveIfCurrent(expectedCurrent, session)) { "authentication state changed" }
+                expectedCurrent = session
+            }
+            api = api(session)
             val profile = api.me()
             val contacts = api.contactsPage().withoutUser(profile.login)
-            authStore.save(session.copy(features = info.features))
+            check(authStore.saveIfCurrent(expectedCurrent, session)) { "authentication state changed" }
             contacts
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clearIfCurrent(session)
+            handleUnauthorized(e, session)
             throw e
         }
     }
 
-    fun restoreContacts(): ContactPage? {
-        val session = authStore.load() ?: return null
-        val api = apiFactory(session.url, session.login, session.token)
+    fun restoreContacts(deviceId: String = ""): ContactPage? {
+        val storedSession = authStore.load() ?: return null
+        var session = storedSession
+        var expectedCurrent = storedSession
+        var api = api(session)
         return try {
             val info = api.requireCompatibleServer()
+            val claimed = SINGLE_DEVICE_SESSION_FEATURE in info.features && session.sessionId == null
+            session = session.copy(
+                features = info.features,
+                sessionId = if (claimed) {
+                    require(deviceId.isNotBlank()) { "device_id is required for managed sessions" }
+                    api.claimSession(deviceId)
+                } else {
+                    session.sessionId
+                },
+            )
+            if (claimed) {
+                check(authStore.saveIfCurrent(expectedCurrent, session)) { "authentication state changed" }
+                expectedCurrent = session
+                api = api(session)
+            }
             val profile = api.me()
             val contacts = api.contactsPage().withoutUser(profile.login)
-            authStore.save(session.copy(features = info.features))
-            contacts
+            if (authStore.saveIfCurrent(expectedCurrent, session)) contacts else null
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clearIfCurrent(session)
+            handleUnauthorized(e, session)
             throw e
         }
     }
@@ -95,11 +134,11 @@ class ContactRepository(
     fun refreshContacts(cursor: String = ""): ContactPage? {
         val session = authStore.load() ?: return null
         return try {
-            apiFactory(session.url, session.login, session.token)
+            api(session)
                 .contactsPage(cursor = cursor)
                 .withoutUser(session.login)
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clearIfCurrent(session)
+            handleUnauthorized(e, session)
             throw e
         }
     }
@@ -107,9 +146,9 @@ class ContactRepository(
     fun updateContactName(login: String, customName: String?): Contact? {
         val session = authStore.load() ?: return null
         return try {
-            apiFactory(session.url, session.login, session.token).updateContactName(login, customName)
+            api(session).updateContactName(login, customName)
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clearIfCurrent(session)
+            handleUnauthorized(e, session)
             throw e
         }
     }
@@ -117,9 +156,9 @@ class ContactRepository(
     fun loadCallHistory(before: Long = 0, limit: Int = 50, peerLogin: String? = null): CallHistoryPage? {
         val session = authStore.load() ?: return null
         return try {
-            apiFactory(session.url, session.login, session.token).calls(limit, before, peerLogin)
+            api(session).calls(limit, before, peerLogin)
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clearIfCurrent(session)
+            handleUnauthorized(e, session)
             throw e
         }
     }
@@ -127,15 +166,27 @@ class ContactRepository(
     fun markCallHistoryRead(throughId: Long, peerLogin: String? = null): CallUnreadState? {
         val session = authStore.load() ?: return null
         return try {
-            apiFactory(session.url, session.login, session.token).markCallsRead(throughId, peerLogin)
+            api(session).markCallsRead(throughId, peerLogin)
         } catch (e: ApiException) {
-            if (e.code == 401) authStore.clearIfCurrent(session)
+            handleUnauthorized(e, session)
             throw e
         }
     }
 
     fun signOut() {
         authStore.clear()
+    }
+
+    private fun api(session: Session): HouseholdApi =
+        apiFactory(session.url, session.login, session.token, session.sessionId)
+
+    private fun handleUnauthorized(error: ApiException, session: Session) {
+        if (error.code != 401) return
+        if (error.authReason == SessionReplacedReason) {
+            authStore.invalidateIfCurrent(session)
+        } else {
+            authStore.clearIfCurrent(session)
+        }
     }
 }
 

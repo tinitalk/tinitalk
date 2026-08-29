@@ -27,6 +27,7 @@ class AuthStoreTest {
         assertEquals("alice", session?.login)
         assertEquals("secret-token", session?.token)
         assertEquals(emptySet<String>(), session?.features)
+        assertNull(session?.sessionId)
     }
 
     @Test
@@ -37,6 +38,32 @@ class AuthStoreTest {
         store.save(session)
 
         assertEquals(session, store.load())
+    }
+
+    @Test
+    fun savesAndLoadsOpaqueSessionId() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session(
+            "https://host",
+            "alice",
+            "token",
+            setOf("single_device_session"),
+            sessionId = "session-123",
+        )
+
+        store.save(session)
+
+        assertEquals(session, store.load())
+    }
+
+    @Test
+    fun savingLegacySessionRemovesPreviousSessionId() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token", sessionId = "session-123"))
+
+        store.save(Session("https://host", "alice", "token"))
+
+        assertNull(store.load()?.sessionId)
     }
 
     @Test
@@ -83,6 +110,88 @@ class AuthStoreTest {
         saving.join()
 
         assertEquals(newSession, first.load())
+    }
+
+    @Test
+    fun conditionalClearTreatsSessionIdAsPartOfIdentity() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val revoked = Session("https://host", "alice", "token", sessionId = "session-old")
+        val replacement = revoked.copy(sessionId = "session-new")
+        store.save(replacement)
+
+        val cleared = store.clearIfCurrent(revoked)
+
+        assertFalse(cleared)
+        assertEquals(replacement, store.load())
+    }
+
+    @Test
+    fun conditionalSaveCannotResurrectClearedSession() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val restored = Session("https://host", "alice", "token", sessionId = "session-old")
+        store.save(restored)
+        assertTrue(store.clearIfCurrent(restored))
+
+        val saved = store.saveIfCurrent(restored, restored.copy(features = setOf("single_device_session")))
+
+        assertFalse(saved)
+        assertNull(store.load())
+    }
+
+    @Test
+    fun conditionalSaveInstallsManualSessionWhenStartingIdentityIsUnchanged() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val previous = Session("https://host", "alice", "old-token")
+        val claimed = Session("https://host", "alice", "new-token", sessionId = "session-new")
+        store.save(previous)
+
+        val saved = store.saveIfCurrent(previous, claimed)
+
+        assertTrue(saved)
+        assertEquals(claimed, store.load())
+    }
+
+    @Test
+    fun replacementInvalidationPublishesOnlyAfterExactConditionalClear() {
+        AuthSessionEvents.clear()
+        val events = mutableListOf<AuthSessionEvent>()
+        val observer: (AuthSessionEvent) -> Unit = events::add
+        AuthSessionEvents.observe(observer)
+        try {
+            val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+            val old = Session("https://host", "alice", "token", sessionId = "session-old")
+            val current = old.copy(sessionId = "session-new")
+            store.save(current)
+
+            assertFalse(store.invalidateIfCurrent(old))
+            assertTrue(events.isEmpty())
+            assertTrue(store.invalidateIfCurrent(current))
+            assertEquals(listOf(AuthSessionEvent(current)), events)
+            assertNull(store.load())
+        } finally {
+            AuthSessionEvents.removeObserver(observer)
+            AuthSessionEvents.clear()
+        }
+    }
+
+    @Test
+    fun savingNewSessionClearsStickyReplacementEvent() {
+        AuthSessionEvents.clear()
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val old = Session("https://host", "alice", "token", sessionId = "session-old")
+        store.save(old)
+        assertTrue(store.invalidateIfCurrent(old))
+
+        store.save(old.copy(sessionId = "session-new"))
+        val replayed = mutableListOf<AuthSessionEvent>()
+        val observer: (AuthSessionEvent) -> Unit = replayed::add
+        AuthSessionEvents.observe(observer)
+        try {
+            assertTrue(replayed.isEmpty())
+        } finally {
+            AuthSessionEvents.removeObserver(observer)
+            AuthSessionEvents.clear()
+        }
     }
 }
 

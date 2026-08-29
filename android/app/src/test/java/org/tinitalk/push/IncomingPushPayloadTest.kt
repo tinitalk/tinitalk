@@ -2,6 +2,7 @@ package org.tinitalk.push
 
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSnapshot
+import org.tinitalk.data.Session
 import org.tinitalk.telecom.TerminalCallTombstones
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,6 +12,90 @@ import org.junit.Test
 import java.time.Instant
 
 class IncomingPushPayloadTest {
+    @Test
+    fun targetlessCallPayloadRemainsCompatibleWithLegacyServer() {
+        val session = Session("https://host", "alice", "token", sessionId = "session-123")
+
+        assertTrue(IncomingPushPayload.matchesTarget(emptyMap(), session, "android-device"))
+        assertTrue(IncomingPushPayload.matchesTarget(emptyMap(), null, "android-device"))
+    }
+
+    @Test
+    fun managedCallPayloadRequiresExactLoginDeviceAndSession() {
+        val data = mapOf(
+            "target_login" to "alice",
+            "target_device_id" to "android-device",
+            "target_session_id" to "session-123",
+        )
+        val session = Session("https://host", "alice", "token", sessionId = "session-123")
+
+        assertTrue(IncomingPushPayload.matchesTarget(data, session, "android-device"))
+        assertFalse(IncomingPushPayload.matchesTarget(data, session.copy(sessionId = "session-new"), "android-device"))
+        assertFalse(IncomingPushPayload.matchesTarget(data, session, "other-device"))
+        assertFalse(IncomingPushPayload.matchesTarget(data, session.copy(login = "bob"), "android-device"))
+        assertFalse(IncomingPushPayload.matchesTarget(data, null, "android-device"))
+    }
+
+    @Test
+    fun emptyTargetSessionMatchesOnlyLegacySession() {
+        val data = mapOf(
+            "target_login" to "alice",
+            "target_device_id" to "android-device",
+            "target_session_id" to "",
+        )
+        val legacy = Session("https://host", "alice", "token")
+
+        assertTrue(IncomingPushPayload.matchesTarget(data, legacy, "android-device"))
+        assertFalse(
+            IncomingPushPayload.matchesTarget(
+                data,
+                legacy.copy(sessionId = "session-123"),
+                "android-device",
+            ),
+        )
+        assertFalse(
+            IncomingPushPayload.matchesTarget(
+                mapOf("target_login" to "alice"),
+                legacy,
+                "android-device",
+            ),
+        )
+    }
+
+    @Test
+    fun replacementMatchesOnlyExactCurrentIdentity() {
+        val replacement = IncomingPushPayload.sessionReplacement(
+            mapOf(
+                "type" to "session_replaced",
+                "login" to "alice",
+                "revoked_session_id" to "session-old",
+                "revoked_device_id" to "android-device",
+            ),
+        )!!
+        val revoked = Session("https://host", "alice", "token", sessionId = "session-old")
+
+        assertTrue(replacement.matches(revoked, "android-device"))
+        assertFalse(replacement.matches(revoked.copy(sessionId = "session-new"), "android-device"))
+        assertFalse(replacement.matches(revoked.copy(login = "bob"), "android-device"))
+        assertFalse(replacement.matches(revoked, "other-device"))
+    }
+
+    @Test
+    fun emptyRevokedSessionMatchesOnlyLegacySession() {
+        val replacement = IncomingPushPayload.sessionReplacement(
+            mapOf(
+                "type" to "session_replaced",
+                "login" to "alice",
+                "revoked_session_id" to "",
+                "revoked_device_id" to "android-device",
+            ),
+        )!!
+        val legacy = Session("https://host", "alice", "token")
+
+        assertTrue(replacement.matches(legacy, "android-device"))
+        assertFalse(replacement.matches(legacy.copy(sessionId = "session-new"), "android-device"))
+    }
+
     @Test
     fun acceptsFreshIncomingCallPayload() {
         val invite = IncomingPushPayload.parse(

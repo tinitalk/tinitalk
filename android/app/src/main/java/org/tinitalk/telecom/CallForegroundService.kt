@@ -35,6 +35,7 @@ import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.data.signal.SignalFailure
@@ -566,7 +567,16 @@ class CallForegroundService : Service() {
                 }
             },
             onError = { failure ->
+                if (failure.code == SessionReplacedReason) auth.invalidateIfCurrent(session)
                 handler.post {
+                    if (failure.code == SessionReplacedReason) {
+                        if (socket !== newSocket || finishing) return@post
+                        connected = false
+                        newCoordinator.fail()
+                        publish(CallEndReason.Failed)
+                        finishCall()
+                        return@post
+                    }
                     if (socket !== newSocket || finishing) return@post
                     val current = newCoordinator.snapshot()
                     val activeCallId = current.callId.takeIf { current.phase != CallPhase.Ended }

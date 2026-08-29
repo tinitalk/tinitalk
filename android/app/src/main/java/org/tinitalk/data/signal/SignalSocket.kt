@@ -3,7 +3,10 @@ package org.tinitalk.data.signal
 import com.google.gson.JsonParser
 import org.tinitalk.call.SequencedSignalEvent
 import org.tinitalk.call.SignalClient
+import org.tinitalk.data.AuthReasonHeader
 import org.tinitalk.data.Session
+import org.tinitalk.data.SessionIdHeader
+import org.tinitalk.data.SessionReplacedReason
 import java.util.Base64
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -149,6 +152,7 @@ class SignalSocket(
                 if (deviceId.isNotEmpty()) {
                     header(DeviceIDHeader, deviceId)
                 }
+                session.sessionId?.let { header(SessionIdHeader, it) }
             }
             .build()
         val nextSocket = socketFactory.newWebSocket(request, object : WebSocketListener() {
@@ -161,15 +165,33 @@ class SignalSocket(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                dispatch(currentAttempt) { handleFailure(currentAttempt, webSocket, callbacks) }
+                dispatch(currentAttempt) {
+                    if (response.isSessionReplaced()) {
+                        handleSessionReplaced(currentAttempt, webSocket, callbacks)
+                    } else {
+                        handleFailure(currentAttempt, webSocket, callbacks)
+                    }
+                }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                webSocket.close(code, reason)
+                if (reason == SessionReplacedReason) {
+                    dispatch(currentAttempt) {
+                        handleSessionReplaced(currentAttempt, webSocket, callbacks)
+                    }
+                } else {
+                    webSocket.close(code, reason)
+                }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                dispatch(currentAttempt) { handleFailure(currentAttempt, webSocket, callbacks) }
+                dispatch(currentAttempt) {
+                    if (reason == SessionReplacedReason) {
+                        handleSessionReplaced(currentAttempt, webSocket, callbacks)
+                    } else {
+                        handleFailure(currentAttempt, webSocket, callbacks)
+                    }
+                }
             }
         })
         val deferred: List<() -> Unit>
@@ -334,6 +356,29 @@ class SignalSocket(
         }
     }
 
+    private fun handleSessionReplaced(
+        currentAttempt: SocketAttempt,
+        webSocket: WebSocket,
+        callbacks: SignalCallbacks,
+    ) {
+        synchronized(pending) {
+            if (!isCurrentLocked(currentAttempt, webSocket)) return
+            closed = true
+            opened = false
+            generation++
+            attempt = null
+            this.callbacks = null
+            pending.clear()
+        }
+        webSocket.cancel()
+        callbacks.onError(
+            SignalFailure(
+                message = "session replaced",
+                code = SessionReplacedReason,
+            ),
+        )
+    }
+
     private fun isCurrentLocked(currentAttempt: SocketAttempt, webSocket: WebSocket): Boolean =
         !closed && attempt === currentAttempt && currentAttempt.socket === webSocket &&
             generation == currentAttempt.generation
@@ -378,6 +423,9 @@ class SignalSocket(
         data class Acknowledgement(val eventId: String) : ParsedSignal
     }
 }
+
+private fun Response?.isSessionReplaced(): Boolean =
+    this?.code == 401 && header(AuthReasonHeader) == SessionReplacedReason
 
 private fun scheduleReconnect(delayMillis: Long, action: () -> Unit) {
     Thread({

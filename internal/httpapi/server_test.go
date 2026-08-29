@@ -77,8 +77,8 @@ func TestHealthIdentifiesTiniTalkVersionAndCommit(t *testing.T) {
 	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 3 || health.Commit != "01234567" {
 		t.Fatalf("health = %+v, want tinitalk, ok, API version 3, commit 01234567", health)
 	}
-	if len(health.Features) != 1 || health.Features[0] != "video_1to1" {
-		t.Fatalf("health features = %v, want [video_1to1]", health.Features)
+	if len(health.Features) != 2 || health.Features[0] != "video_1to1" || health.Features[1] != "single_device_session" {
+		t.Fatalf("health features = %v, want [video_1to1 single_device_session]", health.Features)
 	}
 }
 

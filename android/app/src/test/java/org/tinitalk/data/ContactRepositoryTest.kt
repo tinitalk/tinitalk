@@ -8,13 +8,82 @@ class ContactRepositoryTest {
     @Test
     fun signInPersistsObservedServerFeatures() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val repo = ContactRepository(store) { _, _, _ ->
-            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("video_1to1")))
-        }
+        val api = FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("video_1to1")))
+        val repo = ContactRepository(store) { _, _, _ -> api }
 
         repo.signIn("https://host", "alice", "token")
 
         assertEquals(setOf("video_1to1"), store.load()?.features)
+        assertEquals(0, api.claimRequests)
+    }
+
+    @Test
+    fun manualSignInClaimsAdvertisedSingleDeviceSession() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val api = FakeApiClient(
+            serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("single_device_session")),
+            claimedSessionId = "session-123",
+        )
+        val repo = ContactRepository(store) { _, _, _ -> api }
+
+        repo.signIn("https://host", "alice", "token", deviceId = "android-device")
+
+        assertEquals(1, api.claimRequests)
+        assertEquals("android-device", api.claimedDeviceId)
+        assertEquals("session-123", store.load()?.sessionId)
+    }
+
+    @Test
+    fun newClientSilentlyClaimsLegacySessionDuringRestore() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token"))
+        val api = FakeApiClient(
+            serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("single_device_session")),
+            claimedSessionId = "session-restored",
+        )
+        val repo = ContactRepository(store) { _, _, _ -> api }
+
+        repo.restoreContacts(deviceId = "android-device")
+
+        assertEquals(1, api.claimRequests)
+        assertEquals("android-device", api.claimedDeviceId)
+        assertEquals("session-restored", store.load()?.sessionId)
+    }
+
+    @Test
+    fun restorePersistsClaimBeforeLaterNetworkFailure() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token"))
+        val api = FakeApiClient(
+            serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("single_device_session")),
+            claimedSessionId = "session-restored",
+            error = ApiException(503, "offline"),
+        )
+        val repo = ContactRepository(store) { _, _, _ -> api }
+
+        runCatching { repo.restoreContacts(deviceId = "android-device") }
+
+        assertEquals("session-restored", store.load()?.sessionId)
+    }
+
+    @Test
+    fun restoreBuildsAuthenticatedApiWithPersistedSessionId() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        store.save(Session("https://host", "alice", "token", sessionId = "session-123"))
+        val seenSessionIds = mutableListOf<String?>()
+        val api = FakeApiClient()
+        val repo = ContactRepository(
+            store,
+            apiFactory = { _, _, _, sessionId ->
+                seenSessionIds += sessionId
+                api
+            },
+        )
+
+        repo.restoreContacts()
+
+        assertEquals(listOf("session-123"), seenSessionIds)
+        assertEquals(0, api.claimRequests)
     }
 
     @Test
@@ -219,6 +288,58 @@ class ContactRepositoryTest {
     }
 
     @Test
+    fun staleReplacementUnauthorizedDoesNotInvalidateNewSession() {
+        AuthSessionEvents.clear()
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val oldSession = Session("https://host", "alice", "old", sessionId = "old-session")
+        val newSession = Session("https://host", "alice", "new", sessionId = "new-session")
+        store.save(oldSession)
+        val events = mutableListOf<AuthSessionEvent>()
+        val observer: (AuthSessionEvent) -> Unit = events::add
+        AuthSessionEvents.observe(observer)
+        try {
+            val repo = ContactRepository(store) { _, _, _ ->
+                FakeApiClient(
+                    error = ApiException(401, "replaced", SessionReplacedReason),
+                    beforeError = { store.save(newSession) },
+                )
+            }
+
+            runCatching { repo.restoreContacts() }
+
+            assertEquals(newSession, store.load())
+            assertEquals(emptyList<AuthSessionEvent>(), events)
+        } finally {
+            AuthSessionEvents.removeObserver(observer)
+            AuthSessionEvents.clear()
+        }
+    }
+
+    @Test
+    fun currentReplacementUnauthorizedPublishesInvalidation() {
+        AuthSessionEvents.clear()
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session("https://host", "alice", "token", sessionId = "session-123")
+        store.save(session)
+        val events = mutableListOf<AuthSessionEvent>()
+        val observer: (AuthSessionEvent) -> Unit = events::add
+        AuthSessionEvents.observe(observer)
+        try {
+            val repo = ContactRepository(store) { _, _, _ ->
+                FakeApiClient(error = ApiException(401, "replaced", SessionReplacedReason))
+            }
+
+            runCatching { repo.restoreContacts() }
+
+            assertNull(store.load())
+            assertEquals(listOf(AuthSessionEvent(session)), events)
+        } finally {
+            AuthSessionEvents.removeObserver(observer)
+            AuthSessionEvents.clear()
+        }
+    }
+
+    @Test
     fun signOutClearsSavedSession() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         store.save(Session("https://host", "alice", "token"))
@@ -293,6 +414,7 @@ private class FakeApiClient(
     private val unreadAfterRead: CallUnreadState = CallUnreadState(0, emptyList()),
     private val error: RuntimeException? = null,
     private val beforeError: (() -> Unit)? = null,
+    private val claimedSessionId: String = "session-id",
 ) : HouseholdApi {
     var profileRequests = 0
     var contactsRequests = 0
@@ -301,6 +423,8 @@ private class FakeApiClient(
     var updatedLogin: String? = null
     var updatedName: String? = null
     var readPeer: String? = null
+    var claimRequests = 0
+    var claimedDeviceId: String? = null
 
     override fun serverInfo(): ServerInfo = serverInfoError?.let { throw it } ?: serverInfo
 
@@ -337,4 +461,10 @@ private class FakeApiClient(
     }
 
     override fun putDevice(deviceId: String, fcmToken: String) = Unit
+
+    override fun claimSession(deviceId: String): String {
+        claimRequests++
+        claimedDeviceId = deviceId
+        return claimedSessionId
+    }
 }

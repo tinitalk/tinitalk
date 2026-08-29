@@ -17,6 +17,7 @@ data class Session(
     val login: String,
     val token: String,
     val features: Set<String> = emptySet(),
+    val sessionId: String? = null,
 )
 
 interface KeyValueStore {
@@ -38,22 +39,42 @@ class AuthStore(
     private val cipher: TokenCipher,
 ) {
     fun save(session: Session) {
-        synchronized(SessionLock) { saveUnlocked(session) }
+        synchronized(SessionLock) {
+            saveUnlocked(session)
+            AuthSessionEvents.clear()
+        }
     }
 
     fun load(): Session? = synchronized(SessionLock) { loadUnlocked() }
 
-    fun clear() = synchronized(SessionLock) { clearUnlocked() }
+    fun clear() = synchronized(SessionLock) {
+        clearUnlocked()
+        AuthSessionEvents.clear()
+    }
 
-    fun clearIfCurrent(session: Session) = synchronized(SessionLock) {
+    fun clearIfCurrent(session: Session): Boolean = synchronized(SessionLock) {
         val current = loadUnlocked()
-        if (current != null &&
-            current.url == session.url &&
-            current.login == session.login &&
-            current.token == session.token
-        ) {
+        if (current.sameIdentity(session)) {
             clearUnlocked()
+            true
+        } else {
+            false
         }
+    }
+
+    fun saveIfCurrent(expected: Session?, session: Session): Boolean = synchronized(SessionLock) {
+        if (!loadUnlocked().sameIdentity(expected)) return@synchronized false
+        saveUnlocked(session)
+        AuthSessionEvents.clear()
+        true
+    }
+
+    fun invalidateIfCurrent(session: Session): Boolean = synchronized(SessionLock) {
+        val current = loadUnlocked()
+        if (!current.sameIdentity(session)) return@synchronized false
+        clearUnlocked()
+        AuthSessionEvents.publish(AuthSessionEvent(requireNotNull(current)))
+        true
     }
 
     fun updateFeatures(url: String, features: Set<String>) = synchronized(SessionLock) {
@@ -71,7 +92,8 @@ class AuthStore(
                 runCatching { gson.fromJson<List<String>>(encoded, featureListType).toSet() }.getOrNull()
             }
             .orEmpty()
-        return Session(url, login, cipher.decrypt(CipherText(token, iv)), features)
+        val sessionId = store.get("session_id")?.takeIf(String::isNotEmpty)
+        return Session(url, login, cipher.decrypt(CipherText(token, iv)), features, sessionId)
     }
 
     private fun saveUnlocked(session: Session) {
@@ -81,10 +103,15 @@ class AuthStore(
         store.put("token", encrypted.value)
         store.put("iv", encrypted.iv)
         store.put("features", gson.toJson(session.features.sorted()))
+        if (session.sessionId == null) {
+            store.remove("session_id")
+        } else {
+            store.put("session_id", session.sessionId)
+        }
     }
 
     private fun clearUnlocked() {
-        store.remove("url", "login", "token", "iv", "features")
+        store.remove("url", "login", "token", "iv", "features", "session_id")
     }
 
     private companion object {
@@ -92,6 +119,14 @@ class AuthStore(
         val gson = Gson()
         val featureListType = object : TypeToken<List<String>>() {}.type
     }
+}
+
+internal fun Session?.sameIdentity(other: Session?): Boolean = when {
+    this == null || other == null -> this == null && other == null
+    else -> url == other.url &&
+        login == other.login &&
+        token == other.token &&
+        sessionId == other.sessionId
 }
 
 class SharedPreferencesKeyValueStore(context: Context) : KeyValueStore {

@@ -31,7 +31,12 @@ class SignalSocketTest {
             val client = OkHttpClient()
             val socket = SignalSocket(
                 client,
-                Session(server.url("/").toString(), "alice", "secret-token"),
+                Session(
+                    server.url("/").toString(),
+                    "alice",
+                    "secret-token",
+                    sessionId = "session-123",
+                ),
                 deviceId = "android-device-123",
             )
 
@@ -42,11 +47,69 @@ class SignalSocketTest {
             assertNull(request.requestUrl?.query)
             assertEquals("Basic YWxpY2U6c2VjcmV0LXRva2Vu", request.getHeader("Authorization"))
             assertEquals("android-device-123", request.getHeader("X-TiniTalk-Device-ID"))
+            assertEquals("session-123", request.getHeader("X-TiniTalk-Session-ID"))
             assertEquals("1", request.getHeader("X-TiniTalk-Signal-Ack"))
             assertEquals("2", request.getHeader("X-TiniTalk-Signal-Protocol"))
             socket.close()
             client.shutdown()
         }
+    }
+
+    @Test
+    fun replacementHandshakeIsFatalAndDoesNotReconnect() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val scheduler = FakeReconnectScheduler()
+        val failures = mutableListOf<SignalFailure>()
+        val socket = SignalSocket(
+            client,
+            Session("https://talk.example.com", "alice", "token", sessionId = "session-old"),
+            socketFactory = factory,
+            reconnectScheduler = scheduler::schedule,
+        )
+
+        socket.connect(onEvent = {}, onError = failures::add)
+        val connection = factory.connections.single()
+        val unauthorized = Response.Builder()
+            .request(connection.webSocket.request())
+            .protocol(Protocol.HTTP_1_1)
+            .code(401)
+            .message("Unauthorized")
+            .header("X-TiniTalk-Auth-Reason", "session_replaced")
+            .build()
+        connection.listener.onFailure(connection.webSocket, IOException("upgrade rejected"), unauthorized)
+
+        assertEquals("session_replaced", failures.single().code)
+        assertEquals(0, scheduler.pendingCount)
+        assertTrue(connection.webSocket.cancelled)
+        socket.reconnectNow()
+        assertEquals(1, factory.connections.size)
+        client.shutdown()
+    }
+
+    @Test
+    fun replacementCloseFrameIsFatalBeforeTransportFinishesClosing() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val scheduler = FakeReconnectScheduler()
+        val failures = mutableListOf<SignalFailure>()
+        val socket = SignalSocket(
+            client,
+            Session("https://talk.example.com", "alice", "token", sessionId = "session-old"),
+            socketFactory = factory,
+            reconnectScheduler = scheduler::schedule,
+        )
+
+        socket.connect(onEvent = {}, onError = failures::add)
+        val connection = factory.connections.single()
+        connection.listener.onClosing(connection.webSocket, 4001, "session_replaced")
+
+        assertEquals("session_replaced", failures.single().code)
+        assertEquals(0, scheduler.pendingCount)
+        assertTrue(connection.webSocket.cancelled)
+        socket.reconnectNow()
+        assertEquals(1, factory.connections.size)
+        client.shutdown()
     }
 
     @Test

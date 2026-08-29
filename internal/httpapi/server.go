@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"tinitalk/internal/auth"
@@ -13,15 +14,22 @@ import (
 type Options struct {
 	AllowInsecureLoopback bool
 	Hub                   *signaling.Hub
+	SessionNotifier       SessionReplacementNotifier
+}
+
+type SessionReplacementNotifier interface {
+	SessionReplaced(login, revokedSessionID string, devices []state.Device)
 }
 
 type Server struct {
-	db           *state.DB
-	auth         *auth.BasicAuthenticator
-	hub          *signaling.Hub
-	options      Options
-	mux          *http.ServeMux
-	socketTiming socketTiming
+	db             *state.DB
+	auth           *auth.BasicAuthenticator
+	hub            *signaling.Hub
+	sessionNotify  SessionReplacementNotifier
+	options        Options
+	mux            *http.ServeMux
+	socketTiming   socketTiming
+	sessionClaimMu sync.Mutex
 }
 
 type socketTiming struct {
@@ -41,13 +49,17 @@ const apiVersion = 3
 var serverCommit = "unknown"
 
 func NewServer(db *state.DB, options Options) http.Handler {
+	if options.Hub != nil {
+		options.Hub.SetSessionStore(db)
+	}
 	s := &Server{
-		db:           db,
-		auth:         auth.NewBasicAuthenticator(db),
-		hub:          options.Hub,
-		options:      options,
-		mux:          http.NewServeMux(),
-		socketTiming: defaultSocketTiming,
+		db:            db,
+		auth:          auth.NewBasicAuthenticator(db),
+		hub:           options.Hub,
+		sessionNotify: options.SessionNotifier,
+		options:       options,
+		mux:           http.NewServeMux(),
+		socketTiming:  defaultSocketTiming,
 	}
 	s.routes()
 	return s
@@ -59,6 +71,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.health)
+	s.mux.Handle("/api/session", s.requireBasicAuth(http.HandlerFunc(s.session)))
 	s.mux.Handle("/api/me", s.requireAuth(http.HandlerFunc(s.profile)))
 	s.mux.Handle("/api/contacts", s.requireAuth(http.HandlerFunc(s.contacts)))
 	s.mux.Handle("GET /api/contacts/page", s.requireAuth(http.HandlerFunc(s.contactsPage)))
@@ -81,7 +94,7 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 		Status:     "ok",
 		APIVersion: apiVersion,
 		Commit:     serverCommit,
-		Features:   []string{"video_1to1"},
+		Features:   []string{"video_1to1", "single_device_session"},
 	})
 }
 

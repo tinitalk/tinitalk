@@ -6,6 +6,7 @@ import android.os.Looper
 import org.tinitalk.call.CallCoordinator
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.telecom.signalingHttpClient
@@ -26,7 +27,8 @@ class IncomingRingingAcknowledger(context: Context) : Closeable {
     fun acknowledge(invite: IncomingInvite) {
         if (callId == invite.callId) return
         stop()
-        val session = AuthStore(SharedPreferencesKeyValueStore(context), AndroidKeystoreTokenCipher()).load() ?: return
+        val authStore = AuthStore(SharedPreferencesKeyValueStore(context), AndroidKeystoreTokenCipher())
+        val session = authStore.load() ?: return
         val client = signalingHttpClient()
         val signal = SignalSocket(
             client,
@@ -45,7 +47,15 @@ class IncomingRingingAcknowledger(context: Context) : Closeable {
         CallCoordinator(session.login, signal).restoreIncoming(invite.callId, invite.lastSeq) {
             stop(invite.callId)
         }
-        runCatching { signal.connect(onEvent = {}) }
+        runCatching {
+            signal.connect(
+                onEvent = {},
+                onError = { failure ->
+                    if (failure.code == SessionReplacedReason) authStore.invalidateIfCurrent(session)
+                    stop(invite.callId)
+                },
+            )
+        }
             .onFailure { stop(invite.callId) }
     }
 

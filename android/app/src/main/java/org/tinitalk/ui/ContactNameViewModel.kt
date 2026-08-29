@@ -16,6 +16,7 @@ data class ContactNameUpdateState(
     val completed: Boolean = false,
     val errorMessage: String? = null,
     val authExpired: Boolean = false,
+    val authReason: String? = null,
 )
 
 class ContactNameViewModel : ViewModel() {
@@ -49,6 +50,7 @@ class ContactNameViewModel : ViewModel() {
                         login = login,
                         errorMessage = contactNameError(error),
                         authExpired = error is ApiException && error.code == 401,
+                        authReason = (error as? ApiException)?.authReason,
                     )
                 }
             }

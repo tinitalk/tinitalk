@@ -73,6 +73,7 @@ class IncomingCallForegroundService : Service() {
     override fun onDestroy() {
         stopTask?.let(handler::removeCallbacks)
         stopTask = null
+        ringingAcknowledger.close()
         detachForeground()
         super.onDestroy()
     }
