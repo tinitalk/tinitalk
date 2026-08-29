@@ -483,6 +483,10 @@ class ForegroundCallControllerTest {
         }, ids)
         controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
         controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.answer", JsonObject().apply { addProperty("sdp", "initial-answer") }),
+        )
         signal.sent.clear()
         media.updatedServers.clear()
 
@@ -499,6 +503,45 @@ class ForegroundCallControllerTest {
     }
 
     @Test
+    fun repeatedCallerRestartRunsAfterCurrentOfferIsAnswered() {
+        val signal = CapturingSignalClient()
+        val media = FakeMediaSession(offer = "restart-offer")
+        lateinit var restart: () -> Unit
+        val controller = ForegroundCallController(signal, { _, _, _, _, callback ->
+            restart = callback
+            media
+        }, ids)
+        controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.answer", JsonObject().apply { addProperty("sdp", "initial-answer") }),
+        )
+        signal.sent.clear()
+
+        restart()
+        val firstRestart = signal.sent.single()
+        restart()
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event(
+                "rtc.config",
+                iceConfig("fresh-user", "fresh-pass", Instant.ofEpochMilli(120_000L), firstRestart.id),
+            ),
+        )
+
+        assertEquals(listOf("rtc.restart", "rtc.offer"), signal.sent.map { it.type })
+
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.answer", JsonObject().apply { addProperty("sdp", "restart-answer") }),
+        )
+
+        assertEquals(listOf("rtc.restart", "rtc.offer", "rtc.restart"), signal.sent.map { it.type })
+        assertTrue(signal.sent.first().id != signal.sent.last().id)
+    }
+
+    @Test
     fun staleOrMismatchedConfigDoesNotCompletePendingRestart() {
         val signal = CapturingSignalClient()
         val media = FakeMediaSession(offer = "restart-offer")
@@ -510,6 +553,10 @@ class ForegroundCallControllerTest {
         }, ids, scheduler)
         controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
         controller.onSignalEvent(activeSnapshot(), event("call.accept"))
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.answer", JsonObject().apply { addProperty("sdp", "initial-answer") }),
+        )
         signal.sent.clear()
         media.updatedServers.clear()
 
@@ -603,6 +650,10 @@ class ForegroundCallControllerTest {
 
         controller.onSignalEvent(activeSnapshot(), event("call.accept"))
         controller.onSignalEvent(activeSnapshot(), event("rtc.config", iceConfig("user", "pass", Instant.ofEpochMilli(65_010L))))
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.answer", JsonObject().apply { addProperty("sdp", "initial-answer") }),
+        )
         signal.sent.clear()
 
         restart()
@@ -645,6 +696,10 @@ class ForegroundCallControllerTest {
 
         caller.onSignalEvent(activeSnapshot(), event("call.accept"))
         caller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        caller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.answer", JsonObject().apply { addProperty("sdp", "initial-answer") }),
+        )
         callee.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
         callee.onSignalEvent(activeSnapshot(), event("rtc.offer", JsonObject().apply { addProperty("sdp", "remote-offer") }))
         callerSignal.sent.clear()
@@ -846,6 +901,10 @@ class ForegroundCallControllerTest {
         }, ids)
         controller.onSignalEvent(activeSnapshot(), event("call.accept"))
         controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.answer", JsonObject().apply { addProperty("sdp", "initial-answer") }),
+        )
         signal.sent.clear()
 
         restart()
@@ -866,6 +925,10 @@ class ForegroundCallControllerTest {
         }, ids, scheduler)
         controller.onSignalEvent(activeSnapshot(), event("call.accept"))
         controller.onSignalEvent(activeSnapshot(), event("rtc.config", emptyIceConfig()))
+        controller.onSignalEvent(
+            activeSnapshot(),
+            event("rtc.answer", JsonObject().apply { addProperty("sdp", "initial-answer") }),
+        )
         signal.sent.clear()
 
         restart()

@@ -58,6 +58,23 @@ class IncomingCallNotifierTest {
     }
 
     @Test
+    fun repeatedPresentationDoesNotLoseClaimedAnswer() {
+        val context = RuntimeEnvironment.getApplication()
+        val controller = IncomingCallController()
+        val invite = IncomingInvite(
+            callId = "call-claimed",
+            caller = "Alice",
+            expiresAt = Instant.now().plusSeconds(30),
+        )
+        controller.save(context, invite)
+        assertEquals(IncomingAnswerClaim.Claimed, controller.claimAnswer(context, invite))
+
+        assertTrue(controller.presentIncoming(context, invite) {})
+
+        assertEquals(IncomingAnswerClaim.AlreadyClaimed, controller.claimAnswer(context, invite))
+    }
+
+    @Test
     fun systemDisconnectImmediatelyPreventsIncomingCallReplay() {
         val context = RuntimeEnvironment.getApplication()
         val controller = IncomingCallController()
@@ -73,5 +90,26 @@ class IncomingCallNotifierTest {
         assertTrue(controller.isTerminal(context, invite.callId))
         assertEquals(null, controller.load(context))
         assertEquals(null, IncomingCallNotifier(context).buildIncomingNotification(invite))
+    }
+
+    @Test
+    fun staleTerminalEventDoesNotDismissANewerIncomingCall() {
+        val context = RuntimeEnvironment.getApplication()
+        val controller = IncomingCallController()
+        val current = IncomingInvite(
+            callId = "new-call",
+            caller = "Bob",
+            expiresAt = Instant.now().plusSeconds(30),
+        )
+        controller.save(context, current)
+        var cancelled = false
+
+        val finished = controller.finishTerminalPresentation(context, "old-call") {
+            cancelled = true
+        }
+
+        assertEquals(false, finished)
+        assertEquals(false, cancelled)
+        assertEquals(current.callId, controller.load(context)?.invite?.callId)
     }
 }

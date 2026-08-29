@@ -93,6 +93,43 @@ func TestHubNotifiesBusyCalleeWithoutDisturbingActiveCall(t *testing.T) {
 	}
 }
 
+func TestHubPushesActiveHangupToTheOtherParticipant(t *testing.T) {
+	for _, sender := range []string{"alice", "bob"} {
+		t.Run(sender, func(t *testing.T) {
+			notifier := &recordingNotifier{notifications: make(chan recordedNotification, 3)}
+			hub := NewHub(notifier)
+			alice := hub.Connect("alice")
+			bob := hub.Connect("bob")
+			start := event(uuid(1201), uuid(1202), "call.start", map[string]any{"callee_id": "bob"})
+			if err := hub.Handle("alice", start); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, bob)
+			_ = awaitNotification(t, notifier.notifications)
+			if err := hub.Handle("bob", event(uuid(1203), start.CallID, "call.accept", map[string]any{})); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, alice)
+			_ = next(t, alice)
+			_ = next(t, bob)
+			_ = awaitNotification(t, notifier.notifications)
+
+			if err := hub.Handle(sender, event(uuid(1204), start.CallID, "call.end", map[string]any{})); err != nil {
+				t.Fatal(err)
+			}
+
+			got := awaitNotification(t, notifier.notifications)
+			wantRecipient := "bob"
+			if sender == "bob" {
+				wantRecipient = "alice"
+			}
+			if got.kind != "cancel" || got.callee != wantRecipient || got.event.Type != "call.end" {
+				t.Fatalf("hangup notification = %+v, want recipient %q", got, wantRecipient)
+			}
+		})
+	}
+}
+
 func TestHubMergesSupportedCrossedCalls(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alice := hub.Connect("alice")
@@ -551,11 +588,17 @@ func TestHubExpiresRingingCall(t *testing.T) {
 
 func TestHubEndsAbandonedActiveCallAndReleasesBothUsers(t *testing.T) {
 	now := time.Unix(2_000, 0)
-	hub := NewHub(NoopNotifier{})
+	notifier := &recordingNotifier{notifications: make(chan recordedNotification, 4)}
+	hub := NewHub(notifier)
 	hub.SetNow(func() time.Time { return now })
 	alice := hub.Connect("alice")
 	bob := hub.Connect("bob")
 	start := activeCall(t, hub, alice, bob, 1201)
+	for {
+		if got := awaitNotification(t, notifier.notifications); got.event.Type == "call.accept" {
+			break
+		}
+	}
 
 	hub.Disconnect(bob)
 	now = now.Add(30*time.Second + time.Millisecond)
@@ -565,6 +608,17 @@ func TestHubEndsAbandonedActiveCallAndReleasesBothUsers(t *testing.T) {
 	disconnectEventID := start.CallID[:len(start.CallID)-3] + "998"
 	if got := next(t, alice); got.Type != "call.end" || got.ID != disconnectEventID || string(got.Payload) != `{"reason":"participant_disconnected"}` {
 		t.Fatalf("call end = %+v", got)
+	}
+	notified := map[string]bool{}
+	for range 2 {
+		got := awaitNotification(t, notifier.notifications)
+		if got.kind != "cancel" || got.event.Type != "call.end" {
+			t.Fatalf("disconnect notification = %+v", got)
+		}
+		notified[got.callee] = true
+	}
+	if !notified["alice"] || !notified["bob"] {
+		t.Fatalf("disconnect notifications = %+v, want both participants", notified)
 	}
 	replayed, err := hub.Resume("bob", start.CallID, 4)
 	if err != nil {
@@ -1044,6 +1098,54 @@ func TestHubKeepsIncomingAndCancelNotificationsOrdered(t *testing.T) {
 	}
 }
 
+func TestHubKeepsNewerCancelWhenOlderCancelIsInFlight(t *testing.T) {
+	notifier := &orderedCancelNotifier{events: make(chan string, 2), releaseFirst: make(chan struct{})}
+	hub := NewHub(notifier)
+	enqueue := func(next notification) {
+		hub.mu.Lock()
+		hub.enqueueNotification(next)
+		hub.mu.Unlock()
+	}
+	callID := "call-a"
+	enqueue(notification{callee: "bob", event: DeliveredEvent{Event: protocol.Event{ID: "accept", CallID: callID, Type: "call.accept"}}, cancel: true})
+	if got := <-notifier.events; got != "call.accept" {
+		t.Fatalf("first cancellation = %q", got)
+	}
+	enqueue(notification{callee: "bob", event: DeliveredEvent{Event: protocol.Event{ID: "end", CallID: callID, Type: "call.end"}}, cancel: true})
+	close(notifier.releaseFirst)
+	select {
+	case got := <-notifier.events:
+		if got != "call.end" {
+			t.Fatalf("second cancellation = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("newer cancellation was dropped")
+	}
+}
+
+func TestHubKeepsCancellationForEachParticipant(t *testing.T) {
+	hub := NewHub(nil)
+	hub.notifying = true
+
+	hub.mu.Lock()
+	hub.enqueueNotification(notification{
+		callee: "bob",
+		event:  DeliveredEvent{Event: protocol.Event{ID: "accept", CallID: "call-a", Type: "call.accept"}},
+		cancel: true,
+	})
+	hub.enqueueNotification(notification{
+		callee: "alice",
+		event:  DeliveredEvent{Event: protocol.Event{ID: "end", CallID: "call-a", Type: "call.end"}},
+		cancel: true,
+	})
+	queued := append([]notification(nil), hub.notifications...)
+	hub.mu.Unlock()
+
+	if len(queued) != 2 {
+		t.Fatalf("queued cancellations = %d, want one for each participant", len(queued))
+	}
+}
+
 func TestHubKeepsCancelForInFlightIncomingWhenQueueIsFull(t *testing.T) {
 	notifier := &saturatedNotifier{
 		started:   make(chan struct{}),
@@ -1262,6 +1364,11 @@ type orderedNotifier struct {
 	releaseIncoming chan struct{}
 }
 
+type orderedCancelNotifier struct {
+	events       chan string
+	releaseFirst chan struct{}
+}
+
 func (n *orderedNotifier) IncomingCall(string, string, DeliveredEvent) {
 	n.events <- "incoming"
 	<-n.releaseIncoming
@@ -1269,6 +1376,15 @@ func (n *orderedNotifier) IncomingCall(string, string, DeliveredEvent) {
 
 func (n *orderedNotifier) CancelCall(string, DeliveredEvent) {
 	n.events <- "cancel"
+}
+
+func (n *orderedCancelNotifier) IncomingCall(string, string, DeliveredEvent) {}
+
+func (n *orderedCancelNotifier) CancelCall(_ string, event DeliveredEvent) {
+	n.events <- event.Type
+	if event.Type == "call.accept" {
+		<-n.releaseFirst
+	}
 }
 
 type saturatedNotifier struct {

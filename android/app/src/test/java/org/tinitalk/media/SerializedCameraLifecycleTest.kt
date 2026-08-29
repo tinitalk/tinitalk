@@ -10,6 +10,142 @@ import java.util.concurrent.TimeUnit
 
 class SerializedCameraLifecycleTest {
     @Test
+    fun failedStopRetriesAfterPeerCloseThenDisposesSafely() {
+        val control = ManualCameraQueue()
+        var shouldFailStop = true
+        val attempt = FakeCameraAttempt(
+            "camera2-front",
+            CameraFacing.Front,
+            "back-main",
+            control,
+            onStop = {
+                if (shouldFailStop) {
+                    shouldFailStop = false
+                    error("native stop failed")
+                }
+            },
+        )
+        val lifecycle = lifecycle(control, FakeAttemptProvider(attempt))
+        lifecycle.start()
+        control.runAll()
+        var released = false
+
+        lifecycle.close(
+            afterDetached = {},
+            afterReleased = { released = true },
+        )
+        control.runAll()
+
+        assertFalse(released)
+        assertEquals(1, attempt.stopCalls)
+        assertFalse(attempt.disposed)
+
+        var safePeerRelease = false
+        lifecycle.disposeAfterPeerClosed { safePeerRelease = true }
+
+        assertEquals(2, attempt.stopCalls)
+        assertTrue(attempt.disposed)
+        assertTrue(released)
+        assertTrue(safePeerRelease)
+    }
+
+    @Test
+    fun successfulStopDisposesBeforeLogicalRelease() {
+        val control = ManualCameraQueue()
+        val blocking = ManualCameraQueue()
+        val order = mutableListOf<String>()
+        val attempt = FakeCameraAttempt(
+            "camera2-front",
+            CameraFacing.Front,
+            "back-main",
+            control,
+            onDispose = { order += "dispose" },
+        )
+        val lifecycle = lifecycle(
+            control,
+            FakeAttemptProvider(attempt),
+            blockingQueue = blocking,
+        )
+        lifecycle.start()
+        control.runAll()
+
+        lifecycle.close(
+            afterDetached = {},
+            afterReleased = { order += "released" },
+        )
+        control.runAll()
+        blocking.runAll()
+
+        assertEquals(listOf("dispose", "released"), order)
+    }
+
+    @Test
+    fun repeatedStopFailureQuarantinesAttemptWithoutReleasingBarrier() {
+        val control = ManualCameraQueue()
+        val attempt = FakeCameraAttempt(
+            "camera2-front",
+            CameraFacing.Front,
+            "back-main",
+            control,
+            onStop = { error("native stop failed") },
+        )
+        val lifecycle = lifecycle(control, FakeAttemptProvider(attempt))
+        lifecycle.start()
+        control.runAll()
+        var released = false
+
+        lifecycle.close(
+            afterDetached = {},
+            afterReleased = { released = true },
+        )
+        control.runAll()
+        lifecycle.disposeAfterPeerClosed()
+        lifecycle.disposeAfterPeerClosed()
+
+        assertEquals(2, attempt.stopCalls)
+        assertFalse(attempt.disposed)
+        assertFalse(released)
+    }
+
+    @Test
+    fun unsafeRetirementKeepsBarrierClosedWhenAnotherAttemptDisposes() {
+        val control = ManualCameraQueue()
+        val blocking = ManualCameraQueue()
+        val unsafe = FakeCameraAttempt(
+            "camera2-front",
+            CameraFacing.Front,
+            "back-main",
+            control,
+            onStop = { error("native stop failed") },
+        )
+        val safe = FakeCameraAttempt("camera1-front", CameraFacing.Front, "back-main", control)
+        val lifecycle = lifecycle(
+            control,
+            FakeAttemptProvider(unsafe, safe),
+            blockingQueue = blocking,
+        )
+        lifecycle.start()
+        control.runAll()
+        unsafe.events.onFailure("camera2 failed")
+        control.runAll()
+        blocking.runAll()
+
+        lifecycle.disposeAfterPeerClosed()
+        var released = false
+        lifecycle.close(
+            afterDetached = {},
+            afterReleased = { released = true },
+        )
+        control.runAll()
+        blocking.runAll()
+
+        assertEquals(2, unsafe.stopCalls)
+        assertEquals(1, safe.stopCalls)
+        assertTrue(safe.disposed)
+        assertFalse(released)
+    }
+
+    @Test
     fun openingStopCannotBlockControlQueueOrLogicalCloseCompletion() {
         val control = ManualCameraQueue()
         val stopEntered = CountDownLatch(1)

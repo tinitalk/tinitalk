@@ -8,11 +8,12 @@ type DeliveredEvent struct {
 }
 
 type Client struct {
-	user     string
-	deviceID string
-	inbox    chan DeliveredEvent
-	closed   bool
-	online   bool
+	user                 string
+	deviceID             string
+	inbox                chan DeliveredEvent
+	closed               bool
+	online               bool
+	awaitingResumeCallID string
 }
 
 func (c *Client) TryNext() (DeliveredEvent, bool) {

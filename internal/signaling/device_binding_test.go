@@ -296,6 +296,57 @@ func TestHubRebindsMediaOnSameDeviceReconnectAndFiltersReplay(t *testing.T) {
 	assertNoEvent(t, aliceTablet)
 }
 
+func TestHubBoundReconnectReplaysBeforeNewLiveEvents(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alicePhone := connectDevice(t, hub, "alice", "phone")
+	bobPhone := connectDevice(t, hub, "bob", "phone")
+	bobTablet := connectDevice(t, hub, "bob", "tablet")
+	start := startBoundCall(t, hub, alicePhone, bobPhone, bobTablet, 2441)
+	call, ok := hub.callByID(start.CallID)
+	if !ok {
+		t.Fatal("active call not found")
+	}
+	lastSeq := call.nextSeq - 1
+
+	hub.Disconnect(bobTablet)
+	missed := event(uuid(2445), start.CallID, "rtc.offer", map[string]any{"sdp": "missed"})
+	if err := hub.HandleClient(alicePhone, missed); err != nil {
+		t.Fatal(err)
+	}
+
+	bobReplacement := connectDevice(t, hub, "bob", "tablet")
+	live := event(uuid(2446), start.CallID, "rtc.ice", map[string]any{"candidate": "live"})
+	if err := hub.HandleClient(alicePhone, live); err != nil {
+		t.Fatal(err)
+	}
+	assertNoEvent(t, bobReplacement)
+
+	if _, offline := call.offlineSince["bob"]; !offline {
+		t.Fatal("replacement cleared disconnect grace before resume")
+	}
+
+	resume := event(uuid(2447), start.CallID, "call.resume", map[string]any{"last_seq": lastSeq})
+	if err := hub.HandleClient(bobReplacement, resume); err != nil {
+		t.Fatal(err)
+	}
+	first := next(t, bobReplacement)
+	second := next(t, bobReplacement)
+	if first.ID != missed.ID || second.ID != live.ID || first.Seq >= second.Seq {
+		t.Fatalf("replay order = [%+v, %+v]", first, second)
+	}
+	if _, offline := call.offlineSince["bob"]; offline {
+		t.Fatal("successful resume did not clear disconnect grace")
+	}
+
+	future := event(uuid(2448), start.CallID, "rtc.ice", map[string]any{"candidate": "future"})
+	if err := hub.HandleClient(alicePhone, future); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, bobReplacement); got.ID != future.ID || got.Seq <= second.Seq {
+		t.Fatalf("future live event = %+v after seq %d", got, second.Seq)
+	}
+}
+
 func TestHubEmptyDeviceCannotReplayBoundMedia(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alicePhone := connectDevice(t, hub, "alice", "phone")

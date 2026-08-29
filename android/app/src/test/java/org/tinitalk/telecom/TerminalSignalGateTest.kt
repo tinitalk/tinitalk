@@ -11,9 +11,9 @@ class TerminalSignalGateTest {
     fun waitsForSettlementAndCompletesOnlyOnce() {
         val scheduler = FakeTerminalScheduler()
         var completions = 0
-        val gate = TerminalSignalGate(20_000L, scheduler::schedule) { completions++ }
+        val gate = TerminalSignalGate(20_000L, scheduler::schedule)
 
-        val settle = gate.begin()
+        val settle = gate.begin { completions++ }
 
         assertEquals(0, completions)
         assertTrue(gate.isWaiting())
@@ -29,13 +29,28 @@ class TerminalSignalGateTest {
     fun timeoutCompletesWhenSettlementNeverArrives() {
         val scheduler = FakeTerminalScheduler()
         var completions = 0
-        val gate = TerminalSignalGate(20_000L, scheduler::schedule) { completions++ }
+        val gate = TerminalSignalGate(20_000L, scheduler::schedule)
 
-        gate.begin()
+        gate.begin { completions++ }
         scheduler.runPending()
 
         assertEquals(1, completions)
         assertEquals(20_000L, scheduler.delayMillis)
+    }
+
+    @Test
+    fun settlementFromClosedGenerationDoesNotCompleteTheNextWait() {
+        val scheduler = FakeTerminalScheduler()
+        var completions = 0
+        val gate = TerminalSignalGate(20_000L, scheduler::schedule)
+        val staleSettlement = gate.begin { completions++ }
+        gate.close()
+        gate.begin { completions++ }
+
+        staleSettlement()
+
+        assertEquals(0, completions)
+        assertTrue(gate.isWaiting())
     }
 }
 

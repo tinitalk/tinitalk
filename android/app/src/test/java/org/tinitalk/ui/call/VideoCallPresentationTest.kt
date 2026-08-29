@@ -7,6 +7,38 @@ import org.junit.Test
 
 class VideoCallPresentationTest {
     @Test
+    fun videoRecoveryOverlayRequiresAnInterruptedRemoteVideoRun() {
+        assertTrue(
+            videoRecoveryOverlayVisible(
+                remoteSending = true,
+                remoteVideoWasVisible = true,
+                remoteFrameVisible = false,
+            ),
+        )
+        assertFalse(
+            videoRecoveryOverlayVisible(
+                remoteSending = true,
+                remoteVideoWasVisible = false,
+                remoteFrameVisible = false,
+            ),
+        )
+        assertFalse(
+            videoRecoveryOverlayVisible(
+                remoteSending = false,
+                remoteVideoWasVisible = true,
+                remoteFrameVisible = false,
+            ),
+        )
+        assertFalse(
+            videoRecoveryOverlayVisible(
+                remoteSending = true,
+                remoteVideoWasVisible = true,
+                remoteFrameVisible = true,
+            ),
+        )
+    }
+
+    @Test
     fun videoControlsFollowAutoHideTapAndVideoLoss() {
         var visible = true
 

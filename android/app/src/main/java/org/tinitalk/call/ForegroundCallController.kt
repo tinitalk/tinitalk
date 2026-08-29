@@ -69,6 +69,9 @@ class ForegroundCallController(
     private var configuredCallId: String? = null
     private var acceptedCallId: String? = null
     private var offerStartedCallId: String? = null
+    private var offerAwaitingAnswerCallId: String? = null
+    private var restartInFlightCallId: String? = null
+    private var restartAgainCallId: String? = null
     private var restartRequestedCallId: String? = null
     private var restartRequestID: String? = null
     private var pendingRestart: SignalEvent? = null
@@ -121,8 +124,9 @@ class ForegroundCallController(
                 }
             }
             "rtc.config" -> handleRtcConfig(event)
-            "rtc.answer" -> session?.let { media ->
+            "rtc.answer" -> session?.takeIf { callId == event.callId }?.let { media ->
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
+                completeLocalOffer(event.callId)
             }
             "rtc.video" -> {
                 val enabled = event.payload["enabled"]
@@ -132,6 +136,7 @@ class ForegroundCallController(
                 updateVideoState(videoState.withRemoteSending(event.callId, enabled))
             }
             "rtc.restart" -> {
+                restartInFlightCallId = event.callId
                 clearPendingRestartRequest(event.callId)
                 remoteIceGeneration = event.id
                 session?.beginRemoteDescription()
@@ -327,6 +332,9 @@ class ForegroundCallController(
         configuredCallId = null
         acceptedCallId = null
         offerStartedCallId = null
+        offerAwaitingAnswerCallId = null
+        restartInFlightCallId = null
+        restartAgainCallId = null
         restartRequestedCallId = null
         restartRequestID = null
         pendingRestart = null
@@ -416,6 +424,7 @@ class ForegroundCallController(
             restartRequestedCallId = null
             restartRequestID = null
             pendingRestart = null
+            offerAwaitingAnswerCallId = event.callId
             sendSdp(event.callId, "rtc.offer", offer)
         } else {
             startOfferWhenReady(event.callId)
@@ -431,12 +440,33 @@ class ForegroundCallController(
         if (acceptedCallId != nextCallId || configuredCallId != nextCallId || offerStartedCallId == nextCallId) return
         offerStartedCallId = nextCallId
         val offer = runBlockingLite { ensureSession(nextCallId).createOffer() }
+        offerAwaitingAnswerCallId = nextCallId
         sendSdp(nextCallId, "rtc.offer", offer)
     }
 
     private fun answerOffer(event: SignalEvent) {
         val answer = runBlockingLite { ensureSession(event.callId).acceptOffer(event.payload["sdp"].asString) }
         sendSdp(event.callId, "rtc.answer", answer)
+        completeRemoteOffer(event.callId)
+    }
+
+    private fun completeLocalOffer(nextCallId: String) {
+        if (offerAwaitingAnswerCallId != nextCallId) return
+        offerAwaitingAnswerCallId = null
+        if (restartInFlightCallId == nextCallId) restartInFlightCallId = null
+        runDeferredRestart(nextCallId)
+    }
+
+    private fun completeRemoteOffer(nextCallId: String) {
+        if (offerStartedCallId == nextCallId || restartInFlightCallId != nextCallId) return
+        restartInFlightCallId = null
+        runDeferredRestart(nextCallId)
+    }
+
+    private fun runDeferredRestart(nextCallId: String) {
+        if (restartAgainCallId != nextCallId) return
+        restartAgainCallId = null
+        restartIce(nextCallId)
     }
 
     private fun ensureSession(nextCallId: String): MediaSession {
@@ -564,7 +594,7 @@ class ForegroundCallController(
             val released = { completeCameraRelease(retirement, lease) }
             if (usePause) camera.pauseCamera(detached, released) else camera.stopCamera(detached, released)
         }.onFailure {
-            completeCameraDetach(retirement)
+            completeCameraRelease(retirement, lease)
         }
     }
 
@@ -716,15 +746,18 @@ class ForegroundCallController(
     @Synchronized
     private fun restartIce(nextCallId: String) {
         if (callId != nextCallId) return
+        if (offerAwaitingAnswerCallId == nextCallId || restartInFlightCallId == nextCallId) {
+            restartAgainCallId = nextCallId
+            return
+        }
+        restartInFlightCallId = nextCallId
         if (offerStartedCallId != nextCallId) {
-            if (pendingRestartRequest != null) return
             event(nextCallId, "rtc.restart.request", JsonObject()).also {
                 pendingRestartRequest = it
                 signal.send(it)
             }
             return
         }
-        if (restartRequestedCallId == nextCallId) return
         val restart = event(nextCallId, "rtc.restart", JsonObject())
         restartRequestedCallId = nextCallId
         restartRequestID = restart.id

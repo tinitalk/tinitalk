@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -393,6 +394,14 @@ private fun VideoActiveCallScreen(
     val remoteSource = videoState.remoteTrack
     var localFrameVisible by remember(localSource) { mutableStateOf(false) }
     var remoteFrameVisible by remember(remoteSource) { mutableStateOf(false) }
+    var remoteVideoWasVisible by remember(videoState.callId, videoState.remoteSending) {
+        mutableStateOf(false)
+    }
+    val showVideoRecoveryOverlay = videoRecoveryOverlayVisible(
+        remoteSending = videoState.remoteSending,
+        remoteVideoWasVisible = remoteVideoWasVisible,
+        remoteFrameVisible = remoteFrameVisible,
+    )
     val presentation = videoCallPresentation(
         videoAllowed = videoState.allowed,
         cameraRequested = videoState.requested,
@@ -422,6 +431,9 @@ private fun VideoActiveCallScreen(
         )
     }
 
+    LaunchedEffect(videoState.callId, videoState.remoteSending, remoteFrameVisible) {
+        if (videoState.remoteSending && remoteFrameVisible) remoteVideoWasVisible = true
+    }
     LaunchedEffect(videoState.callId, localSource, remoteSource, presentation.blockProximity) {
         onVideoVisibilityChanged(presentation.blockProximity)
     }
@@ -482,6 +494,35 @@ private fun VideoActiveCallScreen(
                         detectTapGestures { toggleControls() }
                     },
             )
+        }
+
+        AnimatedVisibility(
+            visible = showVideoRecoveryOverlay,
+            modifier = Modifier.align(Alignment.Center),
+            enter = fadeIn(tween(160)),
+            exit = fadeOut(tween(240)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color.Black.copy(alpha = 0.66f))
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                )
+                Text(
+                    text = "Восстанавливаем видео…",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
 
         AnimatedVisibility(

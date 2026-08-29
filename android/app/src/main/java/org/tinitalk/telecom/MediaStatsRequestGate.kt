@@ -20,7 +20,7 @@ internal data class MediaConnectionEpoch(
     val becameReady: Boolean,
 )
 
-/** Main-thread state machine that isolates async getStats callbacks by media session and epoch. */
+/** Isolates async getStats callbacks by media session and transport epoch. */
 internal class MediaStatsRequestGate {
     private var nextSessionId = 0L
     private var nextEpoch = 0L
@@ -31,6 +31,7 @@ internal class MediaStatsRequestGate {
     private var closed = false
     private var inFlight: MediaStatsRequestToken? = null
 
+    @Synchronized
     fun openSession(callId: String): MediaStatsSession {
         val opened = MediaStatsSession(callId, ++nextSessionId)
         session = opened
@@ -41,6 +42,7 @@ internal class MediaStatsRequestGate {
         return opened
     }
 
+    @Synchronized
     fun onConnection(
         candidate: MediaStatsSession,
         state: MediaConnectionState,
@@ -66,6 +68,7 @@ internal class MediaStatsRequestGate {
         )
     }
 
+    @Synchronized
     fun begin(candidate: MediaStatsSession): MediaStatsRequestToken? {
         if (session != candidate || closed || !transportReady || inFlight != null) return null
         return MediaStatsRequestToken(
@@ -76,6 +79,7 @@ internal class MediaStatsRequestGate {
         ).also { inFlight = it }
     }
 
+    @Synchronized
     fun complete(token: MediaStatsRequestToken): Boolean {
         if (inFlight != token) return false
         inFlight = null
@@ -84,6 +88,7 @@ internal class MediaStatsRequestGate {
             current.callId == token.callId && epoch == token.epoch
     }
 
+    @Synchronized
     fun reset() {
         session = null
         transportReady = false

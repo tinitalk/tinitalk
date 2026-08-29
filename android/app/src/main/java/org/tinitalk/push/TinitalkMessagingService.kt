@@ -1,8 +1,10 @@
 package org.tinitalk.push
 
+import android.app.NotificationManager
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import org.tinitalk.call.CallAudioState
+import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
@@ -34,32 +36,54 @@ class TinitalkMessagingService : FirebaseMessagingService() {
             val snapshot = CallServiceState.snapshot()
             val now = Instant.now()
             val latest = cancellation.missedFallback(pending, snapshot, now)
+            if (cancellation.shouldRouteRemoteEnd(pending?.callId, snapshot)) {
+                runCatching { CallForegroundService.remoteEnded(this, cancellation.callId) }
+            }
             if (pending != null && !pending.expiresAt.isAfter(now)) {
                 incoming.clear(this, pending.callId)
             }
             if (cancellation.shouldDismiss(pending?.callId, snapshot)) {
                 TelecomCallController(AndroidTelecomRegistrar(this)).cancel(cancellation.callId)
-                notifier.cancel()
-                incoming.clear(this, cancellation.callId)
+                incoming.finishTerminalPresentation(this, cancellation.callId, notifier::cancel)
             }
             if (cancellation.shouldRefreshMissedCount()) refreshMissedCount(notifier, latest)
             return
         }
         val invite = IncomingPushPayload.parse(message.data) ?: return
         val incoming = IncomingCallController()
-        if (incoming.isTerminal(this, invite.callId)) return
-        incoming.save(this, invite)
-        TelecomCallController(AndroidTelecomRegistrar(this)).addIncoming(invite, TelecomCallCallbacks(
-            onAnswer = { incoming.answerFromTelecom(this, invite) },
-            onDisconnect = { incoming.disconnectFromTelecom(this, invite) },
-            onActive = { CallForegroundService.telecomActive(this, invite.callId) },
-            onInactive = { CallForegroundService.telecomInactive(this, invite.callId) },
-            onEndpointsChanged = { state -> CallAudioState.publish(invite.callId, state) },
-        ))
+        val registered = incoming.presentIncoming(this, invite) {
+            TelecomCallController(AndroidTelecomRegistrar(this)).addIncoming(invite, TelecomCallCallbacks(
+                onAnswer = { incoming.answerFromTelecom(this, invite) },
+                onDisconnect = { incoming.disconnectFromTelecom(this, invite) },
+                onActive = {
+                    val call = CallServiceState.snapshot()
+                    val liveSameCall = call.callId == invite.callId &&
+                        call.phase != CallPhase.Idle && call.phase != CallPhase.Ended
+                    if (liveSameCall || !incoming.isTerminal(this, invite.callId)) {
+                        CallForegroundService.telecomActive(this, invite.callId)
+                    }
+                },
+                onInactive = {
+                    val call = CallServiceState.snapshot()
+                    val liveSameCall = call.callId == invite.callId &&
+                        call.phase != CallPhase.Idle && call.phase != CallPhase.Ended
+                    if (liveSameCall || !incoming.isTerminal(this, invite.callId)) {
+                        CallForegroundService.telecomInactive(this, invite.callId)
+                    }
+                },
+                onEndpointsChanged = { state -> CallAudioState.publish(invite.callId, state) },
+            ))
+        }
+        if (!registered) return
         if (!IncomingCallForegroundService.show(this, invite)) {
-            notifier.show(invite)
-            IncomingRingingAcknowledger(this).acknowledge(invite)
-            incoming.openScreen(this, invite)
+            val shown = notifier.presentIncoming(invite) { notification ->
+                getSystemService(NotificationManager::class.java)
+                    .notify(IncomingCallNotifier.NotificationId, notification)
+            }
+            if (shown) {
+                IncomingRingingAcknowledger(this).acknowledge(invite)
+                incoming.openScreen(this, invite)
+            }
         }
     }
 

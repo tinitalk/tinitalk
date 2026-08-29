@@ -1,5 +1,6 @@
 package org.tinitalk.push
 
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -21,43 +22,47 @@ class IncomingCallForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val incoming = IncomingCallController()
         val invite = IncomingCallController.inviteFrom(intent)
-        if (invite == null || !invite.expiresAt.isAfter(Instant.now()) || incoming.isTerminal(this, invite.callId)) {
-            stopSelf()
+        if (invite == null || !invite.expiresAt.isAfter(Instant.now())) {
+            stopPresentation(startId)
             return START_NOT_STICKY
         }
 
         val notifier = IncomingCallNotifier(this)
-        val notification = notifier.buildIncomingNotification(invite)
-        if (notification == null) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
+        var foregroundStarted = false
+        val presented = runCatching {
+            notifier.presentIncoming(invite) { notification ->
+                foregroundStarted = runCatching {
+                    IncomingCallForegroundPresentation(
+                        enterForeground = {
+                            ServiceCompat.startForeground(
+                                this,
+                                IncomingCallNotifier.NotificationId,
+                                notification,
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL,
+                            )
+                            foreground = true
+                        },
+                        acknowledgeRinging = ringingAcknowledger::acknowledge,
+                        openFullScreen = { incoming.openScreen(this, it) },
+                    ).present(invite)
+                }.isSuccess
+                if (!foregroundStarted) {
+                    IncomingCallForegroundPresentation(
+                        enterForeground = {
+                            getSystemService(NotificationManager::class.java)
+                                .notify(IncomingCallNotifier.NotificationId, notification)
+                        },
+                        acknowledgeRinging = ringingAcknowledger::acknowledge,
+                        openFullScreen = { incoming.openScreen(this, it) },
+                    ).present(invite)
+                }
+            }
+        }.getOrDefault(false)
 
-        val foregroundStarted = runCatching {
-            IncomingCallForegroundPresentation(
-                enterForeground = {
-                    ServiceCompat.startForeground(
-                        this,
-                        IncomingCallNotifier.NotificationId,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL,
-                    )
-                    foreground = true
-                },
-                acknowledgeRinging = ringingAcknowledger::acknowledge,
-                openFullScreen = { incoming.openScreen(this, it) },
-            ).present(invite)
-        }.isSuccess
-
-        if (!foregroundStarted) {
-            IncomingCallForegroundPresentation(
-                enterForeground = notifier::show,
-                acknowledgeRinging = ringingAcknowledger::acknowledge,
-                openFullScreen = { incoming.openScreen(this, it) },
-            ).present(invite)
-            stopSelf()
+        if (!presented || !foregroundStarted) {
+            stopPresentation(startId)
         } else {
-            scheduleStop(invite)
+            scheduleStop(invite, startId)
         }
         return START_NOT_STICKY
     }
@@ -67,19 +72,30 @@ class IncomingCallForegroundService : Service() {
     override fun onDestroy() {
         stopTask?.let(handler::removeCallbacks)
         stopTask = null
-        if (foreground) stopForeground(STOP_FOREGROUND_REMOVE)
-        foreground = false
+        detachForeground()
         super.onDestroy()
     }
 
-    private fun scheduleStop(invite: IncomingInvite) {
+    private fun scheduleStop(invite: IncomingInvite, startId: Int) {
         stopTask?.let(handler::removeCallbacks)
-        val task = Runnable { stopSelf() }
+        val task = Runnable { stopPresentation(startId) }
         stopTask = task
         val remainingMillis = java.time.Duration.between(Instant.now(), invite.expiresAt)
             .toMillis()
             .coerceAtLeast(0)
         handler.postDelayed(task, remainingMillis)
+    }
+
+    private fun stopPresentation(startId: Int) {
+        detachForeground()
+        stopSelfResult(startId)
+    }
+
+    private fun detachForeground() {
+        // Terminal paths cancel the scoped notification themselves. Detaching first also keeps a
+        // newer fallback notification with the shared ID alive while this service is stopping.
+        if (foreground) stopForeground(STOP_FOREGROUND_DETACH)
+        foreground = false
     }
 
     companion object {

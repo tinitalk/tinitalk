@@ -12,14 +12,20 @@ import org.tinitalk.push.IncomingInvite
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class TelecomCapabilities {
     AudioOnly,
@@ -91,8 +97,11 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
             callbacks = callbacks,
             expiresAt = invite.expiresAt,
             onFailure = {
-                IncomingCallNotifier(context).cancel()
-                IncomingCallController().clear(context, invite.callId)
+                IncomingCallController().finishTerminalPresentation(
+                    context,
+                    invite.callId,
+                    IncomingCallNotifier(context)::cancel,
+                )
             },
         )
     }
@@ -115,15 +124,21 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
         onFailure: () -> Unit = {},
     ) {
         val session = TelecomSessions.prepare(callId) ?: return
-        TelecomSessions.scope.launch {
+        val owner = TelecomSessions.scope.launch(start = CoroutineStart.LAZY) {
             val expiry = expiresAt?.let {
                 launch {
                     delay(Duration.between(Instant.now(), it).toMillis().coerceAtLeast(0))
-                    TelecomSessions.disconnect(callId, DisconnectCause.MISSED)
-                    onFailure()
+                    try {
+                        TelecomSessions.disconnect(callId, DisconnectCause.MISSED)
+                        currentCoroutineContext().ensureActive()
+                        onFailure()
+                    } catch (failure: CancellationException) {
+                        TelecomSessions.abortCancel(callId)
+                        throw failure
+                    }
                 }
             }
-            TelecomSessions.setExpiry(callId, expiry)
+            session.attachExpiry(expiry)
             try {
                 callsManager.addCall(
                     CallAttributesCompat(
@@ -141,10 +156,16 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                     onSetActive = { callbacks.onActive() },
                     onSetInactive = { callbacks.onInactive() },
                 ) {
-                    session.complete(this)
+                    val control = this
+                    if (!session.publish(control)) {
+                        TelecomSessions.scope.launch {
+                            TelecomSessions.disconnectDetached(control, DisconnectCause.REMOTE)
+                        }
+                        return@addCall
+                    }
                     launch {
                         combine(currentCallEndpoint, availableEndpoints) { current, available ->
-                            TelecomSessions.updateEndpoints(callId, available)
+                            TelecomSessions.updateEndpoints(callId, session, available)
                             AudioEndpointState(
                                 current = current.toAudioEndpoint(),
                                 available = available.map { it.toAudioEndpoint() },
@@ -152,14 +173,17 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                         }.collect(callbacks.onEndpointsChanged)
                     }
                 }
+            } catch (failure: CancellationException) {
+                throw failure
             } catch (_: Exception) {
-                session.completeExceptionally(IllegalStateException("Telecom rejected the call"))
+                session.fail(IllegalStateException("Telecom rejected the call"))
                 onFailure()
             } finally {
-                expiry?.cancel()
-                TelecomSessions.remove(callId, session)
+                TelecomSessions.finishNormally(callId, session)
             }
         }
+        session.attachOwner(owner)
+        owner.start()
     }
 
     override fun answer(callId: String, onResult: (Boolean) -> Unit) {
@@ -223,40 +247,159 @@ internal class EndpointCache<T> {
 
 private object TelecomSessions {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val sessions = ConcurrentHashMap<String, CompletableDeferred<CallControlScope>>()
-    private val expiries = ConcurrentHashMap<String, Job>()
+    private val sessions = ConcurrentHashMap<String, TelecomSession>()
     private val endpoints = EndpointCache<androidx.core.telecom.CallEndpointCompat>()
 
-    fun prepare(callId: String): CompletableDeferred<CallControlScope>? {
-        val session = CompletableDeferred<CallControlScope>()
+    fun prepare(callId: String): TelecomSession? {
+        val session = TelecomSession()
         return if (sessions.putIfAbsent(callId, session) == null) session else null
     }
 
-    suspend fun control(callId: String): CallControlScope? =
-        runCatching { sessions[callId]?.await() }.getOrNull()
-
-    suspend fun disconnect(callId: String, cause: Int) {
-        control(callId)?.disconnect(DisconnectCause(cause))
+    suspend fun control(callId: String): CallControlScope? {
+        val session = sessions[callId] ?: return null
+        return try {
+            session.control.await()
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            null
+        }
     }
 
-    fun setExpiry(callId: String, expiry: Job?) {
-        if (expiry != null) expiries.put(callId, expiry)?.cancel()
+    suspend fun disconnect(callId: String, cause: Int) {
+        val session = sessions[callId] ?: return
+        if (!session.beginCancel()) return
+        try {
+            val control = try {
+                withTimeoutOrNull(ControlReadyTimeoutMillis) { session.control.await() }
+            } catch (failure: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                null
+            } catch (_: Exception) {
+                null
+            }
+            if (control == null || !disconnectControl(control, cause)) {
+                forceRemove(callId, session)
+            }
+        } catch (failure: CancellationException) {
+            session.abortCancel()
+            throw failure
+        }
     }
 
     fun cancelExpiry(callId: String) {
-        expiries.remove(callId)?.cancel()
+        sessions[callId]?.cancelExpiry()
     }
 
-    fun updateEndpoints(callId: String, available: List<androidx.core.telecom.CallEndpointCompat>) {
-        endpoints.update(callId, available)
+    fun abortCancel(callId: String) {
+        sessions[callId]?.abortCancel()
+    }
+
+    fun updateEndpoints(
+        callId: String,
+        session: TelecomSession,
+        available: List<androidx.core.telecom.CallEndpointCompat>,
+    ) {
+        if (sessions[callId] === session) endpoints.update(callId, available)
     }
 
     fun endpoint(callId: String, endpointId: String): androidx.core.telecom.CallEndpointCompat? =
         endpoints.find(callId, endpointId) { it.identifier.toString() }
 
-    fun remove(callId: String, session: CompletableDeferred<CallControlScope>) {
-        cancelExpiry(callId)
-        endpoints.remove(callId)
-        sessions.remove(callId, session)
+    suspend fun disconnectDetached(control: CallControlScope, cause: Int) {
+        disconnectControl(control, cause)
+    }
+
+    fun finishNormally(callId: String, session: TelecomSession) {
+        if (sessions.remove(callId, session)) endpoints.remove(callId)
+        session.finish()
+    }
+
+    private fun forceRemove(callId: String, session: TelecomSession) {
+        if (sessions.remove(callId, session)) endpoints.remove(callId)
+        session.forceClose()
+    }
+
+    private suspend fun disconnectControl(control: CallControlScope, cause: Int): Boolean =
+        withTimeoutOrNull(DisconnectTimeoutMillis) {
+            repeat(DisconnectAttempts) { attempt ->
+                val result = try {
+                    control.disconnect(DisconnectCause(cause))
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (_: Exception) {
+                    null
+                }
+                if (result is CallControlResult.Success) return@withTimeoutOrNull true
+                if (attempt + 1 < DisconnectAttempts) delay(DisconnectRetryDelayMillis)
+            }
+            false
+        } ?: false
+
+    private const val ControlReadyTimeoutMillis = 6_000L
+    private const val DisconnectTimeoutMillis = 2_000L
+    private const val DisconnectRetryDelayMillis = 150L
+    private const val DisconnectAttempts = 3
+}
+
+private class TelecomSession {
+    val control = CompletableDeferred<CallControlScope>()
+    private val cancelStarted = AtomicBoolean(false)
+    private val forceClosed = AtomicBoolean(false)
+    private var owner: Job? = null
+    private var expiry: Job? = null
+
+    fun attachOwner(job: Job) {
+        val cancel = synchronized(this) {
+            owner = job
+            forceClosed.get()
+        }
+        if (cancel) job.cancel()
+    }
+
+    fun attachExpiry(job: Job?) {
+        if (job == null) return
+        val cancel = synchronized(this) {
+            expiry?.cancel()
+            expiry = job
+            forceClosed.get()
+        }
+        if (cancel) job.cancel()
+    }
+
+    fun publish(value: CallControlScope): Boolean = synchronized(this) {
+        if (forceClosed.get()) return false
+        control.complete(value)
+    }
+
+    fun fail(failure: Throwable) {
+        control.completeExceptionally(failure)
+    }
+
+    fun beginCancel(): Boolean = cancelStarted.compareAndSet(false, true)
+
+    fun abortCancel() {
+        cancelStarted.compareAndSet(true, false)
+    }
+
+    fun cancelExpiry() {
+        val job = synchronized(this) { expiry.also { expiry = null } }
+        job?.cancel()
+    }
+
+    fun finish() {
+        cancelExpiry()
+    }
+
+    fun forceClose() {
+        val cleanup = synchronized(this) {
+            if (!forceClosed.compareAndSet(false, true)) return
+            val jobs = owner to expiry
+            expiry = null
+            jobs
+        }
+        control.cancel()
+        cleanup.second?.cancel()
+        cleanup.first?.cancel()
     }
 }

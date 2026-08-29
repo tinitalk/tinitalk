@@ -7,47 +7,79 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import org.tinitalk.CallActivity
+import org.tinitalk.call.CallPhase
+import org.tinitalk.call.CallServiceState
 import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import java.time.Instant
 
 class IncomingCallController {
-    fun save(context: Context, invite: IncomingInvite, action: String? = null) {
-        prefs(context).edit()
-            .putString(ExtraCallId, invite.callId)
-            .putString(ExtraCaller, invite.caller)
-            .putString(ExtraCallerLogin, invite.callerLogin)
-            .putString(ExtraExpiresAt, invite.expiresAt.toString())
-            .putLong(ExtraLastSeq, invite.lastSeq)
-            .putString(ExtraAction, action)
-            .apply()
-    }
+    fun save(context: Context, invite: IncomingInvite, action: String? = null) =
+        synchronized(PendingActionLock) {
+            prefs(context).edit()
+                .putString(ExtraCallId, invite.callId)
+                .putString(ExtraCaller, invite.caller)
+                .putString(ExtraCallerLogin, invite.callerLogin)
+                .putString(ExtraExpiresAt, invite.expiresAt.toString())
+                .putLong(ExtraLastSeq, invite.lastSeq)
+                .putString(ExtraAction, action)
+                .apply()
+        }
 
-    fun clear(context: Context, callId: String): Boolean {
+    fun clear(context: Context, callId: String): Boolean = synchronized(PendingActionLock) {
         val pending = load(context) ?: return false
         if (pending.invite.callId != callId) return false
         prefs(context).edit().clear().apply()
         return true
     }
 
-    fun rememberTerminal(context: Context, callId: String, nowMillis: Long = System.currentTimeMillis()) {
-        val prefs = terminalPrefs(context)
-        val updated = TerminalCallTombstones.remember(
-            prefs.getStringSet(TerminalEntries, emptySet()).orEmpty(),
-            callId,
-            nowMillis,
-        )
-        prefs.edit().putStringSet(TerminalEntries, updated).commit()
+    fun finishTerminalPresentation(
+        context: Context,
+        callId: String?,
+        cancelPresentation: () -> Unit,
+    ): Boolean = synchronized(PendingActionLock) {
+        callId?.let { rememberTerminal(context, it) }
+        val pending = load(context)
+        if (pending != null && pending.invite.callId != callId) return false
+        if (pending != null) prefs(context).edit().clear().apply()
+        cancelPresentation()
+        true
     }
 
-    fun isTerminal(context: Context, callId: String, nowMillis: Long = System.currentTimeMillis()): Boolean {
-        val prefs = terminalPrefs(context)
-        val stored = prefs.getStringSet(TerminalEntries, emptySet()).orEmpty()
-        val pruned = TerminalCallTombstones.prune(stored, nowMillis)
-        if (pruned != stored) prefs.edit().putStringSet(TerminalEntries, pruned).apply()
-        return TerminalCallTombstones.contains(pruned, callId, nowMillis)
+    fun presentIncoming(
+        context: Context,
+        invite: IncomingInvite,
+        present: () -> Unit,
+    ): Boolean = synchronized(PendingActionLock) {
+        if (!invite.expiresAt.isAfter(Instant.now()) || isTerminal(context, invite.callId)) return false
+        val action = load(context)
+            ?.takeIf { it.invite.callId == invite.callId }
+            ?.action
+        save(context, invite, action)
+        present()
+        true
     }
+
+    fun rememberTerminal(context: Context, callId: String, nowMillis: Long = System.currentTimeMillis()) =
+        synchronized(PendingActionLock) {
+            val prefs = terminalPrefs(context)
+            val updated = TerminalCallTombstones.remember(
+                prefs.getStringSet(TerminalEntries, emptySet()).orEmpty(),
+                callId,
+                nowMillis,
+            )
+            prefs.edit().putStringSet(TerminalEntries, updated).apply()
+        }
+
+    fun isTerminal(context: Context, callId: String, nowMillis: Long = System.currentTimeMillis()): Boolean =
+        synchronized(PendingActionLock) {
+            val prefs = terminalPrefs(context)
+            val stored = prefs.getStringSet(TerminalEntries, emptySet()).orEmpty()
+            val pruned = TerminalCallTombstones.prune(stored, nowMillis)
+            if (pruned != stored) prefs.edit().putStringSet(TerminalEntries, pruned).apply()
+            TerminalCallTombstones.contains(pruned, callId, nowMillis)
+        }
 
     fun load(context: Context): PendingIncomingCall? {
         val prefs = prefs(context)
@@ -79,11 +111,8 @@ class IncomingCallController {
             return@synchronized IncomingAnswerClaim.Invalid
         }
         if (pending.action == ActionAnswer) return@synchronized IncomingAnswerClaim.AlreadyClaimed
-        if (prefs(context).edit().putString(ExtraAction, ActionAnswer).commit()) {
-            IncomingAnswerClaim.Claimed
-        } else {
-            IncomingAnswerClaim.Invalid
-        }
+        prefs(context).edit().putString(ExtraAction, ActionAnswer).apply()
+        IncomingAnswerClaim.Claimed
     }
 
     fun activityIntent(context: Context, action: String, invite: IncomingInvite): PendingIntent =
@@ -125,7 +154,15 @@ class IncomingCallController {
     }
 
     fun answerFromTelecom(context: Context, invite: IncomingInvite) {
-        save(context, invite, ActionAnswer)
+        val call = CallServiceState.snapshot()
+        if (call.callId == invite.callId && call.phase != CallPhase.Idle && call.phase != CallPhase.Ended) return
+        if (claimAnswer(context, invite) == IncomingAnswerClaim.Invalid) {
+            finishTerminalPresentation(context, invite.callId) {
+                IncomingCallNotifier(context).cancel()
+            }
+            TelecomCallController(AndroidTelecomRegistrar(context)).cancel(invite.callId)
+            return
+        }
         CallForegroundService.start(
             context,
             intent(context, CallForegroundService::class.java, CallForegroundService.ActionAnswer, invite),
@@ -138,7 +175,9 @@ class IncomingCallController {
     }
 
     fun rejectFromTelecom(context: Context, invite: IncomingInvite) {
+        val alreadyTerminal = isTerminal(context, invite.callId)
         finishIncoming(context, invite)
+        if (alreadyTerminal) return
         CallForegroundService.start(
             context,
             intent(context, CallForegroundService::class.java, CallForegroundService.ActionReject, invite),
@@ -146,7 +185,12 @@ class IncomingCallController {
     }
 
     fun disconnectFromTelecom(context: Context, invite: IncomingInvite) {
+        val alreadyTerminal = isTerminal(context, invite.callId)
+        val call = CallServiceState.snapshot()
+        val liveSameCall = call.callId == invite.callId &&
+            call.phase != CallPhase.Idle && call.phase != CallPhase.Ended
         finishIncoming(context, invite)
+        if (alreadyTerminal && !liveSameCall) return
         CallForegroundService.start(
             context,
             intent(context, CallForegroundService::class.java, CallForegroundService.ActionDisconnect, invite),
@@ -154,9 +198,9 @@ class IncomingCallController {
     }
 
     private fun finishIncoming(context: Context, invite: IncomingInvite) {
-        rememberTerminal(context, invite.callId)
-        clear(context, invite.callId)
-        IncomingCallNotifier(context).cancel()
+        finishTerminalPresentation(context, invite.callId) {
+            IncomingCallNotifier(context).cancel()
+        }
     }
 
     companion object {

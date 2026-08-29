@@ -114,6 +114,12 @@ func (h *Hub) ConnectDeviceChecked(user, deviceID string) (*Client, error) {
 		return nil, errors.New("too many connections for user")
 	}
 	client := &Client{user: user, deviceID: deviceID, inbox: make(chan DeliveredEvent, ReplayLimit)}
+	if callID, ok := h.activeByUser[user]; ok && deviceID != "" {
+		if c := h.calls[callID]; c != nil && c.state == callActive &&
+			c.devicesBound() && c.deviceID(user) == deviceID {
+			client.awaitingResumeCallID = c.id
+		}
+	}
 	if h.clients[user] == nil {
 		h.clients[user] = map[*Client]struct{}{}
 	}
@@ -133,7 +139,7 @@ func (h *Hub) Connected(client *Client) bool {
 	client.online = true
 	if callID, ok := h.activeByUser[client.user]; ok {
 		if c := h.calls[callID]; c != nil && c.state == callActive {
-			if h.clientBelongsToCall(c, client) {
+			if h.clientBelongsToCall(c, client) && client.awaitingResumeCallID != c.id {
 				delete(c.offlineSince, client.user)
 			}
 		}
@@ -210,7 +216,7 @@ func (h *Hub) Handle(sender string, event protocol.Event) error {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.handleLocked(sender, "", false, event)
+	return h.handleLocked(sender, "", false, nil, event)
 }
 
 func (h *Hub) HandleClient(client *Client, event protocol.Event) error {
@@ -228,10 +234,10 @@ func (h *Hub) HandleClient(client *Client, event protocol.Event) error {
 	if _, ok := h.clients[client.user][client]; !ok {
 		return errors.New("client is not connected")
 	}
-	return h.handleLocked(client.user, client.deviceID, true, event)
+	return h.handleLocked(client.user, client.deviceID, true, client, event)
 }
 
-func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, event protocol.Event) error {
+func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, client *Client, event protocol.Event) error {
 	if event.Type == "call.start" {
 		return h.start(sender, senderDeviceID, event)
 	}
@@ -252,6 +258,16 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, even
 		}
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
+		}
+		if client != nil && client.awaitingResumeCallID == c.id {
+			client.awaitingResumeCallID = ""
+			delete(c.offlineSince, sender)
+			for _, delivered := range c.afterDevice(sender, senderDeviceID, payload.LastSeq) {
+				if !h.deliverClient(client, delivered) {
+					break
+				}
+			}
+			return nil
 		}
 		replayed := c.after(sender, payload.LastSeq)
 		if clientAware {
@@ -355,6 +371,9 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, even
 	}
 	if event.Type == "call.accept" || event.Type == "call.reject" || event.Type == "call.cancel" {
 		h.enqueueNotification(notification{callee: c.callee, event: delivered, cancel: true})
+	}
+	if event.Type == "call.end" {
+		h.enqueueNotification(notification{callee: recipient, event: delivered, cancel: true})
 	}
 	if endsCall(event.Type) {
 		h.end(c)
@@ -597,6 +616,8 @@ func (h *Hub) Sweep() int {
 				h.finishHistory(c, disconnectedOutcome(c), now)
 				h.deliver(c.caller, delivered)
 				h.deliver(c.callee, delivered)
+				h.enqueueNotification(notification{callee: c.caller, event: delivered, cancel: true})
+				h.enqueueNotification(notification{callee: c.callee, event: delivered, cancel: true})
 				h.end(c)
 				expired++
 				break
@@ -629,7 +650,7 @@ func (h *Hub) Sweep() int {
 
 func (h *Hub) enqueueNotification(next notification) {
 	for i := range h.notifications {
-		if h.notifications[i].event.CallID != next.event.CallID {
+		if h.notifications[i].event.CallID != next.event.CallID || h.notifications[i].callee != next.callee {
 			continue
 		}
 		if next.cancel {
@@ -702,7 +723,9 @@ func (h *Hub) runNotifications() {
 		if next.cancel {
 			delete(h.reservedWake, next.event.CallID)
 		}
-		if h.notifications[0].cancel != next.cancel {
+		current := h.notifications[0]
+		if current.cancel != next.cancel || current.event.ID != next.event.ID ||
+			current.event.Type != next.event.Type || current.event.Seq != next.event.Seq {
 			h.mu.Unlock()
 			continue
 		}
@@ -805,11 +828,10 @@ func (h *Hub) callByID(callID string) (*call, bool) {
 
 func (h *Hub) deliver(user string, event DeliveredEvent) {
 	for client := range h.clients[user] {
-		select {
-		case client.inbox <- event:
-		default:
-			h.disconnectLocked(client)
+		if client.awaitingResumeCallID == event.CallID {
+			continue
 		}
+		h.deliverClient(client, event)
 	}
 }
 
@@ -822,11 +844,23 @@ func (h *Hub) deliverDevice(user, deviceID string, event DeliveredEvent) {
 		if client.deviceID != deviceID {
 			continue
 		}
-		select {
-		case client.inbox <- event:
-		default:
-			h.disconnectLocked(client)
+		if client.awaitingResumeCallID == event.CallID {
+			continue
 		}
+		h.deliverClient(client, event)
+	}
+}
+
+func (h *Hub) deliverClient(client *Client, event DeliveredEvent) bool {
+	if client == nil || client.closed {
+		return false
+	}
+	select {
+	case client.inbox <- event:
+		return true
+	default:
+		h.disconnectLocked(client)
+		return false
 	}
 }
 

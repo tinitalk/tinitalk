@@ -153,6 +153,12 @@ internal data class VideoCallPresentation(
     val actionCount: Int,
 )
 
+internal fun videoRecoveryOverlayVisible(
+    remoteSending: Boolean,
+    remoteVideoWasVisible: Boolean,
+    remoteFrameVisible: Boolean,
+): Boolean = remoteSending && remoteVideoWasVisible && !remoteFrameVisible
+
 internal fun videoModeActive(
     videoAllowed: Boolean,
     localSending: Boolean,

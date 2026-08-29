@@ -44,6 +44,7 @@ import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.media.CameraMediaCallbacks
+import org.tinitalk.media.CallMediaDispatcher
 import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
@@ -91,6 +92,11 @@ internal sealed interface CameraCallAction {
     data class Switch(override val callId: String) : CameraCallAction
 }
 
+private data class CameraForegroundLease(
+    val owner: ForegroundCallController,
+    val id: Long,
+)
+
 internal fun cameraCallAction(intent: Intent): CameraCallAction? {
     val callId = intent.getStringExtra(CallForegroundService.ExtraCallId) ?: return null
     return when (intent.action) {
@@ -113,21 +119,22 @@ class CallForegroundService : Service() {
     private var socket: SignalSocket? = null
     private var httpClient: OkHttpClient? = null
     private var coordinator: CallCoordinator? = null
-    private var media: ForegroundCallController? = null
+    @Volatile private var media: ForegroundCallController? = null
+    @Volatile private var mediaDispatcher: CallMediaDispatcher? = null
     @Volatile private var connected = false
-    private var finishing = false
-    private var callResourcesReleased = false
-    private var callResourcesReleaseComplete = false
-    private val callResourcesReleaseCallbacks = mutableListOf<() -> Unit>()
+    @Volatile private var finishing = false
+    @Volatile private var callResourcesReleased = false
     private var statsPolling = false
     private val statsRequestGate = MediaStatsRequestGate()
-    private var statsSession: MediaStatsSession? = null
-    private var cameraForegroundTypeEnabled = false
-    private var cameraForegroundLease: Long? = null
+    @Volatile private var statsSession: MediaStatsSession? = null
+    @Volatile private var cameraForegroundTypeEnabled = false
+    @Volatile private var cameraForegroundLease: CameraForegroundLease? = null
+    @Volatile private var runtimeGeneration = 0L
     private var telecomCallId: String? = null
     private var outgoingPeer: CallPeer? = null
     private var callNetworkLock: CallNetworkLock? = null
     private var networkObserver: DefaultNetworkObserver? = null
+    private val foregroundLock = Any()
     private lateinit var callTones: CallToneController
     private val connectionHealthClassifier = ConnectionHealthClassifier()
     private val terminalSignalGate = TerminalSignalGate(
@@ -136,11 +143,10 @@ class CallForegroundService : Service() {
             handler.postDelayed(action, delayMillis)
             CancellableTask { handler.removeCallbacks(action) }
         },
-        onReady = { handler.post(::finishCallSoon) },
     )
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         handler.post {
-            if (!finishing) {
+            if (!finishing && !callResourcesReleased) {
                 callTones.update(state)
                 if (state.phase != CallPhase.Idle) {
                     getSystemService(NotificationManager::class.java).notify(NotificationId, notification(state))
@@ -155,34 +161,42 @@ class CallForegroundService : Service() {
                 .takeIf { it.phase == CallPhase.Active }
                 ?.callId
             val currentMedia = media
+            val currentDispatcher = mediaDispatcher
             val currentStatsSession = statsSession
             val request = if (
-                activeCallId != null && currentMedia != null &&
+                activeCallId != null && currentMedia != null && currentDispatcher != null &&
                 currentStatsSession?.callId == activeCallId
             ) {
                 statsRequestGate.begin(currentStatsSession)
             } else {
                 null
             }
-            if (activeCallId != null && currentMedia != null && request != null) {
-                runCatching {
-                    currentMedia.getStats { stats ->
-                        handler.post {
-                            val accepted = statsRequestGate.complete(request)
-                            val snapshot = CallServiceState.snapshot()
-                            val stillActive = statsPolling && !finishing &&
-                                snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
-                            if (accepted && stillActive && media === currentMedia) {
-                                Log.i(CallLogTag, CallDiagnostics.format(stats))
-                                val currentHealth = CallUiStateStore.snapshot().connectionHealth
-                                val health = connectionHealthClassifier.update(stats, currentHealth)
-                                CallUiStateStore.setConnectionHealth(activeCallId, health)
+            if (activeCallId != null && currentMedia != null && currentDispatcher != null && request != null) {
+                val accepted = currentDispatcher.dispatch {
+                    if (finishing || media !== currentMedia) {
+                        statsRequestGate.complete(request)
+                        return@dispatch
+                    }
+                    runCatching {
+                        currentMedia.getStats { stats ->
+                            handler.post {
+                                val accepted = statsRequestGate.complete(request)
+                                val snapshot = CallServiceState.snapshot()
+                                val stillActive = statsPolling && !finishing &&
+                                    snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
+                                if (accepted && stillActive && media === currentMedia) {
+                                    Log.i(CallLogTag, CallDiagnostics.format(stats))
+                                    val currentHealth = CallUiStateStore.snapshot().connectionHealth
+                                    val health = connectionHealthClassifier.update(stats, currentHealth)
+                                    CallUiStateStore.setConnectionHealth(activeCallId, health)
+                                }
                             }
                         }
+                    }.onFailure {
+                        statsRequestGate.complete(request)
                     }
-                }.onFailure {
-                    statsRequestGate.complete(request)
                 }
+                if (!accepted) statsRequestGate.complete(request)
             }
             if (statsPolling) handler.postDelayed(this, CallDiagnostics.IntervalMillis)
         }
@@ -197,9 +211,36 @@ class CallForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (finishing) return START_NOT_STICKY
+        if (finishing && callResourcesReleased && replacesTerminalCall(intent)) {
+            resetReleasedRuntime()
+        }
+        if (finishing) {
+            endSystemCall(intent?.getStringExtra(ExtraCallId))
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        if (callResourcesReleased) {
+            if (replacesTerminalCall(intent)) {
+                resetReleasedRuntime()
+            } else if (terminalSignalGate.isWaiting()) {
+                if (!satisfyTerminalForegroundStart()) {
+                    finishing = true
+                    terminalSignalGate.close()
+                    endSystemCall(intent?.getStringExtra(ExtraCallId))
+                    stopSelf(startId)
+                }
+            } else {
+                finishing = true
+                endSystemCall(intent?.getStringExtra(ExtraCallId))
+                stopSelf(startId)
+                return START_NOT_STICKY
+            }
+            if (callResourcesReleased) return START_NOT_STICKY
+        }
         updateForegroundType(cameraSending = cameraForegroundTypeEnabled)
         if (intent == null || !ensureRuntime()) {
+            finishing = true
+            releaseCallResources(intent?.getStringExtra(ExtraCallId))
             stopSelf()
             return START_NOT_STICKY
         }
@@ -207,11 +248,41 @@ class CallForegroundService : Service() {
         return START_NOT_STICKY
     }
 
+    private fun replacesTerminalCall(intent: Intent?): Boolean {
+        if (intent?.action == ActionStart) return true
+        val nextCallId = IncomingCallController.inviteFrom(intent)?.callId ?: return false
+        val terminalCallId = coordinator?.snapshot()?.callId ?: CallUiStateStore.snapshot().callId
+        return nextCallId != terminalCallId
+    }
+
+    private fun resetReleasedRuntime() {
+        runtimeGeneration++
+        terminalSignalGate.close()
+        runCatching { callNetworkLock?.close() }
+        callNetworkLock = null
+        runCatching { networkObserver?.close() }
+        networkObserver = null
+        runCatching { socket?.close() }
+        runCatching { httpClient?.dispatcher?.executorService?.shutdownNow() }
+        runCatching { httpClient?.connectionPool?.evictAll() }
+        runCatching { coordinator?.finish() }
+        socket = null
+        httpClient = null
+        coordinator = null
+        connected = false
+        telecomCallId = null
+        outgoingPeer = null
+        callResourcesReleased = false
+        finishing = false
+        CallServiceState.reset()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         val unexpected = !finishing
         finishing = true
+        runtimeGeneration++
         CallUiStateStore.removeObserver(callUiObserver)
         callTones.close()
         terminalSignalGate.close()
@@ -224,16 +295,20 @@ class CallForegroundService : Service() {
         if (unexpected && connected && snapshot?.phase == CallPhase.Active) {
             runCatching { coordinator?.hangUp() }
         }
+        releaseCallResources(snapshot?.callId)
         runCatching { socket?.close() }
-        VideoCallStateStore.reset()
-        runCatching { media?.close() }
         runCatching { httpClient?.dispatcher?.executorService?.shutdownNow() }
         runCatching { httpClient?.connectionPool?.evictAll() }
         CallAudioState.reset()
         val terminal = coordinator?.snapshot() ?: snapshot
         if (terminal?.callId != null) {
             if (terminal.phase != CallPhase.Ended) runCatching { coordinator?.fail() }
-            coordinator?.snapshot()?.let(CallServiceState::publish)
+            coordinator?.snapshot()?.let { ended ->
+                CallServiceState.publish(ended)
+                if (unexpected || CallUiStateStore.snapshot().phase != CallPhase.Ended) {
+                    CallUiStateStore.sync(ended, CallEndReason.Failed)
+                }
+            }
             runCatching { coordinator?.finish() }
         }
         CallServiceState.reset()
@@ -241,6 +316,7 @@ class CallForegroundService : Service() {
             handler.postDelayed({ CallUiStateStore.reset(callId) }, EndedStateLifetimeMillis)
         }
         media = null
+        mediaDispatcher = null
         socket = null
         httpClient = null
         coordinator = null
@@ -262,26 +338,47 @@ class CallForegroundService : Service() {
             newSocket,
             serverFeatures = session.features,
         )
+        val newMediaDispatcher = CallMediaDispatcher()
         lateinit var newMedia: ForegroundCallController
         fun routeMediaCallback(
             onDropped: () -> Unit = {},
+            onFailure: (Throwable) -> Unit = { failure ->
+                Log.e(CallLogTag, "media operation failed", failure)
+            },
             action: (ForegroundCallController) -> Unit,
         ) {
-            val route = {
-                if (!finishing && media === newMedia) action(newMedia) else onDropped()
+            val accepted = newMediaDispatcher.dispatch {
+                if (finishing || media !== newMedia) {
+                    onDropped()
+                    return@dispatch
+                }
+                runCatching { action(newMedia) }.onFailure(onFailure)
             }
-            if (Looper.myLooper() == Looper.getMainLooper()) route() else handler.post(route)
+            if (!accepted) onDropped()
         }
         fun postMediaCallback(
             onDropped: () -> Unit = {},
             action: () -> Unit,
         ) {
-            postCurrentMediaCallback(
-                post = { callback -> handler.post(callback) },
-                isCurrent = { !finishing && media === newMedia },
-                onDropped = onDropped,
-                action = action,
-            )
+            val accepted = newMediaDispatcher.dispatch {
+                if (!finishing && media === newMedia) {
+                    runCatching(action).onFailure { failure ->
+                        Log.e(CallLogTag, "media callback failed", failure)
+                    }
+                } else {
+                    onDropped()
+                }
+            }
+            if (!accepted) onDropped()
+        }
+        fun failCurrentMedia(failure: Throwable) {
+            Log.e(CallLogTag, "media signaling failed", failure)
+            handler.post {
+                if (finishing || media !== newMedia) return@post
+                newCoordinator.fail()
+                publish(CallEndReason.Failed)
+                finishCallSoon()
+            }
         }
         newMedia = ForegroundCallController(
             signal = newSocket,
@@ -302,18 +399,21 @@ class CallForegroundService : Service() {
                         postMediaCallback(action = onIceRestartNeeded)
                     },
                     onConnectionStateChanged = { state ->
-                        handler.post {
-                            if (finishing || media !== newMedia) return@post
-                            val connection = statsRequestGate.onConnection(mediaStatsSession, state) ?: return@post
-                            newMedia.onMediaConnection(callId, connection.epoch, state)
-                            if (state == MediaConnectionState.Connected) {
-                                newCoordinator.mediaConnected()
-                            }
-                            if (CallUiStateStore.snapshot().callId == callId) {
-                                if (!connection.transportReady || connection.becameReady) {
-                                    connectionHealthClassifier.reset()
+                        routeMediaCallback { controller ->
+                            val connection = statsRequestGate.onConnection(mediaStatsSession, state)
+                                ?: return@routeMediaCallback
+                            controller.onMediaConnection(callId, connection.epoch, state)
+                            handler.post {
+                                if (finishing || media !== newMedia) return@post
+                                if (state == MediaConnectionState.Connected) {
+                                    newCoordinator.mediaConnected()
                                 }
-                                CallUiStateStore.onMediaConnection(state)
+                                if (CallUiStateStore.snapshot().callId == callId) {
+                                    if (!connection.transportReady || connection.becameReady) {
+                                        connectionHealthClassifier.reset()
+                                    }
+                                    CallUiStateStore.onMediaConnection(state)
+                                }
                             }
                         }
                     },
@@ -359,23 +459,28 @@ class CallForegroundService : Service() {
                 if (Looper.myLooper() == Looper.getMainLooper()) publish() else handler.post(publish)
             },
             prepareCameraStart = { callId, lease ->
-                val snapshot = newCoordinator.snapshot()
+                val snapshot = CallServiceState.snapshot()
                 val permissionGranted = ContextCompat.checkSelfPermission(
                     this,
                     Manifest.permission.CAMERA,
                 ) == PackageManager.PERMISSION_GRANTED
-                val prepared = media === newMedia &&
-                    snapshot.callId == callId &&
-                    snapshot.phase == CallPhase.Active &&
-                    permissionGranted &&
-                    updateForegroundType(cameraSending = true)
-                if (prepared) cameraForegroundLease = lease
-                prepared
+                synchronized(foregroundLock) {
+                    val prepared = media === newMedia &&
+                        snapshot.callId == callId &&
+                        snapshot.phase == CallPhase.Active &&
+                        permissionGranted &&
+                        updateForegroundType(cameraSending = true)
+                    if (prepared) cameraForegroundLease = CameraForegroundLease(newMedia, lease)
+                    prepared
+                }
             },
             onCameraLeaseReleased = { lease ->
-                if (cameraForegroundLease == lease) {
-                    cameraForegroundLease = null
-                    updateForegroundType(cameraSending = false)
+                synchronized(foregroundLock) {
+                    val activeLease = cameraForegroundLease
+                    if (media === newMedia && activeLease?.owner === newMedia && activeLease.id == lease) {
+                        cameraForegroundLease = null
+                        updateForegroundType(cameraSending = false)
+                    }
                 }
             },
         )
@@ -383,9 +488,17 @@ class CallForegroundService : Service() {
         httpClient = newHttpClient
         coordinator = newCoordinator
         media = newMedia
+        mediaDispatcher = newMediaDispatcher
+        val runtimeOwnerGeneration = runtimeGeneration
         networkObserver = DefaultNetworkObserver(applicationContext) {
-            connected = false
-            migrateCallNetwork(newSocket::reconnectNow, newMedia::onNetworkChanged)
+            handler.post {
+                if (finishing || runtimeGeneration != runtimeOwnerGeneration || socket !== newSocket) return@post
+                connected = false
+                migrateCallNetwork(
+                    newSocket::reconnectNow,
+                    { routeMediaCallback { it.onNetworkChanged() } },
+                )
+            }
         }
         newSocket.connect(
             onEvent = { incoming ->
@@ -393,7 +506,10 @@ class CallForegroundService : Service() {
                     if (socket !== newSocket || finishing) return@post
                     try {
                         if (newCoordinator.onEvent(incoming)) {
-                            newMedia.onSignalEvent(newCoordinator.snapshot(), incoming.event)
+                            val snapshot = newCoordinator.snapshot()
+                            routeMediaCallback(onFailure = ::failCurrentMedia) {
+                                it.onSignalEvent(snapshot, incoming.event)
+                            }
                         }
                     } catch (_: Exception) {
                         newCoordinator.fail()
@@ -407,16 +523,17 @@ class CallForegroundService : Service() {
                                 CallUiStateStore.begin(incoming.event.callId, peer, CallDirection.Outgoing, CallPhase.Active)
                                 CallUiStateStore.setAudioEndpoints(incoming.event.callId, CallAudioState.snapshot())
                             }
-                            IncomingCallController().apply {
-                                rememberTerminal(this@CallForegroundService, incoming.event.callId)
-                                clear(this@CallForegroundService, incoming.event.callId)
+                            IncomingCallController().finishTerminalPresentation(
+                                this@CallForegroundService,
+                                incoming.event.callId,
+                            ) {
+                                IncomingCallNotifier(this@CallForegroundService).cancel()
                             }
-                            IncomingCallNotifier(this@CallForegroundService).cancel()
                             telecomCallId?.takeIf { it != incoming.event.callId }?.let {
                                 telecom.cancel(incoming.event.callId)
                             }
                         }
-                        newMedia.setActive(true)
+                        routeMediaCallback { it.setActive(true) }
                         val localCallId = telecomCallId ?: incoming.event.callId
                         telecom.setActive(localCallId) { success ->
                             if (!success) {
@@ -438,7 +555,7 @@ class CallForegroundService : Service() {
                 handler.post {
                     if (socket !== newSocket || finishing || !newSocket.isOpen(connectionGeneration)) return@post
                     connected = true
-                    newMedia.onSignalConnected()
+                    routeMediaCallback(onFailure = ::failCurrentMedia) { it.onSignalConnected() }
                     newCoordinator.resume()
                     if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallUnlessAwaitingTerminalSignal()
                 }
@@ -453,7 +570,7 @@ class CallForegroundService : Service() {
                     if (socket !== newSocket || finishing) return@post
                     val current = newCoordinator.snapshot()
                     val activeCallId = current.callId.takeIf { current.phase != CallPhase.Ended }
-                    newMedia.onSignalFailure(failure)
+                    routeMediaCallback { it.onSignalFailure(failure) }
                     val reason = signalingFailureEndReason(failure, activeCallId) ?: return@post
                     newCoordinator.fail()
                     publish(reason)
@@ -475,7 +592,10 @@ class CallForegroundService : Service() {
         var awaitingTerminalSignal = false
         fun terminalSettlement(): () -> Unit {
             awaitingTerminalSignal = true
-            return terminalSignalGate.begin()
+            val expectedGeneration = runtimeGeneration
+            return terminalSignalGate.begin {
+                handler.post { finishCallSoon(expectedGeneration) }
+            }
         }
         when (intent.action) {
             ActionStart -> {
@@ -504,6 +624,12 @@ class CallForegroundService : Service() {
             ActionAnswer -> {
                 invite ?: return
                 if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callId != invite.callId) return
+                if (call.snapshot().phase == CallPhase.Idle &&
+                    IncomingCallController().isTerminal(this, invite.callId)
+                ) {
+                    stopTerminalTelecomStart(call, intent)
+                    return
+                }
                 telecomCallId = invite.callId
                 connectionHealthClassifier.reset()
                 CallUiStateStore.begin(
@@ -516,9 +642,10 @@ class CallForegroundService : Service() {
                 call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
-                if (call.snapshot().phase == CallPhase.Active) media?.setActive(true)
-                IncomingCallNotifier(this).cancel()
-                IncomingCallController().clear(this, invite.callId)
+                if (call.snapshot().phase == CallPhase.Active) dispatchMedia { it.setActive(true) }
+                IncomingCallController().finishTerminalPresentation(this, invite.callId) {
+                    IncomingCallNotifier(this).cancel()
+                }
             }
             ActionReject -> {
                 invite ?: return
@@ -551,42 +678,68 @@ class CallForegroundService : Service() {
                     endReason = CallEndReason.Rejected
                 }
             }
-            ActionEnd -> when (call.snapshot().phase) {
-                CallPhase.Active -> {
-                    call.hangUp(terminalSettlement())
-                    endReason = CallEndReason.LocalHangup
+            ActionEnd -> {
+                val requestedCallId = intent.getStringExtra(ExtraCallId)
+                val current = call.snapshot()
+                if (requestedCallId != null && current.callId != null && requestedCallId != current.callId) return
+                when (current.phase) {
+                    CallPhase.Active -> {
+                        call.hangUp(terminalSettlement())
+                        endReason = CallEndReason.LocalHangup
+                    }
+                    CallPhase.Connecting -> {
+                        call.cancel(terminalSettlement())
+                        endReason = CallEndReason.Cancelled
+                    }
+                    CallPhase.Ringing -> if (CallUiStateStore.snapshot().direction == CallDirection.Outgoing) {
+                        call.cancel(terminalSettlement())
+                        endReason = CallEndReason.Cancelled
+                    } else {
+                        call.reject(terminalSettlement())
+                        endReason = CallEndReason.Rejected
+                    }
+                    CallPhase.Idle, CallPhase.Ended -> {
+                        finishing = true
+                        releaseCallResources(requestedCallId)
+                        stopSelf()
+                        return
+                    }
                 }
-                CallPhase.Connecting -> {
-                    call.cancel(terminalSettlement())
-                    endReason = CallEndReason.Cancelled
+            }
+            ActionRemoteEnd -> {
+                val callId = intent.getStringExtra(ExtraCallId) ?: return
+                val current = call.snapshot()
+                if (current.callId != callId) {
+                    if (current.phase == CallPhase.Idle || current.phase == CallPhase.Ended) {
+                        finishing = true
+                        releaseCallResources(callId)
+                        stopSelf()
+                    }
+                    return
                 }
-                CallPhase.Ringing -> if (CallUiStateStore.snapshot().direction == CallDirection.Outgoing) {
-                    call.cancel(terminalSettlement())
-                    endReason = CallEndReason.Cancelled
-                } else {
-                    call.reject(terminalSettlement())
-                    endReason = CallEndReason.Rejected
+                if (current.phase != CallPhase.Ended) {
+                    call.fail()
+                    endReason = CallEndReason.RemoteHangup
                 }
-                else -> Unit
             }
             ActionMute -> {
                 val muted = intent.getBooleanExtra(ExtraMuted, false)
-                media?.setMuted(muted)
+                dispatchMedia { it.setMuted(muted) }
                 CallUiStateStore.setMuted(muted)
             }
             ActionTelecomActive -> {
                 if (!acceptsTelecomCallback(call, intent)) {
-                    if (call.snapshot().phase == CallPhase.Idle) stopSelf()
+                    stopTerminalTelecomStart(call, intent)
                     return
                 }
-                media?.setActive(true)
+                dispatchMedia { it.setActive(true) }
             }
             ActionTelecomInactive -> {
                 if (!acceptsTelecomCallback(call, intent)) {
-                    if (call.snapshot().phase == CallPhase.Idle) stopSelf()
+                    stopTerminalTelecomStart(call, intent)
                     return
                 }
-                media?.setActive(false)
+                dispatchMedia { it.setActive(false) }
             }
             ActionSelectEndpoint -> {
                 val callId = intent.getStringExtra(ExtraCallId) ?: return
@@ -600,17 +753,21 @@ class CallForegroundService : Service() {
                 val activeCallId = call.snapshot().takeIf { it.phase == CallPhase.Active }?.callId ?: return
                 if (cameraAction.callId != activeCallId) return
                 when (cameraAction) {
-                    is CameraCallAction.Request -> media?.setCameraRequested(
-                        cameraAction.callId,
-                        cameraAction.requested,
-                        permissionGranted = cameraAction.requested,
-                    )
-                    is CameraCallAction.Foreground -> media?.setCameraForeground(
-                        cameraAction.callId,
-                        cameraAction.foreground,
-                        cameraAction.permissionGranted,
-                    )
-                    is CameraCallAction.Switch -> media?.switchCamera(cameraAction.callId)
+                    is CameraCallAction.Request -> dispatchMedia {
+                        it.setCameraRequested(
+                            cameraAction.callId,
+                            cameraAction.requested,
+                            permissionGranted = cameraAction.requested,
+                        )
+                    }
+                    is CameraCallAction.Foreground -> dispatchMedia {
+                        it.setCameraForeground(
+                            cameraAction.callId,
+                            cameraAction.foreground,
+                            cameraAction.permissionGranted,
+                        )
+                    }
+                    is CameraCallAction.Switch -> dispatchMedia { it.switchCamera(cameraAction.callId) }
                 }
             }
         }
@@ -625,6 +782,17 @@ class CallForegroundService : Service() {
             CallServiceState.publish(snapshot)
             CallUiStateStore.sync(snapshot, endReason)
             handler.post(::updateStatsPolling)
+        }
+    }
+
+    private fun dispatchMedia(action: (ForegroundCallController) -> Unit) {
+        val currentMedia = media ?: return
+        val currentDispatcher = mediaDispatcher ?: return
+        currentDispatcher.dispatch {
+            if (finishing || media !== currentMedia) return@dispatch
+            runCatching { action(currentMedia) }.onFailure { failure ->
+                Log.e(CallLogTag, "media operation failed", failure)
+            }
         }
     }
 
@@ -650,70 +818,119 @@ class CallForegroundService : Service() {
         connectionHealthClassifier.reset()
     }
 
-    private fun finishCallSoon() {
-        finishCallAfter(FinishToneDelayMillis)
+    private fun finishCallSoon(expectedGeneration: Long = runtimeGeneration) {
+        finishCallAfter(FinishToneDelayMillis, expectedGeneration)
     }
 
     private fun finishCallUnlessAwaitingTerminalSignal() {
         if (!terminalSignalGate.isWaiting()) finishCallSoon()
     }
 
-    private fun finishCallAfter(delayMillis: Long) {
-        handler.postDelayed({ finishCall() }, delayMillis)
+    private fun finishCallAfter(delayMillis: Long, expectedGeneration: Long = runtimeGeneration) {
+        handler.postDelayed({ finishCall(expectedGeneration) }, delayMillis)
     }
 
-    private fun finishCall() {
-        if (finishing) return
+    private fun finishCall(expectedGeneration: Long = runtimeGeneration) {
+        if (finishing || expectedGeneration != runtimeGeneration) return
         finishing = true
         terminalSignalGate.close()
-        releaseCallResources(::stopSelf)
+        releaseCallResources()
+        stopSelf()
     }
 
-    private fun releaseCallResources(afterReleased: () -> Unit = {}) {
-        if (callResourcesReleaseComplete) {
-            afterReleased()
+    private fun releaseCallResources(callIdHint: String? = null) {
+        if (callResourcesReleased) {
+            endSystemCall(callIdHint)
             return
         }
-        callResourcesReleaseCallbacks += afterReleased
-        if (callResourcesReleased) return
         callResourcesReleased = true
         stopStatsPolling()
         val snapshot = coordinator?.snapshot()
-        val callId = snapshot?.callId
+        val callId = snapshot?.callId ?: callIdHint ?: CallUiStateStore.snapshot().callId
         CallAudioState.reset()
         val currentMedia = media
+        val currentDispatcher = mediaDispatcher
+        media = null
+        mediaDispatcher = null
         VideoCallStateStore.reset()
-        if (currentMedia == null) {
-            completeCallResourceRelease(null, callId)
+        endSystemCall(callId)
+        if (currentMedia != null) {
+            val cleanupDispatcher = currentDispatcher ?: CallMediaDispatcher()
+            cleanupDispatcher.dispatch {
+                runCatching { currentMedia.close() }.onFailure { failure ->
+                    Log.e(CallLogTag, "failed to release call media", failure)
+                }
+            }
+            cleanupDispatcher.close()
         } else {
-            currentMedia.close { completeCallResourceRelease(currentMedia, callId) }
+            currentDispatcher?.close()
         }
     }
 
-    private fun completeCallResourceRelease(
-        releasedMedia: ForegroundCallController?,
-        callId: String?,
-    ) {
-        if (callResourcesReleaseComplete) return
-        callResourcesReleaseComplete = true
-        if (media === releasedMedia) media = null
-        cameraForegroundLease = null
-        updateForegroundType(cameraSending = false)
-        IncomingCallNotifier(this).cancel()
-        callId?.let { IncomingCallController().clear(this, it) }
-        (telecomCallId ?: callId)?.let(telecom::cancel)
+    private fun endSystemCall(callId: String?) {
+        runCatching {
+            IncomingCallController().finishTerminalPresentation(this, callId) {
+                IncomingCallNotifier(this).cancel()
+            }
+        }
+        listOfNotNull(telecomCallId, callId).distinct().forEach { id ->
+            runCatching { telecom.cancel(id) }
+        }
         telecomCallId = null
-        val callbacks = callResourcesReleaseCallbacks.toList()
-        callResourcesReleaseCallbacks.clear()
-        callbacks.forEach { it() }
+        synchronized(foregroundLock) {
+            cameraForegroundLease = null
+            cameraForegroundTypeEnabled = false
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            runCatching { getSystemService(NotificationManager::class.java).cancel(NotificationId) }
+        }
     }
 
-    private fun telecomCallbacks(callId: String, onDisconnect: () -> Unit) = TelecomCallCallbacks(
-        onDisconnect = onDisconnect,
-        onActive = { telecomActive(this, callId) },
-        onInactive = { telecomInactive(this, callId) },
-        onEndpointsChanged = { state -> CallAudioState.publish(coordinator?.snapshot()?.callId ?: callId, state) },
-    )
+    private fun satisfyTerminalForegroundStart(): Boolean = synchronized(foregroundLock) {
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NotificationId,
+                terminalNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL,
+            )
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            getSystemService(NotificationManager::class.java).cancel(NotificationId)
+            true
+        } catch (failure: Throwable) {
+            Log.e(CallLogTag, "failed to settle late foreground service start", failure)
+            false
+        }
+    }
+
+    private fun telecomCallbacks(callId: String, onDisconnect: () -> Unit): TelecomCallCallbacks {
+        val ownerGeneration = runtimeGeneration
+        fun dispatchIfOwned(action: () -> Unit) {
+            handler.post {
+                val current = coordinator?.snapshot()
+                val ownsCall = !finishing &&
+                    !callResourcesReleased &&
+                    runtimeGeneration == ownerGeneration &&
+                    current != null &&
+                    TelecomActionScope.acceptsCallback(
+                        current,
+                        pendingIncomingCallId = null,
+                        pendingExpiresAt = null,
+                        localTelecomCallId = telecomCallId,
+                        callbackCallId = callId,
+                        now = Instant.now(),
+                    )
+                if (ownsCall) action()
+            }
+        }
+        return TelecomCallCallbacks(
+            onDisconnect = { dispatchIfOwned(onDisconnect) },
+            onActive = { dispatchIfOwned { telecomActive(this, callId) } },
+            onInactive = { dispatchIfOwned { telecomInactive(this, callId) } },
+            onEndpointsChanged = { state ->
+                dispatchIfOwned { CallAudioState.publish(coordinator?.snapshot()?.callId ?: callId, state) }
+            },
+        )
+    }
 
     private fun acceptsTelecomCallback(call: CallCoordinator, intent: Intent): Boolean {
         val callId = intent.getStringExtra(ExtraCallId) ?: return false
@@ -726,6 +943,13 @@ class CallForegroundService : Service() {
             callId,
             Instant.now(),
         )
+    }
+
+    private fun stopTerminalTelecomStart(call: CallCoordinator, intent: Intent) {
+        if (call.snapshot().phase != CallPhase.Idle && call.snapshot().phase != CallPhase.Ended) return
+        finishing = true
+        releaseCallResources(intent.getStringExtra(ExtraCallId))
+        stopSelf()
     }
 
     private fun notification(state: CallUiState): Notification {
@@ -744,7 +968,9 @@ class CallForegroundService : Service() {
         val hangUp = PendingIntent.getService(
             this,
             1,
-            Intent(this, CallForegroundService::class.java).setAction(ActionEnd),
+            Intent(this, CallForegroundService::class.java)
+                .setAction(ActionEnd)
+                .putExtra(ExtraCallId, state.callId),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val peerName = state.peer?.displayName?.takeIf(String::isNotBlank) ?: "TiniTalk"
@@ -783,6 +1009,23 @@ class CallForegroundService : Service() {
         return builder.build()
     }
 
+    private fun terminalNotification(): Notification {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, ChannelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        return builder
+            .setSmallIcon(R.drawable.ic_call)
+            .setContentTitle("TiniTalk")
+            .setContentText("Завершаем звонок…")
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setShowWhen(false)
+            .build()
+    }
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
@@ -791,9 +1034,10 @@ class CallForegroundService : Service() {
         )
     }
 
-    private fun updateForegroundType(cameraSending: Boolean): Boolean {
+    private fun updateForegroundType(cameraSending: Boolean): Boolean = synchronized(foregroundLock) {
+        if (callResourcesReleased) return@synchronized false
         val state = CallUiStateStore.snapshot()
-        return try {
+        try {
             ServiceCompat.startForeground(
                 this,
                 NotificationId,
@@ -814,6 +1058,7 @@ class CallForegroundService : Service() {
         const val ActionReject = "org.tinitalk.action.SERVICE_REJECT_CALL"
         const val ActionDisconnect = "org.tinitalk.action.SERVICE_DISCONNECT_CALL"
         const val ActionEnd = "org.tinitalk.action.END_CALL"
+        const val ActionRemoteEnd = "org.tinitalk.action.REMOTE_END_CALL"
         const val ActionMute = "org.tinitalk.action.MUTE_CALL"
         const val ActionTelecomActive = "org.tinitalk.action.TELECOM_ACTIVE"
         const val ActionTelecomInactive = "org.tinitalk.action.TELECOM_INACTIVE"
@@ -847,7 +1092,18 @@ class CallForegroundService : Service() {
         }
 
         fun end(context: Context) {
-            start(context, Intent(context, CallForegroundService::class.java).setAction(ActionEnd))
+            val intent = Intent(context, CallForegroundService::class.java).setAction(ActionEnd)
+            CallServiceState.snapshot().callId?.let { intent.putExtra(ExtraCallId, it) }
+            start(context, intent)
+        }
+
+        fun remoteEnded(context: Context, callId: String) {
+            start(
+                context,
+                Intent(context, CallForegroundService::class.java)
+                    .setAction(ActionRemoteEnd)
+                    .putExtra(ExtraCallId, callId),
+            )
         }
 
         fun mute(context: Context, muted: Boolean) {

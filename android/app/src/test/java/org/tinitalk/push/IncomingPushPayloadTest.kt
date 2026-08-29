@@ -64,6 +64,17 @@ class IncomingPushPayloadTest {
     }
 
     @Test
+    fun activeHangupDismissesWithoutAPendingIncomingInvite() {
+        val cancel = CallCancellation("call-1", "call.end")
+        val active = CallSnapshot(CallPhase.Active, "call-1")
+
+        assertTrue(cancel.shouldDismiss(null, active))
+        assertTrue(cancel.shouldRouteRemoteEnd(null, CallSnapshot()))
+        assertTrue(cancel.shouldRouteRemoteEnd("new-call", active))
+        assertFalse(cancel.shouldRouteRemoteEnd("new-call", CallSnapshot()))
+    }
+
+    @Test
     fun staleCancellationDoesNotTouchTheNextInvite() {
         val cancel = CallCancellation("old-call", "call.cancel")
 

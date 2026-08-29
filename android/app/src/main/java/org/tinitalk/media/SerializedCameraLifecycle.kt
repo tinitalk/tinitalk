@@ -100,7 +100,9 @@ internal class SerializedCameraLifecycle<Track>(
     private val peerClosed = AtomicBoolean(false)
     private val retirementLock = Any()
     private val retirements = mutableListOf<AttemptRetirement>()
-    private val allReleasedCallbacks = mutableListOf<() -> Unit>()
+    private val logicalReleaseCallbacks = mutableListOf<() -> Unit>()
+    private val safeReleaseCallbacks = mutableListOf<() -> Unit>()
+    private var unsafeRetirements = 0
     private var candidates = emptyList<CameraAttemptCandidate>()
     private var candidateIndex = 0
     private var current: CameraAttempt<Track>? = null
@@ -171,13 +173,17 @@ internal class SerializedCameraLifecycle<Track>(
 
     fun disposeAfterPeerClosed(afterAllReleased: () -> Unit = {}) {
         peerClosed.set(true)
+        var releaseNow = false
         val snapshot = synchronized(retirementLock) {
-            if (retirements.isEmpty()) emptyList() else {
-                allReleasedCallbacks += afterAllReleased
+            if (retirements.isEmpty()) {
+                releaseNow = unsafeRetirements == 0
+                emptyList()
+            } else {
+                safeReleaseCallbacks += afterAllReleased
                 retirements.toList()
             }
         }
-        if (snapshot.isEmpty()) {
+        if (releaseNow) {
             afterAllReleased()
         } else {
             snapshot.forEach { retirement -> retirement.peerDidClose() }
@@ -362,16 +368,16 @@ internal class SerializedCameraLifecycle<Track>(
         synchronized(retirementLock) { retirements += retirement }
         afterDetached(release)
         blockingQueue.execute {
-            retirement.stopFinished(runCatching(attempt::stop).isSuccess)
+            retirement.initialStopFinished(runCatching(attempt::stop).isSuccess)
         }
     }
 
     private fun afterAllRetirements(callback: () -> Unit) {
         val released = synchronized(retirementLock) {
-            if (retirements.isEmpty()) {
+            if (unsafeRetirements == 0 && retirements.all { it.logicalReleaseFinished() }) {
                 true
             } else {
-                allReleasedCallbacks += callback
+                logicalReleaseCallbacks += callback
                 false
             }
         }
@@ -401,25 +407,76 @@ internal class SerializedCameraLifecycle<Track>(
         private val requiresPeerClosed: Boolean,
     ) {
         private val stopSucceeded = AtomicBoolean(false)
-        private val disposed = AtomicBoolean(false)
+        private val initialStopFailed = AtomicBoolean(false)
+        private val retryScheduled = AtomicBoolean(false)
+        private val logicalReleaseFinished = AtomicBoolean(false)
+        private val retired = AtomicBoolean(false)
 
-        fun stopFinished(succeeded: Boolean) {
-            if (succeeded) stopSucceeded.set(true)
+        fun initialStopFinished(succeeded: Boolean) {
+            if (!succeeded) {
+                initialStopFailed.set(true)
+                retryAfterPeerClosed()
+                return
+            }
+            stopSucceeded.set(true)
             disposeIfSafe()
         }
 
-        fun peerDidClose() = disposeIfSafe()
+        fun peerDidClose() {
+            if (stopSucceeded.get()) {
+                disposeIfSafe()
+            } else {
+                retryAfterPeerClosed()
+            }
+        }
+
+        fun logicalReleaseFinished(): Boolean = logicalReleaseFinished.get()
+
+        private fun retryAfterPeerClosed() {
+            if (!peerClosed.get() || !initialStopFailed.get() || retired.get()) return
+            if (!retryScheduled.compareAndSet(false, true)) return
+            blockingQueue.execute {
+                if (runCatching(attempt::stop).isSuccess) {
+                    stopSucceeded.set(true)
+                    disposeIfSafe()
+                } else {
+                    finishRetirement(dispose = false)
+                }
+            }
+        }
 
         private fun disposeIfSafe() {
             if (!stopSucceeded.get()) return
             if (requiresPeerClosed && !peerClosed.get()) return
-            if (!disposed.compareAndSet(false, true)) return
-            runCatching(attempt::dispose)
+            finishRetirement(dispose = true)
+        }
+
+        private fun finishRetirement(dispose: Boolean) {
+            if (!retired.compareAndSet(false, true)) return
+            if (dispose) {
+                runCatching(attempt::dispose)
+                completeLogicalRelease()
+            }
             val callbacks = synchronized(retirementLock) {
                 retirements.remove(this)
-                if (retirements.isEmpty()) {
-                    val pending = allReleasedCallbacks.toList()
-                    allReleasedCallbacks.clear()
+                if (!dispose) unsafeRetirements++
+                if (retirements.isEmpty() && unsafeRetirements == 0) {
+                    val safe = safeReleaseCallbacks.toList()
+                    safeReleaseCallbacks.clear()
+                    safe
+                } else {
+                    emptyList()
+                }
+            }
+            callbacks.forEach { it() }
+        }
+
+        private fun completeLogicalRelease() {
+            if (!logicalReleaseFinished.compareAndSet(false, true)) return
+            val callbacks = synchronized(retirementLock) {
+                if (unsafeRetirements == 0 && retirements.all { it.logicalReleaseFinished() }) {
+                    val pending = logicalReleaseCallbacks.toList()
+                    logicalReleaseCallbacks.clear()
                     pending
                 } else {
                     emptyList()

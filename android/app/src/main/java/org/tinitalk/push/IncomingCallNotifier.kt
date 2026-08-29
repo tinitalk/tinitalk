@@ -216,63 +216,76 @@ private object IncomingRingtone {
 
 class IncomingCallNotifier(private val context: Context) {
     fun show(invite: IncomingInvite) {
-        val notification = buildIncomingNotification(invite) ?: return
-        context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
+        buildIncomingNotification(invite) { notification ->
+            context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
+        }
     }
 
-    internal fun buildIncomingNotification(invite: IncomingInvite): Notification? {
+    internal fun buildIncomingNotification(invite: IncomingInvite): Notification? =
+        buildIncomingNotification(invite) {}
+
+    internal fun presentIncoming(invite: IncomingInvite, publish: (Notification) -> Unit): Boolean =
+        buildIncomingNotification(invite, publish) != null
+
+    private fun buildIncomingNotification(
+        invite: IncomingInvite,
+        publish: (Notification) -> Unit,
+    ): Notification? {
         ensureChannel()
         val controller = IncomingCallController()
-        if (controller.isTerminal(context, invite.callId)) return null
-        controller.save(context, invite)
-        IncomingVibration.start(context, invite)
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(context, ChannelId)
-        } else {
+        var notification: Notification? = null
+        val presented = controller.presentIncoming(context, invite) {
+            IncomingVibration.start(context, invite)
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(context, ChannelId)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(context)
+            }
+            val answer = controller.activityIntent(context, IncomingCallController.ActionAnswer, invite)
+            val reject = controller.actionIntent(context, IncomingCallController.ActionReject, invite)
+            val fullScreen = controller.activityIntent(context, IncomingCallController.ActionIncoming, invite)
             @Suppress("DEPRECATION")
-            Notification.Builder(context)
-        }
-        val answer = controller.activityIntent(context, IncomingCallController.ActionAnswer, invite)
-        val reject = controller.actionIntent(context, IncomingCallController.ActionReject, invite)
-        val fullScreen = controller.activityIntent(context, IncomingCallController.ActionIncoming, invite)
-        @Suppress("DEPRECATION")
-        builder
-            .setSmallIcon(R.drawable.ic_call)
-            .setContentTitle("Входящий звонок")
-            .setContentText(invite.caller.ifEmpty { "TiniTalk" })
-            .setCategory(Notification.CATEGORY_CALL)
-            .setPriority(Notification.PRIORITY_HIGH)
-            .setVisibility(Notification.VISIBILITY_PUBLIC)
-            .setContentIntent(fullScreen)
-            .setFullScreenIntent(fullScreen, canUseFullScreenIntent())
-            .setOngoing(true)
-            .setTimeoutAfter(Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0))
-        if (Build.VERSION.SDK_INT >= 31) {
-            builder.setStyle(
-                Notification.CallStyle.forIncomingCall(
-                    Person.Builder().setName(invite.caller.ifEmpty { "TiniTalk" }).setImportant(true).build(),
-                    reject,
-                    answer,
-                ),
-            )
-        } else {
             builder
-                .addAction(
-                    Notification.Action.Builder(
-                        Icon.createWithResource(context, R.drawable.ic_call),
-                        "Отклонить",
+                .setSmallIcon(R.drawable.ic_call)
+                .setContentTitle("Входящий звонок")
+                .setContentText(invite.caller.ifEmpty { "TiniTalk" })
+                .setCategory(Notification.CATEGORY_CALL)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setContentIntent(fullScreen)
+                .setFullScreenIntent(fullScreen, canUseFullScreenIntent())
+                .setOngoing(true)
+                .setTimeoutAfter(Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0))
+            if (Build.VERSION.SDK_INT >= 31) {
+                builder.setStyle(
+                    Notification.CallStyle.forIncomingCall(
+                        Person.Builder().setName(invite.caller.ifEmpty { "TiniTalk" }).setImportant(true).build(),
                         reject,
-                    ).build(),
-                )
-                .addAction(
-                    Notification.Action.Builder(
-                        Icon.createWithResource(context, R.drawable.ic_call),
-                        "Ответить",
                         answer,
-                    ).build(),
+                    ),
                 )
+            } else {
+                builder
+                    .addAction(
+                        Notification.Action.Builder(
+                            Icon.createWithResource(context, R.drawable.ic_call),
+                            "Отклонить",
+                            reject,
+                        ).build(),
+                    )
+                    .addAction(
+                        Notification.Action.Builder(
+                            Icon.createWithResource(context, R.drawable.ic_call),
+                            "Ответить",
+                            answer,
+                        ).build(),
+                    )
+            }
+            notification = builder.build()
+            publish(requireNotNull(notification))
         }
-        return builder.build()
+        return notification.takeIf { presented }
     }
 
     fun showMissed(invite: IncomingInvite? = null) {
@@ -450,10 +463,19 @@ object IncomingPushPayload {
 
 data class CallCancellation(val callId: String, val eventType: String) {
     fun shouldDismiss(pendingCallId: String?, snapshot: CallSnapshot): Boolean {
+        if (shouldEndActive(snapshot)) return true
         if (pendingCallId != callId) return false
         return eventType != "call.accept" ||
             snapshot.callId != callId || snapshot.phase != CallPhase.Active
     }
+
+    fun shouldEndActive(snapshot: CallSnapshot): Boolean =
+        eventType == "call.end" && snapshot.callId == callId &&
+            snapshot.phase != CallPhase.Idle && snapshot.phase != CallPhase.Ended
+
+    fun shouldRouteRemoteEnd(pendingCallId: String?, snapshot: CallSnapshot): Boolean =
+        shouldEndActive(snapshot) ||
+            eventType == "call.end" && (pendingCallId == null || pendingCallId == callId)
 
     fun shouldShowMissed(pendingCallId: String?, snapshot: CallSnapshot): Boolean {
         if (pendingCallId != callId || (eventType != "call.cancel" && eventType != "call.expire")) return false

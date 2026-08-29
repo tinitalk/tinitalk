@@ -93,20 +93,14 @@ internal class WebRtcCameraController(
     )
 
     fun start() = lifecycle.start()
-    fun pause(afterDetached: () -> Unit = {}, afterReleased: () -> Unit = {}) = lifecycle.pause(
-        afterDetached = { AndroidMainCameraQueue.execute(afterDetached) },
-        afterReleased = { AndroidMainCameraQueue.execute(afterReleased) },
-    )
-    fun stop(afterDetached: () -> Unit = {}, afterReleased: () -> Unit = {}) = lifecycle.stop(
-        afterDetached = { AndroidMainCameraQueue.execute(afterDetached) },
-        afterReleased = { AndroidMainCameraQueue.execute(afterReleased) },
-    )
+    fun pause(afterDetached: () -> Unit = {}, afterReleased: () -> Unit = {}) =
+        lifecycle.pause(afterDetached, afterReleased)
+    fun stop(afterDetached: () -> Unit = {}, afterReleased: () -> Unit = {}) =
+        lifecycle.stop(afterDetached, afterReleased)
     fun refreshSender(onFailure: () -> Unit = {}) = lifecycle.refreshSender(onFailure)
     fun switchCamera() = lifecycle.switchCamera()
-    fun close(afterDetached: () -> Unit, afterReleased: () -> Unit) = lifecycle.close(
-        afterDetached = { AndroidMainCameraQueue.execute(afterDetached) },
-        afterReleased = { AndroidMainCameraQueue.execute(afterReleased) },
-    )
+    fun close(afterDetached: () -> Unit, afterReleased: () -> Unit) =
+        lifecycle.close(afterDetached, afterReleased)
     fun disposeAfterPeerClosed(afterAllReleased: () -> Unit = {}) =
         lifecycle.disposeAfterPeerClosed(afterAllReleased)
 }
@@ -233,8 +227,13 @@ private class WebRtcCameraAttempt(
     }
 
     override fun stop() {
-        if (!capturing.getAndSet(false)) return
-        capturer.stopCapture()
+        if (!capturing.compareAndSet(true, false)) return
+        try {
+            capturer.stopCapture()
+        } catch (failure: Throwable) {
+            capturing.set(true)
+            throw failure
+        }
     }
 
     override fun refreshSender(): Boolean = lease.refresh()

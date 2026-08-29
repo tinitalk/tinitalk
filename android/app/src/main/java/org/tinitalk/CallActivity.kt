@@ -485,6 +485,8 @@ class CallActivity : ComponentActivity() {
     }
 
     private fun isCurrentIncoming(invite: IncomingInvite): Boolean {
+        val activeCallMatches = callState.callId == invite.callId && callState.phase == CallPhase.Active
+        if (activeCallMatches) return true
         if (!invite.expiresAt.isAfter(Instant.now()) || incomingController.isTerminal(this, invite.callId)) {
             return false
         }
