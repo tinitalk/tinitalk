@@ -237,6 +237,89 @@ func TestHubSendsICEConfigToParticipantsAfterAccept(t *testing.T) {
 	}
 }
 
+func TestHubNegotiatesVideoCapability(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		callerSupports bool
+		calleeSupports bool
+		wantVideo      bool
+	}{
+		{name: "old old", wantVideo: false},
+		{name: "new old", callerSupports: true, wantVideo: false},
+		{name: "old new", calleeSupports: true, wantVideo: false},
+		{name: "new new", callerSupports: true, calleeSupports: true, wantVideo: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hub := NewHub(NoopNotifier{})
+			alice := connectDevice(t, hub, "alice", "phone")
+			bob := connectDevice(t, hub, "bob", "phone")
+
+			startPayload := map[string]any{"callee_id": "bob"}
+			if test.callerSupports {
+				startPayload["supports_video"] = true
+			}
+			start := event(uuid(2201), uuid(2202), "call.start", startPayload)
+			if err := hub.HandleClient(alice, start); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, bob)
+
+			acceptPayload := map[string]any{}
+			if test.calleeSupports {
+				acceptPayload["supports_video"] = true
+			}
+			if err := hub.HandleClient(bob, event(uuid(2203), start.CallID, "call.accept", acceptPayload)); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, alice) // call.accept
+			assertVideoAllowed(t, next(t, alice).Event, test.wantVideo)
+			assertVideoAllowed(t, next(t, bob).Event, test.wantVideo)
+		})
+	}
+}
+
+func TestHubNegotiatesVideoCapabilityForCrossedCalls(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		callerSupports bool
+		calleeSupports bool
+		wantVideo      bool
+	}{
+		{name: "old old", wantVideo: false},
+		{name: "new old", callerSupports: true, wantVideo: false},
+		{name: "old new", calleeSupports: true, wantVideo: false},
+		{name: "new new", callerSupports: true, calleeSupports: true, wantVideo: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hub := NewHub(NoopNotifier{})
+			alice := connectDevice(t, hub, "alice", "phone")
+			bob := connectDevice(t, hub, "bob", "phone")
+
+			firstPayload := map[string]any{"callee_id": "bob", "supports_cross_call": true}
+			if test.callerSupports {
+				firstPayload["supports_video"] = true
+			}
+			first := event(uuid(2301), uuid(2302), "call.start", firstPayload)
+			if err := hub.HandleClient(alice, first); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, bob)
+
+			reversePayload := map[string]any{"callee_id": "alice", "supports_cross_call": true}
+			if test.calleeSupports {
+				reversePayload["supports_video"] = true
+			}
+			if err := hub.HandleClient(bob, event(uuid(2303), uuid(2304), "call.start", reversePayload)); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, alice) // crossed call.accept
+			_ = next(t, bob)   // crossed call.accept
+			assertVideoAllowed(t, next(t, alice).Event, test.wantVideo)
+			assertVideoAllowed(t, next(t, bob).Event, test.wantVideo)
+		})
+	}
+}
+
 func TestHubRefreshesICEConfigAfterRestart(t *testing.T) {
 	provider := &generationalICEConfig{}
 	hub := NewHub(NoopNotifier{})
@@ -296,9 +379,19 @@ func TestHubSendsEmptyICEConfigWhenTURNIsDisabled(t *testing.T) {
 	_ = next(t, alice)
 	for _, client := range []*Client{alice, bob} {
 		config := next(t, client)
-		if config.Type != "rtc.config" || string(config.Payload) != `{"ice_servers":[]}` {
+		if config.Type != "rtc.config" {
 			t.Fatalf("config = %+v", config)
 		}
+		var payload struct {
+			ICEServers []any `json:"ice_servers"`
+		}
+		if err := json.Unmarshal(config.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload.ICEServers) != 0 {
+			t.Fatalf("ice_servers = %v, want empty", payload.ICEServers)
+		}
+		assertVideoAllowed(t, config.Event, false)
 	}
 }
 
@@ -1101,6 +1194,25 @@ func configRestartID(t *testing.T, event protocol.Event) string {
 		t.Fatal(err)
 	}
 	return payload.RestartID
+}
+
+func assertVideoAllowed(t *testing.T, event protocol.Event, want bool) {
+	t.Helper()
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := payload["video_allowed"]
+	if !ok {
+		t.Fatalf("rtc.config payload = %s, missing video_allowed", event.Payload)
+	}
+	var got bool
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("video_allowed = %s: %v", raw, err)
+	}
+	if got != want {
+		t.Fatalf("video_allowed = %t, want %t", got, want)
+	}
 }
 
 type blockingNotifier struct {

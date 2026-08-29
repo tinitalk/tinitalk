@@ -22,10 +22,16 @@ data class SignalEvent(
         require(id.looksLikeUuid()) { "id must be a UUID" }
         require(callId.looksLikeUuid()) { "call_id must be a UUID" }
         require(type in allowedTypes) { "unknown event type" }
+        if (type == "rtc.video") {
+            val enabled = payload["enabled"]
+            require(enabled != null && enabled.isJsonPrimitive && enabled.asJsonPrimitive.isBoolean) {
+                "rtc.video enabled must be a boolean"
+            }
+        }
     }
 
     companion object {
-        const val MAX_EVENT_BYTES = 16 * 1024
+        const val MAX_EVENT_BYTES = 32 * 1024
         const val RING_TIMEOUT_SECONDS = 45
         const val EVENT_BUFFER_LIMIT = 256
 
@@ -45,6 +51,7 @@ data class SignalEvent(
             "rtc.offer",
             "rtc.answer",
             "rtc.ice",
+            "rtc.video",
             "rtc.restart",
             "rtc.restart.request",
         )

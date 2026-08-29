@@ -3,13 +3,17 @@ package org.tinitalk.media
 import org.webrtc.DataChannel
 import org.webrtc.IceCandidate
 import org.webrtc.MediaStream
+import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.RtpReceiver
+import org.webrtc.RtpTransceiver
+import org.webrtc.VideoTrack
 
 open class PeerConnectionObserver(
     private val onLocalIceCandidate: (IceCandidateData) -> Unit = {},
     private val onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit = {},
     private val onConnectionChange: (PeerConnection.IceConnectionState) -> Unit = {},
+    private val onRemoteVideoTrack: (VideoTrack) -> Unit = {},
 ) : PeerConnection.Observer {
     override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
     override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) = onConnectionChange(state)
@@ -34,6 +38,11 @@ open class PeerConnectionObserver(
     override fun onDataChannel(channel: DataChannel) = Unit
     override fun onRenegotiationNeeded() = Unit
     override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) = Unit
+    override fun onTrack(transceiver: RtpTransceiver) = onRemoteTrack(transceiver.receiver.track())
+
+    internal fun onRemoteTrack(track: MediaStreamTrack?) {
+        if (track is VideoTrack) onRemoteVideoTrack(track)
+    }
 
     private fun IceCandidate.toData() = IceCandidateData(
         sdpMid = sdpMid.orEmpty(),

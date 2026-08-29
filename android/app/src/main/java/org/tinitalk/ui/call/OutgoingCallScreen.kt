@@ -33,17 +33,17 @@ fun OutgoingCallScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            MuteCallAction(
-                muted = muted,
-                modifier = Modifier.weight(1f),
-                onMute = onMute,
-            )
             AudioRouteAction(
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
                 modifier = Modifier.weight(1f),
                 onSelectEndpoint = onSelectEndpoint,
                 onShowPicker = { routePickerVisible = true },
+            )
+            MuteCallAction(
+                muted = muted,
+                modifier = Modifier.weight(1f),
+                onMute = onMute,
             )
             RoundCallAction(
                 label = "Отменить",

@@ -14,7 +14,17 @@ data class ServerInfo(
     val status: String?,
     @SerializedName("api_version") val apiVersion: Int = 0,
     val commit: String? = null,
+    val features: Set<String> = emptySet(),
 )
+private data class ServerInfoWire(
+    val service: String?,
+    val status: String?,
+    @SerializedName("api_version") val apiVersion: Int,
+    val commit: String?,
+    val features: List<String>?,
+) {
+    fun toServerInfo() = ServerInfo(service, status, apiVersion, commit, features.orEmpty().toSet())
+}
 data class Contact(
     val login: String,
     val displayName: String,
@@ -104,7 +114,7 @@ class UrlConnectionApiClient(
     private val token: String,
 ) : HouseholdApi {
     override fun serverInfo(): ServerInfo =
-        get("/healthz", ServerInfo::class.java, authenticated = false)
+        get("/healthz", ServerInfoWire::class.java, authenticated = false).toServerInfo()
 
     override fun me(): Profile =
         get("/api/me", Profile::class.java)

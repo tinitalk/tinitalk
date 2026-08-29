@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,43 @@ func TestRestartRequestIsAValidEventType(t *testing.T) {
 
 	if err := event.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestRTCVideoIsAValidEventType(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		event := Event{
+			ID:      "018f7d51-3f90-7e63-b657-4a83a6a90210",
+			CallID:  "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+			Type:    "rtc.video",
+			SentAt:  1787666400000,
+			Payload: json.RawMessage(fmt.Sprintf(`{"enabled":%t}`, enabled)),
+		}
+
+		if err := event.Validate(); err != nil {
+			t.Fatalf("Validate(enabled=%t) error = %v", enabled, err)
+		}
+	}
+}
+
+func TestRTCVideoRequiresBooleanEnabled(t *testing.T) {
+	for _, payload := range []string{
+		`{}`,
+		`{"enabled":null}`,
+		`{"enabled":"true"}`,
+		`{"enabled":1}`,
+	} {
+		event := Event{
+			ID:      "018f7d51-3f90-7e63-b657-4a83a6a90210",
+			CallID:  "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+			Type:    "rtc.video",
+			SentAt:  1787666400000,
+			Payload: json.RawMessage(payload),
+		}
+
+		if err := event.Validate(); err == nil {
+			t.Fatalf("Validate(payload=%s) error = nil, want rejection", payload)
+		}
 	}
 }
 
@@ -62,6 +100,14 @@ func TestDecodeRejectsOversizedPayload(t *testing.T) {
 	raw := `{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.start","sent_at":1787666400000,"payload":{"blob":"` + strings.Repeat("a", MaxEventBytes) + `"}}`
 	if _, err := Decode([]byte(raw)); err == nil {
 		t.Fatal("Decode() error = nil, want oversized payload rejection")
+	}
+}
+
+func TestDecodeAcceptsEventUpTo32KiB(t *testing.T) {
+	raw := `{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.start","sent_at":1787666400000,"payload":{"callee_id":"bob","blob":"` + strings.Repeat("a", 20*1024) + `"}}`
+
+	if _, err := Decode([]byte(raw)); err != nil {
+		t.Fatalf("Decode() error = %v, want 20 KiB event accepted", err)
 	}
 }
 

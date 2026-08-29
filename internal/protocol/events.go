@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	MaxEventBytes    = 16 * 1024
+	MaxEventBytes    = 32 * 1024
 	RingTimeoutSecs  = 45
 	EventBufferLimit = 256
 )
@@ -36,6 +36,7 @@ var allowedTypes = map[string]struct{}{
 	"rtc.offer":           {},
 	"rtc.answer":          {},
 	"rtc.ice":             {},
+	"rtc.video":           {},
 	"rtc.restart":         {},
 	"rtc.restart.request": {},
 }
@@ -94,13 +95,21 @@ func (e Event) validatePayload() error {
 	switch e.Type {
 	case "call.start":
 		var payload struct {
-			CalleeID string `json:"callee_id"`
+			CalleeID      string `json:"callee_id"`
+			SupportsVideo bool   `json:"supports_video"`
 		}
 		if err := json.Unmarshal(e.Payload, &payload); err != nil {
 			return err
 		}
 		if payload.CalleeID == "" {
 			return errors.New("callee_id is required")
+		}
+	case "call.accept":
+		var payload struct {
+			SupportsVideo bool `json:"supports_video"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
 		}
 	case "call.resume":
 		var payload struct {
@@ -111,6 +120,16 @@ func (e Event) validatePayload() error {
 		}
 		if payload.LastSeq < 0 {
 			return errors.New("last_seq must be non-negative")
+		}
+	case "rtc.video":
+		var payload struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Enabled == nil {
+			return errors.New("enabled must be a boolean")
 		}
 	case "rtc.ice":
 		type iceCandidate struct {

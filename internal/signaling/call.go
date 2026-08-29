@@ -12,29 +12,34 @@ const (
 
 type replayEntry struct {
 	recipient string
+	deviceID  string
 	event     DeliveredEvent
 }
 
 type call struct {
-	id                 string
-	caller             string
-	callee             string
-	nextSeq            uint64
-	seen               map[string]struct{}
-	seenOrder          []string
-	replay             []replayEntry
-	aliases            []string
-	startedAt          time.Time
-	ringingAt          time.Time
-	connectedAt        time.Time
-	endedAt            time.Time
-	iceWindowAt        time.Time
-	iceCount           int
-	lastRestart        time.Time
-	lastRestartRequest time.Time
-	offlineSince       map[string]time.Time
-	state              callState
-	supportsCrossCall  bool
+	id                  string
+	caller              string
+	callee              string
+	callerDeviceID      string
+	calleeDeviceID      string
+	nextSeq             uint64
+	seen                map[string]struct{}
+	seenOrder           []string
+	replay              []replayEntry
+	aliases             []string
+	startedAt           time.Time
+	ringingAt           time.Time
+	connectedAt         time.Time
+	endedAt             time.Time
+	iceWindowAt         time.Time
+	iceCount            int
+	lastRestart         time.Time
+	lastRestartRequest  time.Time
+	offlineSince        map[string]time.Time
+	state               callState
+	supportsCrossCall   bool
+	callerSupportsVideo bool
+	calleeSupportsVideo bool
 }
 
 func (c *call) remember(eventID string) {
@@ -55,4 +60,19 @@ func (c *call) other(user string) string {
 		return c.callee
 	}
 	return c.caller
+}
+
+func (c *call) deviceID(user string) string {
+	if user == c.caller {
+		return c.callerDeviceID
+	}
+	return c.calleeDeviceID
+}
+
+func (c *call) devicesBound() bool {
+	return c.callerDeviceID != "" && c.calleeDeviceID != ""
+}
+
+func (c *call) videoAllowed() bool {
+	return c.devicesBound() && c.callerSupportsVideo && c.calleeSupportsVideo
 }

@@ -1,5 +1,6 @@
 package org.tinitalk.media
 
+import org.tinitalk.call.CameraFacing
 import java.time.Instant
 
 data class IceCandidateData(
@@ -38,3 +39,29 @@ interface MediaSession {
     fun getStats(onResult: (CallStats) -> Unit)
     suspend fun close()
 }
+
+interface CameraMediaSession {
+    fun startCamera()
+    /** Rebinds an active video track after the media transport moves to a new network path. */
+    fun refreshVideoSender(onFailure: () -> Unit = {}) = Unit
+    /** [onDetached] is logical/nonblocking; [onReleased] follows native stop and safe disposal. */
+    fun pauseCamera(
+        onDetached: () -> Unit = {},
+        onReleased: () -> Unit = {},
+    )
+    /** [onDetached] is logical/nonblocking; [onReleased] follows native stop and safe disposal. */
+    fun stopCamera(
+        onDetached: () -> Unit = {},
+        onReleased: () -> Unit = {},
+    )
+    fun switchCamera()
+}
+
+data class CameraMediaCallbacks(
+    val onLocalTrackChanged: (VideoRenderSource?) -> Unit = {},
+    val onCaptureStarted: (CameraFacing) -> Unit = {},
+    val onCaptureInvalidated: () -> Unit = {},
+    val onCaptureStopped: () -> Unit = {},
+    val onFacingChanged: (CameraFacing) -> Unit = {},
+    val onFailure: (String) -> Unit = {},
+)

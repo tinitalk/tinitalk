@@ -1,14 +1,20 @@
 package org.tinitalk
 
+import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -23,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.core.view.WindowCompat
+import androidx.core.content.ContextCompat
 import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallEndReason
@@ -33,11 +40,14 @@ import org.tinitalk.call.CallScreenActionGate
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
+import org.tinitalk.call.CallVideoState
+import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.call.outgoingVisibleState
 import org.tinitalk.call.shouldDismissIncomingOverlay
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
+import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingAnswerClaim
 import org.tinitalk.telecom.IncomingCallController
@@ -57,17 +67,59 @@ class CallActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var proximityController: ProximityController
     private var activityStarted = false
+    private val cameraForegroundPublicationGate = CameraForegroundPublicationGate()
+    private lateinit var cameraPermissionRouter: CameraPermissionActionRouter
+    private lateinit var cameraForegroundLifecycle: CallActivityCameraForeground
     private val actionGate = CallScreenActionGate()
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
+    private var videoState by mutableStateOf(VideoCallStateStore.snapshot())
+    private var renderedVideoCallId: String? = null
+    private var renderedVideoVisible = false
     private var incomingInvite by mutableStateOf<IncomingInvite?>(null)
     private var outgoingLogin by mutableStateOf<String?>(null)
     private var outgoingName by mutableStateOf<String?>(null)
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (::cameraPermissionRouter.isInitialized) {
+            cameraPermissionRouter.onPermissionResult(
+                granted,
+                visibleCallState(),
+                VideoCallStateStore.snapshot(),
+            )
+        }
+    }
+    private val screenStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> cameraForegroundLifecycle.onScreenOff()
+                Intent.ACTION_SCREEN_ON -> cameraForegroundLifecycle.onScreenOn()
+                Intent.ACTION_USER_PRESENT -> cameraForegroundLifecycle.onUserPresent()
+            }
+        }
+    }
 
     private val callObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread {
             actionGate.onCallState(state)
             callState = state
+            if (state.callId != renderedVideoCallId || state.phase != CallPhase.Active) {
+                renderedVideoCallId = null
+                renderedVideoVisible = false
+            }
             updateProximity()
+            cameraForegroundLifecycle.onCallStateChanged()
+        }
+    }
+
+    private val videoObserver: (CallVideoState<VideoRenderSource>) -> Unit = { state ->
+        runOnUiThread {
+            videoState = state
+            if (state.callId != renderedVideoCallId) {
+                renderedVideoCallId = null
+                renderedVideoVisible = false
+                updateProximity()
+            }
         }
     }
 
@@ -87,6 +139,30 @@ class CallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         proximityController = ProximityController(this)
+        cameraPermissionRouter = CameraPermissionActionRouter(
+            permissionGranted = ::cameraPermissionGranted,
+            requestPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+            enableCamera = { callId -> CallForegroundService.cameraRequested(this, callId, requested = true) },
+            cameraVisible = ::cameraVisible,
+            restoredPendingCallId = savedInstanceState?.getString(StatePendingCameraCallId),
+        )
+        cameraForegroundLifecycle = CallActivityCameraForeground(
+            screenInteractive = ::screenInteractive,
+            retryPendingCamera = {
+                cameraPermissionRouter.onVisible(visibleCallState(), VideoCallStateStore.snapshot())
+            },
+            publish = ::publishCameraForeground,
+        )
+        ContextCompat.registerReceiver(
+            this,
+            screenStateReceiver,
+            IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_USER_PRESENT)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -100,6 +176,7 @@ class CallActivity : ComponentActivity() {
         }
         applyIntent(intent)
         CallUiStateStore.observe(callObserver)
+        VideoCallStateStore.observe(videoObserver)
 
         setContent {
             TiniTalkTheme(darkTheme = true) {
@@ -117,6 +194,8 @@ class CallActivity : ComponentActivity() {
                     ?: outgoingName?.takeIf { it.isNotBlank() }
                     ?: "TiniTalk"
                 val durationText = rememberDurationText(visibleState)
+                val visibleVideoState = videoState.takeIf { it.callId == visibleState.callId }
+                    ?: CallVideoState()
 
                 when {
                     visibleState.phase == CallPhase.Ended -> EndedCallScreen(peerName, visibleState.endReason)
@@ -127,11 +206,19 @@ class CallActivity : ComponentActivity() {
                         connectionHealth = visibleState.connectionHealth,
                         currentEndpoint = visibleState.currentAudioEndpoint,
                         availableEndpoints = visibleState.availableAudioEndpoints,
+                        videoState = visibleVideoState,
                         onMute = { CallForegroundService.mute(this, it) },
                         onSelectEndpoint = { endpoint ->
                             visibleState.callId?.let { callId ->
                                 CallForegroundService.selectAudioEndpoint(this, callId, endpoint.id)
                             }
+                        },
+                        onCamera = { enabled ->
+                            if (enabled) requestCamera() else disableCamera()
+                        },
+                        onSwitchCamera = ::switchCamera,
+                        onVideoVisibilityChanged = { visible ->
+                            updateRenderedVideoVisibility(visibleState.callId, visible)
                         },
                         onEnd = { endCall(visibleState) },
                     )
@@ -197,6 +284,16 @@ class CallActivity : ComponentActivity() {
         if (incomingInvite != null) handler.post(inviteMonitor)
     }
 
+    override fun onResume() {
+        super.onResume()
+        cameraForegroundLifecycle.onResume()
+    }
+
+    override fun onPause() {
+        cameraForegroundLifecycle.onPause()
+        super.onPause()
+    }
+
     override fun onStop() {
         activityStarted = false
         restoreIncomingCallNotification()
@@ -215,7 +312,16 @@ class CallActivity : ComponentActivity() {
         handler.removeCallbacks(inviteMonitor)
         proximityController.close()
         CallUiStateStore.removeObserver(callObserver)
+        VideoCallStateStore.removeObserver(videoObserver)
+        unregisterReceiver(screenStateReceiver)
         super.onDestroy()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        cameraPermissionRouter.pendingCallId()?.let { callId ->
+            outState.putString(StatePendingCameraCallId, callId)
+        }
+        super.onSaveInstanceState(outState)
     }
 
     private fun applyIntent(intent: Intent?): Boolean {
@@ -298,6 +404,47 @@ class CallActivity : ComponentActivity() {
         CallForegroundService.end(this)
     }
 
+    internal fun requestCamera() {
+        cameraPermissionRouter.request(visibleCallState(), VideoCallStateStore.snapshot())
+    }
+
+    internal fun disableCamera() {
+        val state = visibleCallState()
+        val callId = state.callId ?: return
+        if (state.phase == CallPhase.Active) {
+            CallForegroundService.cameraRequested(this, callId, requested = false)
+        }
+    }
+
+    internal fun switchCamera() {
+        val state = visibleCallState()
+        val callId = state.callId ?: return
+        if (state.phase == CallPhase.Active) CallForegroundService.switchCamera(this, callId)
+    }
+
+    private fun publishCameraForeground(visible: Boolean) {
+        val state = visibleCallState()
+        val callId = state.callId ?: return
+        if (state.phase != CallPhase.Active) return
+        val permissionGranted = cameraPermissionGranted()
+        if (!cameraForegroundPublicationGate.shouldPublish(callId, visible, permissionGranted)) return
+        CallForegroundService.cameraForeground(
+            this,
+            callId,
+            foreground = visible,
+            permissionGranted = permissionGranted,
+        )
+    }
+
+    private fun cameraPermissionGranted(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    private fun cameraVisible(): Boolean =
+        ::cameraForegroundLifecycle.isInitialized && cameraForegroundLifecycle.visible
+
+    private fun screenInteractive(): Boolean =
+        getSystemService(PowerManager::class.java).isInteractive
+
     private fun updateProximity() {
         if (!::proximityController.isInitialized) return
         val connected = callState.connectionHealth == ConnectionHealth.Good ||
@@ -307,9 +454,18 @@ class CallActivity : ComponentActivity() {
             (callState.phase == CallPhase.Connecting || callState.phase == CallPhase.Ringing)
         val activeConversation = callState.phase == CallPhase.Active &&
             callState.connectedAtElapsedMs != null && connected
+        val videoVisible = renderedVideoCallId == callState.callId && renderedVideoVisible
         proximityController.setEnabled(
-            activityStarted && earpiece && (outgoingDial || activeConversation),
+            activityStarted && !videoVisible && earpiece && (outgoingDial || activeConversation),
         )
+    }
+
+    private fun updateRenderedVideoVisibility(callId: String?, visible: Boolean) {
+        val current = visibleCallState()
+        if (callId == null || current.callId != callId || current.phase != CallPhase.Active) return
+        renderedVideoCallId = callId
+        renderedVideoVisible = visible
+        updateProximity()
     }
 
     private fun showIncomingCallFullScreen() {
@@ -346,6 +502,7 @@ class CallActivity : ComponentActivity() {
         private const val ExtraOutgoingLogin = "outgoing_login"
         private const val ExtraOutgoingName = "outgoing_name"
         private const val ActionRedial = "org.tinitalk.action.REDIAL"
+        private const val StatePendingCameraCallId = "pending_camera_call_id"
         private const val InviteCheckIntervalMillis = 500L
         private const val IdleGraceMillis = 1_000L
         private const val EndedScreenMillis = 900L
@@ -366,6 +523,65 @@ class CallActivity : ComponentActivity() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
     }
 }
+
+internal class CameraForegroundPublicationGate {
+    private var published: CameraForegroundPublication? = null
+
+    fun shouldPublish(callId: String, foreground: Boolean, permissionGranted: Boolean): Boolean {
+        val next = CameraForegroundPublication(callId, foreground, permissionGranted)
+        if (next == published) return false
+        published = next
+        return true
+    }
+}
+
+internal class CallActivityCameraForeground(
+    private val screenInteractive: () -> Boolean,
+    private val retryPendingCamera: () -> Unit,
+    private val publish: (Boolean) -> Unit,
+) {
+    private var resumed = false
+
+    val visible: Boolean
+        get() = resumed && screenInteractive()
+
+    fun onResume() {
+        resumed = true
+        publishVisible()
+    }
+
+    fun onPause() {
+        resumed = false
+        publish(false)
+    }
+
+    fun onScreenOff() {
+        publish(false)
+    }
+
+    fun onScreenOn() {
+        if (resumed) publishVisible()
+    }
+
+    fun onUserPresent() {
+        if (resumed) publishVisible()
+    }
+
+    fun onCallStateChanged() {
+        if (resumed) publish(visible)
+    }
+
+    private fun publishVisible() {
+        if (visible) retryPendingCamera()
+        publish(visible)
+    }
+}
+
+private data class CameraForegroundPublication(
+    val callId: String,
+    val foreground: Boolean,
+    val permissionGranted: Boolean,
+)
 
 @androidx.compose.runtime.Composable
 private fun EmptyCallSurface() {

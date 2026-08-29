@@ -8,6 +8,25 @@ import org.junit.Test
 
 class AudioRouteSelectionTest {
     @Test
+    fun videoRoutesOnlyEarpieceToSpeaker() {
+        val earpiece = AudioEndpoint("earpiece", "Earpiece", CallEndpointCompat.TYPE_EARPIECE)
+        val speaker = AudioEndpoint("speaker", "Speaker", CallEndpointCompat.TYPE_SPEAKER)
+        val bluetooth = AudioEndpoint("bluetooth", "Bluetooth", CallEndpointCompat.TYPE_BLUETOOTH)
+        val wired = AudioEndpoint("wired", "Wired", CallEndpointCompat.TYPE_WIRED_HEADSET)
+        val streaming = AudioEndpoint("streaming", "Streaming", CallEndpointCompat.TYPE_STREAMING)
+        val available = listOf(earpiece, speaker, bluetooth, wired, streaming)
+
+        assertEquals(speaker, speakerRouteOnCameraPress(true, earpiece, available))
+        assertNull(speakerRouteOnCameraPress(false, earpiece, available))
+        assertNull(speakerRouteOnCameraPress(true, speaker, available))
+        assertNull(speakerRouteOnCameraPress(true, bluetooth, available))
+        assertNull(speakerRouteOnCameraPress(true, wired, available))
+        assertNull(speakerRouteOnCameraPress(true, streaming, available))
+        assertNull(speakerRouteOnCameraPress(true, null, available))
+        assertNull(speakerRouteOnCameraPress(true, earpiece, available - speaker))
+    }
+
+    @Test
     fun togglesDirectlyOnlyBetweenEarpieceAndSpeaker() {
         val earpiece = AudioEndpoint("earpiece", "Earpiece", CallEndpointCompat.TYPE_EARPIECE)
         val speaker = AudioEndpoint("speaker", "Speaker", CallEndpointCompat.TYPE_SPEAKER)

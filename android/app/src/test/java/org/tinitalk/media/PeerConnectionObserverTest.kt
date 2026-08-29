@@ -1,8 +1,10 @@
 package org.tinitalk.media
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Test
 import org.webrtc.IceCandidate
+import org.webrtc.VideoTrack
 
 class PeerConnectionObserverTest {
     @Test
@@ -24,5 +26,16 @@ class PeerConnectionObserverTest {
             ),
             removed,
         )
+    }
+
+    @Test
+    fun reportsRemoteVideoTrackForRendering() {
+        var reported: VideoTrack? = null
+        val track = VideoTrack(1L)
+        val observer = PeerConnectionObserver(onRemoteVideoTrack = { reported = it })
+
+        observer.onRemoteTrack(track)
+
+        assertSame(track, reported)
     }
 }

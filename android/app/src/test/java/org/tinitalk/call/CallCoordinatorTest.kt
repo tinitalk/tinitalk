@@ -11,10 +11,16 @@ class CallCoordinatorTest {
     @Test
     fun advertisesCrossedCallsAndAdoptsCanonicalCallId() {
         val signal = FakeSignalClient()
-        val coordinator = CallCoordinator("alice", signal, FixedIds())
+        val coordinator = CallCoordinator(
+            "alice",
+            signal,
+            FixedIds(),
+            serverFeatures = setOf("video_1to1"),
+        )
         coordinator.startCall("bob")
 
         assertTrue(signal.sent.single().payload["supports_cross_call"].asBoolean)
+        assertTrue(signal.sent.single().payload["supports_video"].asBoolean)
 
         val canonical = "018f7d51-40a1-7bb5-a2d0-7e47f9182000"
         val payload = JsonObject().apply {
@@ -35,6 +41,57 @@ class CallCoordinatorTest {
         )
 
         assertEquals(CallSnapshot(CallPhase.Active, canonical, 2), coordinator.snapshot())
+    }
+
+    @Test
+    fun oldServerOmitsVideoSupportInBothCallDirections() {
+        val outgoingSignal = FakeSignalClient()
+        CallCoordinator("alice", outgoingSignal, ids = FixedIds()).startCall("bob")
+        val incomingSignal = FakeSignalClient()
+        CallCoordinator("alice", incomingSignal, ids = FixedIds()).apply {
+            onEvent(event("call.incoming", seq = 1))
+            accept()
+        }
+
+        assertFalse(outgoingSignal.sent.single().payload.has("supports_video"))
+        assertFalse(incomingSignal.sent.last().payload.has("supports_video"))
+    }
+
+    @Test
+    fun videoServerAdvertisesSupportInBothCallDirections() {
+        val outgoingSignal = FakeSignalClient()
+        CallCoordinator(
+            "alice",
+            outgoingSignal,
+            ids = FixedIds(),
+            serverFeatures = setOf("video_1to1"),
+        ).startCall("bob")
+        val incomingSignal = FakeSignalClient()
+        CallCoordinator(
+            "alice",
+            incomingSignal,
+            ids = FixedIds(),
+            serverFeatures = setOf("video_1to1"),
+        ).apply {
+            onEvent(event("call.incoming", seq = 1))
+            accept()
+        }
+
+        assertTrue(outgoingSignal.sent.single().payload["supports_video"].asBoolean)
+        assertTrue(incomingSignal.sent.last().payload["supports_video"].asBoolean)
+    }
+
+    @Test
+    fun similarlyNamedServerFeatureDoesNotAdvertiseVideo() {
+        val signal = FakeSignalClient()
+        CallCoordinator(
+            "alice",
+            signal,
+            ids = FixedIds(),
+            serverFeatures = setOf("VIDEO_1TO1", "video_1to1_preview"),
+        ).startCall("bob")
+
+        assertFalse(signal.sent.single().payload.has("supports_video"))
     }
 
     @Test

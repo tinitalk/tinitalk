@@ -6,6 +6,25 @@ import org.junit.Test
 
 class ConnectionHealthClassifierTest {
     @Test
+    fun `receiver buffer delay alone does not mark the network poor`() {
+        val classifier = ConnectionHealthClassifier()
+        val healthyNetwork = CallStats(
+            rttMs = 10,
+            jitterMs = 5,
+            packetLossPercent = 0.0,
+            concealedSamplesPercent = 0.0,
+            jitterBufferTargetDelayMs = 380,
+        )
+
+        repeat(3) {
+            assertEquals(
+                ConnectionHealth.Good,
+                classifier.update(healthyNetwork, ConnectionHealth.Good),
+            )
+        }
+    }
+
+    @Test
     fun `quality becomes poor only when sustained and recovers without overriding reconnect`() {
         val classifier = ConnectionHealthClassifier()
         val good = CallStats(rttMs = 90, jitterMs = 12, packetLossPercent = 0.5)

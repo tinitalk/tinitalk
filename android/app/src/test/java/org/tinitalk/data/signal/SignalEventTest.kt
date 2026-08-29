@@ -9,6 +9,35 @@ import org.junit.Test
 
 class SignalEventTest {
     @Test
+    fun acceptsVideoTransmissionEventWithBooleanState() {
+        val event = SignalEvent(
+            id = "018f7d51-3f90-7e63-b657-4a83a6a90210",
+            callId = "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+            type = "rtc.video",
+            sentAt = 1787666400000,
+            payload = com.google.gson.JsonObject().apply { addProperty("enabled", true) },
+        )
+
+        val decoded = SignalEvent.decode(event.encode())
+
+        assertEquals("rtc.video", decoded.type)
+        assertEquals(true, decoded.payload["enabled"].asBoolean)
+    }
+
+    @Test
+    fun rejectsVideoTransmissionEventWithoutBooleanState() {
+        val event = SignalEvent(
+            id = "018f7d51-3f90-7e63-b657-4a83a6a90210",
+            callId = "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+            type = "rtc.video",
+            sentAt = 1787666400000,
+            payload = com.google.gson.JsonObject().apply { addProperty("enabled", "true") },
+        )
+
+        assertTrue(runCatching { event.encode() }.isFailure)
+    }
+
+    @Test
     fun acceptsRestartRequestEvent() {
         val event = SignalEvent(
             id = "018f7d51-3f90-7e63-b657-4a83a6a90210",
@@ -51,6 +80,13 @@ class SignalEventTest {
         val raw = """{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.start","sent_at":1787666400000,"payload":{"blob":"${"a".repeat(SignalEvent.MAX_EVENT_BYTES)}"}}"""
         val result = runCatching { SignalEvent.decode(raw) }
         assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun acceptsEventLargerThanLegacySixteenKiBLimit() {
+        val raw = """{"id":"018f7d51-3f90-7e63-b657-4a83a6a90210","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9181766","type":"call.start","sent_at":1787666400000,"payload":{"blob":"${"a".repeat(20 * 1024)}"}}"""
+
+        assertEquals("call.start", SignalEvent.decode(raw).type)
     }
 
     private fun readFixture(name: String): String =
