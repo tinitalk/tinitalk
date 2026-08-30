@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"tinitalk/internal/app"
+	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/httpapi"
 	"tinitalk/internal/notify"
 	"tinitalk/internal/signaling"
@@ -48,23 +49,30 @@ func runInit(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	var fcm []byte
-	if len(rest) == 2 && rest[0] == "--fcm-service-account" {
-		fcm, err = os.ReadFile(rest[1])
+	var fcmServiceAccount, firebaseAndroidConfig []byte
+	for len(rest) > 0 {
+		if len(rest) < 2 {
+			return errors.New("usage: tinitalk init [--data-dir DIR] [--fcm-service-account FILE] [--firebase-android-config FILE]")
+		}
+		switch rest[0] {
+		case "--fcm-service-account":
+			fcmServiceAccount, err = os.ReadFile(rest[1])
+		case "--firebase-android-config":
+			firebaseAndroidConfig, err = os.ReadFile(rest[1])
+		default:
+			return errors.New("usage: tinitalk init [--data-dir DIR] [--fcm-service-account FILE] [--firebase-android-config FILE]")
+		}
 		if err != nil {
 			return err
 		}
-		rest = nil
-	}
-	if len(rest) != 0 {
-		return errors.New("usage: tinitalk init [--data-dir DIR] [--fcm-service-account FILE]")
+		rest = rest[2:]
 	}
 	db, err := state.OpenDir(dataDir)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	if err := db.Init(fcm); err != nil {
+	if err := db.Init(fcmServiceAccount, firebaseAndroidConfig); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(w, "state: %s\n", dataDir)
@@ -92,15 +100,12 @@ func runServe(args []string) error {
 	}
 	notifier := signaling.Notifier(signaling.NoopNotifier{})
 	var sessionNotifier httpapi.SessionReplacementNotifier
-	fcmServiceAccount, err := db.Secret("fcm_service_account")
+	fcmServiceAccount, firebaseAndroidConfig, err := loadFirebaseConfiguration(db)
 	if err != nil {
 		return err
 	}
-	if len(fcmServiceAccount) > 0 {
-		project, err := notify.ProjectIDFromServiceAccount(fcmServiceAccount)
-		if err != nil {
-			return err
-		}
+	{
+		project := firebaseAndroidConfig.ProjectID
 		bearer, err := notify.BearerTokenFromServiceAccount(ctx, fcmServiceAccount)
 		if err != nil {
 			return err
@@ -176,6 +181,27 @@ func runServe(args []string) error {
 		}
 		return nil
 	}
+}
+
+func loadFirebaseConfiguration(db *state.DB) ([]byte, firebaseconfig.Config, error) {
+	serviceAccount, err := db.Secret("fcm_service_account")
+	if err != nil {
+		return nil, firebaseconfig.Config{}, err
+	}
+	if len(serviceAccount) == 0 {
+		return nil, firebaseconfig.Config{}, errors.New("FCM service account is missing; run tinitalk init --fcm-service-account FILE")
+	}
+	config, err := db.FirebaseConfig()
+	if err != nil {
+		return nil, firebaseconfig.Config{}, err
+	}
+	if config.ConfigID == "" {
+		return nil, firebaseconfig.Config{}, errors.New("FCM Android configuration is missing; run tinitalk init --firebase-android-config FILE")
+	}
+	if err := firebaseconfig.ValidatePair(serviceAccount, config); err != nil {
+		return nil, firebaseconfig.Config{}, err
+	}
+	return serviceAccount, config, nil
 }
 
 func turnServerConfig(options serveOptions, tlsConfig *tls.Config, issuer turnserver.CredentialIssuer) turnserver.Config {

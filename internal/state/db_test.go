@@ -14,7 +14,7 @@ func TestOpenReopensWithRequiredPragmasAndStableFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Init([]byte(`{"project_id":"demo"}`)); err != nil {
+	if err := db.Init(nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -57,7 +57,7 @@ func TestUsersTokensAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.Init(nil); err != nil {
+	if err := db.Init(nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,7 +103,7 @@ func TestDeleteUserRemovesCredentialsAndDevices(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.Init(nil); err != nil {
+	if err := db.Init(nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

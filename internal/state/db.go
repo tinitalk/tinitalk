@@ -73,18 +73,11 @@ func (db *DB) Pragmas() (map[string]string, error) {
 	return out, nil
 }
 
-func (db *DB) Init(fcmServiceAccount []byte) error {
+func (db *DB) Init(fcmServiceAccount, firebaseAndroidConfig []byte) error {
 	if err := db.ensureSecret("turn_secret", randomToken); err != nil {
 		return err
 	}
-	if len(fcmServiceAccount) > 0 {
-		_, err := db.sql.Exec(`
-			INSERT INTO secrets(key, value) VALUES('fcm_service_account', ?)
-			ON CONFLICT(key) DO UPDATE SET value=excluded.value
-		`, fcmServiceAccount)
-		return err
-	}
-	return nil
+	return db.initFirebase(fcmServiceAccount, firebaseAndroidConfig)
 }
 
 func (db *DB) ensureSecret(key string, create func() (string, error)) error {

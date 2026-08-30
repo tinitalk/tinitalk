@@ -477,7 +477,7 @@ func testDB(t *testing.T) (*state.DB, map[string]string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Init(nil); err != nil {
+	if err := db.Init(nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	tokens := map[string]string{}
