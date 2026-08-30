@@ -6,10 +6,6 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-if (file("google-services.json").isFile) {
-    apply(plugin = "com.google.gms.google-services")
-}
-
 val tinitalkServerUrl = providers.gradleProperty("tinitalkServerUrl")
     .getOrElse("https://tinitalk.example.com")
     .replace("\\", "\\\\")
