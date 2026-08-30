@@ -37,6 +37,7 @@ androidx-core-telecom = { module = "androidx.core:core-telecom", version.ref = "
 webrtc = { module = "io.github.webrtc-sdk:android", version.ref = "webrtc" }
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
+firebase-installations = { module = "com.google.firebase:firebase-installations" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }

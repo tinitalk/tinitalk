@@ -1,5 +1,6 @@
 package org.tinitalk.data
 
+import org.tinitalk.push.StoredFirebaseConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -28,6 +29,7 @@ class AuthStoreTest {
         assertEquals("secret-token", session?.token)
         assertEquals(emptySet<String>(), session?.features)
         assertNull(session?.sessionId)
+        assertNull(session?.configId)
     }
 
     @Test
@@ -49,6 +51,7 @@ class AuthStoreTest {
             "token",
             setOf("single_device_session"),
             sessionId = "session-123",
+            configId = "sha256:config",
         )
 
         store.save(session)
@@ -57,13 +60,48 @@ class AuthStoreTest {
     }
 
     @Test
-    fun savingLegacySessionRemovesPreviousSessionId() {
+    fun savingLegacySessionRemovesPreviousActivationBinding() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token", sessionId = "session-123"))
+        store.save(
+            Session(
+                "https://host",
+                "alice",
+                "token",
+                sessionId = "session-123",
+                configId = "sha256:config",
+            ),
+        )
 
         store.save(Session("https://host", "alice", "token"))
 
         assertNull(store.load()?.sessionId)
+        assertNull(store.load()?.configId)
+    }
+
+    @Test
+    fun loadsOnlySessionsBoundToTheSameNormalizedServerAndConfiguration() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session(
+            " https://host.example/// ",
+            "alice",
+            "token",
+            sessionId = "session-123",
+            configId = "sha256:config",
+        )
+        store.save(session)
+
+        val cases = listOf(
+            storedConfig("https://host.example", "sha256:config") to session,
+            storedConfig("https://other.example", "sha256:config") to null,
+            storedConfig("https://host.example", "sha256:other") to null,
+            null to null,
+        )
+
+        cases.forEach { (config, expected) ->
+            assertEquals(expected, store.loadBoundTo(config))
+        }
+        store.save(session.copy(configId = null))
+        assertNull(store.loadBoundTo(storedConfig("https://host.example", "sha256:config")))
     }
 
     @Test
@@ -113,10 +151,16 @@ class AuthStoreTest {
     }
 
     @Test
-    fun conditionalClearTreatsSessionIdAsPartOfIdentity() {
+    fun conditionalClearTreatsSessionAndConfigurationIdsAsPartOfIdentity() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val revoked = Session("https://host", "alice", "token", sessionId = "session-old")
-        val replacement = revoked.copy(sessionId = "session-new")
+        val revoked = Session(
+            "https://host",
+            "alice",
+            "token",
+            sessionId = "session-old",
+            configId = "config-old",
+        )
+        val replacement = revoked.copy(sessionId = "session-new", configId = "config-new")
         store.save(replacement)
 
         val cleared = store.clearIfCurrent(revoked)
@@ -194,6 +238,15 @@ class AuthStoreTest {
         }
     }
 }
+
+private fun storedConfig(serverUrl: String, configId: String) = StoredFirebaseConfig(
+    serverUrl = serverUrl,
+    applicationId = "1:123:android:abc",
+    apiKey = "public-api-key",
+    projectId = "demo-project",
+    gcmSenderId = "123",
+    configId = configId,
+)
 
 private class PausingKeyValueStore : KeyValueStore {
     private val values = ConcurrentHashMap<String, String>()

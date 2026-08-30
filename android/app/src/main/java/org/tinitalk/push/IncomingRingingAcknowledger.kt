@@ -33,7 +33,7 @@ class IncomingRingingAcknowledger(context: Context) : Closeable {
         val signal = SignalSocket(
             client,
             session,
-            deviceId = DeviceRegistrar.deviceId(context),
+            deviceId = DeviceIdentity.id(context),
         )
         callId = invite.callId
         socket = signal

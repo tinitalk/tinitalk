@@ -21,6 +21,7 @@
         android:label="TiniTalk"
         android:allowBackup="false"
         android:supportsRtl="true">
+        <meta-data android:name="firebase_messaging_installation_id_enabled" android:value="true" />
         <activity
             android:name=".MainActivity"
             android:icon="@mipmap/ic_launcher"

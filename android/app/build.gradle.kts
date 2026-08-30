@@ -97,6 +97,7 @@ dependencies {
     implementation(libs.webrtc)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
+    implementation(libs.firebase.installations)
     implementation(libs.kotlinx.coroutines.android)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

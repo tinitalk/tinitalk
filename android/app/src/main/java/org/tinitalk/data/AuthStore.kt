@@ -6,6 +6,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import org.tinitalk.push.StoredFirebaseConfig
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -18,6 +19,7 @@ data class Session(
     val token: String,
     val features: Set<String> = emptySet(),
     val sessionId: String? = null,
+    val configId: String? = null,
 )
 
 interface KeyValueStore {
@@ -46,6 +48,10 @@ class AuthStore(
     }
 
     fun load(): Session? = synchronized(SessionLock) { loadUnlocked() }
+
+    fun loadBoundTo(config: StoredFirebaseConfig?): Session? = synchronized(SessionLock) {
+        loadUnlocked()?.takeIf { session -> session.isBoundTo(config) }
+    }
 
     fun clear() = synchronized(SessionLock) {
         clearUnlocked()
@@ -93,7 +99,8 @@ class AuthStore(
             }
             .orEmpty()
         val sessionId = store.get("session_id")?.takeIf(String::isNotEmpty)
-        return Session(url, login, cipher.decrypt(CipherText(token, iv)), features, sessionId)
+        val configId = store.get("config_id")?.takeIf(String::isNotEmpty)
+        return Session(url, login, cipher.decrypt(CipherText(token, iv)), features, sessionId, configId)
     }
 
     private fun saveUnlocked(session: Session) {
@@ -108,10 +115,15 @@ class AuthStore(
         } else {
             store.put("session_id", session.sessionId)
         }
+        if (session.configId == null) {
+            store.remove("config_id")
+        } else {
+            store.put("config_id", session.configId)
+        }
     }
 
     private fun clearUnlocked() {
-        store.remove("url", "login", "token", "iv", "features", "session_id")
+        store.remove("url", "login", "token", "iv", "features", "session_id", "config_id")
     }
 
     private companion object {
@@ -126,8 +138,17 @@ internal fun Session?.sameIdentity(other: Session?): Boolean = when {
     else -> url == other.url &&
         login == other.login &&
         token == other.token &&
-        sessionId == other.sessionId
+        sessionId == other.sessionId &&
+        configId == other.configId
 }
+
+private fun Session.isBoundTo(config: StoredFirebaseConfig?): Boolean =
+    config != null &&
+        !configId.isNullOrBlank() &&
+        normalizeServerUrl(url) == normalizeServerUrl(config.serverUrl) &&
+        configId == config.configId
+
+internal fun normalizeServerUrl(url: String): String = url.trim().trimEnd('/')
 
 class SharedPreferencesKeyValueStore(context: Context) : KeyValueStore {
     private val prefs: SharedPreferences = context.getSharedPreferences("auth", Context.MODE_PRIVATE)

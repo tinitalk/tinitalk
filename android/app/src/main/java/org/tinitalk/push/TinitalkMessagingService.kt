@@ -19,19 +19,12 @@ import org.tinitalk.telecom.TelecomCallCallbacks
 import org.tinitalk.telecom.CallForegroundService
 import java.time.Instant
 
-@Suppress("OVERRIDE_DEPRECATION")
 class TinitalkMessagingService : FirebaseMessagingService() {
-    @Suppress("DEPRECATION")
-    override fun onNewToken(token: String) {
-        val session = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher()).load() ?: return
-        DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this), token)
-    }
-
     @Synchronized
     override fun onMessageReceived(message: RemoteMessage) {
         val authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
-        val session = authStore.load()
-        val deviceId = DeviceRegistrar.deviceId(this)
+        val session = authStore.loadBoundTo(FirebaseConfigStore(this).load())
+        val deviceId = DeviceIdentity.id(this)
         val replacement = IncomingPushPayload.sessionReplacement(message.data)
         if (replacement != null) {
             if (session != null && replacement.matches(session, deviceId)) {
