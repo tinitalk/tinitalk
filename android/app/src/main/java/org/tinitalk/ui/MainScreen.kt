@@ -1,5 +1,6 @@
 package org.tinitalk.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -202,6 +203,9 @@ fun MainScreenState.withUnreadMissedState(
     unreadMissedCount = appliedBadgeCount,
     latestUnreadMissedByContact = unread.unreadMissed.associate { it.peerLogin to it.startedAt },
 )
+
+internal fun shouldReturnToContactsOnBack(currentPage: Int, contactOpen: Boolean): Boolean =
+    currentPage == 1 && !contactOpen
 
 @Composable
 fun MainScreen(
@@ -696,6 +700,15 @@ private fun HomeScreen(
     val scope = rememberCoroutineScope()
     var selectedContactLogin by rememberSaveable { mutableStateOf<String?>(null) }
     val selectedContact = state.contacts.firstOrNull { it.login == selectedContactLogin }
+
+    BackHandler(
+        enabled = shouldReturnToContactsOnBack(
+            currentPage = pagerState.currentPage,
+            contactOpen = selectedContactLogin != null,
+        ),
+    ) {
+        scope.launch { pagerState.animateScrollToPage(0) }
+    }
 
     LaunchedEffect(selectedContactLogin, state.contacts) {
         val login = selectedContactLogin ?: return@LaunchedEffect
