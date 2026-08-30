@@ -22,6 +22,7 @@ import org.tinitalk.MainActivity
 import org.tinitalk.R
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSnapshot
+import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.Session
 import org.tinitalk.telecom.IncomingCallController
 import java.time.Instant
@@ -38,6 +39,15 @@ data class IncomingInvite(
 )
 
 internal data class MissedBadgeUpdate(val applied: Boolean, val count: Int)
+
+internal fun acknowledgeLatestMissedCall(
+    login: String,
+    loadLatestId: (String) -> Long?,
+    markRead: (String, Long) -> CallUnreadState?,
+): CallUnreadState? {
+    val latestId = loadLatestId(login)?.takeIf { it > 0L } ?: return null
+    return markRead(login, latestId)
+}
 
 internal class MissedBadgeCounter {
     private var nextRefreshId = 0L
@@ -89,6 +99,16 @@ internal class MissedBadgeUpdater(
             notifyObservers(update.count)
             execute { publish(update.count) }
         }
+        return update
+    }
+
+    fun updateImmediately(refreshId: Long, count: Int, publish: (Int) -> Unit): MissedBadgeUpdate {
+        val update = synchronized(this) {
+            counter.update(refreshId, count).also {
+                if (it.applied) notifyObservers(it.count)
+            }
+        }
+        if (update.applied) publish(update.count)
         return update
     }
 
@@ -321,7 +341,7 @@ class IncomingCallNotifier(private val context: Context) {
     }
 
     fun showMissed(invite: IncomingInvite? = null) {
-        updateMissedCount(1, beginMissedCountRefresh(), invite)
+        updateMissedCountImmediately(1, beginMissedCountRefresh(), invite)
     }
 
     fun showMissedIfAbsent(invite: IncomingInvite) {
@@ -338,17 +358,49 @@ class IncomingCallNotifier(private val context: Context) {
     internal fun updateMissedCount(count: Int, refreshId: Long, latest: IncomingInvite? = null): MissedBadgeUpdate =
         MissedBadges.update(refreshId, count) { publishMissedCount(it, latest) }
 
+    internal fun updateMissedState(
+        unread: CallUnreadState,
+        refreshId: Long,
+        latest: IncomingInvite? = null,
+    ): MissedBadgeUpdate =
+        MissedBadges.update(refreshId, unread.unreadMissedCount) {
+            publishMissedCount(it, latest, unread.unreadMissed.firstOrNull()?.peerLogin)
+        }
+
+    internal fun updateMissedCountImmediately(
+        count: Int,
+        refreshId: Long,
+        latest: IncomingInvite? = null,
+    ): MissedBadgeUpdate =
+        MissedBadges.updateImmediately(refreshId, count) { publishMissedCount(it, latest) }
+
+    internal fun updateMissedStateImmediately(
+        unread: CallUnreadState,
+        refreshId: Long,
+        latest: IncomingInvite? = null,
+    ): MissedBadgeUpdate =
+        MissedBadges.updateImmediately(refreshId, unread.unreadMissedCount) {
+            publishMissedCount(it, latest, unread.unreadMissed.firstOrNull()?.peerLogin)
+        }
+
     fun clearMissedCount() {
         MissedBadges.clear { publishMissedCount(it, null) }
     }
 
-    private fun publishMissedCount(count: Int, latest: IncomingInvite?) {
+    private fun publishMissedCount(
+        count: Int,
+        latest: IncomingInvite?,
+        latestUnreadLogin: String? = null,
+    ) {
         ensureMissedChannel()
         val manager = context.getSystemService(NotificationManager::class.java)
         if (count <= 0) {
             manager.cancel(MissedNotificationId)
             return
         }
+        val redialLogin = latestUnreadLogin?.takeIf(String::isNotBlank)
+            ?: latest?.callerLogin?.takeIf(String::isNotBlank)
+        val matchingLatest = latest?.takeIf { it.callerLogin == redialLogin }
         val openApp = PendingIntent.getActivity(
             context,
             0,
@@ -366,7 +418,7 @@ class IncomingCallNotifier(private val context: Context) {
             .setSmallIcon(R.drawable.ic_call_missed)
             .setContentTitle(if (count == 1) "Пропущенный звонок" else "Пропущенные звонки")
             .setContentText(
-                latest?.caller?.takeIf { count == 1 && it.isNotBlank() }
+                matchingLatest?.caller?.takeIf { count == 1 && it.isNotBlank() }
                     ?: "$count ${missedCallsWord(count)}",
             )
             .setCategory(Notification.CATEGORY_MISSED_CALL)
@@ -376,17 +428,17 @@ class IncomingCallNotifier(private val context: Context) {
             .setNumber(count)
             .setBadgeIconType(Notification.BADGE_ICON_SMALL)
             .setOnlyAlertOnce(true)
-        latest?.callerLogin?.takeIf { count == 1 && it.isNotBlank() }?.let { login ->
+        redialLogin?.let { login ->
             val redial = PendingIntent.getActivity(
                 context,
-                latest.callId.hashCode(),
-                CallActivity.redialIntent(context, login, latest.caller.ifBlank { login }),
+                (matchingLatest?.callId ?: "missed:$login").hashCode(),
+                CallActivity.redialIntent(context, login, matchingLatest?.caller?.ifBlank { login } ?: login),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             builder.addAction(
                 Notification.Action.Builder(
                     Icon.createWithResource(context, R.drawable.ic_call),
-                    "Перезвонить",
+                    if (count == 1) "Перезвонить" else "Перезвонить последнему",
                     redial,
                 ).build(),
             )

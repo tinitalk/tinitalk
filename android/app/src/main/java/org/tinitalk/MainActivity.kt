@@ -52,6 +52,8 @@ import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.ContactNameViewModel
 import org.tinitalk.ui.ContactHistoryState
 import org.tinitalk.ui.HistoryRefreshGate
+import org.tinitalk.ui.isHistoryVisibleToUser
+import org.tinitalk.ui.shouldMarkHistoryRead
 import org.tinitalk.ui.isCurrentContactHistoryRequest
 import org.tinitalk.ui.isCurrentSessionRequest
 import org.tinitalk.ui.withContactsPage
@@ -83,6 +85,8 @@ class MainActivity : ComponentActivity() {
     private var callUiState by mutableStateOf(CallUiStateStore.snapshot())
     private var loginResetKey by mutableIntStateOf(0)
     private var pushRegistrationStarted = false
+    @Volatile
+    private var mainScreenResumed = false
     private var historyLoadGeneration = 0
     private var historyVisible = false
     private val historyRefreshGate = HistoryRefreshGate()
@@ -394,7 +398,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showHistory() {
         historyVisible = true
-        loadHistory(reset = true)
+        loadHistory(reset = true, markRead = true)
     }
 
     private fun loadMoreHistory() {
@@ -402,10 +406,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun retryHistory() {
-        loadHistory(reset = screenState.history.isEmpty() || screenState.historyNextBefore == 0L)
+        loadHistory(
+            reset = screenState.history.isEmpty() || screenState.historyNextBefore == 0L,
+            markRead = true,
+        )
     }
 
-    private fun loadHistory(reset: Boolean) {
+    private fun loadHistory(reset: Boolean, markRead: Boolean = false) {
         if (!network.available || !screenState.signedIn) return
         val requestAuthGeneration = authGeneration
         val before: Long
@@ -451,7 +458,9 @@ class MainActivity : ComponentActivity() {
                         )
                         finishHistoryRefresh()
                     }
-                    if (reset && page.latestId > 0) {
+                    if (reset && page.latestId > 0 &&
+                        shouldMarkHistoryRead(markRead, mainScreenResumed, historyVisible)
+                    ) {
                         val readRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
                         runCatching { repository.markCallHistoryRead(page.latestId) }
                             .onSuccess { unread ->
@@ -497,7 +506,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         contactHistoryLogin = login
-        loadContactHistory(login, reset = true)
+        loadContactHistory(login, reset = true, markRead = true)
     }
 
     private fun hideContactHistory() {
@@ -515,10 +524,14 @@ class MainActivity : ComponentActivity() {
     private fun retryContactHistory() {
         val login = contactHistoryLogin ?: return
         val history = screenState.contactHistory
-        loadContactHistory(login, reset = history.items.isEmpty() || history.nextBefore == 0L)
+        loadContactHistory(
+            login,
+            reset = history.items.isEmpty() || history.nextBefore == 0L,
+            markRead = true,
+        )
     }
 
-    private fun loadContactHistory(login: String, reset: Boolean) {
+    private fun loadContactHistory(login: String, reset: Boolean, markRead: Boolean = false) {
         if (!network.available || !screenState.signedIn || contactHistoryLogin != login) return
         val before: Long
         val generation: Int
@@ -564,7 +577,13 @@ class MainActivity : ComponentActivity() {
                         screenState = screenState.copy(
                             contactHistory = screenState.contactHistory.withPage(login, page, reset),
                         )
-                        if (reset && page.latestId > 0) {
+                        if (reset && page.latestId > 0 &&
+                            shouldMarkHistoryRead(
+                                markRead,
+                                mainScreenResumed,
+                                contactHistoryLogin == login,
+                            )
+                        ) {
                             markContactHistoryRead(login, page.latestId, generation, requestAuthGeneration)
                         }
                         finishContactHistoryRefresh(login)
@@ -606,7 +625,8 @@ class MainActivity : ComponentActivity() {
         generation: Int,
         requestAuthGeneration: Int,
     ) {
-        if (!network.available ||
+        if (!isHistoryVisibleToUser(mainScreenResumed, contactHistoryLogin == login) ||
+            !network.available ||
             !screenState.signedIn ||
             !isCurrentSessionRequest(requestAuthGeneration, authGeneration) ||
             !isCurrentContactHistoryRequest(
@@ -735,12 +755,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        mainScreenResumed = true
         refreshPermissions()
         when {
             contactHistoryLogin != null -> loadContactHistory(contactHistoryLogin.orEmpty(), reset = true)
-            historyVisible -> showHistory()
+            historyVisible -> loadHistory(reset = true)
             else -> refreshMissedCount()
         }
+    }
+
+    override fun onPause() {
+        mainScreenResumed = false
+        super.onPause()
     }
 
     private fun refreshMissedCount() {
@@ -769,8 +795,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyUnreadMissedState(unread: CallUnreadState, badgeRefreshId: Long) {
-        val update = IncomingCallNotifier(this).updateMissedCount(
-            unread.unreadMissedCount,
+        val update = IncomingCallNotifier(this).updateMissedState(
+            unread,
             badgeRefreshId,
         )
         if (update.applied) {
@@ -780,6 +806,7 @@ class MainActivity : ComponentActivity() {
 
     private fun onCallHistoryChanged(unread: CallUnreadState) {
         screenState = screenState.withUnreadMissedState(unread, unread.unreadMissedCount)
+        if (!mainScreenResumed) return
         when {
             contactHistoryLogin != null -> requestContactHistoryRefresh(contactHistoryLogin.orEmpty())
             historyVisible -> requestHistoryRefresh()
@@ -787,20 +814,26 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestHistoryRefresh() {
-        if (!network.available || !historyVisible) return
+        if (!network.available || !isHistoryVisibleToUser(mainScreenResumed, historyVisible)) return
         if (historyRefreshGate.request(screenState.historyLoading || screenState.historyLoadingMore)) {
             loadHistory(reset = true)
         }
     }
 
     private fun finishHistoryRefresh() {
-        if (historyRefreshGate.afterLoad() && network.available && historyVisible) {
+        if (historyRefreshGate.afterLoad() && network.available &&
+            isHistoryVisibleToUser(mainScreenResumed, historyVisible)
+        ) {
             loadHistory(reset = true)
         }
     }
 
     private fun requestContactHistoryRefresh(login: String) {
-        if (!network.available || contactHistoryLogin != login) return
+        if (!network.available ||
+            !isHistoryVisibleToUser(mainScreenResumed, contactHistoryLogin == login)
+        ) {
+            return
+        }
         val history = screenState.contactHistory
         if (contactHistoryRefreshGate.request(history.loading || history.loadingMore)) {
             loadContactHistory(login, reset = true)
@@ -808,7 +841,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun finishContactHistoryRefresh(login: String) {
-        if (contactHistoryRefreshGate.afterLoad() && network.available && contactHistoryLogin == login) {
+        if (contactHistoryRefreshGate.afterLoad() && network.available &&
+            isHistoryVisibleToUser(mainScreenResumed, contactHistoryLogin == login)
+        ) {
             loadContactHistory(login, reset = true)
         }
     }
@@ -899,7 +934,7 @@ class MainActivity : ComponentActivity() {
         refreshContacts()
         when {
             contactHistoryLogin != null -> loadContactHistory(contactHistoryLogin.orEmpty(), reset = true)
-            historyVisible -> showHistory()
+            historyVisible -> loadHistory(reset = true)
             else -> refreshMissedCount()
         }
     }

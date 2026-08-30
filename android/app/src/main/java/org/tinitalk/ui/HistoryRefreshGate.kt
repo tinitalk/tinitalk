@@ -1,5 +1,14 @@
 package org.tinitalk.ui
 
+internal fun isHistoryVisibleToUser(activityResumed: Boolean, historySelected: Boolean): Boolean =
+    activityResumed && historySelected
+
+internal fun shouldMarkHistoryRead(
+    userInitiated: Boolean,
+    activityResumed: Boolean,
+    historySelected: Boolean,
+): Boolean = userInitiated && isHistoryVisibleToUser(activityResumed, historySelected)
+
 internal class HistoryRefreshGate {
     private var pending = false
 

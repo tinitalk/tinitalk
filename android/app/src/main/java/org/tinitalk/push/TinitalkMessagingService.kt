@@ -108,7 +108,7 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         val page = runCatching { ContactRepository(store).loadCallHistory(limit = 1) }.getOrNull()
         if (page != null) {
             val unread = CallUnreadState(page.unreadMissedCount, page.unreadMissed)
-            val update = notifier.updateMissedCount(page.unreadMissedCount, refreshId, latest)
+            val update = notifier.updateMissedStateImmediately(unread, refreshId, latest)
             if (update.applied) CallHistoryEvents.publish(unread)
         } else {
             latest?.let(notifier::showMissedIfAbsent)

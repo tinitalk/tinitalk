@@ -46,8 +46,14 @@ import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.call.outgoingVisibleState
 import org.tinitalk.call.shouldDismissIncomingOverlay
+import org.tinitalk.data.AndroidKeystoreTokenCipher
+import org.tinitalk.data.AuthStore
+import org.tinitalk.data.CallHistoryEvents
+import org.tinitalk.data.ContactRepository
+import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
+import org.tinitalk.push.acknowledgeLatestMissedCall
 import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.network.NetworkAvailability
 import org.tinitalk.network.networkAvailability
@@ -377,6 +383,7 @@ class CallActivity : ComponentActivity() {
         val login = intent?.getStringExtra(ExtraOutgoingLogin) ?: return false
         val redial = intent.action == ActionRedial
         if (redial) intent.action = null
+        if (redial) acknowledgeMissedCall(login)
         val servicePhase = CallServiceState.snapshot().phase
         if (redial && servicePhase != CallPhase.Idle && servicePhase != CallPhase.Ended) {
             incomingInvite = null
@@ -401,6 +408,30 @@ class CallActivity : ComponentActivity() {
             }
         }
         return true
+    }
+
+    private fun acknowledgeMissedCall(login: String) {
+        val appContext = applicationContext
+        val notifier = IncomingCallNotifier(appContext)
+        val refreshId = notifier.beginMissedCountRefresh()
+        Thread {
+            val repository = ContactRepository(
+                AuthStore(SharedPreferencesKeyValueStore(appContext), AndroidKeystoreTokenCipher()),
+            )
+            val unread = runCatching {
+                acknowledgeLatestMissedCall(
+                    login = login,
+                    loadLatestId = { peer ->
+                        repository.loadCallHistory(limit = 1, peerLogin = peer)?.latestId
+                    },
+                    markRead = { peer, throughId ->
+                        repository.markCallHistoryRead(throughId, peerLogin = peer)
+                    },
+                )
+            }.getOrNull() ?: return@Thread
+            val update = notifier.updateMissedStateImmediately(unread, refreshId)
+            if (update.applied) CallHistoryEvents.publish(unread)
+        }.start()
     }
 
     private fun visibleCallState(): CallUiState {

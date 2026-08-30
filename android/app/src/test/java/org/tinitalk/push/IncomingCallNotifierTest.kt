@@ -1,7 +1,10 @@
 package org.tinitalk.push
 
+import android.app.Notification
 import android.app.NotificationManager
 import org.tinitalk.CallActivity
+import org.tinitalk.data.CallUnreadState
+import org.tinitalk.data.UnreadMissedContact
 import org.tinitalk.telecom.IncomingAnswerClaim
 import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.TelecomCallCallbacks
@@ -23,6 +26,34 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class IncomingCallNotifierTest {
+    @Test
+    fun serverMissedStateAlwaysOffersRedialToTheMostRecentCaller() {
+        val context = RuntimeEnvironment.getApplication()
+        val notifier = IncomingCallNotifier(context)
+        val refreshId = notifier.beginMissedCountRefresh()
+
+        notifier.updateMissedStateImmediately(
+            CallUnreadState(
+                unreadMissedCount = 2,
+                unreadMissed = listOf(
+                    UnreadMissedContact("anna", 200),
+                    UnreadMissedContact("ira", 100),
+                ),
+            ),
+            refreshId,
+        )
+
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val notification = manager.activeNotifications
+            .single { it.notification.category == Notification.CATEGORY_MISSED_CALL }
+            .notification
+        val action = notification.actions.single()
+        val redialIntent = Shadows.shadowOf(action.actionIntent).savedIntent
+
+        assertEquals("Перезвонить последнему", action.title.toString())
+        assertEquals("anna", redialIntent.getStringExtra("outgoing_login"))
+    }
+
     @Test
     fun fullScreenIntentAndAlertingChannelMatchTheSelectedPresentation() {
         val context = RuntimeEnvironment.getApplication()

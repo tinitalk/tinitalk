@@ -58,6 +58,19 @@ class MissedBadgeCounterTest {
     }
 
     @Test
+    fun immediateUpdatePublishesBeforeReturning() {
+        val pending = ArrayDeque<() -> Unit>()
+        val published = mutableListOf<Int>()
+        val badges = MissedBadgeUpdater(MissedBadgeCounter()) { task -> pending.addLast(task) }
+        val refreshId = badges.beginRefresh()
+
+        badges.updateImmediately(refreshId, count = 1) { published += it }
+
+        assertEquals(listOf(1), published)
+        assertTrue(pending.isEmpty())
+    }
+
+    @Test
     fun acceptedRefreshNotifiesRegisteredObserverImmediately() {
         val pending = ArrayDeque<() -> Unit>()
         val observed = mutableListOf<Int>()
