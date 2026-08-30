@@ -26,6 +26,9 @@ func TestNewHTTPServerWiresSessionReplacementNotifier(t *testing.T) {
 	if err := db.UpsertDevice("alice", "old-phone", "old-fcm"); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.UpsertPushTarget("alice", "old-tablet", state.PushTarget{Kind: state.KindFID, Value: "old-fid", ConfigID: "config-id"}); err != nil {
+		t.Fatal(err)
+	}
 	notifier := &captureSessionNotifier{calls: make(chan capturedSessionReplacement, 1)}
 	server := NewHTTPServer(db, ServerConfig{AllowInsecureLoopback: true, SessionNotifier: notifier})
 	req := httptest.NewRequest(http.MethodPost, "/api/session", bytes.NewBufferString(`{"device_id":"tablet"}`))
@@ -37,8 +40,8 @@ func TestNewHTTPServerWiresSessionReplacementNotifier(t *testing.T) {
 	}
 	select {
 	case got := <-notifier.calls:
-		if got.login != "alice" || got.revokedSessionID != "" || len(got.devices) != 1 || got.devices[0].DeviceID != "old-phone" {
-			t.Fatalf("captured replacement = %+v, want legacy old-phone", got)
+		if got.login != "alice" || got.revokedSessionID != "" || len(got.devices) != 2 || got.devices[0].PushTarget != (state.PushTarget{Kind: state.KindToken, Value: "old-fcm"}) || got.devices[1].PushTarget != (state.PushTarget{Kind: state.KindFID, Value: "old-fid", ConfigID: "config-id"}) {
+			t.Fatalf("captured replacement = %+v, want legacy token and FID targets", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("session replacement notifier was not called")

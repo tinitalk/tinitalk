@@ -38,8 +38,19 @@ func (db *DB) CurrentSession(login string) (AccountSession, bool, error) {
 }
 
 func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
+	return db.ClaimSessionWithPushTarget(login, deviceID, nil)
+}
+
+// ClaimSessionWithPushTarget atomically claims a session and, when provided,
+// stores the current device's push target.
+func (db *DB) ClaimSessionWithPushTarget(login, deviceID string, target *PushTarget) (SessionClaim, error) {
 	if deviceID == "" {
 		return SessionClaim{}, errors.New("device ID is required")
+	}
+	if target != nil {
+		if err := target.validate(); err != nil {
+			return SessionClaim{}, err
+		}
 	}
 	tx, err := db.sql.Begin()
 	if err != nil {
@@ -60,6 +71,11 @@ func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
 	`, userID).Scan(&previous.DeviceID, &previous.SessionID, &previous.UpdatedAt)
 	if err == nil && previous.DeviceID == deviceID {
 		claim.Current = previous
+		if target != nil {
+			if err := upsertPushTarget(tx, userID, deviceID, *target); err != nil {
+				return SessionClaim{}, err
+			}
+		}
 		if err := tx.Commit(); err != nil {
 			return SessionClaim{}, err
 		}
@@ -124,6 +140,11 @@ func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
 	}
 	if err := tx.QueryRow("SELECT updated_at FROM account_sessions WHERE user_id = ?", userID).Scan(&claim.Current.UpdatedAt); err != nil {
 		return SessionClaim{}, err
+	}
+	if target != nil {
+		if err := upsertPushTarget(tx, userID, deviceID, *target); err != nil {
+			return SessionClaim{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return SessionClaim{}, err

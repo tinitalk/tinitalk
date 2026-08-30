@@ -97,7 +97,7 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 		Status:     "ok",
 		APIVersion: apiVersion,
 		Commit:     serverCommit,
-		Features:   []string{"video_1to1", "single_device_session"},
+		Features:   []string{"video_1to1", "single_device_session", "dynamic_fcm_v1"},
 	})
 }
 

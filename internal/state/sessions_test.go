@@ -135,6 +135,61 @@ func TestClaimSessionAtomicallyReplacesPriorSessionAndDevices(t *testing.T) {
 	}
 }
 
+func TestClaimSessionWithPushTargetRefreshesFIDAndRollsBackTogether(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.AddUser("alice", "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := db.ClaimSession("alice", "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTarget := PushTarget{Kind: KindFID, Value: "first-fid", ConfigID: "config-id"}
+	if _, err := db.ClaimSessionWithPushTarget("alice", "phone", &firstTarget); err != nil {
+		t.Fatal(err)
+	}
+	retryTarget := PushTarget{Kind: KindFID, Value: "second-fid", ConfigID: "config-id"}
+	retry, err := db.ClaimSessionWithPushTarget("alice", "phone", &retryTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.Current.SessionID != first.Current.SessionID || retry.Changed {
+		t.Fatalf("same-device FID retry = %+v, want unchanged session", retry)
+	}
+	devices, err := db.PushTargetsForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].PushTarget != retryTarget {
+		t.Fatalf("same-device FID retry devices = %+v, want refreshed target", devices)
+	}
+	if _, err := db.sql.Exec(`CREATE TRIGGER reject_session_replacement BEFORE UPDATE ON account_sessions BEGIN SELECT RAISE(ABORT, 'reject'); END`); err != nil {
+		t.Fatal(err)
+	}
+	failedTarget := PushTarget{Kind: KindFID, Value: "tablet-fid", ConfigID: "config-id"}
+	if _, err := db.ClaimSessionWithPushTarget("alice", "tablet", &failedTarget); err == nil {
+		t.Fatal("replacement succeeded despite forced database failure")
+	}
+	current, managed, err := db.CurrentSession("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !managed || current != first.Current {
+		t.Fatalf("session after failed replacement = %+v, managed %v, want %+v", current, managed, first.Current)
+	}
+	devices, err = db.PushTargetsForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].DeviceID != "phone" || devices[0].PushTarget != retryTarget {
+		t.Fatalf("devices after failed replacement = %+v, want retained refreshed target", devices)
+	}
+}
+
 func TestAuthenticatedDeviceUpsertRechecksLegacyTransitionInTransaction(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
