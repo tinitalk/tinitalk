@@ -16,6 +16,7 @@ import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
+import org.tinitalk.network.NetworkAvailability
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
@@ -24,6 +25,8 @@ import org.tinitalk.telecom.TelecomCallController
 class TinitalkApplication : Application() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var authStore: AuthStore
+    lateinit var networkAvailability: NetworkAvailability
+        private set
     private val authSessionObserver: (AuthSessionEvent) -> Unit = {
         mainHandler.post {
             if (authStore.load() == null) stopCallsAfterSessionReplacement()
@@ -32,6 +35,7 @@ class TinitalkApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        networkAvailability = NetworkAvailability(this)
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         registerActivityLifecycleCallbacks(AppActivityVisibility)
         runCatching { TelecomCallController(AndroidTelecomRegistrar(this)).registerAudioOnly() }

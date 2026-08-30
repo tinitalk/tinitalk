@@ -50,14 +50,24 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun AboutScreen(
     serverUrl: String,
+    internetAvailable: Boolean = true,
     onCheckServer: (String) -> ServerCheckDetails,
     onBack: () -> Unit,
 ) {
     var details by remember(serverUrl) { mutableStateOf<ServerCheckDetails?>(null) }
     var checking by remember(serverUrl) { mutableStateOf(true) }
-    val presentation = serverCheckPresentation(serverUrl.isNotBlank(), checking, details?.result)
+    val presentation = serverCheckPresentation(
+        serverReady = serverUrl.isNotBlank(),
+        checking = checking,
+        result = details?.result,
+        internetAvailable = internetAvailable,
+    )
 
-    LaunchedEffect(serverUrl) {
+    LaunchedEffect(serverUrl, internetAvailable) {
+        if (!internetAvailable) {
+            checking = false
+            return@LaunchedEffect
+        }
         checking = true
         details = null
         details = withContext(Dispatchers.IO) { onCheckServer(serverUrl) }

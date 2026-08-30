@@ -67,4 +67,32 @@ class AboutScreenTest {
         }
         activity.pause().stop().destroy()
     }
+
+    @Test
+    fun offlineScreenDoesNotProbeServer() {
+        var checks = 0
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        composeRule.runOnUiThread {
+            activity.get().setContent {
+                TiniTalkTheme(darkTheme = true) {
+                    AboutScreen(
+                        serverUrl = "https://talk.example.com",
+                        internetAvailable = false,
+                        onCheckServer = {
+                            checks++
+                            ServerCheckDetails(ServerCheckResult.Available)
+                        },
+                        onBack = {},
+                    )
+                }
+            }
+        }
+
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodes(hasText("Нет подключения к интернету"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals(0, checks)
+        activity.pause().stop().destroy()
+    }
 }

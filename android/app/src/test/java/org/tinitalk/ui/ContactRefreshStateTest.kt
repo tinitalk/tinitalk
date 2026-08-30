@@ -95,5 +95,28 @@ class ContactRefreshStateTest {
         assertFalse(shouldLoadMoreContacts(index = 14, itemCount = 20, nextCursor = "next", loading = false, hasError = false))
         assertTrue(shouldLoadMoreContacts(index = 15, itemCount = 20, nextCursor = "next", loading = false, hasError = false))
         assertFalse(shouldLoadMoreContacts(index = 15, itemCount = 20, nextCursor = "next", loading = false, hasError = true))
+        assertFalse(
+            shouldLoadMoreContacts(
+                index = 15,
+                itemCount = 20,
+                nextCursor = "next",
+                loading = false,
+                hasError = false,
+                internetAvailable = false,
+            ),
+        )
+    }
+
+    @Test
+    fun offlineStartupKeepsStoredSessionWithoutPretendingContactsLoaded() {
+        val state = MainScreenState(restoring = true, networkAvailable = true)
+
+        val offline = state.withOfflineSession("https://talk.example.com")
+
+        assertFalse(offline.restoring)
+        assertTrue(offline.signedIn)
+        assertFalse(offline.networkAvailable)
+        assertEquals("https://talk.example.com", offline.serverUrl)
+        assertTrue(offline.contacts.isEmpty())
     }
 }

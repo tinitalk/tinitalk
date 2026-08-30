@@ -30,6 +30,16 @@ class ContactHistoryStateTest {
     fun pagingWaitsForManualRetryAfterAnError() {
         assertTrue(shouldLoadMoreHistory(index = 2, itemCount = 3, nextBefore = 2, loading = false, hasError = false))
         assertFalse(shouldLoadMoreHistory(index = 2, itemCount = 3, nextBefore = 2, loading = false, hasError = true))
+        assertFalse(
+            shouldLoadMoreHistory(
+                index = 2,
+                itemCount = 3,
+                nextBefore = 2,
+                loading = false,
+                hasError = false,
+                internetAvailable = false,
+            ),
+        )
     }
 
     @Test

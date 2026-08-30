@@ -73,6 +73,7 @@ private val contactAvatarColors = listOf(
 @Composable
 fun ContactScreen(
     contact: Contact,
+    internetAvailable: Boolean = true,
     nameUpdate: ContactNameUpdateState,
     history: ContactHistoryState,
     ongoingCall: CallUiState?,
@@ -86,7 +87,7 @@ fun ContactScreen(
 ) {
     var renameVisible by rememberSaveable(contact.login) { mutableStateOf(false) }
     val name = contactDisplayName(contact.displayName)
-    val action = contactCallAction(contact.login, ongoingCall)
+    val action = contactCallAction(contact.login, ongoingCall, internetAvailable)
     val relevantUpdate = nameUpdate.takeIf { it.login == contact.login }
     val now = Instant.now()
     val zone = ZoneId.systemDefault()
@@ -155,6 +156,7 @@ fun ContactScreen(
                                     onRenameHandled()
                                     renameVisible = true
                                 },
+                                enabled = internetAvailable,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .widthIn(max = 420.dp)
@@ -190,7 +192,11 @@ fun ContactScreen(
                                 }
                             }
                             Text(
-                                "Нажмите на имя, чтобы изменить",
+                                if (internetAvailable) {
+                                    "Нажмите на имя, чтобы изменить"
+                                } else {
+                                    "Для изменения имени нужен интернет"
+                                },
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodyMedium,
                                 textAlign = TextAlign.Center,
@@ -237,13 +243,16 @@ fun ContactScreen(
                         item(key = "contact-history-error") {
                             ContactHistoryMessage(
                                 message = history.errorMessage,
-                                action = "Повторить",
+                                action = "Повторить".takeIf { internetAvailable },
                                 onAction = onRetryHistory,
                                 error = true,
                             )
                         }
                     }
                     when {
+                        !internetAvailable && history.items.isEmpty() -> item(key = "contact-history-offline") {
+                            ContactHistoryMessage("История появится после восстановления связи")
+                        }
                         !history.loaded && history.items.isEmpty() -> item(key = "contact-history-loading") {
                             Box(
                                 modifier = Modifier.fillMaxWidth().padding(30.dp),
@@ -282,6 +291,7 @@ fun ContactScreen(
                                         nextBefore = history.nextBefore,
                                         loading = history.loadingMore,
                                         hasError = history.errorMessage != null,
+                                        internetAvailable = internetAvailable,
                                     )
                                 ) {
                                     LaunchedEffect(history.nextBefore) { onLoadMoreHistory() }
@@ -307,6 +317,7 @@ fun ContactScreen(
     if (renameVisible) {
         RenameContactDialog(
             contact = contact,
+            internetAvailable = internetAvailable,
             saving = relevantUpdate?.saving == true,
             errorMessage = relevantUpdate?.errorMessage,
             onDismiss = {
@@ -374,6 +385,7 @@ private fun ContactAvatar(contact: Contact, name: String, size: androidx.compose
 @Composable
 private fun RenameContactDialog(
     contact: Contact,
+    internetAvailable: Boolean,
     saving: Boolean,
     errorMessage: String?,
     onDismiss: () -> Unit,
@@ -397,7 +409,7 @@ private fun RenameContactDialog(
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Имя контакта") },
                     singleLine = true,
-                    enabled = !saving,
+                    enabled = !saving && internetAvailable,
                     isError = value.isBlank() || errorMessage != null,
                     supportingText = {
                         when {
@@ -409,7 +421,7 @@ private fun RenameContactDialog(
                 if (contact.customName != null) {
                     TextButton(
                         onClick = { onRename(null) },
-                        enabled = !saving,
+                        enabled = !saving && internetAvailable,
                         modifier = Modifier.align(Alignment.Start),
                     ) {
                         Text("Вернуть исходное имя")
@@ -418,7 +430,10 @@ private fun RenameContactDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onRename(trimmed) }, enabled = trimmed.isNotEmpty() && !saving) {
+            Button(
+                onClick = { onRename(trimmed) },
+                enabled = trimmed.isNotEmpty() && !saving && internetAvailable,
+            ) {
                 if (saving) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),

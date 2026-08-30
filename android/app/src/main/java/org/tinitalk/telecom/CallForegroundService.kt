@@ -44,6 +44,7 @@ import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
+import org.tinitalk.network.networkAvailability
 import org.tinitalk.media.CameraMediaCallbacks
 import org.tinitalk.media.CallMediaDispatcher
 import org.tinitalk.push.DeviceRegistrar
@@ -212,6 +213,11 @@ class CallForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (rejectOfflineOutgoingStart(intent?.action, networkAvailability().canStartNetworkAction())) {
+            val phase = coordinator?.snapshot()?.phase ?: CallServiceState.snapshot().phase
+            if (phase == CallPhase.Idle || phase == CallPhase.Ended) stopSelf(startId)
+            return START_NOT_STICKY
+        }
         if (finishing && callResourcesReleased && replacesTerminalCall(intent)) {
             resetReleasedRuntime()
         }
@@ -1091,7 +1097,8 @@ class CallForegroundService : Service() {
         private const val BusyToneDelayMillis = 2_200L
         private const val EndedStateLifetimeMillis = 1_000L
         private const val CallLogTag = "TiniTalkCall"
-        fun startOutgoing(context: Context, callee: String, displayName: String = callee) {
+        fun startOutgoing(context: Context, callee: String, displayName: String = callee): Boolean {
+            if (!context.networkAvailability().canStartNetworkAction()) return false
             start(
                 context,
                 Intent(context, CallForegroundService::class.java)
@@ -1099,6 +1106,7 @@ class CallForegroundService : Service() {
                     .putExtra(ExtraCallee, callee)
                     .putExtra(ExtraDisplayName, displayName),
             )
+            return true
         }
 
         fun end(context: Context) {
@@ -1182,6 +1190,9 @@ class CallForegroundService : Service() {
         }
     }
 }
+
+internal fun rejectOfflineOutgoingStart(action: String?, networkAvailable: Boolean): Boolean =
+    action == CallForegroundService.ActionStart && !networkAvailable
 
 internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: String?): CallEndReason? = when {
     currentCallId == null -> null

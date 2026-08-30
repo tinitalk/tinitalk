@@ -28,4 +28,17 @@ class ServerCheckPresentationTest {
 
         cases.forEach { (actual, expected) -> assertEquals(expected, actual) }
     }
+
+    @Test
+    fun offlineIsNotPresentedAsServerFailure() {
+        assertEquals(
+            ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Нет подключения к интернету"),
+            serverCheckPresentation(
+                serverReady = true,
+                checking = false,
+                result = ServerCheckResult.Unavailable,
+                internetAvailable = false,
+            ),
+        )
+    }
 }

@@ -35,7 +35,9 @@ fun shouldLoadMoreHistory(
     nextBefore: Long,
     loading: Boolean,
     hasError: Boolean,
-): Boolean = itemCount > 0 &&
+    internetAvailable: Boolean = true,
+): Boolean = internetAvailable &&
+    itemCount > 0 &&
     index == itemCount - 1 &&
     nextBefore > 0 &&
     !loading &&

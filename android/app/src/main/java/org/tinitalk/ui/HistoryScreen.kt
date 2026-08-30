@@ -46,6 +46,7 @@ import java.time.ZoneId
 @Composable
 fun HistoryScreen(
     items: List<CallHistoryItem>,
+    internetAvailable: Boolean = true,
     loaded: Boolean,
     loading: Boolean,
     loadingMore: Boolean,
@@ -57,16 +58,19 @@ fun HistoryScreen(
     val now = Instant.now()
     val zone = ZoneId.systemDefault()
     when {
+        !internetAvailable && items.isEmpty() -> HistoryOffline()
         loading && items.isEmpty() -> HistoryLoading()
         loaded && items.isEmpty() && errorMessage == null -> HistoryEmpty()
-        items.isEmpty() && errorMessage != null -> HistoryError(errorMessage, onRetry)
+        items.isEmpty() && errorMessage != null -> HistoryError(errorMessage, onRetry, retryEnabled = internetAvailable)
         else -> LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (errorMessage != null) {
-                item(key = "history-error") { HistoryError(errorMessage, onRetry, compact = true) }
+                item(key = "history-error") {
+                    HistoryError(errorMessage, onRetry, compact = true, retryEnabled = internetAvailable)
+                }
             }
             itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
                 Column {
@@ -87,6 +91,7 @@ fun HistoryScreen(
                             nextBefore = nextBefore,
                             loading = loadingMore,
                             hasError = errorMessage != null,
+                            internetAvailable = internetAvailable,
                         )
                     ) {
                         LaunchedEffect(nextBefore) { onLoadMore() }
@@ -194,6 +199,23 @@ private fun HistoryLoading() {
 }
 
 @Composable
+private fun HistoryOffline() {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Нет подключения к интернету", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "История появится после восстановления связи.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
 private fun HistoryEmpty() {
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -218,7 +240,12 @@ private fun HistoryEmpty() {
 }
 
 @Composable
-private fun HistoryError(message: String, onRetry: () -> Unit, compact: Boolean = false) {
+private fun HistoryError(
+    message: String,
+    onRetry: () -> Unit,
+    compact: Boolean = false,
+    retryEnabled: Boolean = true,
+) {
     Column(
         modifier = (if (compact) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
             .padding(if (compact) 12.dp else 32.dp),
@@ -227,6 +254,6 @@ private fun HistoryError(message: String, onRetry: () -> Unit, compact: Boolean 
     ) {
         Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.height(12.dp))
-        Button(onClick = onRetry) { Text("Повторить") }
+        Button(onClick = onRetry, enabled = retryEnabled) { Text("Повторить") }
     }
 }

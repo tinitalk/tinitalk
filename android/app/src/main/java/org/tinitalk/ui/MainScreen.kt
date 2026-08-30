@@ -119,7 +119,10 @@ internal fun serverCheckPresentation(
     serverReady: Boolean,
     checking: Boolean,
     result: ServerCheckResult?,
+    internetAvailable: Boolean = true,
 ): ServerCheckPresentation = when {
+    !internetAvailable ->
+        ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Нет подключения к интернету")
     !serverReady -> ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Введите полный адрес сервера")
     checking -> ServerCheckPresentation(ServerCheckIndicator.Checking, "Проверяем подключение…")
     result == null -> ServerCheckPresentation(ServerCheckIndicator.Checking, "Проверяем подключение…")
@@ -160,6 +163,20 @@ data class MainScreenState(
     val latestUnreadMissedByContact: Map<String, Long> = emptyMap(),
     val permissions: AppPermissionsState = AppPermissionsState(),
     val errorMessage: String? = null,
+    val networkAvailable: Boolean = true,
+)
+
+fun MainScreenState.withOfflineSession(serverUrl: String?): MainScreenState = copy(
+    restoring = false,
+    signingIn = false,
+    signedIn = serverUrl != null,
+    serverUrl = serverUrl.orEmpty(),
+    contactsRefreshing = false,
+    contactsLoadingMore = false,
+    historyLoading = false,
+    historyLoadingMore = false,
+    contactHistory = contactHistory.copy(loading = false, loadingMore = false),
+    networkAvailable = false,
 )
 
 fun MainScreenState.withRefreshedContacts(page: ContactPage): MainScreenState = copy(
@@ -227,12 +244,13 @@ fun MainScreen(
             when {
                 state.restoring -> LoadingScreen()
                 !state.signedIn -> LoginScreen(
-                    loginResetKey,
-                    defaultServerUrl,
-                    state.signingIn,
-                    state.errorMessage,
-                    onSignIn,
-                    onCheckServer,
+                    resetKey = loginResetKey,
+                    defaultServerUrl = defaultServerUrl,
+                    loading = state.signingIn,
+                    errorMessage = state.errorMessage,
+                    internetAvailable = state.networkAvailable,
+                    onSignIn = onSignIn,
+                    onCheckServer = onCheckServer,
                 )
                 !state.permissions.allRequiredGranted -> PermissionsScreen(
                     permissions = state.permissions,
@@ -270,9 +288,56 @@ fun MainScreen(
         if (aboutVisible) {
             AboutScreen(
                 serverUrl = state.serverUrl,
+                internetAvailable = state.networkAvailable,
                 onCheckServer = onCheckServerDetails,
                 onBack = { aboutVisible = false },
             )
+        }
+        if (!state.networkAvailable) {
+            OfflineBanner(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 64.dp, start = 16.dp, end = 16.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun OfflineBanner(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxWidth().semantics {
+            contentDescription = "Нет подключения к интернету. Звонки и обновление данных недоступны"
+        },
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+        shadowElevation = 8.dp,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_server_unavailable),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(24.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Нет подключения к интернету",
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Звонки и обновление данных недоступны",
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
     }
 }
@@ -301,6 +366,7 @@ private fun LoginScreen(
     defaultServerUrl: String,
     loading: Boolean,
     errorMessage: String?,
+    internetAvailable: Boolean,
     onSignIn: (String, String, String) -> Unit,
     onCheckServer: (String) -> ServerCheckResult,
 ) {
@@ -311,13 +377,23 @@ private fun LoginScreen(
     var serverCheckResult by remember(resetKey) { mutableStateOf<ServerCheckResult?>(null) }
     var checkingServer by remember(resetKey) { mutableStateOf(false) }
     val serverReady = url.trim().matches(Regex("https?://.+", RegexOption.IGNORE_CASE))
-    val serverPresentation = serverCheckPresentation(serverReady, checkingServer, serverCheckResult)
-    val canSubmit = !loading && serverReady && login.isNotBlank() && token.isNotBlank()
+    val serverPresentation = serverCheckPresentation(
+        serverReady,
+        checkingServer,
+        serverCheckResult,
+        internetAvailable,
+    )
+    val canSubmit = internetAvailable && !loading && serverReady && login.isNotBlank() && token.isNotBlank()
     val submit = { if (canSubmit) onSignIn(url, login, token) }
     val keyboardVisible = WindowInsets.isImeVisible
 
-    LaunchedEffect(serverExpanded, url) {
+    LaunchedEffect(serverExpanded, url, internetAvailable) {
         if (!serverExpanded) return@LaunchedEffect
+        if (!internetAvailable) {
+            checkingServer = false
+            serverCheckResult = null
+            return@LaunchedEffect
+        }
         if (!serverReady) {
             checkingServer = false
             serverCheckResult = ServerCheckResult.Unavailable
@@ -657,6 +733,7 @@ private fun HomeScreen(
                             ContactsPage(
                                 contacts = state.contacts,
                                 latestUnreadMissedByContact = state.latestUnreadMissedByContact,
+                                internetAvailable = state.networkAvailable,
                                 listState = contactsListState,
                                 refreshing = state.contactsRefreshing,
                                 loadingMore = state.contactsLoadingMore,
@@ -669,6 +746,7 @@ private fun HomeScreen(
                         } else {
                             HistoryScreen(
                                 items = state.history,
+                                internetAvailable = state.networkAvailable,
                                 loaded = state.historyLoaded,
                                 loading = state.historyLoading,
                                 loadingMore = state.historyLoadingMore,
@@ -734,6 +812,7 @@ private fun HomeScreen(
         if (selectedContact != null) {
             ContactScreen(
                 contact = selectedContact,
+                internetAvailable = state.networkAvailable,
                 nameUpdate = contactNameUpdate,
                 history = state.contactHistory,
                 ongoingCall = ongoingCall,
@@ -758,6 +837,7 @@ private fun HomeScreen(
 private fun ContactsPage(
     contacts: List<Contact>,
     latestUnreadMissedByContact: Map<String, Long>,
+    internetAvailable: Boolean,
     listState: LazyListState,
     refreshing: Boolean,
     loadingMore: Boolean,
@@ -769,7 +849,7 @@ private fun ContactsPage(
 ) {
     PullToRefreshBox(
         isRefreshing = refreshing,
-        onRefresh = onRefresh,
+        onRefresh = { if (internetAvailable) onRefresh() },
         modifier = Modifier.fillMaxSize(),
     ) {
         if (contacts.isEmpty()) {
@@ -781,10 +861,18 @@ private fun ContactsPage(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("Контактов пока нет", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (internetAvailable) "Контактов пока нет" else "Нет подключения к интернету",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Добавьте абонентов в настройках сервера.",
+                    if (internetAvailable) {
+                        "Добавьте абонентов в настройках сервера."
+                    } else {
+                        "Контакты появятся после восстановления связи."
+                    },
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -804,6 +892,7 @@ private fun ContactsPage(
                             nextCursor = nextCursor,
                             loading = loadingMore || refreshing,
                             hasError = loadMoreErrorMessage != null,
+                            internetAvailable = internetAvailable,
                         )
                     ) {
                         LaunchedEffect(nextCursor) { onLoadMore() }
@@ -820,7 +909,7 @@ private fun ContactsPage(
                                 color = MaterialTheme.colorScheme.error,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
-                            TextButton(onClick = onLoadMore) { Text("Повторить") }
+                            TextButton(onClick = onLoadMore, enabled = internetAvailable) { Text("Повторить") }
                         }
                     }
                 }
@@ -842,7 +931,8 @@ fun shouldLoadMoreContacts(
     nextCursor: String,
     loading: Boolean,
     hasError: Boolean,
-): Boolean = nextCursor.isNotEmpty() && !loading && !hasError && index == maxOf(0, itemCount - 5)
+    internetAvailable: Boolean = true,
+): Boolean = internetAvailable && nextCursor.isNotEmpty() && !loading && !hasError && index == maxOf(0, itemCount - 5)
 
 @Composable
 private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {

@@ -13,6 +13,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
@@ -48,6 +49,8 @@ import org.tinitalk.call.shouldDismissIncomingOverlay
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import org.tinitalk.media.VideoRenderSource
+import org.tinitalk.network.NetworkAvailability
+import org.tinitalk.network.networkAvailability
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingAnswerClaim
 import org.tinitalk.telecom.IncomingCallController
@@ -66,6 +69,7 @@ class CallActivity : ComponentActivity() {
     private val incomingController = IncomingCallController()
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var proximityController: ProximityController
+    private lateinit var network: NetworkAvailability
     private var activityStarted = false
     private val cameraForegroundPublicationGate = CameraForegroundPublicationGate()
     private lateinit var cameraPermissionRouter: CameraPermissionActionRouter
@@ -78,6 +82,19 @@ class CallActivity : ComponentActivity() {
     private var incomingInvite by mutableStateOf<IncomingInvite?>(null)
     private var outgoingLogin by mutableStateOf<String?>(null)
     private var outgoingName by mutableStateOf<String?>(null)
+    private var pendingOutgoingStart = false
+    private val networkObserver: (Boolean) -> Unit = { available ->
+        handler.post {
+            val servicePhase = CallServiceState.snapshot().phase
+            if (!available && !network.canStartNetworkAction() &&
+                pendingOutgoingStart && outgoingLogin != null &&
+                (servicePhase == CallPhase.Idle || servicePhase == CallPhase.Ended)
+            ) {
+                Toast.makeText(this, "Нет подключения к интернету", Toast.LENGTH_SHORT).show()
+                finish()
+            }
+        }
+    }
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -101,6 +118,9 @@ class CallActivity : ComponentActivity() {
 
     private val callObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread {
+            if (state.phase != CallPhase.Idle && state.phase != CallPhase.Ended) {
+                pendingOutgoingStart = false
+            }
             actionGate.onCallState(state)
             callState = state
             if (state.callId != renderedVideoCallId || state.phase != CallPhase.Active) {
@@ -139,6 +159,7 @@ class CallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         proximityController = ProximityController(this)
+        network = networkAvailability()
         cameraPermissionRouter = CameraPermissionActionRouter(
             permissionGranted = ::cameraPermissionGranted,
             requestPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
@@ -177,6 +198,7 @@ class CallActivity : ComponentActivity() {
         applyIntent(intent)
         CallUiStateStore.observe(callObserver)
         VideoCallStateStore.observe(videoObserver)
+        network.observe(networkObserver)
 
         setContent {
             TiniTalkTheme(darkTheme = true) {
@@ -313,6 +335,7 @@ class CallActivity : ComponentActivity() {
         proximityController.close()
         CallUiStateStore.removeObserver(callObserver)
         VideoCallStateStore.removeObserver(videoObserver)
+        network.removeObserver(networkObserver)
         unregisterReceiver(screenStateReceiver)
         super.onDestroy()
     }
@@ -347,6 +370,7 @@ class CallActivity : ComponentActivity() {
             incomingInvite = invite
             outgoingLogin = null
             outgoingName = null
+            pendingOutgoingStart = false
             if (answerClaim == IncomingAnswerClaim.Claimed) answer(invite)
             return true
         }
@@ -358,14 +382,23 @@ class CallActivity : ComponentActivity() {
             incomingInvite = null
             outgoingLogin = null
             outgoingName = null
+            pendingOutgoingStart = false
             return true
         }
         if (outgoingLogin != login) actionGate.reset()
         outgoingLogin = login
         outgoingName = intent.getStringExtra(ExtraOutgoingName).orEmpty().ifBlank { login }
         incomingInvite = null
+        pendingOutgoingStart = true
         if (redial) {
-            CallForegroundService.startOutgoing(this, login, outgoingName.orEmpty())
+            if (!CallForegroundService.startOutgoing(this, login, outgoingName.orEmpty())) {
+                Toast.makeText(this, "Нет подключения к интернету", Toast.LENGTH_SHORT).show()
+                outgoingLogin = null
+                outgoingName = null
+                pendingOutgoingStart = false
+                finish()
+                return false
+            }
         }
         return true
     }

@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,6 +40,8 @@ import org.tinitalk.data.CompatibilityProblem
 import org.tinitalk.data.ServerCompatibilityException
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
+import org.tinitalk.network.NetworkAvailability
+import org.tinitalk.network.networkAvailability
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.push.DeviceRegistrar
 import org.tinitalk.push.IncomingCallNotifier
@@ -50,6 +53,7 @@ import org.tinitalk.ui.ContactHistoryState
 import org.tinitalk.ui.isCurrentContactHistoryRequest
 import org.tinitalk.ui.isCurrentSessionRequest
 import org.tinitalk.ui.withContactsPage
+import org.tinitalk.ui.withOfflineSession
 import org.tinitalk.ui.withRefreshedContacts
 import org.tinitalk.ui.withUnreadMissedState
 import org.tinitalk.ui.withPage
@@ -72,6 +76,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var repository: ContactRepository
     private lateinit var authStore: AuthStore
+    private lateinit var network: NetworkAvailability
     private var screenState by mutableStateOf(MainScreenState())
     private var callUiState by mutableStateOf(CallUiStateStore.snapshot())
     private var loginResetKey by mutableIntStateOf(0)
@@ -96,12 +101,19 @@ class MainActivity : ComponentActivity() {
             if (!isDestroyed && authStore.load() == null) resetToLogin(SessionReplacedMessage)
         }
     }
+    private val networkObserver: (Boolean) -> Unit = { available ->
+        mainHandler.post {
+            if (!isDestroyed) updateNetworkAvailability(available)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         repository = ContactRepository(authStore)
+        network = networkAvailability()
+        screenState = screenState.copy(networkAvailable = network.available)
         setContent {
             TiniTalkTheme(darkTheme = true) {
                 val contactNameUpdate = contactNameViewModel.state
@@ -135,7 +147,11 @@ class MainActivity : ComponentActivity() {
                     onRefreshPermissions = ::refreshPermissions,
                     onCall = ::startCall,
                     onRenameContact = { login, customName ->
-                        contactNameViewModel.rename(repository, login, customName)
+                        if (network.available) {
+                            contactNameViewModel.rename(repository, login, customName)
+                        } else {
+                            showNoInternetMessage()
+                        }
                     },
                     onRenameHandled = contactNameViewModel::clearResult,
                     onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
@@ -157,11 +173,20 @@ class MainActivity : ComponentActivity() {
         CallUiStateStore.observe(callUiObserver)
         IncomingCallNotifier(this).observeMissedCount(missedCountObserver)
         AuthSessionEvents.observe(authSessionObserver)
+        network.observe(networkObserver)
         refreshPermissions()
-        restoreContacts()
+        if (network.available) {
+            restoreContacts()
+        } else {
+            screenState = screenState.withOfflineSession(authStore.load()?.url)
+        }
     }
 
     private fun restoreContacts() {
+        if (!network.available) {
+            screenState = screenState.withOfflineSession(authStore.load()?.url)
+            return
+        }
         val requestAuthGeneration = authGeneration
         val deviceId = DeviceRegistrar.deviceId(this)
         Thread {
@@ -179,17 +204,22 @@ class MainActivity : ComponentActivity() {
                             screenState = MainScreenState(
                                 restoring = false,
                                 permissions = screenState.permissions,
+                                networkAvailable = network.available,
                             )
                         } else {
                             showContacts(restored.first, restored.second)
                         }
                     }
                 }
-                .onFailure { showSessionErrorIfCurrent(it, requestAuthGeneration) }
+                .onFailure { showRestoreErrorIfCurrent(it, requestAuthGeneration) }
         }.start()
     }
 
     private fun loadContacts(url: String, login: String, token: String) {
+        if (!network.available) {
+            showNoInternetMessage()
+            return
+        }
         contactNameViewModel.reset()
         authGeneration++
         val requestAuthGeneration = authGeneration
@@ -215,7 +245,10 @@ class MainActivity : ComponentActivity() {
             startActivity(CallActivity.ongoingIntent(this))
             return
         }
-        CallForegroundService.startOutgoing(this, contact.login, contact.displayName)
+        if (!CallForegroundService.startOutgoing(this, contact.login, contact.displayName)) {
+            showNoInternetMessage()
+            return
+        }
         startActivity(CallActivity.outgoingIntent(this, contact.login, contact.displayName))
     }
 
@@ -255,7 +288,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshContacts() {
-        if (!screenState.signedIn || screenState.contactsRefreshing || screenState.contactsLoadingMore) return
+        if (!network.available || !screenState.signedIn || screenState.contactsRefreshing || screenState.contactsLoadingMore) return
         val requestAuthGeneration = authGeneration
         screenState = screenState.copy(
             contactsRefreshing = true,
@@ -300,7 +333,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadMoreContacts() {
-        if (!screenState.signedIn || screenState.contactsRefreshing || screenState.contactsLoadingMore) return
+        if (!network.available || !screenState.signedIn || screenState.contactsRefreshing || screenState.contactsLoadingMore) return
         val cursor = screenState.contactsNextCursor
         if (cursor.isEmpty()) return
         val requestAuthGeneration = authGeneration
@@ -363,7 +396,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadHistory(reset: Boolean) {
-        if (!screenState.signedIn) return
+        if (!network.available || !screenState.signedIn) return
         val requestAuthGeneration = authGeneration
         val before: Long
         val generation: Int
@@ -473,7 +506,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadContactHistory(login: String, reset: Boolean) {
-        if (!screenState.signedIn || contactHistoryLogin != login) return
+        if (!network.available || !screenState.signedIn || contactHistoryLogin != login) return
         val before: Long
         val generation: Int
         val requestAuthGeneration = authGeneration
@@ -558,7 +591,8 @@ class MainActivity : ComponentActivity() {
         generation: Int,
         requestAuthGeneration: Int,
     ) {
-        if (!screenState.signedIn ||
+        if (!network.available ||
+            !screenState.signedIn ||
             !isCurrentSessionRequest(requestAuthGeneration, authGeneration) ||
             !isCurrentContactHistoryRequest(
                 generation,
@@ -600,6 +634,31 @@ class MainActivity : ComponentActivity() {
                 return@runOnUiThread
             }
             showError(error)
+        }
+    }
+
+    private fun showRestoreErrorIfCurrent(error: Throwable, requestAuthGeneration: Int) {
+        runOnUiThread {
+            if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration)) return@runOnUiThread
+            val session = authStore.load()
+            val terminal = (error is ApiException && error.code == 401) ||
+                (error is ServerCompatibilityException && error.problem != CompatibilityProblem.Unavailable) ||
+                error is MalformedURLException
+            if (session == null || terminal) {
+                showError(error)
+                return@runOnUiThread
+            }
+            screenState = if (!network.available) {
+                screenState.withOfflineSession(session.url)
+            } else {
+                screenState.copy(
+                    restoring = false,
+                    signingIn = false,
+                    signedIn = true,
+                    serverUrl = session.url,
+                    contactsRefreshErrorMessage = "Сервер TiniTalk временно недоступен",
+                )
+            }
         }
     }
 
@@ -653,6 +712,7 @@ class MainActivity : ComponentActivity() {
             restoring = false,
             permissions = screenState.permissions,
             errorMessage = errorMessage,
+            networkAvailable = network.available,
         )
     }
 
@@ -667,7 +727,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshMissedCount() {
-        if (!screenState.signedIn) return
+        if (!network.available || !screenState.signedIn) return
         val requestAuthGeneration = authGeneration
         val generation = historyLoadGeneration
         val badgeRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
@@ -702,6 +762,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        network.removeObserver(networkObserver)
         AuthSessionEvents.removeObserver(authSessionObserver)
         IncomingCallNotifier(this).removeMissedCountObserver(missedCountObserver)
         CallUiStateStore.removeObserver(callUiObserver)
@@ -760,10 +821,38 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun registerPushToken() {
-        if (pushRegistrationStarted || !screenState.permissions.allRequiredGranted) return
+        if (!network.available || pushRegistrationStarted || !screenState.permissions.allRequiredGranted) return
         val session = authStore.load() ?: return
         pushRegistrationStarted = true
         DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this))
+    }
+
+    private fun updateNetworkAvailability(available: Boolean) {
+        val changed = screenState.networkAvailable != available
+        if (!available) {
+            pushRegistrationStarted = false
+            screenState = screenState.withOfflineSession(authStore.load()?.url)
+            return
+        }
+        screenState = screenState.copy(networkAvailable = true)
+        if (!changed) return
+        val session = authStore.load() ?: return
+        refreshPermissions()
+        if (!screenState.signedIn || screenState.contacts.isEmpty()) {
+            screenState = screenState.copy(restoring = true)
+            restoreContacts()
+            return
+        }
+        refreshContacts()
+        when {
+            contactHistoryLogin != null -> loadContactHistory(contactHistoryLogin.orEmpty(), reset = true)
+            historyVisible -> showHistory()
+            else -> refreshMissedCount()
+        }
+    }
+
+    private fun showNoInternetMessage() {
+        Toast.makeText(this, "Нет подключения к интернету", Toast.LENGTH_SHORT).show()
     }
 }
 

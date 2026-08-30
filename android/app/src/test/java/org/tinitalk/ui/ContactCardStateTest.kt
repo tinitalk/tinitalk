@@ -31,4 +31,20 @@ class ContactCardStateTest {
         assertFalse(anotherContact.enabled)
         assertTrue(!anotherContact.opensCurrentCall)
     }
+
+    @Test
+    fun offlineBlocksNewCallButKeepsCurrentCallAccessible() {
+        assertEquals(
+            ContactCallAction("Нет подключения", enabled = false, opensCurrentCall = false),
+            contactCallAction("anna", null, internetAvailable = false),
+        )
+        assertEquals(
+            ContactCallAction("Вернуться к звонку", enabled = true, opensCurrentCall = true),
+            contactCallAction(
+                "anna",
+                CallUiState(peer = CallPeer("Анна", "anna"), phase = CallPhase.Active),
+                internetAvailable = false,
+            ),
+        )
+    }
 }
