@@ -1,11 +1,48 @@
 package org.tinitalk.data
 
+import org.tinitalk.push.FirebaseClientConfig
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ApiClientTest {
+    @Test
+    fun loadsFirebaseConfigurationWithBasicCredentialsOnly() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"application_id":"1:123:android:abc","api_key":"public-api-key","project_id":"demo-project","gcm_sender_id":"123","config_id":"sha256:config"}""",
+            ),
+        )
+        server.start()
+        try {
+            val config = UrlConnectionApiClient(
+                server.url("/").toString(),
+                "alice",
+                "secret-token",
+                sessionId = "session-123",
+            ).firebaseConfig()
+
+            assertEquals(
+                FirebaseClientConfig(
+                    applicationId = "1:123:android:abc",
+                    apiKey = "public-api-key",
+                    projectId = "demo-project",
+                    gcmSenderId = "123",
+                    configId = "sha256:config",
+                ),
+                config,
+            )
+            val request = server.takeRequest()
+            assertEquals("/api/firebase-config", request.path)
+            assertEquals("Basic YWxpY2U6c2VjcmV0LXRva2Vu", request.getHeader("Authorization"))
+            assertEquals(null, request.getHeader("X-TiniTalk-Session-ID"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
     @Test
     fun loadsServerFeaturesFromHealthResponse() {
         val server = MockWebServer()

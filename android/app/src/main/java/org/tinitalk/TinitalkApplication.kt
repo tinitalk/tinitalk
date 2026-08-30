@@ -16,6 +16,7 @@ import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
+import org.tinitalk.push.FirebaseBootstrap
 import org.tinitalk.network.NetworkAvailability
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
@@ -35,6 +36,7 @@ class TinitalkApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        FirebaseBootstrap(this).restore()
         networkAvailability = NetworkAvailability(this)
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         registerActivityLifecycleCallbacks(AppActivityVisibility)

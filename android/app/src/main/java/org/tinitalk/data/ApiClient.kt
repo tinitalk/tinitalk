@@ -3,6 +3,7 @@ package org.tinitalk.data
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.annotations.SerializedName
+import org.tinitalk.push.FirebaseClientConfig
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -128,6 +129,9 @@ class UrlConnectionApiClient(
     override fun serverInfo(): ServerInfo =
         get("/healthz", ServerInfoWire::class.java, authenticated = false).toServerInfo()
 
+    fun firebaseConfig(): FirebaseClientConfig =
+        get("/api/firebase-config", FirebaseClientConfig::class.java, includeSessionId = false)
+
     override fun me(): Profile =
         get("/api/me", Profile::class.java)
 
@@ -196,12 +200,17 @@ class UrlConnectionApiClient(
         return gson.fromJson(connection.inputStream.bufferedReader().readText(), type)
     }
 
-    private fun <T> get(path: String, type: Class<T>, authenticated: Boolean = true): T {
+    private fun <T> get(
+        path: String,
+        type: Class<T>,
+        authenticated: Boolean = true,
+        includeSessionId: Boolean = true,
+    ): T {
         val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
             readTimeout = 5000
-            if (authenticated) authenticate(this)
+            if (authenticated) authenticate(this, includeSessionId)
         }
         val code = connection.responseCode
         if (code !in 200..299) {
@@ -210,9 +219,9 @@ class UrlConnectionApiClient(
         return gson.fromJson(connection.inputStream.bufferedReader().readText(), type)
     }
 
-    private fun authenticate(connection: HttpURLConnection) {
+    private fun authenticate(connection: HttpURLConnection, includeSessionId: Boolean = true) {
         connection.setRequestProperty("Authorization", basicAuth())
-        sessionId?.let { connection.setRequestProperty(SessionIdHeader, it) }
+        if (includeSessionId) sessionId?.let { connection.setRequestProperty(SessionIdHeader, it) }
     }
 
     private fun HttpURLConnection.apiException(code: Int): ApiException = ApiException(
