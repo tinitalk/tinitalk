@@ -27,7 +27,7 @@ class ContactRepositoryTest {
             FailureCase(Failure.ConfigFetch, listOf("health", "firebase-config"), ApiException::class.java),
             FailureCase(
                 Failure.ConfigSave,
-                listOf("health", "firebase-config", "save-config"),
+                listOf("health", "firebase-config", "save-config", "save-config"),
                 IllegalStateException::class.java,
             ),
             FailureCase(
@@ -107,7 +107,7 @@ class ContactRepositoryTest {
         assertEquals(
             listOf(
                 "health", "firebase-config", "save-config", "bootstrap", "register", "installation-id",
-                "claim-session", "save-session", "me", "contacts",
+                "claim-session", "save-session", "persist-registration", "me", "contacts",
             ),
             fixture.trace,
         )
@@ -386,6 +386,7 @@ private class RepositoryFixture(
                 }
             },
         ),
+        onSessionActivated = { _, _, _, _ -> trace += "persist-registration" },
         apiFactory = { _, _, _, _ -> api },
     )
 }
@@ -467,9 +468,9 @@ private class TraceFirebaseConfigPersistence(
 ) : FirebaseConfigPersistence {
     private var value: String? = null
     override fun read(): String? = value
-    override fun commit(value: String): Boolean {
+    override fun commit(value: String?): Boolean {
         trace += "save-config"
-        if (acceptCommits) this.value = value
+        this.value = value
         return acceptCommits
     }
 }
@@ -494,7 +495,7 @@ private fun firebaseConfigStore(config: StoredFirebaseConfig?): FirebaseConfigSt
     val persistence = object : FirebaseConfigPersistence {
         var value: String? = null
         override fun read(): String? = value
-        override fun commit(value: String): Boolean {
+        override fun commit(value: String?): Boolean {
             this.value = value
             return true
         }

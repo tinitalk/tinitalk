@@ -70,8 +70,6 @@ sudo -u tinitalk tinitalk init \
 sudo -u tinitalk tinitalk init --firebase-android-config google-services.json
 ```
 
-### Получение файлов
-
 ### Как открыть Firebase Console
 
 1. Открой в браузере:
@@ -134,8 +132,7 @@ firebase-service-account.json
 
 Не коммить этот файл. В нем есть приватный ключ.
 
-Передай этот файл оператору сервера для `--fcm-service-account`; не коммить его:
-в нём приватный ключ.
+Передай этот файл оператору сервера для `--fcm-service-account`.
 
 ### Совместимый rollout
 

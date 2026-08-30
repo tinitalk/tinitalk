@@ -18,7 +18,7 @@ class FirebaseConfigCommitException : IllegalStateException("failed to persist F
 
 internal interface FirebaseConfigPersistence {
     fun read(): String?
-    fun commit(value: String): Boolean
+    fun commit(value: String?): Boolean
 }
 
 class FirebaseConfigStore internal constructor(
@@ -26,7 +26,7 @@ class FirebaseConfigStore internal constructor(
 ) {
     constructor(context: Context) : this(SharedPreferencesFirebaseConfigPersistence(context))
 
-    fun save(serverUrl: String, config: FirebaseClientConfig): StoredFirebaseConfig {
+    fun save(serverUrl: String, config: FirebaseClientConfig): StoredFirebaseConfig = synchronized(StoreLock) {
         val stored = StoredFirebaseConfig(
             serverUrl = serverUrl.trim().trimEnd('/'),
             applicationId = config.applicationId,
@@ -36,13 +36,17 @@ class FirebaseConfigStore internal constructor(
             configId = config.configId,
         )
         require(stored.isValid()) { "invalid Firebase configuration" }
-        if (!persistence.commit(gson.toJson(stored))) throw FirebaseConfigCommitException()
-        return stored
+        val previousEncoded = persistence.read()
+        if (!persistence.commit(gson.toJson(stored))) {
+            persistence.commit(previousEncoded)
+            throw FirebaseConfigCommitException()
+        }
+        stored
     }
 
-    fun load(): StoredFirebaseConfig? {
+    fun load(): StoredFirebaseConfig? = synchronized(StoreLock) {
         val encoded = persistence.read() ?: return null
-        return runCatching {
+        runCatching {
             gson.fromJson(encoded, StoredFirebaseConfig::class.java)?.takeIf { it.isValid() }
         }.getOrNull()
     }
@@ -56,6 +60,7 @@ class FirebaseConfigStore internal constructor(
             configId.isNotBlank()
 
     private companion object {
+        val StoreLock = Any()
         val gson = Gson()
     }
 }
@@ -66,7 +71,9 @@ private class SharedPreferencesFirebaseConfigPersistence(context: Context) : Fir
 
     override fun read(): String? = preferences.getString(ConfigKey, null)
 
-    override fun commit(value: String): Boolean = preferences.edit().putString(ConfigKey, value).commit()
+    override fun commit(value: String?): Boolean = preferences.edit().apply {
+        if (value == null) remove(ConfigKey) else putString(ConfigKey, value)
+    }.commit()
 
     private companion object {
         const val PreferencesName = "firebase_config"

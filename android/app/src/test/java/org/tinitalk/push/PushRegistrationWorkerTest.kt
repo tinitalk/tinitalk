@@ -10,9 +10,76 @@ import org.tinitalk.data.Session
 import org.tinitalk.data.SessionReplacedReason
 import java.io.IOException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PushRegistrationWorkerTest {
+    @Test
+    fun newlyActivatedAccountRunsAfterSuccessfulStaleUploadAndOwnsTheFid() {
+        val registrationStore = PushRegistrationStore(RecordingPushRegistrationPersistence())
+        val authStore = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val config = storedConfig("https://server.example.test", "config-1")
+        val alice = Session(
+            config.serverUrl,
+            "alice",
+            "alice-token",
+            sessionId = "alice-session",
+            configId = config.configId,
+        )
+        val bob = Session(
+            config.serverUrl,
+            "bob",
+            "bob-token",
+            sessionId = "bob-session",
+            configId = config.configId,
+        )
+        authStore.save(alice)
+        registrationStore.upsert(
+            config.serverUrl,
+            config.configId,
+            "device-1",
+            "alice-session",
+            "fid-shared",
+        )
+        var serverOwner = "alice"
+        var enqueued = 0
+        val staleAliceRunner = PushRegistrationRunner(
+            registrationStore,
+            loadConfig = { config },
+            authStore = authStore,
+            deviceId = { "device-1" },
+            upload = { uploadedSession, _ ->
+                serverOwner = "bob" // Bob's session claim committed first.
+                authStore.save(bob)
+                persistRegisteredInstallation(
+                    installationId = "fid-shared",
+                    config = config,
+                    session = bob,
+                    deviceId = "device-1",
+                    store = registrationStore,
+                    enqueue = { enqueued++ },
+                )
+                serverOwner = uploadedSession.login // Alice's delayed request completes last.
+            },
+        )
+
+        assertEquals(PushRegistrationAttemptResult.SUCCESS, staleAliceRunner.runAttempt())
+        assertEquals("alice", serverOwner)
+        assertEquals("bob-session", registrationStore.load()?.sessionId)
+        assertEquals(1, enqueued)
+
+        val bobSuccessor = PushRegistrationRunner(
+            registrationStore,
+            loadConfig = { config },
+            authStore = authStore,
+            deviceId = { "device-1" },
+            upload = { uploadedSession, _ -> serverOwner = uploadedSession.login },
+        )
+        assertEquals(PushRegistrationAttemptResult.SUCCESS, bobSuccessor.runAttempt())
+        assertEquals("bob", serverOwner)
+        assertNull(registrationStore.load())
+    }
+
     @Test
     fun appliesRetryAndReloginPolicyWithoutDiscardingPendingRegistration() {
         data class Case(

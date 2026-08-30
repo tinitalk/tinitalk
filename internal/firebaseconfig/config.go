@@ -1,14 +1,25 @@
 package firebaseconfig
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
+
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
-const AndroidPackageName = "org.tinitalk"
+const (
+	AndroidPackageName     = "org.tinitalk"
+	firebaseMessagingScope = "https://www.googleapis.com/auth/firebase.messaging"
+)
+
+var errStopServiceAccountValidation = errors.New("stop service-account validation before network access")
 
 type Config struct {
 	MobileSDKAppID string `json:"mobilesdk_app_id"`
@@ -19,10 +30,10 @@ type Config struct {
 }
 
 type canonicalConfig struct {
-	MobileSDKAppID string `json:"mobilesdk_app_id"`
-	CurrentKey     string `json:"current_key"`
-	ProjectID      string `json:"project_id"`
-	ProjectNumber  string `json:"project_number"`
+	ApplicationID string `json:"application_id"`
+	APIKey        string `json:"api_key"`
+	ProjectID     string `json:"project_id"`
+	GCMSenderID   string `json:"gcm_sender_id"`
 }
 
 func Parse(raw []byte) (Config, error) {
@@ -92,7 +103,40 @@ func ValidatePair(serviceAccount []byte, config Config) error {
 	if projectID != config.ProjectID {
 		return errors.New("Firebase service account and Android configuration projects do not match")
 	}
+	if err := ValidateServiceAccount(serviceAccount); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ValidateServiceAccount(serviceAccount []byte) error {
+	config, err := google.JWTConfigFromJSON(serviceAccount, firebaseMessagingScope)
+	if err != nil {
+		return fmt.Errorf("validate Firebase service account: %w", err)
+	}
+	if strings.TrimSpace(config.Email) == "" {
+		return errors.New("Firebase service account requires client_email")
+	}
+	transport := &serviceAccountValidationTransport{}
+	client := &http.Client{Transport: transport}
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
+	_, err = config.TokenSource(ctx).Token()
+	if transport.request != nil {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("validate Firebase service account private key: %w", err)
+	}
+	return errors.New("Firebase service account validation did not attempt a token request")
+}
+
+type serviceAccountValidationTransport struct {
+	request *http.Request
+}
+
+func (transport *serviceAccountValidationTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport.request = request
+	return nil, errStopServiceAccountValidation
 }
 
 func ProjectIDFromServiceAccount(serviceAccount []byte) (string, error) {
@@ -110,10 +154,10 @@ func ProjectIDFromServiceAccount(serviceAccount []byte) (string, error) {
 
 func configID(config Config) string {
 	canonical, _ := json.Marshal(canonicalConfig{
-		MobileSDKAppID: config.MobileSDKAppID,
-		CurrentKey:     config.CurrentKey,
-		ProjectID:      config.ProjectID,
-		ProjectNumber:  config.ProjectNumber,
+		ApplicationID: config.MobileSDKAppID,
+		APIKey:        config.CurrentKey,
+		ProjectID:     config.ProjectID,
+		GCMSenderID:   config.ProjectNumber,
 	})
 	sum := sha256.Sum256(canonical)
 	return "sha256:" + hex.EncodeToString(sum[:])

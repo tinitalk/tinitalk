@@ -54,6 +54,17 @@ class FirebaseConfigStoreTest {
         assertEquals(original, store.load())
     }
 
+    @Test
+    fun failedInitialCommitRestoresAnAbsentBinding() {
+        val persistence = RecordingFirebaseConfigPersistence().apply { acceptCommits = false }
+        val store = FirebaseConfigStore(persistence)
+
+        assertThrows(FirebaseConfigCommitException::class.java) {
+            store.save("https://new.example.test", config(configId = "new"))
+        }
+        assertNull(store.load())
+    }
+
     private fun config(configId: String) = FirebaseClientConfig(
         applicationId = "1:123:android:abc",
         apiKey = "public-api-key",
@@ -71,9 +82,9 @@ internal class RecordingFirebaseConfigPersistence(
 
     override fun read(): String? = value
 
-    override fun commit(value: String): Boolean {
+    override fun commit(value: String?): Boolean {
         commitCount++
-        if (acceptCommits) this.value = value
+        this.value = value
         return acceptCommits
     }
 }

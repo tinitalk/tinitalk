@@ -5,6 +5,11 @@ import org.tinitalk.push.FirebaseBootstrap
 import org.tinitalk.push.FirebaseBootstrapResult
 import org.tinitalk.push.FirebaseConfigStore
 import org.tinitalk.push.FirebaseRegistration
+import org.tinitalk.push.DeviceIdentity
+import org.tinitalk.push.PushRegistrationScheduler
+import org.tinitalk.push.PushRegistrationStore
+import org.tinitalk.push.StoredFirebaseConfig
+import org.tinitalk.push.persistRegisteredInstallation
 
 private const val TINITALK_SERVICE = "tinitalk"
 private const val SUPPORTED_API_VERSION = 3
@@ -44,6 +49,12 @@ class ContactRepository internal constructor(
     private val firebaseConfigStore: FirebaseConfigStore?,
     private val firebaseBootstrap: FirebaseBootstrap?,
     private val firebaseRegistration: FirebaseRegistration?,
+    private val onSessionActivated: (
+        config: StoredFirebaseConfig,
+        session: Session,
+        deviceId: String,
+        installationId: String,
+    ) -> Unit = { _, _, _, _ -> },
     private val apiFactory: (url: String, login: String, token: String, sessionId: String?) -> HouseholdApi =
         { url, login, token, sessionId -> UrlConnectionApiClient(url, login, token, sessionId) },
 ) {
@@ -52,13 +63,30 @@ class ContactRepository internal constructor(
     constructor(
         authStore: AuthStore,
         apiFactory: (url: String, login: String, token: String) -> HouseholdApi,
-    ) : this(authStore, null, null, null, { url, login, token, _ -> apiFactory(url, login, token) })
+    ) : this(
+        authStore,
+        null,
+        null,
+        null,
+        { _, _, _, _ -> },
+        { url, login, token, _ -> apiFactory(url, login, token) },
+    )
 
     constructor(context: Context, authStore: AuthStore) : this(
         authStore,
         FirebaseConfigStore(context),
         FirebaseBootstrap(context),
         FirebaseRegistration(),
+        { config, session, deviceId, installationId ->
+            persistRegisteredInstallation(
+                installationId = installationId,
+                config = config,
+                session = session,
+                deviceId = deviceId,
+                store = PushRegistrationStore(context),
+                enqueue = { PushRegistrationScheduler(context).enqueue() },
+            )
+        },
     )
 
     fun checkServer(url: String): ServerCheckResult {
@@ -116,6 +144,7 @@ class ContactRepository internal constructor(
                 configId = storedConfig.configId,
             )
             check(authStore.saveIfCurrent(previous, session)) { "authentication state changed" }
+            onSessionActivated(storedConfig, session, deviceId, firebaseInstallationId)
             api = api(session)
             val profile = api.me()
             api.contactsPage().withoutUser(profile.login)
