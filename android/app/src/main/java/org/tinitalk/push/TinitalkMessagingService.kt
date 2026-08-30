@@ -12,6 +12,7 @@ import org.tinitalk.data.CallHistoryEvents
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
+import org.tinitalk.data.Session
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.TelecomCallController
@@ -20,6 +21,21 @@ import org.tinitalk.telecom.CallForegroundService
 import java.time.Instant
 
 class TinitalkMessagingService : FirebaseMessagingService() {
+    override fun onRegistered(installationId: String) {
+        if (installationId.isBlank()) return
+        val config = FirebaseConfigStore(this).load() ?: return
+        val session = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+            .loadBoundTo(config) ?: return
+        persistRegisteredInstallation(
+            installationId = installationId,
+            config = config,
+            session = session,
+            deviceId = DeviceIdentity.id(this),
+            store = PushRegistrationStore(this),
+            enqueue = { PushRegistrationScheduler(this).enqueue() },
+        )
+    }
+
     @Synchronized
     override fun onMessageReceived(message: RemoteMessage) {
         val authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
@@ -107,4 +123,23 @@ class TinitalkMessagingService : FirebaseMessagingService() {
             latest?.let(notifier::showMissedIfAbsent)
         }
     }
+}
+
+internal fun persistRegisteredInstallation(
+    installationId: String,
+    config: StoredFirebaseConfig,
+    session: Session,
+    deviceId: String,
+    store: PushRegistrationStore,
+    enqueue: () -> Unit,
+) {
+    val sessionId = session.sessionId?.takeIf(String::isNotBlank) ?: return
+    store.upsert(
+        serverUrl = config.serverUrl,
+        configId = config.configId,
+        deviceId = deviceId,
+        sessionId = sessionId,
+        installationId = installationId,
+    )
+    enqueue()
 }

@@ -1,6 +1,8 @@
 package org.tinitalk.push
 
+import com.google.android.gms.tasks.TaskCompletionSource
 import com.google.firebase.FirebaseOptions
+import org.tinitalk.restoreFirebaseAndRegister
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -11,6 +13,34 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class FirebaseBootstrapTest {
+    @Test
+    fun bootstrapPrecedesAsynchronousRegistrationWithoutAwaitingItsCompletion() {
+        listOf(
+            FirebaseBootstrapResult.Absent to listOf("bootstrap"),
+            FirebaseBootstrapResult.Initialized to listOf("bootstrap", "register"),
+            FirebaseBootstrapResult.AlreadyInitialized to listOf("bootstrap", "register"),
+            FirebaseBootstrapResult.ConfigurationMismatch to listOf("bootstrap"),
+        ).forEach { (bootstrapResult, expectedTrace) ->
+            val trace = mutableListOf<String>()
+            val incompleteRegistration = TaskCompletionSource<Void>()
+
+            val result = restoreFirebaseAndRegister(
+                restore = {
+                    trace += "bootstrap"
+                    bootstrapResult
+                },
+                register = {
+                    trace += "register"
+                    incompleteRegistration.task
+                },
+            )
+
+            assertEquals(bootstrapResult, result)
+            assertEquals(bootstrapResult.toString(), expectedTrace, trace)
+            assertEquals(false, incompleteRegistration.task.isComplete)
+        }
+    }
+
     @Test
     fun leavesFirebaseUninitializedWhenTheStoredConfigurationIsAbsent() {
         val runtime = RecordingFirebaseRuntime()

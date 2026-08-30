@@ -4,6 +4,7 @@ import org.tinitalk.push.FirebaseClientConfig
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ApiClientTest {
@@ -170,6 +171,28 @@ class ApiClientTest {
             assertEquals("session-123", request.getHeader("X-TiniTalk-Session-ID"))
         } finally {
             server.shutdown()
+        }
+    }
+
+    @Test
+    fun rejectsNon204SuccessResponsesForDeviceRegistrationOnly() {
+        listOf(200, 202).forEach { status ->
+            val server = MockWebServer()
+            server.enqueue(MockResponse().setResponseCode(status))
+            server.start()
+            try {
+                val error = assertThrows(ApiException::class.java) {
+                    UrlConnectionApiClient(
+                        server.url("/").toString(),
+                        "alice",
+                        "token",
+                        sessionId = "session-123",
+                    ).putDevice("android-device", "fid-456", "sha256:config")
+                }
+                assertEquals(status, error.code)
+            } finally {
+                server.shutdown()
+            }
         }
     }
 

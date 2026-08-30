@@ -1,6 +1,7 @@
 package org.tinitalk.push
 
 import com.google.android.gms.tasks.Tasks
+import org.tinitalk.data.Session
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -11,6 +12,38 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class FirebaseRegistrationTest {
+    @Test
+    fun registeredCallbackPersistsBeforeEnqueueAndReupsertsAnUnchangedFid() {
+        val trace = mutableListOf<String>()
+        val persistence = RecordingPushRegistrationPersistence().apply {
+            onCommit = { trace += "persist" }
+        }
+        val store = PushRegistrationStore(persistence)
+        val config = storedConfig("https://server.example.test", "config-1")
+        val current = Session(
+            "https://server.example.test",
+            "alice",
+            "token",
+            sessionId = "session-1",
+            configId = "config-1",
+        )
+
+        repeat(2) {
+            persistRegisteredInstallation(
+                installationId = "fid-123",
+                config = config,
+                session = current,
+                deviceId = "device-1",
+                store = store,
+                enqueue = { trace += "enqueue" },
+            )
+        }
+
+        assertEquals(listOf("persist", "enqueue", "persist", "enqueue"), trace)
+        assertEquals(2L, store.load()?.generation)
+        assertEquals("fid-123", store.load()?.installationId)
+    }
+
     @Test
     fun waitsForRegistrationBeforeReadingInstallationId() {
         val trace = mutableListOf<String>()

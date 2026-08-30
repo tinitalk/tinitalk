@@ -7,6 +7,8 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import com.google.android.gms.tasks.Task
+import com.google.firebase.messaging.FirebaseMessaging
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.data.AndroidKeystoreTokenCipher
@@ -17,6 +19,7 @@ import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.FirebaseBootstrap
+import org.tinitalk.push.FirebaseBootstrapResult
 import org.tinitalk.network.NetworkAvailability
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
@@ -36,7 +39,10 @@ class TinitalkApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        FirebaseBootstrap(this).restore()
+        restoreFirebaseAndRegister(
+            restore = { FirebaseBootstrap(this).restore() },
+            register = { FirebaseMessaging.getInstance().register() },
+        )
         networkAvailability = NetworkAvailability(this)
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         registerActivityLifecycleCallbacks(AppActivityVisibility)
@@ -68,6 +74,17 @@ class TinitalkApplication : Application() {
         CallServiceState.reset()
         CallUiStateStore.reset()
     }
+}
+
+internal fun restoreFirebaseAndRegister(
+    restore: () -> FirebaseBootstrapResult,
+    register: () -> Task<Void>,
+): FirebaseBootstrapResult {
+    val result = restore()
+    if (result == FirebaseBootstrapResult.Initialized || result == FirebaseBootstrapResult.AlreadyInitialized) {
+        register()
+    }
+    return result
 }
 
 internal object AppActivityVisibility : Application.ActivityLifecycleCallbacks {

@@ -164,7 +164,8 @@ class UrlConnectionApiClient(
     }
 
     override fun putDevice(deviceId: String, firebaseInstallationId: String, configId: String) {
-        put<Unit>(
+        write<Unit>(
+            "PUT",
             "/api/device",
             linkedMapOf(
                 "device_id" to deviceId,
@@ -172,6 +173,7 @@ class UrlConnectionApiClient(
                 "config_id" to configId,
             ),
             null,
+            expectedStatus = 204,
         )
     }
 
@@ -198,6 +200,7 @@ class UrlConnectionApiClient(
         value: Any,
         type: Class<T>?,
         includeSessionId: Boolean = true,
+        expectedStatus: Int? = null,
     ): T {
         val body = gson.toJson(value).toByteArray(Charsets.UTF_8)
         val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
@@ -210,7 +213,7 @@ class UrlConnectionApiClient(
             outputStream.use { it.write(body) }
         }
         val code = connection.responseCode
-        if (code !in 200..299) {
+        if (expectedStatus?.let { code != it } ?: (code !in 200..299)) {
             throw connection.apiException(code)
         }
         if (type == null) {
