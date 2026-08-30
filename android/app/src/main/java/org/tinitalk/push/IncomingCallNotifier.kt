@@ -271,7 +271,7 @@ class IncomingCallNotifier(private val context: Context) {
             val fullScreen = controller.activityIntent(context, IncomingCallController.ActionIncoming, invite)
             @Suppress("DEPRECATION")
             builder
-                .setSmallIcon(R.drawable.ic_call)
+                .setSmallIcon(R.drawable.ic_call_ringing)
                 .setContentTitle("Входящий звонок")
                 .setContentText(invite.caller.ifEmpty { "TiniTalk" })
                 .setCategory(Notification.CATEGORY_CALL)
@@ -363,7 +363,7 @@ class IncomingCallNotifier(private val context: Context) {
             Notification.Builder(context)
         }
         builder
-            .setSmallIcon(R.drawable.ic_call)
+            .setSmallIcon(R.drawable.ic_call_missed)
             .setContentTitle(if (count == 1) "Пропущенный звонок" else "Пропущенные звонки")
             .setContentText(
                 latest?.caller?.takeIf { count == 1 && it.isNotBlank() }

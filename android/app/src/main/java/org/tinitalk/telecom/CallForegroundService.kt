@@ -31,6 +31,7 @@ import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.CallUiState
+import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.AndroidKeystoreTokenCipher
@@ -57,6 +58,16 @@ internal fun signalingHttpClient(): OkHttpClient =
     OkHttpClient.Builder()
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
+
+internal fun callNotificationIcon(state: CallUiState): Int = when {
+    state.phase == CallPhase.Active && state.connectionHealth == ConnectionHealth.Reconnecting ->
+        R.drawable.ic_call_reconnecting
+    state.direction == CallDirection.Outgoing &&
+        (state.phase == CallPhase.Ringing || state.phase == CallPhase.Connecting) ->
+        R.drawable.ic_call_outgoing
+    state.phase == CallPhase.Ringing -> R.drawable.ic_call_ringing
+    else -> R.drawable.ic_call_active
+}
 
 internal fun migrateCallNetwork(
     reconnectSignaling: () -> Unit,
@@ -998,7 +1009,7 @@ class CallForegroundService : Service() {
             CallPhase.Idle -> "Звонок"
         }
         builder
-            .setSmallIcon(R.drawable.ic_call)
+            .setSmallIcon(callNotificationIcon(state))
             .setContentTitle(peerName)
             .setContentText(status)
             .setCategory(Notification.CATEGORY_CALL)
@@ -1033,7 +1044,7 @@ class CallForegroundService : Service() {
             Notification.Builder(this)
         }
         return builder
-            .setSmallIcon(R.drawable.ic_call)
+            .setSmallIcon(R.drawable.ic_call_active)
             .setContentTitle("TiniTalk")
             .setContentText("Завершаем звонок…")
             .setCategory(Notification.CATEGORY_SERVICE)

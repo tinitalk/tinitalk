@@ -31,6 +31,42 @@ private val NoAnswerOutcomes = setOf(
     "interrupted_before_answer",
 )
 
+enum class HistoryCallDirection {
+    Incoming,
+    Outgoing,
+}
+
+enum class HistoryCallMark {
+    Completed,
+    Missed,
+    Busy,
+    Rejected,
+    Failed,
+    Interrupted,
+}
+
+data class HistoryCallIcon(
+    val direction: HistoryCallDirection,
+    val mark: HistoryCallMark,
+)
+
+fun historyCallIcon(item: CallHistoryItem): HistoryCallIcon {
+    val direction = if (item.direction == "incoming") {
+        HistoryCallDirection.Incoming
+    } else {
+        HistoryCallDirection.Outgoing
+    }
+    val mark = when {
+        item.outcome == "completed" -> HistoryCallMark.Completed
+        item.outcome == "interrupted" -> HistoryCallMark.Interrupted
+        item.outcome in NoAnswerOutcomes -> HistoryCallMark.Missed
+        item.outcome == "busy" -> HistoryCallMark.Busy
+        item.outcome == "rejected" -> HistoryCallMark.Rejected
+        else -> HistoryCallMark.Failed
+    }
+    return HistoryCallIcon(direction, mark)
+}
+
 fun isMissedIncoming(item: CallHistoryItem): Boolean =
     item.direction == "incoming" && (item.outcome in NoAnswerOutcomes || item.outcome == "busy")
 

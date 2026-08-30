@@ -11,6 +11,60 @@ import org.junit.Test
 
 class HistoryPresentationTest {
     @Test
+    fun choosesRecognizableIconForEveryCallOutcome() {
+        val passiveOutcomes = listOf(
+            "unreachable",
+            "unanswered",
+            "cancelled_before_ringing",
+            "cancelled_after_ringing",
+            "interrupted_before_answer",
+        )
+
+        assertEquals(
+            HistoryCallIcon(HistoryCallDirection.Incoming, HistoryCallMark.Completed),
+            historyCallIcon(item("incoming", "completed")),
+        )
+        assertEquals(
+            HistoryCallIcon(HistoryCallDirection.Outgoing, HistoryCallMark.Completed),
+            historyCallIcon(item("outgoing", "completed")),
+        )
+        passiveOutcomes.forEach { outcome ->
+            assertEquals(
+                HistoryCallIcon(HistoryCallDirection.Incoming, HistoryCallMark.Missed),
+                historyCallIcon(item("incoming", outcome, reached = true)),
+            )
+            assertEquals(
+                HistoryCallIcon(HistoryCallDirection.Outgoing, HistoryCallMark.Missed),
+                historyCallIcon(item("outgoing", outcome, reached = true)),
+            )
+            assertEquals(
+                HistoryCallIcon(HistoryCallDirection.Incoming, HistoryCallMark.Missed),
+                historyCallIcon(item("incoming", outcome, reached = false)),
+            )
+            assertEquals(
+                HistoryCallIcon(HistoryCallDirection.Outgoing, HistoryCallMark.Missed),
+                historyCallIcon(item("outgoing", outcome, reached = false)),
+            )
+        }
+        assertEquals(
+            HistoryCallIcon(HistoryCallDirection.Incoming, HistoryCallMark.Busy),
+            historyCallIcon(item("incoming", "busy")),
+        )
+        assertEquals(
+            HistoryCallIcon(HistoryCallDirection.Outgoing, HistoryCallMark.Rejected),
+            historyCallIcon(item("outgoing", "rejected")),
+        )
+        assertEquals(
+            HistoryCallIcon(HistoryCallDirection.Incoming, HistoryCallMark.Failed),
+            historyCallIcon(item("incoming", "connection_failed")),
+        )
+        assertEquals(
+            HistoryCallIcon(HistoryCallDirection.Outgoing, HistoryCallMark.Interrupted),
+            historyCallIcon(item("outgoing", "interrupted")),
+        )
+    }
+
+    @Test
     fun usesClearRussianStatusForDirectionAndOutcome() {
         val outgoing = mapOf(
             "busy" to "Занято",

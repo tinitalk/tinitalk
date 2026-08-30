@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,12 +36,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.tinitalk.R
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
@@ -183,12 +186,7 @@ internal fun HistoryRow(item: CallHistoryItem, showPeer: Boolean = true) {
                 )
                 Spacer(Modifier.height(3.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (item.direction == "incoming") "↙" else "↗",
-                        color = statusColor,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                    )
+                    HistoryCallIcon(historyCallIcon(item), statusColor)
                     Spacer(Modifier.width(6.dp))
                     Text(
                         historyStatus(item),
@@ -205,6 +203,48 @@ internal fun HistoryRow(item: CallHistoryItem, showPeer: Boolean = true) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+private fun HistoryCallIcon(icon: HistoryCallIcon, color: Color) {
+    val missed = icon.mark == HistoryCallMark.Missed
+    val directionIcon = when {
+        missed && icon.direction == HistoryCallDirection.Incoming -> R.drawable.ic_history_call_missed_incoming
+        missed -> R.drawable.ic_history_call_missed_outgoing
+        icon.direction == HistoryCallDirection.Incoming -> R.drawable.ic_history_call_incoming
+        else -> R.drawable.ic_history_call_outgoing
+    }
+    val markIcon = when (icon.mark) {
+        HistoryCallMark.Busy -> R.drawable.ic_history_mark_busy
+        HistoryCallMark.Rejected -> R.drawable.ic_history_mark_rejected
+        HistoryCallMark.Failed -> R.drawable.ic_history_mark_failed
+        HistoryCallMark.Interrupted -> R.drawable.ic_history_mark_interrupted
+        HistoryCallMark.Completed,
+        HistoryCallMark.Missed -> null
+    }
+
+    Box(modifier = Modifier.size(25.dp)) {
+        Icon(
+            painter = painterResource(directionIcon),
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(21.dp).align(Alignment.TopStart),
+        )
+        markIcon?.let {
+            Surface(
+                modifier = Modifier.size(12.dp).align(Alignment.BottomEnd),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                Icon(
+                    painter = painterResource(it),
+                    contentDescription = null,
+                    tint = color,
+                    modifier = Modifier.padding(1.5.dp),
+                )
+            }
         }
     }
 }
