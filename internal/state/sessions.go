@@ -78,7 +78,7 @@ func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
 	claim.Changed = true
 
 	rows, err := tx.Query(`
-		SELECT ?, device_id, COALESCE(fcm_token, '')
+		SELECT ?, device_id, push_kind, push_value, config_id
 		FROM devices
 		WHERE user_id = ? AND device_id <> ?
 		ORDER BY device_id
@@ -88,9 +88,17 @@ func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
 	}
 	for rows.Next() {
 		var device Device
-		if err := rows.Scan(&device.UserLogin, &device.DeviceID, &device.FCMToken); err != nil {
+		var kind, value, configID sql.NullString
+		if err := rows.Scan(&device.UserLogin, &device.DeviceID, &kind, &value, &configID); err != nil {
 			_ = rows.Close()
 			return SessionClaim{}, err
+		}
+		if kind.Valid {
+			device.PushTarget.Kind = PushTargetKind(kind.String)
+			device.PushTarget.Value = value.String
+		}
+		if configID.Valid {
+			device.PushTarget.ConfigID = configID.String
 		}
 		claim.RevokedDevices = append(claim.RevokedDevices, device)
 	}

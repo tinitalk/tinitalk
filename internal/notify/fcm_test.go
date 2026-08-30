@@ -3,6 +3,7 @@ package notify
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,7 +15,7 @@ import (
 )
 
 func TestWakeMessageUsesHighPriorityAndShortTTL(t *testing.T) {
-	msg := WakeMessage("project-1", "token-1", signaling.DeliveredEvent{
+	msg := WakeMessage("project-1", state.PushTarget{Kind: state.KindToken, Value: "token-1"}, signaling.DeliveredEvent{
 		Event: protocol.Event{CallID: "call-1", Type: "call.incoming", SentAt: 1000, Payload: json.RawMessage(`{"caller":"Alice"}`)},
 		Seq:   1,
 	}, "alice", "Alice", 30*time.Second)
@@ -41,7 +42,7 @@ func TestWakeMessageFormatsExpiryInUTC(t *testing.T) {
 	time.Local = time.FixedZone("server-local", 3*60*60)
 	t.Cleanup(func() { time.Local = originalLocal })
 
-	msg := WakeMessage("project-1", "token-1", signaling.DeliveredEvent{
+	msg := WakeMessage("project-1", state.PushTarget{Kind: state.KindToken, Value: "token-1"}, signaling.DeliveredEvent{
 		Event: protocol.Event{CallID: "call-1", Type: "call.incoming", SentAt: 1000},
 	}, "alice", "Alice", 30*time.Second)
 
@@ -51,7 +52,8 @@ func TestWakeMessageFormatsExpiryInUTC(t *testing.T) {
 }
 
 func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
-	store := &fakeTokenStore{tokens: []DeviceToken{{Token: "bad-token"}}, displayName: "Мама"}
+	badTarget := state.PushTarget{Kind: state.KindToken, Value: "bad-token"}
+	store := &fakePushTargetStore{targets: []state.Device{tokenDevice("", "bad-token")}, displayName: "Мама"}
 	sender := &fakeSender{err: ErrInvalidRegistration}
 	notifier := NewFCMNotifier(store, sender, "project-1")
 
@@ -60,8 +62,8 @@ func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
 	if sender.calls != 1 {
 		t.Fatalf("send calls = %d", sender.calls)
 	}
-	if store.disabled != "bad-token" {
-		t.Fatalf("disabled = %q", store.disabled)
+	if store.disabled != badTarget {
+		t.Fatalf("disabled = %+v", store.disabled)
 	}
 	if sender.last.Message.Data["caller"] != "Мама" {
 		t.Fatalf("caller = %q", sender.last.Message.Data["caller"])
@@ -74,61 +76,10 @@ func TestNotifierKeepsCallWhenSendFailsAndDisablesInvalidToken(t *testing.T) {
 	}
 }
 
-func TestHTTPv1SenderClassifiesOnlyTokenErrorsAsInvalidRegistration(t *testing.T) {
-	tests := []struct {
-		name        string
-		status      int
-		body        string
-		wantInvalid bool
-	}{
-		{
-			name:   "invalid message payload",
-			status: http.StatusBadRequest,
-			body: `{"error":{"status":"INVALID_ARGUMENT","details":[{` +
-				`"@type":"type.googleapis.com/google.rpc.BadRequest"}]}}`,
-		},
-		{
-			name:        "invalid registration token",
-			status:      http.StatusBadRequest,
-			body:        `{"error":{"status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"INVALID_ARGUMENT"}]}}`,
-			wantInvalid: true,
-		},
-		{
-			name:        "unregistered token",
-			status:      http.StatusNotFound,
-			body:        `{"error":{"status":"NOT_FOUND","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}`,
-			wantInvalid: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(test.status)
-				_, _ = w.Write([]byte(test.body))
-			}))
-			defer server.Close()
-			sender := HTTPv1Sender{
-				Client:      server.Client(),
-				Endpoint:    server.URL,
-				BearerToken: func() (string, error) { return "access-token", nil },
-			}
-
-			err := sender.Send(WakeRequest{})
-			if err == nil {
-				t.Fatal("Send error = nil, want FCM rejection")
-			}
-			if got := errors.Is(err, ErrInvalidRegistration); got != test.wantInvalid {
-				t.Fatalf("invalid registration = %v, want %v; error = %v", got, test.wantInvalid, err)
-			}
-		})
-	}
-}
-
 func TestNotifierSendsCallCancellation(t *testing.T) {
 	for _, eventType := range []string{"call.cancel", "call.expire"} {
 		t.Run(eventType, func(t *testing.T) {
-			store := &fakeTokenStore{tokens: []DeviceToken{{Token: "token-1"}}}
+			store := &fakePushTargetStore{targets: []state.Device{tokenDevice("", "token-1")}}
 			sender := &fakeSender{}
 			notifier := NewFCMNotifier(store, sender, "project-1")
 
@@ -145,7 +96,7 @@ func TestNotifierSendsCallCancellation(t *testing.T) {
 }
 
 func TestNotifierKeepsBusyHistoryRefreshLongLived(t *testing.T) {
-	store := &fakeTokenStore{tokens: []DeviceToken{{Token: "token-1"}}}
+	store := &fakePushTargetStore{targets: []state.Device{tokenDevice("", "token-1")}}
 	sender := &fakeSender{}
 	notifier := NewFCMNotifier(store, sender, "project-1")
 
@@ -159,7 +110,7 @@ func TestNotifierKeepsBusyHistoryRefreshLongLived(t *testing.T) {
 func TestNotifierKeepsHandledCallCancellationShortLived(t *testing.T) {
 	for _, eventType := range []string{"call.accept", "call.reject"} {
 		t.Run(eventType, func(t *testing.T) {
-			store := &fakeTokenStore{tokens: []DeviceToken{{Token: "token-1"}}}
+			store := &fakePushTargetStore{targets: []state.Device{tokenDevice("", "token-1")}}
 			sender := &fakeSender{}
 			notifier := NewFCMNotifier(store, sender, "project-1")
 
@@ -173,7 +124,7 @@ func TestNotifierKeepsHandledCallCancellationShortLived(t *testing.T) {
 }
 
 func TestCancelMessageIncludesSignalingEventType(t *testing.T) {
-	msg := CancelMessage("project", "token", signaling.DeliveredEvent{
+	msg := CancelMessage("project", state.PushTarget{Kind: state.KindToken, Value: "token"}, signaling.DeliveredEvent{
 		Event: protocol.Event{CallID: "call-1", Type: "call.accept"},
 	}, 30*time.Second)
 	if got := msg.Message.Data["call_event"]; got != "call.accept" {
@@ -183,11 +134,11 @@ func TestCancelMessageIncludesSignalingEventType(t *testing.T) {
 
 func TestNotifierTargetsRevokedRegistrationWithSessionReplacementIdentity(t *testing.T) {
 	sender := &fakeSender{}
-	notifier := NewFCMNotifier(&fakeTokenStore{}, sender, "project-1")
+	notifier := NewFCMNotifier(&fakePushTargetStore{}, sender, "project-1")
 
 	notifier.SessionReplaced("alice", "old-session", []state.Device{
-		{UserLogin: "alice", DeviceID: "old-phone", FCMToken: "old-fcm"},
-		{UserLogin: "alice", DeviceID: "unused", FCMToken: ""},
+		{UserLogin: "alice", DeviceID: "old-phone", PushTarget: state.PushTarget{Kind: state.KindToken, Value: "old-fcm"}},
+		{UserLogin: "alice", DeviceID: "unused"},
 	})
 
 	if sender.calls != 1 || sender.last.Message.Token != "old-fcm" {
@@ -210,7 +161,7 @@ func TestNotifierTargetsRevokedRegistrationWithSessionReplacementIdentity(t *tes
 }
 
 func TestSessionReplacedMessageIncludesEmptyLegacySessionID(t *testing.T) {
-	msg := SessionReplacedMessage("token", "alice", "", "old-phone")
+	msg := SessionReplacedMessage(state.PushTarget{Kind: state.KindToken, Value: "token"}, "alice", "", "old-phone")
 	value, present := msg.Message.Data["revoked_session_id"]
 	if !present || value != "" {
 		t.Fatalf("revoked_session_id = %q present %v, want present empty legacy value", value, present)
@@ -218,9 +169,9 @@ func TestSessionReplacedMessageIncludesEmptyLegacySessionID(t *testing.T) {
 }
 
 func TestNotifierAddsExactManagedTargetToEachCallRegistration(t *testing.T) {
-	store := &fakeTokenStore{tokens: []DeviceToken{
-		{DeviceID: "phone", Token: "phone-token"},
-		{DeviceID: "tablet", Token: "tablet-token"},
+	store := &fakePushTargetStore{targets: []state.Device{
+		tokenDevice("phone", "phone-token"),
+		tokenDevice("tablet", "tablet-token"),
 	}}
 	sender := &fakeSender{}
 	notifier := NewFCMNotifier(store, sender, "project-1")
@@ -245,7 +196,7 @@ func TestNotifierAddsExactManagedTargetToEachCallRegistration(t *testing.T) {
 
 func TestNotifierSuppressesCallPushAfterTargetResolutionFailure(t *testing.T) {
 	sender := &fakeSender{}
-	notifier := NewFCMNotifier(&fakeTokenStore{tokens: []DeviceToken{{DeviceID: "phone", Token: "token"}}}, sender, "project-1")
+	notifier := NewFCMNotifier(&fakePushTargetStore{targets: []state.Device{tokenDevice("phone", "token")}}, sender, "project-1")
 	notifier.IncomingCall("alice", "bob", signaling.DeliveredEvent{
 		Event:                  protocol.Event{CallID: "call-1"},
 		TargetResolutionFailed: true,
@@ -265,23 +216,165 @@ func TestProjectIDFromServiceAccount(t *testing.T) {
 	}
 }
 
-type fakeTokenStore struct {
-	tokens      []DeviceToken
-	disabled    string
+func TestHTTPv1SenderSerializesExactlyOnePushTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		target   state.PushTarget
+		wantJSON string
+	}{
+		{
+			name:     "token",
+			target:   state.PushTarget{Kind: state.KindToken, Value: "token-1"},
+			wantJSON: `{"message":{"token":"token-1","data":{"login":"alice","revoked_device_id":"phone","revoked_session_id":"session","type":"session_replaced"},"android":{"priority":"HIGH","ttl":"2419200s"}}}`,
+		},
+		{
+			name:     "FID",
+			target:   state.PushTarget{Kind: state.KindFID, Value: "fid-1", ConfigID: "firebase-config"},
+			wantJSON: `{"message":{"fid":"fid-1","data":{"login":"alice","revoked_device_id":"phone","revoked_session_id":"session","type":"session_replaced"},"android":{"priority":"HIGH","ttl":"2419200s"}}}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = string(body)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+			sender := HTTPv1Sender{
+				Client:      server.Client(),
+				Endpoint:    server.URL,
+				BearerToken: func() (string, error) { return "access-token", nil },
+			}
+			if err := sender.Send(SessionReplacedMessage(test.target, "alice", "session", "phone")); err != nil {
+				t.Fatal(err)
+			}
+			if got != test.wantJSON {
+				t.Fatalf("request JSON = %s, want %s", got, test.wantJSON)
+			}
+		})
+	}
+}
+
+func TestNotifierDisablesOnlyInvalidFIDTarget(t *testing.T) {
+	target := state.PushTarget{Kind: state.KindFID, Value: "fid-1", ConfigID: "firebase-config"}
+	store := &fakePushTargetStore{targets: []state.Device{{DeviceID: "phone", PushTarget: target}}, displayName: "Alice"}
+	sender := &fakeSender{err: ErrInvalidRegistration}
+	notifier := NewFCMNotifier(store, sender, "project-1")
+
+	notifier.IncomingCall("alice", "bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1"}})
+
+	if sender.last.Message.Token != "" || sender.last.Message.FID != "fid-1" {
+		t.Fatalf("message target = token %q FID %q, want only fid-1", sender.last.Message.Token, sender.last.Message.FID)
+	}
+	if store.disabled != target {
+		t.Fatalf("disabled target = %+v, want %+v", store.disabled, target)
+	}
+}
+
+func TestHTTPv1SenderInvalidatesOnlyUnregisteredTokensAndNotFoundFIDs(t *testing.T) {
+	tests := []struct {
+		name        string
+		target      state.PushTarget
+		status      int
+		body        string
+		wantInvalid bool
+	}{
+		{
+			name:        "unregistered token",
+			target:      state.PushTarget{Kind: state.KindToken, Value: "token"},
+			status:      http.StatusNotFound,
+			body:        `{"error":{"status":"NOT_FOUND","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}`,
+			wantInvalid: true,
+		},
+		{
+			name:        "not found FID",
+			target:      state.PushTarget{Kind: state.KindFID, Value: "fid", ConfigID: "firebase-config"},
+			status:      http.StatusNotFound,
+			body:        `{"error":{"status":"NOT_FOUND"}}`,
+			wantInvalid: true,
+		},
+		{
+			name:   "sender ID mismatch",
+			target: state.PushTarget{Kind: state.KindToken, Value: "token"},
+			status: http.StatusForbidden,
+			body:   `{"error":{"status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"SENDER_ID_MISMATCH"}]}}`,
+		},
+		{
+			name:   "token invalid argument",
+			target: state.PushTarget{Kind: state.KindToken, Value: "token"},
+			status: http.StatusBadRequest,
+			body:   `{"error":{"status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"INVALID_ARGUMENT"}]}}`,
+		},
+		{
+			name:   "FID invalid argument",
+			target: state.PushTarget{Kind: state.KindFID, Value: "fid", ConfigID: "firebase-config"},
+			status: http.StatusBadRequest,
+			body:   `{"error":{"status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"INVALID_ARGUMENT"}]}}`,
+		},
+		{
+			name:   "FID unregistered",
+			target: state.PushTarget{Kind: state.KindFID, Value: "fid", ConfigID: "firebase-config"},
+			status: http.StatusBadRequest,
+			body:   `{"error":{"status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}`,
+		},
+		{
+			name:   "generic payload failure",
+			target: state.PushTarget{Kind: state.KindToken, Value: "token"},
+			status: http.StatusBadRequest,
+			body:   `{"error":{"status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.BadRequest"}]}}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			sender := HTTPv1Sender{
+				Client:      server.Client(),
+				Endpoint:    server.URL,
+				BearerToken: func() (string, error) { return "access-token", nil },
+			}
+			err := sender.Send(SessionReplacedMessage(test.target, "alice", "session", "phone"))
+			if err == nil {
+				t.Fatal("Send error = nil, want FCM rejection")
+			}
+			if got := errors.Is(err, ErrInvalidRegistration); got != test.wantInvalid {
+				t.Fatalf("invalid registration = %v, want %v; error = %v", got, test.wantInvalid, err)
+			}
+		})
+	}
+}
+
+type fakePushTargetStore struct {
+	targets     []state.Device
+	disabled    state.PushTarget
 	displayName string
 	nameOwner   string
 	nameContact string
 }
 
-func (s *fakeTokenStore) TokensForUser(string) ([]DeviceToken, error) { return s.tokens, nil }
-func (s *fakeTokenStore) ContactDisplayName(owner, contact string) (string, error) {
+func (s *fakePushTargetStore) PushTargetsForUser(string) ([]state.Device, error) {
+	return s.targets, nil
+}
+func (s *fakePushTargetStore) ContactDisplayName(owner, contact string) (string, error) {
 	s.nameOwner = owner
 	s.nameContact = contact
 	return s.displayName, nil
 }
-func (s *fakeTokenStore) DisableToken(token string) error {
-	s.disabled = token
+func (s *fakePushTargetStore) DisablePushTarget(target state.PushTarget) error {
+	s.disabled = target
 	return nil
+}
+
+func tokenDevice(deviceID, value string) state.Device {
+	return state.Device{DeviceID: deviceID, PushTarget: state.PushTarget{Kind: state.KindToken, Value: value}}
 }
 
 type fakeSender struct {

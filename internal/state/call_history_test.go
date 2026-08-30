@@ -43,8 +43,8 @@ func TestOpenMigratesVersionOneDatabaseWithoutLosingUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.UserVersion != 6 {
-		t.Fatalf("schema version = %d, want 6", check.UserVersion)
+	if check.UserVersion != 7 {
+		t.Fatalf("schema version = %d, want 7", check.UserVersion)
 	}
 	users, err := db.ListUsers()
 	if err != nil {
@@ -710,6 +710,19 @@ func recordMissedCallFrom(t *testing.T, db *DB, callID, caller, callee string, s
 func setMigrationTestVersion(t *testing.T, db *DB, version int) {
 	t.Helper()
 	if _, err := db.sql.Exec("DROP TABLE IF EXISTS account_sessions"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`
+		DROP TABLE devices;
+		CREATE TABLE devices(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			device_id TEXT NOT NULL,
+			fcm_token TEXT,
+			updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+			UNIQUE(user_id, device_id)
+		);
+	`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.sql.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {

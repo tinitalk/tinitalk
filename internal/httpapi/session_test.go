@@ -73,11 +73,11 @@ func TestManagedDeviceRegistrationRequiresCurrentSessionDevice(t *testing.T) {
 	if current.Code != http.StatusNoContent {
 		t.Fatalf("replacement tablet registration status = %d, body %s", current.Code, current.Body.String())
 	}
-	devices, err := db.TokensForUser("alice")
+	devices, err := db.PushTargetsForUser("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(devices) != 1 || devices[0].DeviceID != "tablet" || devices[0].FCMToken != "tablet-fcm" {
+	if len(devices) != 1 || devices[0].DeviceID != "tablet" || devices[0].PushTarget != (state.PushTarget{Kind: state.KindToken, Value: "tablet-fcm"}) {
 		t.Fatalf("managed devices = %+v, want only current tablet", devices)
 	}
 }

@@ -115,7 +115,7 @@ func runServe(args []string) error {
 			Endpoint:    "https://fcm.googleapis.com/v1/projects/" + project + "/messages:send",
 			BearerToken: bearer,
 		}
-		fcmNotifier := notify.NewFCMNotifier(notify.DBTokenStore{DB: db}, sender, project)
+		fcmNotifier := notify.NewFCMNotifier(notify.DBPushTargetStore{DB: db}, sender, project)
 		notifier = fcmNotifier
 		sessionNotifier = fcmNotifier
 	}
