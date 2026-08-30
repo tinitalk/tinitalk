@@ -74,6 +74,17 @@ func (db *DB) DisplayName(login string) (string, error) {
 	return displayName, err
 }
 
+func (db *DB) RenameUser(login, displayName string) error {
+	if displayName == "" {
+		return fmt.Errorf("display name is required")
+	}
+	result, err := db.sql.Exec("UPDATE users SET display_name = ? WHERE login = ?", displayName, login)
+	if err != nil {
+		return err
+	}
+	return requireAffected(result, "user not found")
+}
+
 func (db *DB) DisableUser(login string) error {
 	result, err := db.sql.Exec("UPDATE users SET disabled = 1 WHERE login = ?", login)
 	if err != nil {

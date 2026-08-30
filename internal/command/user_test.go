@@ -34,6 +34,21 @@ func TestInitAndUserCommands(t *testing.T) {
 	}
 
 	out.Reset()
+	if err := Run(&out, "user", "rename", "--data-dir", dir, "alice", "Шурик"); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "renamed: alice\n" {
+		t.Fatalf("rename output = %q", got)
+	}
+	out.Reset()
+	if err := Run(&out, "user", "list", "--data-dir", dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "alice\tШурик\tenabled") {
+		t.Fatalf("list after rename output = %q", got)
+	}
+
+	out.Reset()
 	if err := Run(&out, "user", "disable", "--data-dir", dir, "alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +63,7 @@ func TestInitAndUserCommands(t *testing.T) {
 	if err := Run(&out, "user", "list", "--data-dir", dir); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "alice\tAlice\tenabled") {
+	if got := out.String(); !strings.Contains(got, "alice\tШурик\tenabled") {
 		t.Fatalf("list after enable output = %q", got)
 	}
 	out.Reset()

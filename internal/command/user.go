@@ -10,7 +10,7 @@ import (
 
 func runUser(w io.Writer, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: tinitalk user add|list|disable|enable|delete|rotate-token")
+		return errors.New("usage: tinitalk user add|list|rename|disable|enable|delete|rotate-token")
 	}
 	action := args[0]
 	dataDir, rest, err := parseDataDir(args[1:])
@@ -48,6 +48,14 @@ func runUser(w io.Writer, args []string) error {
 			}
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", user.Login, user.DisplayName, status)
 		}
+	case "rename":
+		if len(rest) != 2 {
+			return errors.New("usage: tinitalk user rename LOGIN DISPLAY_NAME [--data-dir DIR]")
+		}
+		if err := db.RenameUser(rest[0], rest[1]); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(w, "renamed: %s\n", rest[0])
 	case "disable":
 		if len(rest) != 1 {
 			return errors.New("usage: tinitalk user disable LOGIN [--data-dir DIR]")
