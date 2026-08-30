@@ -9,6 +9,7 @@ import (
 	"net"
 	"time"
 
+	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/notify"
 	"tinitalk/internal/state"
 )
@@ -81,14 +82,33 @@ func runDoctor(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	firebaseAndroidConfig, configErr := db.FirebaseConfig()
+	_, serviceErr := notify.ProjectIDFromServiceAccount(fcmServiceAccount)
+	serviceStatus := "ok"
 	if len(fcmServiceAccount) == 0 {
+		serviceStatus = "missing"
+	} else if serviceErr != nil {
+		serviceStatus = "invalid"
+	}
+	androidStatus := "ok"
+	if configErr != nil {
+		androidStatus = "invalid"
+	} else if firebaseAndroidConfig.ConfigID == "" {
+		androidStatus = "missing"
+	}
+	_, _ = fmt.Fprintf(w, "fcm.service_account: %s\n", serviceStatus)
+	_, _ = fmt.Fprintf(w, "fcm.android_config: %s\n", androidStatus)
+	if serviceStatus == "missing" || androidStatus == "missing" {
 		_, _ = fmt.Fprintln(w, "fcm.project: missing")
 		_, _ = fmt.Fprintln(w, "fcm.access: missing")
-	} else if project, err := notify.ProjectIDFromServiceAccount(fcmServiceAccount); err != nil {
+	} else if serviceStatus != "ok" || androidStatus != "ok" {
 		_, _ = fmt.Fprintln(w, "fcm.project: invalid")
 		_, _ = fmt.Fprintln(w, "fcm.access: invalid")
+	} else if err := firebaseconfig.ValidatePair(fcmServiceAccount, firebaseAndroidConfig); err != nil {
+		_, _ = fmt.Fprintln(w, "fcm.project: mismatch")
+		_, _ = fmt.Fprintln(w, "fcm.access: missing")
 	} else {
-		_, _ = fmt.Fprintf(w, "fcm.project: %s\n", project)
+		_, _ = fmt.Fprintln(w, "fcm.project: consistent")
 		bearer, err := notify.BearerTokenFromServiceAccount(context.Background(), fcmServiceAccount)
 		if err != nil {
 			_, _ = fmt.Fprintln(w, "fcm.access: invalid")

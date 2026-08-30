@@ -1,11 +1,49 @@
 package org.tinitalk.data
 
+import org.tinitalk.push.FirebaseClientConfig
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ApiClientTest {
+    @Test
+    fun loadsFirebaseConfigurationWithBasicCredentialsOnly() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"application_id":"1:123:android:abc","api_key":"public-api-key","project_id":"demo-project","gcm_sender_id":"123","config_id":"sha256:config"}""",
+            ),
+        )
+        server.start()
+        try {
+            val config = UrlConnectionApiClient(
+                server.url("/").toString(),
+                "alice",
+                "secret-token",
+                sessionId = "session-123",
+            ).firebaseConfig()
+
+            assertEquals(
+                FirebaseClientConfig(
+                    applicationId = "1:123:android:abc",
+                    apiKey = "public-api-key",
+                    projectId = "demo-project",
+                    gcmSenderId = "123",
+                    configId = "sha256:config",
+                ),
+                config,
+            )
+            val request = server.takeRequest()
+            assertEquals("/api/firebase-config", request.path)
+            assertEquals("Basic YWxpY2U6c2VjcmV0LXRva2Vu", request.getHeader("Authorization"))
+            assertEquals(null, request.getHeader("X-TiniTalk-Session-ID"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
     @Test
     fun loadsServerFeaturesFromHealthResponse() {
         val server = MockWebServer()
@@ -82,23 +120,79 @@ class ApiClientTest {
     }
 
     @Test
-    fun claimsSessionForExactDeviceContract() {
+    fun claimsSessionForExactFirebaseInstallationContract() {
         val server = MockWebServer()
         server.enqueue(MockResponse().setBody("""{"session_id":"opaque-session"}"""))
         server.start()
         try {
-            val sessionId = UrlConnectionApiClient(server.url("/").toString(), "alice", "token")
-                .claimSession("android-device")
+            val sessionId = UrlConnectionApiClient(
+                server.url("/").toString(),
+                "alice",
+                "token",
+                sessionId = "session-must-not-be-sent",
+            ).claimSession("android-device", "fid-123", "sha256:config")
 
             val request = server.takeRequest()
             assertEquals("opaque-session", sessionId)
             assertEquals("POST", request.method)
             assertEquals("/api/session", request.path)
-            assertEquals("{\"device_id\":\"android-device\"}", request.body.readUtf8())
+            assertEquals(
+                "{\"device_id\":\"android-device\",\"firebase_installation_id\":\"fid-123\",\"config_id\":\"sha256:config\"}",
+                request.body.readUtf8(),
+            )
             assertEquals("Basic YWxpY2U6dG9rZW4=", request.getHeader("Authorization"))
             assertEquals(null, request.getHeader("X-TiniTalk-Session-ID"))
         } finally {
             server.shutdown()
+        }
+    }
+
+    @Test
+    fun updatesDeviceForExactFirebaseInstallationContract() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(204))
+        server.start()
+        try {
+            UrlConnectionApiClient(
+                server.url("/").toString(),
+                "alice",
+                "token",
+                sessionId = "session-123",
+            ).putDevice("android-device", "fid-456", "sha256:config")
+
+            val request = server.takeRequest()
+            assertEquals("PUT", request.method)
+            assertEquals("/api/device", request.path)
+            assertEquals(
+                "{\"device_id\":\"android-device\",\"firebase_installation_id\":\"fid-456\",\"config_id\":\"sha256:config\"}",
+                request.body.readUtf8(),
+            )
+            assertEquals("Basic YWxpY2U6dG9rZW4=", request.getHeader("Authorization"))
+            assertEquals("session-123", request.getHeader("X-TiniTalk-Session-ID"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun rejectsNon204SuccessResponsesForDeviceRegistrationOnly() {
+        listOf(200, 202).forEach { status ->
+            val server = MockWebServer()
+            server.enqueue(MockResponse().setResponseCode(status))
+            server.start()
+            try {
+                val error = assertThrows(ApiException::class.java) {
+                    UrlConnectionApiClient(
+                        server.url("/").toString(),
+                        "alice",
+                        "token",
+                        sessionId = "session-123",
+                    ).putDevice("android-device", "fid-456", "sha256:config")
+                }
+                assertEquals(status, error.code)
+            } finally {
+                server.shutdown()
+            }
         }
     }
 

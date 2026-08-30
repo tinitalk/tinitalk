@@ -38,8 +38,19 @@ func (db *DB) CurrentSession(login string) (AccountSession, bool, error) {
 }
 
 func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
+	return db.ClaimSessionWithPushTarget(login, deviceID, nil)
+}
+
+// ClaimSessionWithPushTarget atomically claims a session and, when provided,
+// stores the current device's push target.
+func (db *DB) ClaimSessionWithPushTarget(login, deviceID string, target *PushTarget) (SessionClaim, error) {
 	if deviceID == "" {
 		return SessionClaim{}, errors.New("device ID is required")
+	}
+	if target != nil {
+		if err := target.validate(); err != nil {
+			return SessionClaim{}, err
+		}
 	}
 	tx, err := db.sql.Begin()
 	if err != nil {
@@ -60,6 +71,11 @@ func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
 	`, userID).Scan(&previous.DeviceID, &previous.SessionID, &previous.UpdatedAt)
 	if err == nil && previous.DeviceID == deviceID {
 		claim.Current = previous
+		if target != nil {
+			if err := upsertPushTarget(tx, userID, deviceID, *target); err != nil {
+				return SessionClaim{}, err
+			}
+		}
 		if err := tx.Commit(); err != nil {
 			return SessionClaim{}, err
 		}
@@ -78,7 +94,7 @@ func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
 	claim.Changed = true
 
 	rows, err := tx.Query(`
-		SELECT ?, device_id, COALESCE(fcm_token, '')
+		SELECT ?, device_id, push_kind, push_value, config_id
 		FROM devices
 		WHERE user_id = ? AND device_id <> ?
 		ORDER BY device_id
@@ -88,9 +104,17 @@ func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
 	}
 	for rows.Next() {
 		var device Device
-		if err := rows.Scan(&device.UserLogin, &device.DeviceID, &device.FCMToken); err != nil {
+		var kind, value, configID sql.NullString
+		if err := rows.Scan(&device.UserLogin, &device.DeviceID, &kind, &value, &configID); err != nil {
 			_ = rows.Close()
 			return SessionClaim{}, err
+		}
+		if kind.Valid {
+			device.PushTarget.Kind = PushTargetKind(kind.String)
+			device.PushTarget.Value = value.String
+		}
+		if configID.Valid {
+			device.PushTarget.ConfigID = configID.String
 		}
 		claim.RevokedDevices = append(claim.RevokedDevices, device)
 	}
@@ -116,6 +140,11 @@ func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
 	}
 	if err := tx.QueryRow("SELECT updated_at FROM account_sessions WHERE user_id = ?", userID).Scan(&claim.Current.UpdatedAt); err != nil {
 		return SessionClaim{}, err
+	}
+	if target != nil {
+		if err := upsertPushTarget(tx, userID, deviceID, *target); err != nil {
+			return SessionClaim{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return SessionClaim{}, err

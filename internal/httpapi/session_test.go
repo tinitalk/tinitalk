@@ -54,6 +54,73 @@ func TestSessionClaimTransitionsLegacyAccountAndReplacesPriorClaim(t *testing.T)
 	}
 }
 
+func TestSessionClaimFIDActivationValidatesShapeAndConfigBeforeMutation(t *testing.T) {
+	db, tokens := testDB(t)
+	server := NewServer(db, Options{AllowInsecureLoopback: true, FirebaseConfig: firebaseConfigForTest()})
+	legacy := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(`{"device_id":"phone"}`), "alice", tokens["alice"], "")
+	if legacy.Code != http.StatusOK {
+		t.Fatalf("legacy session status = %d, body %s", legacy.Code, legacy.Body.String())
+	}
+	var legacyBody map[string]string
+	if err := json.Unmarshal(legacy.Body.Bytes(), &legacyBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(legacyBody) != 1 || legacyBody["session_id"] == "" {
+		t.Fatalf("legacy session response = %#v, want only a session_id", legacyBody)
+	}
+	for name, body := range map[string]string{
+		"partial fid":      `{"device_id":"tablet","firebase_installation_id":"fid"}`,
+		"null config":      `{"device_id":"tablet","config_id":null}`,
+		"mixed":            `{"device_id":"tablet","fcm_token":"token","firebase_installation_id":"fid","config_id":"config-id"}`,
+		"mixed null token": `{"device_id":"tablet","fcm_token":null,"firebase_installation_id":"fid","config_id":"config-id"}`,
+	} {
+		if got := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(body), "alice", tokens["alice"], ""); got.Code != http.StatusBadRequest {
+			t.Fatalf("%s session status = %d, want 400", name, got.Code)
+		}
+	}
+	stale := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(`{"device_id":"tablet","firebase_installation_id":"fid","config_id":"stale-config"}`), "alice", tokens["alice"], "")
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale config session status = %d, want 409", stale.Code)
+	}
+	current, managed, err := db.CurrentSession("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !managed || current.SessionID != legacyBody["session_id"] || current.DeviceID != "phone" {
+		t.Fatalf("session after stale config = %+v, managed %v, want phone legacy session", current, managed)
+	}
+	activated := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(`{"device_id":"tablet","firebase_installation_id":"first-fid","config_id":"config-id"}`), "alice", tokens["alice"], "")
+	if activated.Code != http.StatusOK {
+		t.Fatalf("FID session status = %d, body %s", activated.Code, activated.Body.String())
+	}
+	var activatedBody map[string]string
+	if err := json.Unmarshal(activated.Body.Bytes(), &activatedBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(activatedBody) != 1 || activatedBody["session_id"] == "" || activatedBody["session_id"] == legacyBody["session_id"] {
+		t.Fatalf("FID session response = %#v, want one new session_id", activatedBody)
+	}
+	retry := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(`{"device_id":"tablet","firebase_installation_id":"second-fid","config_id":"config-id"}`), "alice", tokens["alice"], "")
+	if retry.Code != http.StatusOK {
+		t.Fatalf("FID retry status = %d, body %s", retry.Code, retry.Body.String())
+	}
+	var retryBody map[string]string
+	if err := json.Unmarshal(retry.Body.Bytes(), &retryBody); err != nil {
+		t.Fatal(err)
+	}
+	if retryBody["session_id"] != activatedBody["session_id"] {
+		t.Fatalf("FID retry session = %#v, want %q", retryBody, activatedBody["session_id"])
+	}
+	devices, err := db.PushTargetsForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := state.PushTarget{Kind: state.KindFID, Value: "second-fid", ConfigID: "config-id"}
+	if len(devices) != 1 || devices[0].DeviceID != "tablet" || devices[0].PushTarget != want {
+		t.Fatalf("FID activation devices = %+v, want tablet %+v", devices, want)
+	}
+}
+
 func TestManagedDeviceRegistrationRequiresCurrentSessionDevice(t *testing.T) {
 	db, tokens := testDB(t)
 	server := NewServer(db, Options{AllowInsecureLoopback: true})
@@ -62,6 +129,9 @@ func TestManagedDeviceRegistrationRequiresCurrentSessionDevice(t *testing.T) {
 	valid := requestWithSession(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","fcm_token":"phone-fcm"}`), "alice", tokens["alice"], first)
 	if valid.Code != http.StatusNoContent {
 		t.Fatalf("current phone registration status = %d, body %s", valid.Code, valid.Body.String())
+	}
+	if valid.Body.Len() != 0 {
+		t.Fatalf("legacy device response body = %q, want empty", valid.Body.String())
 	}
 	mismatch := requestWithSession(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"tablet","fcm_token":"wrong-fcm"}`), "alice", tokens["alice"], first)
 	assertSessionReplacedResponse(t, "mismatched device", mismatch)
@@ -73,12 +143,50 @@ func TestManagedDeviceRegistrationRequiresCurrentSessionDevice(t *testing.T) {
 	if current.Code != http.StatusNoContent {
 		t.Fatalf("replacement tablet registration status = %d, body %s", current.Code, current.Body.String())
 	}
-	devices, err := db.TokensForUser("alice")
+	devices, err := db.PushTargetsForUser("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(devices) != 1 || devices[0].DeviceID != "tablet" || devices[0].FCMToken != "tablet-fcm" {
+	if len(devices) != 1 || devices[0].DeviceID != "tablet" || devices[0].PushTarget != (state.PushTarget{Kind: state.KindToken, Value: "tablet-fcm"}) {
 		t.Fatalf("managed devices = %+v, want only current tablet", devices)
+	}
+}
+
+func TestDeviceFIDRegistrationValidatesShapeAndConfigBeforeMutation(t *testing.T) {
+	db, tokens := testDB(t)
+	server := NewServer(db, Options{AllowInsecureLoopback: true, FirebaseConfig: firebaseConfigForTest()})
+	for name, body := range map[string]string{
+		"partial fid":        `{"device_id":"phone","firebase_installation_id":"fid"}`,
+		"legacy null config": `{"device_id":"phone","fcm_token":"token","config_id":null}`,
+		"mixed":              `{"device_id":"phone","fcm_token":"token","firebase_installation_id":"fid","config_id":"config-id"}`,
+		"mixed null token":   `{"device_id":"phone","fcm_token":null,"firebase_installation_id":"fid","config_id":"config-id"}`,
+	} {
+		if got := request(t, server, http.MethodPut, "/api/device", []byte(body), "alice", tokens["alice"]); got.Code != http.StatusBadRequest {
+			t.Fatalf("%s device status = %d, want 400", name, got.Code)
+		}
+	}
+	stale := request(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","firebase_installation_id":"fid","config_id":"stale-config"}`), "alice", tokens["alice"])
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale config device status = %d, want 409", stale.Code)
+	}
+	devices, err := db.PushTargetsForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("devices after stale config = %+v, want unchanged empty targets", devices)
+	}
+	activated := request(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","firebase_installation_id":"fid","config_id":"config-id"}`), "alice", tokens["alice"])
+	if activated.Code != http.StatusNoContent || activated.Body.Len() != 0 {
+		t.Fatalf("FID device response = %d/%q, want 204/empty", activated.Code, activated.Body.String())
+	}
+	devices, err = db.PushTargetsForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := state.PushTarget{Kind: state.KindFID, Value: "fid", ConfigID: "config-id"}
+	if len(devices) != 1 || devices[0].PushTarget != want {
+		t.Fatalf("FID device targets = %+v, want %+v", devices, want)
 	}
 }
 

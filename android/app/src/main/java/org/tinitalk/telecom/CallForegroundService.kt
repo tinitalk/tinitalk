@@ -48,7 +48,7 @@ import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.network.networkAvailability
 import org.tinitalk.media.CameraMediaCallbacks
 import org.tinitalk.media.CallMediaDispatcher
-import org.tinitalk.push.DeviceRegistrar
+import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.IncomingCallNotifier
 import okhttp3.OkHttpClient
 import java.time.Instant
@@ -349,7 +349,7 @@ class CallForegroundService : Service() {
         val newSocket = SignalSocket(
             newHttpClient,
             session,
-            deviceId = DeviceRegistrar.deviceId(this),
+            deviceId = DeviceIdentity.id(this),
         )
         val newCoordinator = CallCoordinator(
             session.login,

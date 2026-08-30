@@ -8,7 +8,10 @@ import (
 )
 
 type sessionRequest struct {
-	DeviceID string `json:"device_id"`
+	DeviceID               string          `json:"device_id"`
+	FCMToken               json.RawMessage `json:"fcm_token"`
+	FirebaseInstallationID json.RawMessage `json:"firebase_installation_id"`
+	ConfigID               json.RawMessage `json:"config_id"`
 }
 
 func (s *Server) session(w http.ResponseWriter, r *http.Request) {
@@ -17,14 +20,23 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request sessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.DeviceID == "" {
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	target, ok := request.fidPushTarget()
+	if !ok {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if target != nil && target.ConfigID != s.options.FirebaseConfig.ConfigID {
+		http.Error(w, "stale firebase configuration", http.StatusConflict)
 		return
 	}
 
 	login := currentUser(r).Login
 	s.sessionClaimMu.Lock()
-	claim, err := s.db.ClaimSession(login, request.DeviceID)
+	claim, err := s.db.ClaimSessionWithPushTarget(login, request.DeviceID, target)
 	if err != nil {
 		s.sessionClaimMu.Unlock()
 		http.Error(w, "session unavailable", http.StatusInternalServerError)
@@ -49,4 +61,33 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 		SessionID string `json:"session_id"`
 	}{SessionID: claim.Current.SessionID})
 	s.sessionClaimMu.Unlock()
+}
+
+func (request sessionRequest) fidPushTarget() (*state.PushTarget, bool) {
+	if request.DeviceID == "" {
+		return nil, false
+	}
+	_, tokenPresent, _ := requestString(request.FCMToken)
+	fid, fidPresent, fidValid := requestString(request.FirebaseInstallationID)
+	configID, configPresent, configValid := requestString(request.ConfigID)
+	if tokenPresent {
+		return nil, false
+	}
+	if !fidPresent && !configPresent {
+		return nil, true
+	}
+	if !fidPresent || !configPresent || !fidValid || !configValid {
+		return nil, false
+	}
+	return &state.PushTarget{Kind: state.KindFID, Value: fid, ConfigID: configID}, true
+}
+
+func requestString(raw json.RawMessage) (value string, present, valid bool) {
+	if raw == nil {
+		return "", false, true
+	}
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
+		return "", true, false
+	}
+	return value, true, true
 }

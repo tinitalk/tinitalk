@@ -25,52 +25,39 @@ const (
 	missedNotificationTTL = 28 * 24 * time.Hour
 )
 
-type DeviceToken struct {
-	DeviceID string
-	Token    string
-}
-
-type TokenStore interface {
-	TokensForUser(login string) ([]DeviceToken, error)
+type PushTargetStore interface {
+	PushTargetsForUser(login string) ([]state.Device, error)
 	ContactDisplayName(owner, contact string) (string, error)
-	DisableToken(token string) error
+	DisablePushTarget(target state.PushTarget) error
 }
 
 type Sender interface {
 	Send(request WakeRequest) error
 }
 
-type DBTokenStore struct {
+type DBPushTargetStore struct {
 	DB *state.DB
 }
 
-func (s DBTokenStore) TokensForUser(login string) ([]DeviceToken, error) {
-	devices, err := s.DB.TokensForUser(login)
-	if err != nil {
-		return nil, err
-	}
-	tokens := make([]DeviceToken, 0, len(devices))
-	for _, device := range devices {
-		tokens = append(tokens, DeviceToken{DeviceID: device.DeviceID, Token: device.FCMToken})
-	}
-	return tokens, nil
+func (s DBPushTargetStore) PushTargetsForUser(login string) ([]state.Device, error) {
+	return s.DB.PushTargetsForUser(login)
 }
 
-func (s DBTokenStore) DisableToken(token string) error {
-	return s.DB.DisableToken(token)
+func (s DBPushTargetStore) DisablePushTarget(target state.PushTarget) error {
+	return s.DB.DisablePushTarget(target)
 }
 
-func (s DBTokenStore) ContactDisplayName(owner, contact string) (string, error) {
+func (s DBPushTargetStore) ContactDisplayName(owner, contact string) (string, error) {
 	return s.DB.ContactDisplayName(owner, contact)
 }
 
 type FCMNotifier struct {
-	store   TokenStore
+	store   PushTargetStore
 	sender  Sender
 	project string
 }
 
-func NewFCMNotifier(store TokenStore, sender Sender, project string) *FCMNotifier {
+func NewFCMNotifier(store PushTargetStore, sender Sender, project string) *FCMNotifier {
 	return &FCMNotifier{store: store, sender: sender, project: project}
 }
 
@@ -79,7 +66,7 @@ func (n *FCMNotifier) IncomingCall(caller, callee string, event signaling.Delive
 	if err != nil || name == "" {
 		name = caller
 	}
-	n.send(callee, WakeMessage(n.project, "", event, caller, name, callNotificationTTL))
+	n.send(callee, WakeMessage(n.project, state.PushTarget{}, event, caller, name, callNotificationTTL))
 }
 
 func (n *FCMNotifier) CancelCall(callee string, event signaling.DeliveredEvent) {
@@ -87,16 +74,16 @@ func (n *FCMNotifier) CancelCall(callee string, event signaling.DeliveredEvent) 
 	if event.Type == "call.cancel" || event.Type == "call.expire" || event.Type == "call.busy" {
 		ttl = missedNotificationTTL
 	}
-	n.send(callee, CancelMessage(n.project, "", event, ttl))
+	n.send(callee, CancelMessage(n.project, state.PushTarget{}, event, ttl))
 }
 
 func (n *FCMNotifier) SessionReplaced(login, revokedSessionID string, devices []state.Device) {
 	for _, device := range devices {
-		if device.FCMToken == "" {
+		if device.PushTarget.Value == "" {
 			continue
 		}
 		_ = n.sender.Send(SessionReplacedMessage(
-			device.FCMToken,
+			device.PushTarget,
 			login,
 			revokedSessionID,
 			device.DeviceID,
@@ -108,14 +95,14 @@ func (n *FCMNotifier) send(callee string, request WakeRequest) {
 	if request.suppress {
 		return
 	}
-	tokens, err := n.store.TokensForUser(callee)
+	targets, err := n.store.PushTargetsForUser(callee)
 	if err != nil {
 		return
 	}
-	for _, token := range tokens {
+	for _, device := range targets {
 		targetSessionID, hasSessionTarget := request.Message.Data["target_session_id"]
 		targetDeviceID := request.Message.Data["target_device_id"]
-		if hasSessionTarget && targetSessionID != "" && (targetDeviceID == "" || token.DeviceID != targetDeviceID) {
+		if hasSessionTarget && targetSessionID != "" && (targetDeviceID == "" || device.DeviceID != targetDeviceID) {
 			continue
 		}
 		targeted := request
@@ -123,20 +110,21 @@ func (n *FCMNotifier) send(callee string, request WakeRequest) {
 		if hasSessionTarget {
 			targeted.Message.Data["target_login"] = callee
 			if targetSessionID == "" {
-				targeted.Message.Data["target_device_id"] = token.DeviceID
+				targeted.Message.Data["target_device_id"] = device.DeviceID
 			}
 		}
-		targeted.Message.Token = token.Token
+		setPushTarget(&targeted, device.PushTarget)
 		err := n.sender.Send(targeted)
 		if errors.Is(err, ErrInvalidRegistration) {
-			_ = n.store.DisableToken(token.Token)
+			_ = n.store.DisablePushTarget(device.PushTarget)
 		}
 	}
 }
 
 type WakeRequest struct {
 	Message struct {
-		Token   string            `json:"token"`
+		Token   string            `json:"token,omitempty"`
+		FID     string            `json:"fid,omitempty"`
 		Data    map[string]string `json:"data"`
 		Android struct {
 			Priority string `json:"priority"`
@@ -146,9 +134,9 @@ type WakeRequest struct {
 	suppress bool
 }
 
-func WakeMessage(_ string, token string, event signaling.DeliveredEvent, callerLogin, caller string, ttl time.Duration) WakeRequest {
+func WakeMessage(_ string, target state.PushTarget, event signaling.DeliveredEvent, callerLogin, caller string, ttl time.Duration) WakeRequest {
 	var request WakeRequest
-	request.Message.Token = token
+	setPushTarget(&request, target)
 	request.Message.Data = map[string]string{
 		"type":         "incoming_call",
 		"call_id":      event.CallID,
@@ -169,9 +157,9 @@ func WakeMessage(_ string, token string, event signaling.DeliveredEvent, callerL
 	return request
 }
 
-func CancelMessage(_ string, token string, event signaling.DeliveredEvent, ttl time.Duration) WakeRequest {
+func CancelMessage(_ string, target state.PushTarget, event signaling.DeliveredEvent, ttl time.Duration) WakeRequest {
 	var request WakeRequest
-	request.Message.Token = token
+	setPushTarget(&request, target)
 	request.Message.Data = map[string]string{
 		"type":       "call_cancel",
 		"call_id":    event.CallID,
@@ -189,9 +177,9 @@ func CancelMessage(_ string, token string, event signaling.DeliveredEvent, ttl t
 	return request
 }
 
-func SessionReplacedMessage(token, login, revokedSessionID, revokedDeviceID string) WakeRequest {
+func SessionReplacedMessage(target state.PushTarget, login, revokedSessionID, revokedDeviceID string) WakeRequest {
 	var request WakeRequest
-	request.Message.Token = token
+	setPushTarget(&request, target)
 	request.Message.Data = map[string]string{
 		"type":               "session_replaced",
 		"login":              login,
@@ -201,6 +189,18 @@ func SessionReplacedMessage(token, login, revokedSessionID, revokedDeviceID stri
 	request.Message.Android.Priority = "HIGH"
 	request.Message.Android.TTL = fcmTTL(missedNotificationTTL)
 	return request
+}
+
+func setPushTarget(request *WakeRequest, target state.PushTarget) {
+	request.Message.Token = ""
+	request.Message.FID = ""
+	if target.Kind == state.KindFID {
+		request.Message.FID = target.Value
+		return
+	}
+	if target.Kind == state.KindToken {
+		request.Message.Token = target.Value
+	}
 }
 
 func fcmTTL(ttl time.Duration) string {
@@ -262,11 +262,14 @@ func (s HTTPv1Sender) Send(request WakeRequest) error {
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(body, &failure)
+	if request.Message.FID != "" && resp.StatusCode == http.StatusNotFound && failure.Error.Status == "NOT_FOUND" {
+		return ErrInvalidRegistration
+	}
 	for _, detail := range failure.Error.Details {
 		if detail.Type != "type.googleapis.com/google.firebase.fcm.v1.FcmError" {
 			continue
 		}
-		if detail.ErrorCode == "INVALID_ARGUMENT" || detail.ErrorCode == "UNREGISTERED" {
+		if request.Message.Token != "" && detail.ErrorCode == "UNREGISTERED" {
 			return ErrInvalidRegistration
 		}
 	}

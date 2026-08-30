@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
@@ -52,7 +53,7 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	}
 }
 
-func TestHealthIdentifiesTiniTalkVersionAndCommit(t *testing.T) {
+func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	previousCommit := serverCommit
 	serverCommit = "01234567"
 	t.Cleanup(func() { serverCommit = previousCommit })
@@ -77,9 +78,13 @@ func TestHealthIdentifiesTiniTalkVersionAndCommit(t *testing.T) {
 	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 3 || health.Commit != "01234567" {
 		t.Fatalf("health = %+v, want tinitalk, ok, API version 3, commit 01234567", health)
 	}
-	if len(health.Features) != 2 || health.Features[0] != "video_1to1" || health.Features[1] != "single_device_session" {
-		t.Fatalf("health features = %v, want [video_1to1 single_device_session]", health.Features)
+	if len(health.Features) != 3 || health.Features[0] != "video_1to1" || health.Features[1] != "single_device_session" || health.Features[2] != "dynamic_fcm_v1" {
+		t.Fatalf("health features = %v, want [video_1to1 single_device_session dynamic_fcm_v1]", health.Features)
 	}
+}
+
+func firebaseConfigForTest() firebaseconfig.Config {
+	return firebaseconfig.Config{ConfigID: "config-id"}
 }
 
 func TestSocketRequiresSignalingProtocolV2(t *testing.T) {
@@ -477,7 +482,7 @@ func testDB(t *testing.T) (*state.DB, map[string]string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Init(nil); err != nil {
+	if err := db.Init(nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	tokens := map[string]string{}

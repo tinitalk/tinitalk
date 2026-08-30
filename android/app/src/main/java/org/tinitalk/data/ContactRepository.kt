@@ -1,8 +1,19 @@
 package org.tinitalk.data
 
+import android.content.Context
+import org.tinitalk.push.FirebaseBootstrap
+import org.tinitalk.push.FirebaseBootstrapResult
+import org.tinitalk.push.FirebaseConfigStore
+import org.tinitalk.push.FirebaseRegistration
+import org.tinitalk.push.DeviceIdentity
+import org.tinitalk.push.PushRegistrationScheduler
+import org.tinitalk.push.PushRegistrationStore
+import org.tinitalk.push.StoredFirebaseConfig
+import org.tinitalk.push.persistRegisteredInstallation
+
 private const val TINITALK_SERVICE = "tinitalk"
 private const val SUPPORTED_API_VERSION = 3
-private const val SINGLE_DEVICE_SESSION_FEATURE = "single_device_session"
+private const val DYNAMIC_FCM_FEATURE = "dynamic_fcm_v1"
 
 enum class CompatibilityProblem {
     WrongServer,
@@ -29,15 +40,54 @@ class ServerCompatibilityException(
     val problem: CompatibilityProblem,
 ) : RuntimeException()
 
-class ContactRepository(
+class FirebaseConfigurationRestartRequiredException : IllegalStateException(
+    "Firebase configuration changed; restart the app to continue",
+)
+
+class ContactRepository internal constructor(
     private val authStore: AuthStore,
+    private val firebaseConfigStore: FirebaseConfigStore?,
+    private val firebaseBootstrap: FirebaseBootstrap?,
+    private val firebaseRegistration: FirebaseRegistration?,
+    private val onSessionActivated: (
+        config: StoredFirebaseConfig,
+        session: Session,
+        deviceId: String,
+        installationId: String,
+    ) -> Unit = { _, _, _, _ -> },
     private val apiFactory: (url: String, login: String, token: String, sessionId: String?) -> HouseholdApi =
         { url, login, token, sessionId -> UrlConnectionApiClient(url, login, token, sessionId) },
 ) {
+    constructor(authStore: AuthStore) : this(authStore, null, null, null)
+
     constructor(
         authStore: AuthStore,
         apiFactory: (url: String, login: String, token: String) -> HouseholdApi,
-    ) : this(authStore, { url, login, token, _ -> apiFactory(url, login, token) })
+    ) : this(
+        authStore,
+        null,
+        null,
+        null,
+        { _, _, _, _ -> },
+        { url, login, token, _ -> apiFactory(url, login, token) },
+    )
+
+    constructor(context: Context, authStore: AuthStore) : this(
+        authStore,
+        FirebaseConfigStore(context),
+        FirebaseBootstrap(context),
+        FirebaseRegistration(),
+        { config, session, deviceId, installationId ->
+            persistRegisteredInstallation(
+                installationId = installationId,
+                config = config,
+                session = session,
+                deviceId = deviceId,
+                store = PushRegistrationStore(context),
+                enqueue = { PushRegistrationScheduler(context).enqueue() },
+            )
+        },
+    )
 
     fun checkServer(url: String): ServerCheckResult {
         return checkServerDetails(url).result
@@ -70,61 +120,52 @@ class ContactRepository(
 
     fun signIn(url: String, login: String, token: String, deviceId: String = ""): ContactPage {
         val previous = authStore.load()
-        var session = Session(url.trim().trimEnd('/'), login.trim(), token.trim())
-        var expectedCurrent = previous
+        var session = Session(normalizeServerUrl(url), login.trim(), token.trim())
         var api = api(session)
         return try {
-            val info = api.requireCompatibleServer()
-            val managed = SINGLE_DEVICE_SESSION_FEATURE in info.features
+            val info = api.requireDynamicFirebaseServer()
+            require(deviceId.isNotBlank()) { "device_id is required for Firebase activation" }
+            val configStore = checkNotNull(firebaseConfigStore) { "Firebase activation is unavailable" }
+            val bootstrap = checkNotNull(firebaseBootstrap) { "Firebase activation is unavailable" }
+            val registration = checkNotNull(firebaseRegistration) { "Firebase activation is unavailable" }
+            val config = api.firebaseConfig()
+            val storedConfig = configStore.save(session.url, config)
+            when (bootstrap.restore()) {
+                FirebaseBootstrapResult.ConfigurationMismatch -> throw FirebaseConfigurationRestartRequiredException()
+                FirebaseBootstrapResult.Absent -> error("persisted Firebase configuration is unavailable")
+                FirebaseBootstrapResult.Initialized,
+                FirebaseBootstrapResult.AlreadyInitialized -> Unit
+            }
+            val firebaseInstallationId = registration.registerAndGetInstallationId()
+            val sessionId = api.claimSession(deviceId, firebaseInstallationId, storedConfig.configId)
             session = session.copy(
                 features = info.features,
-                sessionId = if (managed) {
-                    require(deviceId.isNotBlank()) { "device_id is required for managed sessions" }
-                    api.claimSession(deviceId)
-                } else {
-                    null
-                },
+                sessionId = sessionId,
+                configId = storedConfig.configId,
             )
-            if (managed) {
-                check(authStore.saveIfCurrent(expectedCurrent, session)) { "authentication state changed" }
-                expectedCurrent = session
-            }
+            check(authStore.saveIfCurrent(previous, session)) { "authentication state changed" }
+            onSessionActivated(storedConfig, session, deviceId, firebaseInstallationId)
             api = api(session)
             val profile = api.me()
-            val contacts = api.contactsPage().withoutUser(profile.login)
-            check(authStore.saveIfCurrent(expectedCurrent, session)) { "authentication state changed" }
-            contacts
+            api.contactsPage().withoutUser(profile.login)
         } catch (e: ApiException) {
             handleUnauthorized(e, session)
             throw e
         }
     }
 
-    fun restoreContacts(deviceId: String = ""): ContactPage? {
-        val storedSession = authStore.load() ?: return null
+    fun restorableSession(): Session? = authStore.loadBoundTo(firebaseConfigStore?.load())
+
+    fun restoreContacts(): ContactPage? {
+        val storedSession = restorableSession() ?: return null
         var session = storedSession
-        var expectedCurrent = storedSession
-        var api = api(session)
+        val api = api(session)
         return try {
-            val info = api.requireCompatibleServer()
-            val claimed = SINGLE_DEVICE_SESSION_FEATURE in info.features && session.sessionId == null
-            session = session.copy(
-                features = info.features,
-                sessionId = if (claimed) {
-                    require(deviceId.isNotBlank()) { "device_id is required for managed sessions" }
-                    api.claimSession(deviceId)
-                } else {
-                    session.sessionId
-                },
-            )
-            if (claimed) {
-                check(authStore.saveIfCurrent(expectedCurrent, session)) { "authentication state changed" }
-                expectedCurrent = session
-                api = api(session)
-            }
+            val info = api.requireDynamicFirebaseServer()
+            session = session.copy(features = info.features)
             val profile = api.me()
             val contacts = api.contactsPage().withoutUser(profile.login)
-            if (authStore.saveIfCurrent(expectedCurrent, session)) contacts else null
+            if (authStore.saveIfCurrent(storedSession, session)) contacts else null
         } catch (e: ApiException) {
             handleUnauthorized(e, session)
             throw e
@@ -196,6 +237,14 @@ private fun ContactPage.withoutUser(login: String): ContactPage =
 private fun HouseholdApi.requireCompatibleServer(): ServerInfo {
     val info = serverInfo()
     throw ServerCompatibilityException(info.compatibilityProblem() ?: return info)
+}
+
+private fun HouseholdApi.requireDynamicFirebaseServer(): ServerInfo {
+    val info = requireCompatibleServer()
+    if (DYNAMIC_FCM_FEATURE !in info.features) {
+        throw ServerCompatibilityException(CompatibilityProblem.ServerOutdated)
+    }
+    return info
 }
 
 private fun ServerInfo.compatibilityProblem(): CompatibilityProblem? = when {

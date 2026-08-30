@@ -3,6 +3,7 @@ package org.tinitalk.data
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.annotations.SerializedName
+import org.tinitalk.push.FirebaseClientConfig
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -110,13 +111,14 @@ class ApiException(
 
 interface HouseholdApi {
     fun serverInfo(): ServerInfo
+    fun firebaseConfig(): FirebaseClientConfig
     fun me(): Profile
     fun contactsPage(limit: Int = 20, cursor: String = ""): ContactPage
     fun updateContactName(login: String, customName: String?): Contact
     fun calls(limit: Int = 50, before: Long = 0, peerLogin: String? = null): CallHistoryPage
     fun markCallsRead(throughId: Long, peerLogin: String? = null): CallUnreadState
-    fun putDevice(deviceId: String, fcmToken: String)
-    fun claimSession(deviceId: String): String
+    fun putDevice(deviceId: String, firebaseInstallationId: String, configId: String)
+    fun claimSession(deviceId: String, firebaseInstallationId: String, configId: String): String
 }
 
 class UrlConnectionApiClient(
@@ -127,6 +129,9 @@ class UrlConnectionApiClient(
 ) : HouseholdApi {
     override fun serverInfo(): ServerInfo =
         get("/healthz", ServerInfoWire::class.java, authenticated = false).toServerInfo()
+
+    override fun firebaseConfig(): FirebaseClientConfig =
+        get("/api/firebase-config", FirebaseClientConfig::class.java, includeSessionId = false)
 
     override fun me(): Profile =
         get("/api/me", Profile::class.java)
@@ -158,35 +163,57 @@ class UrlConnectionApiClient(
         return put("/api/calls/read", request, CallHistoryReadResult::class.java).toCallUnreadState()
     }
 
-    override fun putDevice(deviceId: String, fcmToken: String) {
-        put<Unit>("/api/device", mapOf("device_id" to deviceId, "fcm_token" to fcmToken), null)
+    override fun putDevice(deviceId: String, firebaseInstallationId: String, configId: String) {
+        write<Unit>(
+            "PUT",
+            "/api/device",
+            linkedMapOf(
+                "device_id" to deviceId,
+                "firebase_installation_id" to firebaseInstallationId,
+                "config_id" to configId,
+            ),
+            null,
+            expectedStatus = 204,
+        )
     }
 
-    override fun claimSession(deviceId: String): String =
+    override fun claimSession(deviceId: String, firebaseInstallationId: String, configId: String): String =
         write(
             "POST",
             "/api/session",
-            mapOf("device_id" to deviceId),
+            linkedMapOf(
+                "device_id" to deviceId,
+                "firebase_installation_id" to firebaseInstallationId,
+                "config_id" to configId,
+            ),
             SessionClaimWire::class.java,
+            includeSessionId = false,
         ).sessionId.takeIf(String::isNotBlank) ?: throw IllegalStateException("empty session_id")
 
     private fun <T> put(path: String, value: Any, type: Class<T>?): T {
         return write("PUT", path, value, type)
     }
 
-    private fun <T> write(method: String, path: String, value: Any, type: Class<T>?): T {
+    private fun <T> write(
+        method: String,
+        path: String,
+        value: Any,
+        type: Class<T>?,
+        includeSessionId: Boolean = true,
+        expectedStatus: Int? = null,
+    ): T {
         val body = gson.toJson(value).toByteArray(Charsets.UTF_8)
         val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 5000
             readTimeout = 5000
             doOutput = true
-            authenticate(this)
+            authenticate(this, includeSessionId)
             setRequestProperty("Content-Type", "application/json")
             outputStream.use { it.write(body) }
         }
         val code = connection.responseCode
-        if (code !in 200..299) {
+        if (expectedStatus?.let { code != it } ?: (code !in 200..299)) {
             throw connection.apiException(code)
         }
         if (type == null) {
@@ -196,12 +223,17 @@ class UrlConnectionApiClient(
         return gson.fromJson(connection.inputStream.bufferedReader().readText(), type)
     }
 
-    private fun <T> get(path: String, type: Class<T>, authenticated: Boolean = true): T {
+    private fun <T> get(
+        path: String,
+        type: Class<T>,
+        authenticated: Boolean = true,
+        includeSessionId: Boolean = true,
+    ): T {
         val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
             readTimeout = 5000
-            if (authenticated) authenticate(this)
+            if (authenticated) authenticate(this, includeSessionId)
         }
         val code = connection.responseCode
         if (code !in 200..299) {
@@ -210,9 +242,9 @@ class UrlConnectionApiClient(
         return gson.fromJson(connection.inputStream.bufferedReader().readText(), type)
     }
 
-    private fun authenticate(connection: HttpURLConnection) {
+    private fun authenticate(connection: HttpURLConnection, includeSessionId: Boolean = true) {
         connection.setRequestProperty("Authorization", basicAuth())
-        sessionId?.let { connection.setRequestProperty(SessionIdHeader, it) }
+        if (includeSessionId) sessionId?.let { connection.setRequestProperty(SessionIdHeader, it) }
     }
 
     private fun HttpURLConnection.apiException(code: Int): ApiException = ApiException(

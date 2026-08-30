@@ -1,138 +1,211 @@
 package org.tinitalk.data
 
+import com.google.android.gms.tasks.Tasks
+import com.google.firebase.FirebaseOptions
+import org.tinitalk.push.FirebaseBootstrap
+import org.tinitalk.push.FirebaseClientConfig
+import org.tinitalk.push.FirebaseConfigPersistence
+import org.tinitalk.push.FirebaseConfigStore
+import org.tinitalk.push.FirebaseRegistration
+import org.tinitalk.push.FirebaseRuntime
+import org.tinitalk.push.StoredFirebaseConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class ContactRepositoryTest {
     @Test
-    fun signInPersistsObservedServerFeatures() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val api = FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("video_1to1")))
-        val repo = ContactRepository(store) { _, _, _ -> api }
-
-        repo.signIn("https://host", "alice", "token")
-
-        assertEquals(setOf("video_1to1"), store.load()?.features)
-        assertEquals(0, api.claimRequests)
-    }
-
-    @Test
-    fun manualSignInClaimsAdvertisedSingleDeviceSession() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val api = FakeApiClient(
-            serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("single_device_session")),
-            claimedSessionId = "session-123",
-        )
-        val repo = ContactRepository(store) { _, _, _ -> api }
-
-        repo.signIn("https://host", "alice", "token", deviceId = "android-device")
-
-        assertEquals(1, api.claimRequests)
-        assertEquals("android-device", api.claimedDeviceId)
-        assertEquals("session-123", store.load()?.sessionId)
-    }
-
-    @Test
-    fun newClientSilentlyClaimsLegacySessionDuringRestore() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token"))
-        val api = FakeApiClient(
-            serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("single_device_session")),
-            claimedSessionId = "session-restored",
-        )
-        val repo = ContactRepository(store) { _, _, _ -> api }
-
-        repo.restoreContacts(deviceId = "android-device")
-
-        assertEquals(1, api.claimRequests)
-        assertEquals("android-device", api.claimedDeviceId)
-        assertEquals("session-restored", store.load()?.sessionId)
-    }
-
-    @Test
-    fun restorePersistsClaimBeforeLaterNetworkFailure() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token"))
-        val api = FakeApiClient(
-            serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("single_device_session")),
-            claimedSessionId = "session-restored",
-            error = ApiException(503, "offline"),
-        )
-        val repo = ContactRepository(store) { _, _, _ -> api }
-
-        runCatching { repo.restoreContacts(deviceId = "android-device") }
-
-        assertEquals("session-restored", store.load()?.sessionId)
-    }
-
-    @Test
-    fun restoreBuildsAuthenticatedApiWithPersistedSessionId() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token", sessionId = "session-123"))
-        val seenSessionIds = mutableListOf<String?>()
-        val api = FakeApiClient()
-        val repo = ContactRepository(
-            store,
-            apiFactory = { _, _, _, sessionId ->
-                seenSessionIds += sessionId
-                api
-            },
+    fun activationFailuresStopAtTheirBoundaryWithoutSavingASession() {
+        val cases = listOf(
+            FailureCase(Failure.MissingFeature, listOf("health"), ServerCompatibilityException::class.java),
+            FailureCase(Failure.ConfigFetch, listOf("health", "firebase-config"), ApiException::class.java),
+            FailureCase(
+                Failure.ConfigSave,
+                listOf("health", "firebase-config", "save-config", "save-config"),
+                IllegalStateException::class.java,
+            ),
+            FailureCase(
+                Failure.Register,
+                listOf("health", "firebase-config", "save-config", "bootstrap", "register"),
+                Exception::class.java,
+            ),
+            FailureCase(
+                Failure.InstallationId,
+                listOf("health", "firebase-config", "save-config", "bootstrap", "register", "installation-id"),
+                Exception::class.java,
+            ),
+            FailureCase(
+                Failure.Claim,
+                listOf(
+                    "health", "firebase-config", "save-config", "bootstrap", "register", "installation-id",
+                    "claim-session",
+                ),
+                ApiException::class.java,
+            ),
+            FailureCase(
+                Failure.StaleClaim,
+                listOf(
+                    "health", "firebase-config", "save-config", "bootstrap", "register", "installation-id",
+                    "claim-session",
+                ),
+                ApiException::class.java,
+            ),
         )
 
-        repo.restoreContacts()
+        cases.forEach { case ->
+            val fixture = RepositoryFixture(case.failure)
 
-        assertEquals(listOf("session-123"), seenSessionIds)
-        assertEquals(0, api.claimRequests)
-    }
+            val error = runCatching {
+                onRepositoryThread {
+                    fixture.repository.signIn("https://host.example/", "alice", "token", "android-device")
+                }
+            }.exceptionOrNull()
 
-    @Test
-    fun restorePersistsFeaturesObservedAfterLegacySessionLoad() {
-        val values = MemoryKeyValueStore().apply {
-            put("url", "https://host")
-            put("login", "alice")
-            put("token", "nekot")
-            put("iv", "iv")
+            assertTrue("${case.failure}: $error", case.errorType.isInstance(error))
+            assertEquals(case.failure.toString(), case.expectedTrace, fixture.trace)
+            assertNull(fixture.authStore.load())
+            assertEquals(0, fixture.api.profileRequests)
+            assertEquals(0, fixture.api.contactsRequests)
         }
-        val store = AuthStore(values, PrefixTokenCipher())
-        val repo = ContactRepository(store) { _, _, _ ->
-            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("video_1to1")))
-        }
-
-        repo.restoreContacts()
-
-        assertEquals(setOf("video_1to1"), store.load()?.features)
     }
 
     @Test
-    fun successfulCheckRefreshesFeaturesForMatchingStoredServer() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token", setOf("stale_feature")))
-        val repo = ContactRepository(store) { _, _, _ ->
-            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, features = setOf("video_1to1")))
-        }
+    fun configurationMismatchPersistsOnlyPublicConfigAndRequiresRestart() {
+        val fixture = RepositoryFixture(existingOptions = firebaseOptions(projectId = "already-active-project"))
 
-        assertEquals(ServerCheckResult.Available, repo.checkServer("https://host/"))
+        val error = runCatching {
+            onRepositoryThread {
+                fixture.repository.signIn("https://host.example", "alice", "entered-token", "android-device")
+            }
+        }.exceptionOrNull()
 
-        assertEquals(setOf("video_1to1"), store.load()?.features)
+        assertTrue(error is FirebaseConfigurationRestartRequiredException)
+        assertEquals(listOf("health", "firebase-config", "save-config", "bootstrap"), fixture.trace)
+        assertEquals("sha256:config", fixture.configStore.load()?.configId)
+        assertNull(fixture.authStore.load())
     }
 
     @Test
-    fun reportsServerApiAndCommitDetails() {
-        val repo = ContactRepository(AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())) { _, _, _ ->
-            FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 3, commit = "01234567"))
+    fun activatesWithoutPermissionInputAndLoadsHomeDataInExactOrder() {
+        val fixture = RepositoryFixture()
+
+        val page = onRepositoryThread {
+            fixture.repository.signIn(
+                " https://host.example/// ",
+                " alice ",
+                " token\n",
+                "android-device",
+            )
         }
 
         assertEquals(
-            ServerCheckDetails(ServerCheckResult.Available, apiVersion = 3, commit = "01234567"),
-            repo.checkServerDetails("https://host"),
+            listOf(
+                "health", "firebase-config", "save-config", "bootstrap", "register", "installation-id",
+                "claim-session", "save-session", "persist-registration", "me", "contacts",
+            ),
+            fixture.trace,
         )
+        assertEquals(listOf(Contact("bob", "Bob")), page.items)
+        assertEquals(
+            Session(
+                "https://host.example",
+                "alice",
+                "token",
+                features = setOf("dynamic_fcm_v1", "single_device_session"),
+                sessionId = "session-123",
+                configId = "sha256:config",
+            ),
+            fixture.authStore.load(),
+        )
+        assertEquals(ActivationRequest("android-device", "fid-123", "sha256:config"), fixture.api.claim)
+    }
+
+    @Test
+    fun serverConfirmedSessionRemainsSavedWhenLaterHomeDataLoadFails() {
+        val fixture = RepositoryFixture(failure = Failure.Profile)
+
+        val result = runCatching {
+            onRepositoryThread {
+                fixture.repository.signIn("https://host.example", "alice", "token", "android-device")
+            }
+        }
+
+        assertTrue(result.isFailure)
+        assertEquals("session-123", fixture.authStore.load()?.sessionId)
+        assertEquals("sha256:config", fixture.authStore.load()?.configId)
+        assertEquals(0, fixture.api.contactsRequests)
+    }
+
+    @Test
+    fun restoresOnlyASessionBoundToTheStoredNormalizedServerAndConfig() {
+        val bound = Session(
+            "https://host.example/",
+            "alice",
+            "token",
+            features = setOf("dynamic_fcm_v1"),
+            sessionId = "session-123",
+            configId = "sha256:config",
+        )
+        val cases = listOf(
+            Triple("matching", bound, storedConfig("https://host.example", "sha256:config")),
+            Triple("legacy", bound.copy(configId = null), storedConfig("https://host.example", "sha256:config")),
+            Triple("url mismatch", bound, storedConfig("https://other.example", "sha256:config")),
+            Triple("config mismatch", bound, storedConfig("https://host.example", "sha256:other")),
+            Triple("missing config", bound, null),
+        )
+
+        cases.forEach { (name, session, config) ->
+            val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()).apply { save(session) }
+            val trace = mutableListOf<String>()
+            val configStore = firebaseConfigStore(config)
+            val api = FakeApiClient(trace = trace)
+            val repository = repository(store, configStore, api)
+
+            val contacts = repository.restoreContacts()
+
+            if (name == "matching") {
+                assertEquals(listOf(Contact("bob", "Bob")), contacts?.items)
+                assertEquals(listOf("health", "me", "contacts"), trace)
+            } else {
+                assertNull(name, contacts)
+                assertEquals(name, emptyList<String>(), trace)
+            }
+        }
+    }
+
+    @Test
+    fun restoreRejectsServerThatNoLongerAdvertisesDynamicFirebase() {
+        val session = Session(
+            "https://host.example",
+            "alice",
+            "token",
+            sessionId = "session-123",
+            configId = "sha256:config",
+        )
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()).apply { save(session) }
+        val api = FakeApiClient(serverInfo = healthyInfo(features = emptySet()))
+        val repository = repository(
+            store,
+            firebaseConfigStore(storedConfig("https://host.example", "sha256:config")),
+            api,
+        )
+
+        val error = runCatching { repository.restoreContacts() }.exceptionOrNull()
+
+        assertTrue(error is ServerCompatibilityException)
+        assertEquals(0, api.profileRequests)
     }
 
     @Test
     fun reportsServerAddressHealthWithoutStartingAuthentication() {
         val cases = listOf(
-            ServerInfo("tinitalk", "ok", 3) to ServerCheckResult.Available,
+            healthyInfo() to ServerCheckResult.Available,
             ServerInfo("another-service", "ok", 3) to ServerCheckResult.WrongServer,
             ServerInfo("tinitalk", "ok", 2) to ServerCheckResult.ServerOutdated,
             ServerInfo("tinitalk", "ok", 4) to ServerCheckResult.AppOutdated,
@@ -142,194 +215,59 @@ class ContactRepositoryTest {
         cases.forEach { (serverInfo, expected) ->
             val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
             val api = FakeApiClient(serverInfo = serverInfo)
-            val repo = ContactRepository(store) { _, _, _ -> api }
+            val repository = ContactRepository(store) { _, _, _ -> api }
 
-            assertEquals(expected, repo.checkServer(" https://host/ "))
+            assertEquals(expected, repository.checkServer(" https://host.example/ "))
             assertEquals(0, api.profileRequests)
             assertNull(store.load())
         }
     }
 
     @Test
-    fun reportsUnavailableWhenServerCheckCannotConnect() {
-        val repo = ContactRepository(AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())) { _, _, _ ->
-            FakeApiClient(serverInfoError = IllegalStateException("offline"))
-        }
-
-        assertEquals(ServerCheckResult.Unavailable, repo.checkServer("https://host"))
-    }
-
-    @Test
-    fun rejectsWrongServerOrIncompatibleApiBeforeAuthentication() {
-        val cases = listOf(
-            ServerInfo("another-service", "ok", 3) to CompatibilityProblem.WrongServer,
-            ServerInfo("tinitalk", "ok", 2) to CompatibilityProblem.ServerOutdated,
-            ServerInfo("tinitalk", "ok", 4) to CompatibilityProblem.AppOutdated,
+    fun staleUnauthorizedRestoreDoesNotClearAReplacementSession() {
+        val config = storedConfig("https://host.example", "sha256:config")
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val old = Session(
+            "https://host.example",
+            "alice",
+            "old",
+            sessionId = "old-session",
+            configId = config.configId,
         )
-
-        cases.forEach { (serverInfo, expectedProblem) ->
-            val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-            val api = FakeApiClient(serverInfo = serverInfo)
-            val repo = ContactRepository(store) { _, _, _ -> api }
-
-            val error = runCatching {
-                repo.signIn("https://host", "alice", "token")
-            }.exceptionOrNull() as? ServerCompatibilityException
-
-            assertEquals(expectedProblem, error?.problem)
-            assertEquals(0, api.profileRequests)
-            assertNull(store.load())
-        }
-    }
-
-    @Test
-    fun checksServerCompatibilityWhenRestoringSavedSession() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token"))
-        val api = FakeApiClient(serverInfo = ServerInfo("tinitalk", "ok", 2))
-        val repo = ContactRepository(store) { _, _, _ -> api }
-
-        val error = runCatching { repo.restoreContacts() }
-            .exceptionOrNull() as? ServerCompatibilityException
-
-        assertEquals(CompatibilityProblem.ServerOutdated, error?.problem)
-        assertEquals(0, api.profileRequests)
-    }
-
-    @Test
-    fun verifiesCredentialsBeforeSavingAndFiltersSelf() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val replacement = old.copy(token = "new", sessionId = "new-session")
+        store.save(old)
         val api = FakeApiClient(
-            profile = Profile("alice", "Alice"),
-            contacts = listOf(Contact("alice", "Alice"), Contact("bob", "Bob")),
+            error = ApiException(401, "unauthorized"),
+            beforeError = { store.save(replacement) },
         )
-        val repo = ContactRepository(store) { _, _, _ -> api }
+        val repository = repository(store, firebaseConfigStore(config), api)
 
-        val page = repo.signIn("https://host", "alice", "token")
+        runCatching { repository.restoreContacts() }
 
-        assertEquals(listOf(Contact("bob", "Bob")), page.items)
-        assertEquals(Session("https://host", "alice", "token"), store.load())
-    }
-
-    @Test
-    fun keepsServerContactOrder() {
-        val repo = ContactRepository(AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())) { _, _, _ ->
-            FakeApiClient(
-                profile = Profile("self", "Я"),
-                contacts = listOf(
-                    Contact("anna", "Яна"),
-                    Contact("maria", "мария"),
-                    Contact("zoe", "Анна"),
-                ),
-            )
-        }
-
-        val page = repo.signIn("https://host", "self", "token")
-
-        assertEquals(listOf("Яна", "мария", "Анна"), page.items.map(Contact::displayName))
-    }
-
-    @Test
-    fun trimsManualCredentialsBeforeAuthenticatingAndSaving() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        var captured: Session? = null
-        val repo = ContactRepository(store) { url, login, token ->
-            captured = Session(url, login, token)
-            FakeApiClient(profile = Profile("alex", "Alex"))
-        }
-
-        repo.signIn(" https://tinitalk.example.com/ ", " alex ", " token\n")
-
-        val expected = Session("https://tinitalk.example.com", "alex", "token")
-        assertEquals(expected, captured)
-        assertEquals(expected, store.load())
-    }
-
-    @Test
-    fun invalidTokenClearsSession() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "bad"))
-        val repo = ContactRepository(store) { _, _, _ -> FakeApiClient(error = ApiException(401, "unauthorized")) }
-
-        val result = runCatching { repo.signIn("https://host", "alice", "bad") }
-
-        assertEquals(true, result.isFailure)
-        assertNull(store.load())
-    }
-
-    @Test
-    fun invalidTokenClearsFeatureBearingSessionWithSameCredentials() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "bad", setOf("video_1to1")))
-        val repo = ContactRepository(store) { _, _, _ -> FakeApiClient(error = ApiException(401, "unauthorized")) }
-
-        val result = runCatching { repo.signIn("https://host", "alice", "bad") }
-
-        assertEquals(true, result.isFailure)
-        assertNull(store.load())
-    }
-
-    @Test
-    fun staleUnauthorizedDoesNotClearNewSession() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val oldSession = Session("https://host", "alice", "old")
-        val newSession = Session("https://host", "bob", "new")
-        store.save(oldSession)
-        val repo = ContactRepository(store) { _, _, _ ->
-            FakeApiClient(
-                error = ApiException(401, "unauthorized"),
-                beforeError = { store.save(newSession) },
-            )
-        }
-
-        runCatching { repo.restoreContacts() }
-
-        assertEquals(newSession, store.load())
-    }
-
-    @Test
-    fun staleReplacementUnauthorizedDoesNotInvalidateNewSession() {
-        AuthSessionEvents.clear()
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val oldSession = Session("https://host", "alice", "old", sessionId = "old-session")
-        val newSession = Session("https://host", "alice", "new", sessionId = "new-session")
-        store.save(oldSession)
-        val events = mutableListOf<AuthSessionEvent>()
-        val observer: (AuthSessionEvent) -> Unit = events::add
-        AuthSessionEvents.observe(observer)
-        try {
-            val repo = ContactRepository(store) { _, _, _ ->
-                FakeApiClient(
-                    error = ApiException(401, "replaced", SessionReplacedReason),
-                    beforeError = { store.save(newSession) },
-                )
-            }
-
-            runCatching { repo.restoreContacts() }
-
-            assertEquals(newSession, store.load())
-            assertEquals(emptyList<AuthSessionEvent>(), events)
-        } finally {
-            AuthSessionEvents.removeObserver(observer)
-            AuthSessionEvents.clear()
-        }
+        assertEquals(replacement, store.load())
     }
 
     @Test
     fun currentReplacementUnauthorizedPublishesInvalidation() {
         AuthSessionEvents.clear()
+        val config = storedConfig("https://host.example", "sha256:config")
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val session = Session("https://host", "alice", "token", sessionId = "session-123")
+        val session = Session(
+            "https://host.example",
+            "alice",
+            "token",
+            sessionId = "session-123",
+            configId = config.configId,
+        )
         store.save(session)
         val events = mutableListOf<AuthSessionEvent>()
         val observer: (AuthSessionEvent) -> Unit = events::add
         AuthSessionEvents.observe(observer)
         try {
-            val repo = ContactRepository(store) { _, _, _ ->
-                FakeApiClient(error = ApiException(401, "replaced", SessionReplacedReason))
-            }
+            val api = FakeApiClient(error = ApiException(401, "replaced", SessionReplacedReason))
+            val repository = repository(store, firebaseConfigStore(config), api)
 
-            runCatching { repo.restoreContacts() }
+            runCatching { repository.restoreContacts() }
 
             assertNull(store.load())
             assertEquals(listOf(AuthSessionEvent(session)), events)
@@ -340,95 +278,148 @@ class ContactRepositoryTest {
     }
 
     @Test
-    fun signOutClearsSavedSession() {
+    fun signOutAndAuthenticatedDataOperationsKeepExistingBehavior() {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token"))
-        val repo = ContactRepository(store) { _, _, _ -> FakeApiClient() }
+        store.save(Session("https://host", "alice", "token", sessionId = "session-123", configId = "config"))
+        val history = CallHistoryPage(
+            listOf(CallHistoryItem(7, "bob", "Bob", "outgoing", "completed", true, 1787740200, 65)),
+            5,
+            7,
+            1,
+        )
+        val api = FakeApiClient(callHistory = history)
+        val repository = ContactRepository(store) { _, _, _ -> api }
 
-        repo.signOut()
-
+        assertEquals(history, repository.loadCallHistory(peerLogin = "bob"))
+        assertEquals("bob", api.requestedPeer)
+        repository.signOut()
         assertNull(store.load())
     }
 
-    @Test
-    fun loadsCallHistoryUsingSavedSession() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token"))
-        val expected = CallHistoryPage(
-            items = listOf(CallHistoryItem(7, "bob", "Bob", "outgoing", "completed", true, 1787740200, 65)),
-            nextBefore = 5,
-            latestId = 7,
-            unreadMissedCount = 1,
-        )
-        val api = FakeApiClient(callHistory = expected)
-        val repo = ContactRepository(store) { _, _, _ -> api }
+    private fun repository(
+        store: AuthStore,
+        configStore: FirebaseConfigStore,
+        api: FakeApiClient,
+    ) = ContactRepository(
+        authStore = store,
+        firebaseConfigStore = configStore,
+        firebaseBootstrap = FirebaseBootstrap(configStore, NoOpFirebaseRuntime),
+        firebaseRegistration = FirebaseRegistration(
+            register = { Tasks.forResult(null) },
+            installationId = { Tasks.forResult("fid-123") },
+        ),
+        apiFactory = { _, _, _, _ -> api },
+    )
+}
 
-        assertEquals(expected, repo.loadCallHistory(peerLogin = "bob"))
-        assertEquals("bob", api.requestedPeer)
-    }
+private fun <T> onRepositoryThread(block: () -> T): T {
+    var result: Result<T>? = null
+    val thread = Thread { result = runCatching(block) }
+    thread.start()
+    thread.join()
+    return requireNotNull(result).getOrThrow()
+}
 
-    @Test
-    fun refreshesContactsWithoutReloadingProfile() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token"))
-        val api = FakeApiClient(
-            contacts = listOf(
-                Contact("alice", "Alice"),
-                Contact("bob", "Bob"),
-            ),
-        )
-        val repo = ContactRepository(store) { _, _, _ -> api }
+private enum class Failure {
+    MissingFeature,
+    ConfigFetch,
+    ConfigSave,
+    Register,
+    InstallationId,
+    Claim,
+    StaleClaim,
+    Profile,
+    None,
+}
 
-        val page = repo.refreshContacts(cursor = "next-page")
+private data class FailureCase(
+    val failure: Failure,
+    val expectedTrace: List<String>,
+    val errorType: Class<out Throwable>,
+)
 
-        assertEquals(listOf("bob"), page?.items?.map(Contact::login))
-        assertEquals(0, api.profileRequests)
-        assertEquals(1, api.contactsRequests)
-        assertEquals("next-page", api.requestedContactCursor)
-    }
+private data class ActivationRequest(
+    val deviceId: String,
+    val installationId: String,
+    val configId: String,
+)
 
-    @Test
-    fun updatesContactAndMarksOnlyItsHistoryRead() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "token"))
-        val updated = Contact("bob", "Мама", "Bob", "Мама")
-        val unreadAfterRead = CallUnreadState(2, listOf(UnreadMissedContact("carol", 1_787_743_800)))
-        val api = FakeApiClient(updatedContact = updated, unreadAfterRead = unreadAfterRead)
-        val repo = ContactRepository(store) { _, _, _ -> api }
-
-        assertEquals(updated, repo.updateContactName("bob", "Мама"))
-        assertEquals(unreadAfterRead, repo.markCallHistoryRead(42, peerLogin = "bob"))
-        assertEquals("bob", api.updatedLogin)
-        assertEquals("Мама", api.updatedName)
-        assertEquals("bob", api.readPeer)
-    }
+private class RepositoryFixture(
+    failure: Failure = Failure.None,
+    existingOptions: FirebaseOptions? = null,
+) {
+    val trace = mutableListOf<String>()
+    val authStore = AuthStore(TraceAuthKeyValueStore(trace), PrefixTokenCipher())
+    val configStore = FirebaseConfigStore(
+        TraceFirebaseConfigPersistence(trace, acceptCommits = failure != Failure.ConfigSave),
+    )
+    val api = FakeApiClient(
+        trace = trace,
+        serverInfo = if (failure == Failure.MissingFeature) healthyInfo(features = emptySet()) else healthyInfo(),
+        firebaseConfigError = ApiException(503, "config unavailable").takeIf { failure == Failure.ConfigFetch },
+        claimError = when (failure) {
+            Failure.Claim -> ApiException(503, "claim unavailable")
+            Failure.StaleClaim -> ApiException(409, "stale Firebase config")
+            else -> null
+        },
+        error = ApiException(503, "profile unavailable").takeIf { failure == Failure.Profile },
+    )
+    val repository = ContactRepository(
+        authStore = authStore,
+        firebaseConfigStore = configStore,
+        firebaseBootstrap = FirebaseBootstrap(configStore, TraceFirebaseRuntime(trace, existingOptions)),
+        firebaseRegistration = FirebaseRegistration(
+            register = {
+                trace += "register"
+                if (failure == Failure.Register) {
+                    Tasks.forException(IllegalStateException("registration failed"))
+                } else {
+                    Tasks.forResult(null)
+                }
+            },
+            installationId = {
+                trace += "installation-id"
+                if (failure == Failure.InstallationId) {
+                    Tasks.forException(IllegalStateException("FID failed"))
+                } else {
+                    Tasks.forResult("fid-123")
+                }
+            },
+        ),
+        onSessionActivated = { _, _, _, _ -> trace += "persist-registration" },
+        apiFactory = { _, _, _, _ -> api },
+    )
 }
 
 private class FakeApiClient(
-    private val serverInfo: ServerInfo = ServerInfo("tinitalk", "ok", 3),
-    private val serverInfoError: RuntimeException? = null,
+    private val trace: MutableList<String> = mutableListOf(),
+    private val serverInfo: ServerInfo = healthyInfo(),
+    private val firebaseConfigError: RuntimeException? = null,
+    private val claimError: RuntimeException? = null,
     private val profile: Profile = Profile("alice", "Alice"),
-    private val contacts: List<Contact> = emptyList(),
+    private val contacts: List<Contact> = listOf(Contact("alice", "Alice"), Contact("bob", "Bob")),
     private val callHistory: CallHistoryPage = CallHistoryPage(emptyList(), 0, 0, 0),
-    private val updatedContact: Contact = Contact("bob", "Bob"),
-    private val unreadAfterRead: CallUnreadState = CallUnreadState(0, emptyList()),
     private val error: RuntimeException? = null,
     private val beforeError: (() -> Unit)? = null,
-    private val claimedSessionId: String = "session-id",
 ) : HouseholdApi {
     var profileRequests = 0
     var contactsRequests = 0
-    var requestedContactCursor = ""
     var requestedPeer: String? = null
-    var updatedLogin: String? = null
-    var updatedName: String? = null
-    var readPeer: String? = null
-    var claimRequests = 0
-    var claimedDeviceId: String? = null
+    var claim: ActivationRequest? = null
 
-    override fun serverInfo(): ServerInfo = serverInfoError?.let { throw it } ?: serverInfo
+    override fun serverInfo(): ServerInfo {
+        trace += "health"
+        return serverInfo
+    }
+
+    override fun firebaseConfig(): FirebaseClientConfig {
+        trace += "firebase-config"
+        firebaseConfigError?.let { throw it }
+        return clientConfig()
+    }
 
     override fun me(): Profile {
+        trace += "me"
         profileRequests++
         error?.let {
             beforeError?.invoke()
@@ -438,33 +429,110 @@ private class FakeApiClient(
     }
 
     override fun contactsPage(limit: Int, cursor: String): ContactPage {
+        trace += "contacts"
         contactsRequests++
-        requestedContactCursor = cursor
-        error?.let { throw it }
         return ContactPage(contacts, "")
     }
 
-    override fun updateContactName(login: String, customName: String?): Contact {
-        updatedLogin = login
-        updatedName = customName
-        return updatedContact
-    }
-
+    override fun updateContactName(login: String, customName: String?): Contact = Contact(login, customName ?: login)
     override fun calls(limit: Int, before: Long, peerLogin: String?): CallHistoryPage {
         requestedPeer = peerLogin
         return callHistory
     }
-
-    override fun markCallsRead(throughId: Long, peerLogin: String?): CallUnreadState {
-        readPeer = peerLogin
-        return unreadAfterRead
-    }
-
-    override fun putDevice(deviceId: String, fcmToken: String) = Unit
-
-    override fun claimSession(deviceId: String): String {
-        claimRequests++
-        claimedDeviceId = deviceId
-        return claimedSessionId
+    override fun markCallsRead(throughId: Long, peerLogin: String?): CallUnreadState = CallUnreadState(0, emptyList())
+    override fun putDevice(deviceId: String, firebaseInstallationId: String, configId: String) = Unit
+    override fun claimSession(deviceId: String, firebaseInstallationId: String, configId: String): String {
+        trace += "claim-session"
+        claim = ActivationRequest(deviceId, firebaseInstallationId, configId)
+        claimError?.let { throw it }
+        return "session-123"
     }
 }
+
+private class TraceAuthKeyValueStore(private val trace: MutableList<String>) : KeyValueStore {
+    private val values = linkedMapOf<String, String>()
+    override fun get(key: String): String? = values[key]
+    override fun put(key: String, value: String) {
+        if (key == "url") trace += "save-session"
+        values[key] = value
+    }
+    override fun remove(vararg keys: String) {
+        keys.forEach(values::remove)
+    }
+    override fun values(): List<String> = values.values.toList()
+}
+
+private class TraceFirebaseConfigPersistence(
+    private val trace: MutableList<String>,
+    private val acceptCommits: Boolean,
+) : FirebaseConfigPersistence {
+    private var value: String? = null
+    override fun read(): String? = value
+    override fun commit(value: String?): Boolean {
+        trace += "save-config"
+        this.value = value
+        return acceptCommits
+    }
+}
+
+private class TraceFirebaseRuntime(
+    private val trace: MutableList<String>,
+    private val existingOptions: FirebaseOptions?,
+) : FirebaseRuntime {
+    override fun currentOptions(): FirebaseOptions? {
+        trace += "bootstrap"
+        return existingOptions
+    }
+    override fun initialize(options: FirebaseOptions) = Unit
+}
+
+private object NoOpFirebaseRuntime : FirebaseRuntime {
+    override fun currentOptions(): FirebaseOptions? = firebaseOptions()
+    override fun initialize(options: FirebaseOptions) = Unit
+}
+
+private fun firebaseConfigStore(config: StoredFirebaseConfig?): FirebaseConfigStore {
+    val persistence = object : FirebaseConfigPersistence {
+        var value: String? = null
+        override fun read(): String? = value
+        override fun commit(value: String?): Boolean {
+            this.value = value
+            return true
+        }
+    }
+    return FirebaseConfigStore(persistence).also { store ->
+        config?.let {
+            store.save(
+                it.serverUrl,
+                FirebaseClientConfig(it.applicationId, it.apiKey, it.projectId, it.gcmSenderId, it.configId),
+            )
+        }
+    }
+}
+
+private fun healthyInfo(features: Set<String> = setOf("dynamic_fcm_v1", "single_device_session")) =
+    ServerInfo("tinitalk", "ok", 3, features = features)
+
+private fun clientConfig() = FirebaseClientConfig(
+    applicationId = "1:123:android:abc",
+    apiKey = "public-api-key",
+    projectId = "demo-project",
+    gcmSenderId = "123",
+    configId = "sha256:config",
+)
+
+private fun storedConfig(serverUrl: String, configId: String) = StoredFirebaseConfig(
+    serverUrl = serverUrl,
+    applicationId = "1:123:android:abc",
+    apiKey = "public-api-key",
+    projectId = "demo-project",
+    gcmSenderId = "123",
+    configId = configId,
+)
+
+private fun firebaseOptions(projectId: String = "demo-project") = FirebaseOptions.Builder()
+    .setApplicationId("1:123:android:abc")
+    .setApiKey("public-api-key")
+    .setProjectId(projectId)
+    .setGcmSenderId("123")
+    .build()

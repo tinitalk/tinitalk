@@ -12,6 +12,7 @@ import org.tinitalk.data.CallHistoryEvents
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
+import org.tinitalk.data.Session
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.TelecomCallController
@@ -19,19 +20,27 @@ import org.tinitalk.telecom.TelecomCallCallbacks
 import org.tinitalk.telecom.CallForegroundService
 import java.time.Instant
 
-@Suppress("OVERRIDE_DEPRECATION")
 class TinitalkMessagingService : FirebaseMessagingService() {
-    @Suppress("DEPRECATION")
-    override fun onNewToken(token: String) {
-        val session = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher()).load() ?: return
-        DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this), token)
+    override fun onRegistered(installationId: String) {
+        if (installationId.isBlank()) return
+        val config = FirebaseConfigStore(this).load() ?: return
+        val session = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+            .loadBoundTo(config) ?: return
+        persistRegisteredInstallation(
+            installationId = installationId,
+            config = config,
+            session = session,
+            deviceId = DeviceIdentity.id(this),
+            store = PushRegistrationStore(this),
+            enqueue = { PushRegistrationScheduler(this).enqueue() },
+        )
     }
 
     @Synchronized
     override fun onMessageReceived(message: RemoteMessage) {
         val authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
-        val session = authStore.load()
-        val deviceId = DeviceRegistrar.deviceId(this)
+        val session = authStore.loadBoundTo(FirebaseConfigStore(this).load())
+        val deviceId = DeviceIdentity.id(this)
         val replacement = IncomingPushPayload.sessionReplacement(message.data)
         if (replacement != null) {
             if (session != null && replacement.matches(session, deviceId)) {
@@ -114,4 +123,23 @@ class TinitalkMessagingService : FirebaseMessagingService() {
             latest?.let(notifier::showMissedIfAbsent)
         }
     }
+}
+
+internal fun persistRegisteredInstallation(
+    installationId: String,
+    config: StoredFirebaseConfig,
+    session: Session,
+    deviceId: String,
+    store: PushRegistrationStore,
+    enqueue: () -> Unit,
+) {
+    val sessionId = session.sessionId?.takeIf(String::isNotBlank) ?: return
+    store.upsert(
+        serverUrl = config.serverUrl,
+        configId = config.configId,
+        deviceId = deviceId,
+        sessionId = sessionId,
+        installationId = installationId,
+    )
+    enqueue()
 }

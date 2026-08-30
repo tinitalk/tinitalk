@@ -2,12 +2,14 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/state"
 )
 
@@ -24,6 +26,9 @@ func TestNewHTTPServerWiresSessionReplacementNotifier(t *testing.T) {
 	if err := db.UpsertDevice("alice", "old-phone", "old-fcm"); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.UpsertPushTarget("alice", "old-tablet", state.PushTarget{Kind: state.KindFID, Value: "old-fid", ConfigID: "config-id"}); err != nil {
+		t.Fatal(err)
+	}
 	notifier := &captureSessionNotifier{calls: make(chan capturedSessionReplacement, 1)}
 	server := NewHTTPServer(db, ServerConfig{AllowInsecureLoopback: true, SessionNotifier: notifier})
 	req := httptest.NewRequest(http.MethodPost, "/api/session", bytes.NewBufferString(`{"device_id":"tablet"}`))
@@ -35,11 +40,50 @@ func TestNewHTTPServerWiresSessionReplacementNotifier(t *testing.T) {
 	}
 	select {
 	case got := <-notifier.calls:
-		if got.login != "alice" || got.revokedSessionID != "" || len(got.devices) != 1 || got.devices[0].DeviceID != "old-phone" {
-			t.Fatalf("captured replacement = %+v, want legacy old-phone", got)
+		if got.login != "alice" || got.revokedSessionID != "" || len(got.devices) != 2 || got.devices[0].PushTarget != (state.PushTarget{Kind: state.KindToken, Value: "old-fcm"}) || got.devices[1].PushTarget != (state.PushTarget{Kind: state.KindFID, Value: "old-fid", ConfigID: "config-id"}) {
+			t.Fatalf("captured replacement = %+v, want legacy token and FID targets", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("session replacement notifier was not called")
+	}
+}
+
+func TestNewHTTPServerWiresFirebaseConfiguration(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Init(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	token, err := db.AddUser("alice", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewHTTPServer(db, ServerConfig{
+		AllowInsecureLoopback: true,
+		FirebaseConfig: firebaseconfig.Config{
+			MobileSDKAppID: "app-id",
+			CurrentKey:     "api-key",
+			ProjectID:      "project-id",
+			ProjectNumber:  "123",
+			ConfigID:       "config-id",
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/firebase-config", nil)
+	req.SetBasicAuth("alice", token)
+	response := httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Firebase config status = %d, body %s", response.Code, response.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["config_id"] != "config-id" {
+		t.Fatalf("Firebase config = %#v, want startup configuration", got)
 	}
 }
 

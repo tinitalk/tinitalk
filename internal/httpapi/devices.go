@@ -25,8 +25,10 @@ const (
 )
 
 type deviceRequest struct {
-	DeviceID string `json:"device_id"`
-	FCMToken string `json:"fcm_token"`
+	DeviceID               string          `json:"device_id"`
+	FCMToken               json.RawMessage `json:"fcm_token"`
+	FirebaseInstallationID json.RawMessage `json:"firebase_installation_id"`
+	ConfigID               json.RawMessage `json:"config_id"`
 }
 
 func (s *Server) device(w http.ResponseWriter, r *http.Request) {
@@ -39,8 +41,13 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if req.DeviceID == "" || req.FCMToken == "" {
+	target, ok := req.pushTarget()
+	if !ok {
 		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if target.Kind == state.KindFID && target.ConfigID != s.options.FirebaseConfig.ConfigID {
+		http.Error(w, "stale firebase configuration", http.StatusConflict)
 		return
 	}
 	user := currentUser(r).Login
@@ -49,7 +56,7 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 	if managed {
 		sessionID = session.SessionID
 	}
-	err := s.db.UpsertAuthenticatedDevice(user, sessionID, req.DeviceID, req.FCMToken)
+	err := s.db.UpsertAuthenticatedPushTarget(user, sessionID, req.DeviceID, target)
 	if errors.Is(err, state.ErrSessionReplaced) {
 		writeSessionReplaced(w)
 		return
@@ -59,6 +66,22 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (request deviceRequest) pushTarget() (state.PushTarget, bool) {
+	if request.DeviceID == "" {
+		return state.PushTarget{}, false
+	}
+	token, tokenPresent, tokenValid := requestString(request.FCMToken)
+	fid, fidPresent, fidValid := requestString(request.FirebaseInstallationID)
+	configID, configPresent, configValid := requestString(request.ConfigID)
+	if tokenPresent && !fidPresent && !configPresent && tokenValid {
+		return state.PushTarget{Kind: state.KindToken, Value: token}, true
+	}
+	if tokenPresent || !fidPresent || !configPresent || !fidValid || !configValid {
+		return state.PushTarget{}, false
+	}
+	return state.PushTarget{Kind: state.KindFID, Value: fid, ConfigID: configID}, true
 }
 
 func (s *Server) socket(w http.ResponseWriter, r *http.Request) {

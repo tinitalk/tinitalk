@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/httpapi"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
@@ -14,6 +15,7 @@ import (
 type ServerConfig struct {
 	Addr                  string
 	AllowInsecureLoopback bool
+	FirebaseConfig        firebaseconfig.Config
 	Hub                   *signaling.Hub
 	SessionNotifier       httpapi.SessionReplacementNotifier
 	ICEConfigProvider     signaling.ICEConfigProvider
@@ -33,6 +35,7 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 		Addr: addr,
 		Handler: httpapi.NewServer(db, httpapi.Options{
 			AllowInsecureLoopback: config.AllowInsecureLoopback,
+			FirebaseConfig:        config.FirebaseConfig,
 			Hub:                   hub,
 			SessionNotifier:       config.SessionNotifier,
 		}),

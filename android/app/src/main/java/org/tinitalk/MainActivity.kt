@@ -38,13 +38,14 @@ import org.tinitalk.data.ContactPage
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.CompatibilityProblem
+import org.tinitalk.data.FirebaseConfigurationRestartRequiredException
 import org.tinitalk.data.ServerCompatibilityException
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.network.NetworkAvailability
 import org.tinitalk.network.networkAvailability
 import org.tinitalk.permissions.AppPermissionsState
-import org.tinitalk.push.DeviceRegistrar
+import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.ui.MainScreen
@@ -84,7 +85,6 @@ class MainActivity : ComponentActivity() {
     private var screenState by mutableStateOf(MainScreenState())
     private var callUiState by mutableStateOf(CallUiStateStore.snapshot())
     private var loginResetKey by mutableIntStateOf(0)
-    private var pushRegistrationStarted = false
     @Volatile
     private var mainScreenResumed = false
     private var historyLoadGeneration = 0
@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
-        repository = ContactRepository(authStore)
+        repository = ContactRepository(this, authStore)
         network = networkAvailability()
         screenState = screenState.copy(networkAvailable = network.available)
         setContent {
@@ -192,21 +192,20 @@ class MainActivity : ComponentActivity() {
         if (network.available) {
             restoreContacts()
         } else {
-            screenState = screenState.withOfflineSession(authStore.load()?.url)
+            screenState = screenState.withOfflineSession(repository.restorableSession()?.url)
         }
     }
 
     private fun restoreContacts() {
         if (!network.available) {
-            screenState = screenState.withOfflineSession(authStore.load()?.url)
+            screenState = screenState.withOfflineSession(repository.restorableSession()?.url)
             return
         }
         val requestAuthGeneration = authGeneration
-        val deviceId = DeviceRegistrar.deviceId(this)
         Thread {
             runCatching {
-                repository.restoreContacts(deviceId)?.let { contacts ->
-                    contacts to authStore.load()?.url.orEmpty()
+                repository.restoreContacts()?.let { contacts ->
+                    contacts to repository.restorableSession()?.url.orEmpty()
                 }
             }
                 .onSuccess { restored ->
@@ -239,7 +238,7 @@ class MainActivity : ComponentActivity() {
         val requestAuthGeneration = authGeneration
         screenState = screenState.copy(signingIn = true, errorMessage = null)
         val serverUrl = url.trim().trimEnd('/')
-        val deviceId = DeviceRegistrar.deviceId(this)
+        val deviceId = DeviceIdentity.id(this)
         Thread {
             runCatching { repository.signIn(url, login, token, deviceId) }
                 .onSuccess { page ->
@@ -268,7 +267,6 @@ class MainActivity : ComponentActivity() {
 
     private fun showContacts(page: ContactPage, serverUrl: String) {
         runOnUiThread {
-            pushRegistrationStarted = false
             authGeneration++
             historyLoadGeneration++
             contactHistoryGeneration++
@@ -675,7 +673,7 @@ class MainActivity : ComponentActivity() {
     private fun showRestoreErrorIfCurrent(error: Throwable, requestAuthGeneration: Int) {
         runOnUiThread {
             if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration)) return@runOnUiThread
-            val session = authStore.load()
+            val session = repository.restorableSession()
             val terminal = (error is ApiException && error.code == 401) ||
                 (error is ServerCompatibilityException && error.problem != CompatibilityProblem.Unavailable) ||
                 error is MalformedURLException
@@ -705,6 +703,8 @@ class MainActivity : ComponentActivity() {
                 CompatibilityProblem.AppOutdated -> "Приложение TiniTalk устарело. Установите новую версию"
                 CompatibilityProblem.Unavailable -> "Сервер TiniTalk временно недоступен"
             }
+            is FirebaseConfigurationRestartRequiredException ->
+                "Конфигурация Firebase изменилась. Перезапустите приложение и войдите снова"
             is ApiException -> if (
                 error.code == 401 && error.authReason == SessionReplacedReason
             ) SessionReplacedMessage else when (error.code) {
@@ -743,7 +743,6 @@ class MainActivity : ComponentActivity() {
         historyRefreshGate.clear()
         contactHistoryRefreshGate.clear()
         IncomingCallNotifier(this).clearMissedCount()
-        pushRegistrationStarted = false
         loginResetKey++
         screenState = MainScreenState(
             restoring = false,
@@ -873,9 +872,6 @@ class MainActivity : ComponentActivity() {
             fullScreenIntentGranted = fullScreenIntentGranted,
         )
         screenState = screenState.copy(permissions = permissions)
-        if (screenState.signedIn && permissions.allRequiredGranted) {
-            registerPushToken()
-        }
     }
 
     private fun requestNotificationPermission() {
@@ -908,23 +904,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun registerPushToken() {
-        if (!network.available || pushRegistrationStarted || !screenState.permissions.allRequiredGranted) return
-        val session = authStore.load() ?: return
-        pushRegistrationStarted = true
-        DeviceRegistrar.forSession(this, session).register(DeviceRegistrar.deviceId(this))
-    }
-
     private fun updateNetworkAvailability(available: Boolean) {
         val changed = screenState.networkAvailable != available
         if (!available) {
-            pushRegistrationStarted = false
-            screenState = screenState.withOfflineSession(authStore.load()?.url)
+            screenState = screenState.withOfflineSession(repository.restorableSession()?.url)
             return
         }
         screenState = screenState.copy(networkAvailable = true)
         if (!changed) return
-        val session = authStore.load() ?: return
+        val session = repository.restorableSession() ?: return
         refreshPermissions()
         if (!screenState.signedIn || screenState.contacts.isEmpty()) {
             screenState = screenState.copy(restoring = true)

@@ -11,7 +11,9 @@ HTTPS/WSS-сигналинг, SQLite-состояние, FCM-пробужден�
 ```bash
 make server
 sudo install -m 0755 dist/tinitalk-linux-amd64 /usr/local/bin/tinitalk
-sudo -u tinitalk tinitalk init --fcm-service-account firebase-service-account.json
+sudo -u tinitalk tinitalk init \
+  --fcm-service-account firebase-service-account.json \
+  --firebase-android-config google-services.json
 sudo -u tinitalk tinitalk user add alice "Alice"
 make client
 ```
@@ -41,17 +43,32 @@ WSL interop. Если JDK или `cmd.exe` лежат нестандартно, 
 или `WINDOWS_CMD`. На обычном Linux Gradle использует `JAVA_HOME` и Android SDK
 из окружения.
 
-## Firebase-файлы
+## Firebase и FCM
 
-Для полноценного FCM нужны два разных JSON-файла из одного Firebase project:
+Для работы приложения FCM обязателен. Сервер владеет обоими Firebase-файлами:
+оператор передаёт `firebase-service-account.json` и `google-services.json` команде
+`tinitalk init`. Оба файла должны относиться к одному Firebase project; пока
+поддерживаются старые APK, Firebase project менять нельзя.
 
-- `google-services.json` - клиентский Android-конфиг для APK.
-- `firebase-service-account.json` - серверный ключ service account для отправки
-  FCM push через HTTP v1 API.
+После успешного импорта сервер сохраняет private service account и разобранный
+публичный Android-конфиг в SQLite, поэтому исходные JSON-файлы можно удалить с
+сервера. Приватный service account клиентам не возвращается. Не помещай ни один
+из этих файлов в APK или исходное дерево Android.
 
-Это разные файлы. `google-services.json` не содержит `private_key` и не подходит
-для сервера. Service account JSON содержит `type: "service_account"`,
-`project_id`, `client_email` и `private_key`.
+Для нового сервера импортируй оба файла:
+
+```bash
+sudo -u tinitalk tinitalk init \
+  --fcm-service-account firebase-service-account.json \
+  --firebase-android-config google-services.json
+```
+
+Для уже работающего сервера, в SQLite которого service account уже сохранён,
+достаточно обновить Android-конфиг:
+
+```bash
+sudo -u tinitalk tinitalk init --firebase-android-config google-services.json
+```
 
 ### Как открыть Firebase Console
 
@@ -69,7 +86,8 @@ https://console.firebase.google.com/
 5. Внутри проекта нажми шестеренку рядом с `Project Overview`.
 6. Выбери `Project settings`.
 
-Дальше в `Project settings` есть две нужные вкладки:
+Дальше в `Project settings` есть две нужные вкладки; скачанные из них файлы
+передай серверу при инициализации:
 
 ```text
 General          -> для google-services.json
@@ -78,7 +96,8 @@ Service accounts -> для firebase-service-account.json
 
 ### Android google-services.json
 
-Нужен, чтобы Android-приложение могло получить FCM registration token.
+Это публичный Android-конфиг для сервера: новый generic APK получает его
+публичные параметры при входе, а не во время сборки.
 
 Как получить:
 
@@ -92,28 +111,8 @@ org.tinitalk
 ```
 
 4. Нажми `Register app`.
-5. Скачай `google-services.json`.
-6. Положи файл сюда:
-
-```text
-android/app/google-services.json
-```
-
-После этого собирай APK:
-
-```bash
-make client
-make client-min
-```
-
-`make client` быстро собирает универсальный debug APK в
-`dist/tinitalk-debug.apk`. `make client-min` собирает оптимизированный ARM64 APK
-в `dist/tinitalk-min.apk`; он подходит для телефонов и планшетов Android с
-64-битной ARM-архитектурой (`arm64-v8a`), то есть для большинства современных
-Android-устройств. Если архитектура неизвестна, используй универсальный debug APK.
-
-Файл `android/app/google-services.json` игнорируется Git'ом. APK без него
-соберется, но FCM-пробуждение из фона работать не будет.
+5. Скачай `google-services.json` и передай его оператору сервера для
+   `--firebase-android-config`.
 
 ### Server firebase-service-account.json
 
@@ -133,19 +132,21 @@ firebase-service-account.json
 
 Не коммить этот файл. В нем есть приватный ключ.
 
-На сервере передай этот файл при первой инициализации:
+Передай этот файл оператору сервера для `--fcm-service-account`.
 
-```bash
-sudo -u tinitalk tinitalk init \
-  --fcm-service-account firebase-service-account.json
-```
+### Совместимый rollout
 
-`tinitalk init` сохраняет содержимое service account в SQLite state, поэтому
-сам JSON-файл после успешной инициализации можно удалить с сервера.
+Сначала обнови сервер и импортируй Android-конфиг из того же Firebase project,
+что и у старого APK. Старый APK со встроенным конфигом продолжает использовать
+сохранённый FCM token этого project. Затем можно выпускать generic APK: при входе
+он загружает с сервера только публичные Firebase options, регистрирует FID, и
+сервер атомарно сохраняет session вместе с FID. При последующих холодных стартах
+приложение использует локально сохранённые options, без загрузки конфига при
+каждом входящем звонке.
 
-Если запустить `tinitalk init` без `--fcm-service-account`, звонки будут
-работать только когда приложение уже активно или само подключено к серверу;
-FCM-пробуждение телефона из фона будет недоступно.
+API остаётся `v3`, signaling protocol остаётся `v2`; Basic authentication,
+session authentication и payload звонка не меняются. Это обязательство покрывает
+старый APK со встроенным конфигом, а не произвольные исторические клиенты.
 
 ## Сертификат
 
@@ -239,12 +240,13 @@ make check
 
 ## Заметки по Android
 
-- Сервер и Android-приложение используют строгую версию signaling protocol
-  `v2`. При обновлении сервера пересобери и установи новый APK на все телефоны:
-  старые версии приложения подключаться не будут.
-
-- Перед `make client` или `make client-min` положи Firebase Android config в
-  `android/app/google-services.json`.
+- Generic APK не содержит server-selected Firebase-конфига и собирается без
+  Firebase JSON-файлов. Один и тот же APK может работать с другим self-hosted
+  сервером и его Firebase project без пересборки: сначала очисти данные
+  приложения, затем войди снова. Эта версия поддерживает один активный аккаунт.
+- После перезагрузки Android не заявляй доставку Direct Boot: тестировать
+  входящий звонок можно только после того, как устройство хотя бы раз
+  разблокировали.
 - `make client` быстро собирает универсальный debug APK
   `dist/tinitalk-debug.apk` со всеми поддерживаемыми ABI.
 - `make client-min` собирает оптимизированный ARM64 release APK
