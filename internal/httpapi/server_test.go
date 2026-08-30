@@ -52,7 +52,7 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	}
 }
 
-func TestHealthIdentifiesTiniTalkVersionAndCommit(t *testing.T) {
+func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	previousCommit := serverCommit
 	serverCommit = "01234567"
 	t.Cleanup(func() { serverCommit = previousCommit })

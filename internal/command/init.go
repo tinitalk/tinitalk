@@ -149,6 +149,7 @@ func runServe(args []string) error {
 	server := app.NewHTTPServer(db, app.ServerConfig{
 		Addr:                  options.addr,
 		AllowInsecureLoopback: options.allowLoopback,
+		FirebaseConfig:        firebaseAndroidConfig,
 		Hub:                   hub,
 		SessionNotifier:       sessionNotifier,
 		ICEConfigProvider:     iceConfig,
