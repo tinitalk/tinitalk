@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -26,6 +27,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +48,9 @@ import org.tinitalk.ui.theme.CallRejectRed
 import java.time.Instant
 import java.time.ZoneId
 
+internal fun shouldScrollToNewest(previousFirstId: Long?, currentFirstId: Long?): Boolean =
+    previousFirstId != null && currentFirstId != null && previousFirstId != currentFirstId
+
 @Composable
 fun HistoryScreen(
     items: List<CallHistoryItem>,
@@ -57,12 +65,22 @@ fun HistoryScreen(
 ) {
     val now = Instant.now()
     val zone = ZoneId.systemDefault()
+    val listState = rememberLazyListState()
+    var previousFirstId by remember { mutableStateOf<Long?>(null) }
+    val currentFirstId = items.firstOrNull()?.id
+    LaunchedEffect(currentFirstId) {
+        if (shouldScrollToNewest(previousFirstId, currentFirstId)) {
+            listState.animateScrollToItem(0)
+        }
+        if (currentFirstId != null) previousFirstId = currentFirstId
+    }
     when {
         !internetAvailable && items.isEmpty() -> HistoryOffline()
         loading && items.isEmpty() -> HistoryLoading()
         loaded && items.isEmpty() && errorMessage == null -> HistoryEmpty()
         items.isEmpty() && errorMessage != null -> HistoryError(errorMessage, onRetry, retryEnabled = internetAvailable)
         else -> LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),

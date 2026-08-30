@@ -8,6 +8,8 @@ import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.CallHistoryEvents
+import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.telecom.AndroidTelecomRegistrar
@@ -105,7 +107,9 @@ class TinitalkMessagingService : FirebaseMessagingService() {
         val store = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         val page = runCatching { ContactRepository(store).loadCallHistory(limit = 1) }.getOrNull()
         if (page != null) {
-            notifier.updateMissedCount(page.unreadMissedCount, refreshId, latest)
+            val unread = CallUnreadState(page.unreadMissedCount, page.unreadMissed)
+            val update = notifier.updateMissedCount(page.unreadMissedCount, refreshId, latest)
+            if (update.applied) CallHistoryEvents.publish(unread)
         } else {
             latest?.let(notifier::showMissedIfAbsent)
         }

@@ -32,6 +32,7 @@ import org.tinitalk.data.ApiException
 import org.tinitalk.data.AuthSessionEvent
 import org.tinitalk.data.AuthSessionEvents
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.CallHistoryEvents
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactPage
 import org.tinitalk.data.ContactRepository
@@ -50,6 +51,7 @@ import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.ContactNameViewModel
 import org.tinitalk.ui.ContactHistoryState
+import org.tinitalk.ui.HistoryRefreshGate
 import org.tinitalk.ui.isCurrentContactHistoryRequest
 import org.tinitalk.ui.isCurrentSessionRequest
 import org.tinitalk.ui.withContactsPage
@@ -83,8 +85,10 @@ class MainActivity : ComponentActivity() {
     private var pushRegistrationStarted = false
     private var historyLoadGeneration = 0
     private var historyVisible = false
+    private val historyRefreshGate = HistoryRefreshGate()
     private var contactHistoryGeneration = 0
     private var contactHistoryLogin: String? = null
+    private val contactHistoryRefreshGate = HistoryRefreshGate()
     private var authGeneration = 0
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread { callUiState = state }
@@ -94,6 +98,11 @@ class MainActivity : ComponentActivity() {
             if (!isDestroyed && screenState.signedIn && screenState.unreadMissedCount != count) {
                 screenState = screenState.copy(unreadMissedCount = count)
             }
+        }
+    }
+    private val callHistoryObserver: (CallUnreadState) -> Unit = { unread ->
+        mainHandler.post {
+            if (!isDestroyed && screenState.signedIn) onCallHistoryChanged(unread)
         }
     }
     private val authSessionObserver: (AuthSessionEvent) -> Unit = {
@@ -172,6 +181,7 @@ class MainActivity : ComponentActivity() {
         }
         CallUiStateStore.observe(callUiObserver)
         IncomingCallNotifier(this).observeMissedCount(missedCountObserver)
+        CallHistoryEvents.observe(callHistoryObserver)
         AuthSessionEvents.observe(authSessionObserver)
         network.observe(networkObserver)
         refreshPermissions()
@@ -439,6 +449,7 @@ class MainActivity : ComponentActivity() {
                             historyLatestId = page.latestId,
                             historyErrorMessage = null,
                         )
+                        finishHistoryRefresh()
                     }
                     if (reset && page.latestId > 0) {
                         val readRefreshId = IncomingCallNotifier(this).beginMissedCountRefresh()
@@ -470,6 +481,7 @@ class MainActivity : ComponentActivity() {
                                 historyLoadingMore = false,
                                 historyErrorMessage = "Не удалось загрузить историю. Проверьте соединение.",
                             )
+                            finishHistoryRefresh()
                         }
                     }
                 }
@@ -490,6 +502,7 @@ class MainActivity : ComponentActivity() {
 
     private fun hideContactHistory() {
         if (contactHistoryLogin == null && screenState.contactHistory.peerLogin == null) return
+        contactHistoryRefreshGate.clear()
         contactHistoryLogin = null
         contactHistoryGeneration++
         screenState = screenState.copy(contactHistory = ContactHistoryState())
@@ -554,6 +567,7 @@ class MainActivity : ComponentActivity() {
                         if (reset && page.latestId > 0) {
                             markContactHistoryRead(login, page.latestId, generation, requestAuthGeneration)
                         }
+                        finishContactHistoryRefresh(login)
                     }
                 }
                 .onFailure { error ->
@@ -579,6 +593,7 @@ class MainActivity : ComponentActivity() {
                                     errorMessage = "Не удалось загрузить звонки. Проверьте соединение.",
                                 ),
                             )
+                            finishContactHistoryRefresh(login)
                         }
                     }
                 }
@@ -705,6 +720,8 @@ class MainActivity : ComponentActivity() {
         contactHistoryGeneration++
         contactHistoryLogin = null
         historyVisible = false
+        historyRefreshGate.clear()
+        contactHistoryRefreshGate.clear()
         IncomingCallNotifier(this).clearMissedCount()
         pushRegistrationStarted = false
         loginResetKey++
@@ -761,9 +778,45 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun onCallHistoryChanged(unread: CallUnreadState) {
+        screenState = screenState.withUnreadMissedState(unread, unread.unreadMissedCount)
+        when {
+            contactHistoryLogin != null -> requestContactHistoryRefresh(contactHistoryLogin.orEmpty())
+            historyVisible -> requestHistoryRefresh()
+        }
+    }
+
+    private fun requestHistoryRefresh() {
+        if (!network.available || !historyVisible) return
+        if (historyRefreshGate.request(screenState.historyLoading || screenState.historyLoadingMore)) {
+            loadHistory(reset = true)
+        }
+    }
+
+    private fun finishHistoryRefresh() {
+        if (historyRefreshGate.afterLoad() && network.available && historyVisible) {
+            loadHistory(reset = true)
+        }
+    }
+
+    private fun requestContactHistoryRefresh(login: String) {
+        if (!network.available || contactHistoryLogin != login) return
+        val history = screenState.contactHistory
+        if (contactHistoryRefreshGate.request(history.loading || history.loadingMore)) {
+            loadContactHistory(login, reset = true)
+        }
+    }
+
+    private fun finishContactHistoryRefresh(login: String) {
+        if (contactHistoryRefreshGate.afterLoad() && network.available && contactHistoryLogin == login) {
+            loadContactHistory(login, reset = true)
+        }
+    }
+
     override fun onDestroy() {
         network.removeObserver(networkObserver)
         AuthSessionEvents.removeObserver(authSessionObserver)
+        CallHistoryEvents.removeObserver(callHistoryObserver)
         IncomingCallNotifier(this).removeMissedCountObserver(missedCountObserver)
         CallUiStateStore.removeObserver(callUiObserver)
         super.onDestroy()
