@@ -133,6 +133,27 @@ var schemaMigrations = [][]string{
 		`DROP TABLE devices`,
 		`ALTER TABLE devices_new RENAME TO devices`,
 	},
+	{
+		`CREATE TABLE devices_new(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			device_id TEXT NOT NULL,
+			push_kind TEXT,
+			push_value TEXT,
+			config_id TEXT,
+			updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+			UNIQUE(user_id, device_id),
+			CHECK(
+				(push_kind IS NULL AND push_value IS NULL AND config_id IS NULL) OR
+				(push_kind = 'token' AND push_value IS NOT NULL AND push_value <> '' AND config_id IS NULL) OR
+				(push_kind IN ('fid', 'webpush') AND push_value IS NOT NULL AND push_value <> '' AND config_id IS NOT NULL AND config_id <> '')
+			)
+		)`,
+		`INSERT INTO devices_new(id, user_id, device_id, push_kind, push_value, config_id, updated_at)
+		 SELECT id, user_id, device_id, push_kind, push_value, config_id, updated_at FROM devices`,
+		`DROP TABLE devices`,
+		`ALTER TABLE devices_new RENAME TO devices`,
+	},
 }
 
 func (db *DB) migrate() error {

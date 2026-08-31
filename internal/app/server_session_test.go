@@ -48,7 +48,7 @@ func TestNewHTTPServerWiresSessionReplacementNotifier(t *testing.T) {
 	}
 }
 
-func TestNewHTTPServerWiresFirebaseConfiguration(t *testing.T) {
+func TestNewHTTPServerWiresPushConfigurations(t *testing.T) {
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -70,6 +70,8 @@ func TestNewHTTPServerWiresFirebaseConfiguration(t *testing.T) {
 			ProjectNumber:  "123",
 			ConfigID:       "config-id",
 		},
+		WebPushPublicKey: "vapid-public-key",
+		WebPushConfigID:  "sha256:webpush",
 	})
 	req := httptest.NewRequest(http.MethodGet, "/api/firebase-config", nil)
 	req.SetBasicAuth("alice", token)
@@ -84,6 +86,20 @@ func TestNewHTTPServerWiresFirebaseConfiguration(t *testing.T) {
 	}
 	if got["config_id"] != "config-id" {
 		t.Fatalf("Firebase config = %#v, want startup configuration", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/webpush-config", nil)
+	req.SetBasicAuth("alice", token)
+	response = httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("WebPush config status = %d, body %s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["vapid_public_key"] != "vapid-public-key" || got["config_id"] != "sha256:webpush" {
+		t.Fatalf("WebPush config = %#v, want startup configuration", got)
 	}
 }
 

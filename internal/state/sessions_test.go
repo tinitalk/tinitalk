@@ -40,8 +40,8 @@ func TestVersionSixMigrationLeavesExistingAccountLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.UserVersion != 7 {
-		t.Fatalf("schema version = %d, want 7", check.UserVersion)
+	if check.UserVersion != 8 {
+		t.Fatalf("schema version = %d, want 8", check.UserVersion)
 	}
 	var sessions int
 	if err := db.sql.QueryRow("SELECT COUNT(*) FROM account_sessions").Scan(&sessions); err != nil {

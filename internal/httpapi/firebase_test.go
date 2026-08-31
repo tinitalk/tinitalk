@@ -73,3 +73,15 @@ func TestFirebaseConfigEndpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestFirebaseConfigEndpointIsAbsentOnWebPushOnlyServer(t *testing.T) {
+	db, tokens := testDB(t)
+	server := NewServer(db, Options{AllowInsecureLoopback: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/firebase-config", nil)
+	req.SetBasicAuth("alice", tokens["alice"])
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, req)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", response.Code)
+	}
+}

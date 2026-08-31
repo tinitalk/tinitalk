@@ -35,6 +35,10 @@ type Sender interface {
 	Send(request WakeRequest) error
 }
 
+type WebPushSender interface {
+	Send(request WebPushRequest) error
+}
+
 type DBPushTargetStore struct {
 	DB *state.DB
 }
@@ -51,47 +55,50 @@ func (s DBPushTargetStore) ContactDisplayName(owner, contact string) (string, er
 	return s.DB.ContactDisplayName(owner, contact)
 }
 
-type FCMNotifier struct {
-	store   PushTargetStore
-	sender  Sender
-	project string
+type PushNotifier struct {
+	store         PushTargetStore
+	fcmSender     Sender
+	webPushSender WebPushSender
 }
 
-func NewFCMNotifier(store PushTargetStore, sender Sender, project string) *FCMNotifier {
-	return &FCMNotifier{store: store, sender: sender, project: project}
+func NewPushNotifier(store PushTargetStore, fcmSender Sender, webPushSender WebPushSender) *PushNotifier {
+	return &PushNotifier{store: store, fcmSender: fcmSender, webPushSender: webPushSender}
 }
 
-func (n *FCMNotifier) IncomingCall(caller, callee string, event signaling.DeliveredEvent) {
+func (n *PushNotifier) IncomingCall(caller, callee string, event signaling.DeliveredEvent) {
 	name, err := n.store.ContactDisplayName(callee, caller)
 	if err != nil || name == "" {
 		name = caller
 	}
-	n.send(callee, WakeMessage(n.project, state.PushTarget{}, event, caller, name, callNotificationTTL))
+	n.send(callee, WakeMessage(state.PushTarget{}, event, caller, name, callNotificationTTL))
 }
 
-func (n *FCMNotifier) CancelCall(callee string, event signaling.DeliveredEvent) {
+func (n *PushNotifier) CancelCall(callee string, event signaling.DeliveredEvent) {
 	ttl := callNotificationTTL
 	if event.Type == "call.cancel" || event.Type == "call.expire" || event.Type == "call.busy" {
 		ttl = missedNotificationTTL
 	}
-	n.send(callee, CancelMessage(n.project, state.PushTarget{}, event, ttl))
+	n.send(callee, CancelMessage(state.PushTarget{}, event, ttl))
 }
 
-func (n *FCMNotifier) SessionReplaced(login, revokedSessionID string, devices []state.Device) {
+func (n *PushNotifier) SessionReplaced(login, revokedSessionID string, devices []state.Device) {
 	for _, device := range devices {
 		if device.PushTarget.Value == "" {
 			continue
 		}
-		_ = n.sender.Send(SessionReplacedMessage(
+		targeted := SessionReplacedMessage(
 			device.PushTarget,
 			login,
 			revokedSessionID,
 			device.DeviceID,
-		))
+		)
+		if errors.Is(n.sendTarget(device.PushTarget, targeted), ErrInvalidRegistration) {
+			_ = n.store.DisablePushTarget(device.PushTarget)
+		}
 	}
 }
 
-func (n *FCMNotifier) send(callee string, request WakeRequest) {
+func (n *PushNotifier) send(callee string, request WakeRequest) {
 	if request.suppress {
 		return
 	}
@@ -113,12 +120,35 @@ func (n *FCMNotifier) send(callee string, request WakeRequest) {
 				targeted.Message.Data["target_device_id"] = device.DeviceID
 			}
 		}
-		setPushTarget(&targeted, device.PushTarget)
-		err := n.sender.Send(targeted)
+		err := n.sendTarget(device.PushTarget, targeted)
 		if errors.Is(err, ErrInvalidRegistration) {
 			_ = n.store.DisablePushTarget(device.PushTarget)
 		}
 	}
+}
+
+func (n *PushNotifier) sendTarget(target state.PushTarget, request WakeRequest) error {
+	if target.Kind == state.KindWebPush {
+		if n.webPushSender == nil {
+			return errors.New("WebPush sender is unavailable")
+		}
+		return n.webPushSender.Send(WebPushRequest{
+			Subscription: target.Value,
+			Data:         cloneData(request.Message.Data),
+			TTL:          request.ttl,
+		})
+	}
+	if n.fcmSender == nil {
+		return errors.New("FCM sender is unavailable")
+	}
+	setPushTarget(&request, target)
+	return n.fcmSender.Send(request)
+}
+
+type WebPushRequest struct {
+	Subscription string
+	Data         map[string]string
+	TTL          time.Duration
 }
 
 type WakeRequest struct {
@@ -132,9 +162,10 @@ type WakeRequest struct {
 		} `json:"android"`
 	} `json:"message"`
 	suppress bool
+	ttl      time.Duration
 }
 
-func WakeMessage(_ string, target state.PushTarget, event signaling.DeliveredEvent, callerLogin, caller string, ttl time.Duration) WakeRequest {
+func WakeMessage(target state.PushTarget, event signaling.DeliveredEvent, callerLogin, caller string, ttl time.Duration) WakeRequest {
 	var request WakeRequest
 	setPushTarget(&request, target)
 	request.Message.Data = map[string]string{
@@ -154,10 +185,11 @@ func WakeMessage(_ string, target state.PushTarget, event signaling.DeliveredEve
 	}
 	request.Message.Android.Priority = "HIGH"
 	request.Message.Android.TTL = fcmTTL(ttl)
+	request.ttl = ttl
 	return request
 }
 
-func CancelMessage(_ string, target state.PushTarget, event signaling.DeliveredEvent, ttl time.Duration) WakeRequest {
+func CancelMessage(target state.PushTarget, event signaling.DeliveredEvent, ttl time.Duration) WakeRequest {
 	var request WakeRequest
 	setPushTarget(&request, target)
 	request.Message.Data = map[string]string{
@@ -174,6 +206,7 @@ func CancelMessage(_ string, target state.PushTarget, event signaling.DeliveredE
 	}
 	request.Message.Android.Priority = "HIGH"
 	request.Message.Android.TTL = fcmTTL(ttl)
+	request.ttl = ttl
 	return request
 }
 
@@ -188,6 +221,7 @@ func SessionReplacedMessage(target state.PushTarget, login, revokedSessionID, re
 	}
 	request.Message.Android.Priority = "HIGH"
 	request.Message.Android.TTL = fcmTTL(missedNotificationTTL)
+	request.ttl = missedNotificationTTL
 	return request
 }
 

@@ -78,6 +78,11 @@ func runDoctor(w io.Writer, args []string) error {
 		return err
 	}
 	_, _ = fmt.Fprintf(w, "turn.secret: %s\n", ok(len(turnSecret) > 0))
+	webPushVAPID, err := db.Secret("webpush_vapid")
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(w, "webpush.vapid: %s\n", ok(len(webPushVAPID) > 0))
 	fcmServiceAccount, err := db.Secret("fcm_service_account")
 	if err != nil {
 		return err

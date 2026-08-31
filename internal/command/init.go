@@ -75,6 +75,9 @@ func runInit(w io.Writer, args []string) error {
 	if err := db.Init(fcmServiceAccount, firebaseAndroidConfig); err != nil {
 		return err
 	}
+	if _, err := db.EnsureWebPushVAPID(); err != nil {
+		return err
+	}
 	_, _ = fmt.Fprintf(w, "state: %s\n", dataDir)
 	return nil
 }
@@ -104,20 +107,35 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	webPushVAPID, err := db.EnsureWebPushVAPID()
+	if err != nil {
+		return err
+	}
 	{
+		var fcmSender notify.Sender
 		project := firebaseAndroidConfig.ProjectID
-		bearer, err := notify.BearerTokenFromServiceAccount(ctx, fcmServiceAccount)
-		if err != nil {
-			return err
+		if len(fcmServiceAccount) > 0 {
+			bearer, err := notify.BearerTokenFromServiceAccount(ctx, fcmServiceAccount)
+			if err != nil {
+				return err
+			}
+			fcmSender = notify.HTTPv1Sender{
+				Client:      &http.Client{Timeout: notify.RequestTimeout},
+				Endpoint:    "https://fcm.googleapis.com/v1/projects/" + project + "/messages:send",
+				BearerToken: bearer,
+			}
 		}
-		sender := notify.HTTPv1Sender{
-			Client:      &http.Client{Timeout: notify.RequestTimeout},
-			Endpoint:    "https://fcm.googleapis.com/v1/projects/" + project + "/messages:send",
-			BearerToken: bearer,
-		}
-		fcmNotifier := notify.NewFCMNotifier(notify.DBPushTargetStore{DB: db}, sender, project)
-		notifier = fcmNotifier
-		sessionNotifier = fcmNotifier
+		pushNotifier := notify.NewPushNotifier(
+			notify.DBPushTargetStore{DB: db},
+			fcmSender,
+			notify.HTTPWebPushSender{
+				Client:     &http.Client{Timeout: notify.RequestTimeout},
+				VAPIDKeys:  webPushVAPID.Keys,
+				Subscriber: "https://tinitalk.org",
+			},
+		)
+		notifier = pushNotifier
+		sessionNotifier = pushNotifier
 	}
 	hub := signaling.NewHub(notifier)
 	hub.SetCallHistoryStore(db)
@@ -150,6 +168,8 @@ func runServe(args []string) error {
 		Addr:                  options.addr,
 		AllowInsecureLoopback: options.allowLoopback,
 		FirebaseConfig:        firebaseAndroidConfig,
+		WebPushPublicKey:      webPushVAPID.PublicKey,
+		WebPushConfigID:       webPushVAPID.ConfigID,
 		Hub:                   hub,
 		SessionNotifier:       sessionNotifier,
 		ICEConfigProvider:     iceConfig,
@@ -190,6 +210,13 @@ func loadFirebaseConfiguration(db *state.DB) ([]byte, firebaseconfig.Config, err
 		return nil, firebaseconfig.Config{}, err
 	}
 	if len(serviceAccount) == 0 {
+		config, err := db.FirebaseConfig()
+		if err != nil {
+			return nil, firebaseconfig.Config{}, err
+		}
+		if config.ConfigID == "" {
+			return nil, firebaseconfig.Config{}, nil
+		}
 		return nil, firebaseconfig.Config{}, errors.New("FCM service account is missing; run tinitalk init --fcm-service-account FILE")
 	}
 	config, err := db.FirebaseConfig()

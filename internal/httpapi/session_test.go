@@ -121,6 +121,43 @@ func TestSessionClaimFIDActivationValidatesShapeAndConfigBeforeMutation(t *testi
 	}
 }
 
+func TestWebPushRegistrationClaimsSessionAndRefreshesDevice(t *testing.T) {
+	db, tokens := testDB(t)
+	server := NewServer(db, Options{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush"})
+	const keys = `"keys":{"p256dh":"BEkDdNnpEcD8M4mRGOFJWTDJ4GkDI5Xs3vpIOrAaBZKRCVv6V3sB3CFujTFiD6DHda7W8pCyChJDU205otrbCAw","auth":"AAAAAAAAAAAAAAAAAAAAAA"}`
+	claimBody := []byte(`{"device_id":"phone","webpush_subscription":{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=first",` + keys + `},"config_id":"sha256:webpush"}`)
+	claimed := requestWithSession(t, server, http.MethodPost, "/api/session", claimBody, "alice", tokens["alice"], "")
+	if claimed.Code != http.StatusOK {
+		t.Fatalf("WebPush session status = %d, body %s", claimed.Code, claimed.Body.String())
+	}
+	var response map[string]string
+	if err := json.Unmarshal(claimed.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshBody := []byte(`{"device_id":"phone","webpush_subscription":{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=refreshed",` + keys + `},"config_id":"sha256:webpush"}`)
+	refreshed := requestWithSession(t, server, http.MethodPut, "/api/device", refreshBody, "alice", tokens["alice"], response["session_id"])
+	if refreshed.Code != http.StatusNoContent {
+		t.Fatalf("WebPush device refresh status = %d, body %s", refreshed.Code, refreshed.Body.String())
+	}
+	devices, err := db.PushTargetsForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].PushTarget.Kind != state.KindWebPush || devices[0].PushTarget.ConfigID != "sha256:webpush" {
+		t.Fatalf("WebPush devices = %+v", devices)
+	}
+	var subscription struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.Unmarshal([]byte(devices[0].PushTarget.Value), &subscription); err != nil {
+		t.Fatal(err)
+	}
+	if subscription.Endpoint != "https://fcm.distributor.unifiedpush.org/wpfcm?t=refreshed" {
+		t.Fatalf("stored WebPush endpoint = %q", subscription.Endpoint)
+	}
+}
+
 func TestManagedDeviceRegistrationRequiresCurrentSessionDevice(t *testing.T) {
 	db, tokens := testDB(t)
 	server := NewServer(db, Options{AllowInsecureLoopback: true})

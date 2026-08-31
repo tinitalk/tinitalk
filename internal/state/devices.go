@@ -8,8 +8,9 @@ import (
 type PushTargetKind string
 
 const (
-	KindToken PushTargetKind = "token"
-	KindFID   PushTargetKind = "fid"
+	KindToken   PushTargetKind = "token"
+	KindFID     PushTargetKind = "fid"
+	KindWebPush PushTargetKind = "webpush"
 )
 
 type PushTarget struct {
@@ -27,6 +28,10 @@ func (target PushTarget) validate() error {
 	case KindFID:
 		if target.Value == "" || target.ConfigID == "" {
 			return errors.New("invalid FID push target")
+		}
+	case KindWebPush:
+		if target.Value == "" || target.ConfigID == "" {
+			return errors.New("invalid WebPush target")
 		}
 	default:
 		return errors.New("unsupported push target kind")

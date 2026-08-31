@@ -8,6 +8,10 @@ func (s *Server) firebaseConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	config := s.options.FirebaseConfig
+	if config.ConfigID == "" {
+		http.NotFound(w, r)
+		return
+	}
 	writeJSON(w, struct {
 		ApplicationID string `json:"application_id"`
 		APIKey        string `json:"api_key"`

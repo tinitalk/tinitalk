@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/tls"
 	"net"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,26 +11,23 @@ import (
 	"tinitalk/internal/turnserver"
 )
 
-func TestServeRequiresStoredFCMServiceAccount(t *testing.T) {
+func TestServerCanRunWithoutLegacyFirebaseConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	if err := Run(&bytes.Buffer{}, "init", "--data-dir", dir); err != nil {
 		t.Fatal(err)
 	}
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	db, err := state.OpenDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer db.Close()
 
-	err = runServe([]string{
-		"--data-dir", dir,
-		"--loopback-insecure",
-		"--addr", listener.Addr().String(),
-	})
-
-	if err == nil || !strings.Contains(err.Error(), "FCM service account is missing") {
-		t.Fatalf("serve without FCM service account error = %v, want missing-FCM rejection", err)
+	serviceAccount, config, err := loadFirebaseConfiguration(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(serviceAccount) != 0 || config.ConfigID != "" {
+		t.Fatalf("optional Firebase configuration = %d bytes, %#v", len(serviceAccount), config)
 	}
 }
 

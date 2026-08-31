@@ -59,7 +59,7 @@ func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	t.Cleanup(func() { serverCommit = previousCommit })
 
 	db, _ := testDB(t)
-	server := NewServer(db, Options{})
+	server := NewServer(db, Options{FirebaseConfig: firebaseConfigForTest()})
 
 	response := request(t, server, http.MethodGet, "/healthz", nil, "", "")
 	if response.Code != http.StatusOK {
@@ -78,8 +78,25 @@ func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 3 || health.Commit != "01234567" {
 		t.Fatalf("health = %+v, want tinitalk, ok, API version 3, commit 01234567", health)
 	}
-	if len(health.Features) != 3 || health.Features[0] != "video_1to1" || health.Features[1] != "single_device_session" || health.Features[2] != "dynamic_fcm_v1" {
-		t.Fatalf("health features = %v, want [video_1to1 single_device_session dynamic_fcm_v1]", health.Features)
+	want := []string{"video_1to1", "single_device_session", "dynamic_fcm_v1", "webpush_v1"}
+	if fmt.Sprint(health.Features) != fmt.Sprint(want) {
+		t.Fatalf("health features = %v, want %v", health.Features, want)
+	}
+}
+
+func TestHealthAdvertisesOnlyWebPushWhenLegacyFirebaseIsNotConfigured(t *testing.T) {
+	db, _ := testDB(t)
+	server := NewServer(db, Options{})
+	response := request(t, server, http.MethodGet, "/healthz", nil, "", "")
+	var health struct {
+		Features []string `json:"features"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"video_1to1", "single_device_session", "webpush_v1"}
+	if fmt.Sprint(health.Features) != fmt.Sprint(want) {
+		t.Fatalf("health features = %v, want %v", health.Features, want)
 	}
 }
 

@@ -16,6 +16,8 @@ type ServerConfig struct {
 	Addr                  string
 	AllowInsecureLoopback bool
 	FirebaseConfig        firebaseconfig.Config
+	WebPushPublicKey      string
+	WebPushConfigID       string
 	Hub                   *signaling.Hub
 	SessionNotifier       httpapi.SessionReplacementNotifier
 	ICEConfigProvider     signaling.ICEConfigProvider
@@ -36,6 +38,8 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 		Handler: httpapi.NewServer(db, httpapi.Options{
 			AllowInsecureLoopback: config.AllowInsecureLoopback,
 			FirebaseConfig:        config.FirebaseConfig,
+			WebPushPublicKey:      config.WebPushPublicKey,
+			WebPushConfigID:       config.WebPushConfigID,
 			Hub:                   hub,
 			SessionNotifier:       config.SessionNotifier,
 		}),

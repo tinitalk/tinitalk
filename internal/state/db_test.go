@@ -89,8 +89,8 @@ func TestVersionSixMigrationPreservesLegacyPushRegistrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.UserVersion != 7 {
-		t.Fatalf("schema version = %d, want 7", check.UserVersion)
+	if check.UserVersion != 8 {
+		t.Fatalf("schema version = %d, want 8", check.UserVersion)
 	}
 	rows, err := db.sql.Query(`
 		SELECT id, user_id, device_id, push_kind, push_value, config_id, updated_at

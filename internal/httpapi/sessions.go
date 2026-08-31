@@ -5,12 +5,14 @@ import (
 	"net/http"
 
 	"tinitalk/internal/state"
+	"tinitalk/internal/webpush"
 )
 
 type sessionRequest struct {
 	DeviceID               string          `json:"device_id"`
 	FCMToken               json.RawMessage `json:"fcm_token"`
 	FirebaseInstallationID json.RawMessage `json:"firebase_installation_id"`
+	WebPushSubscription    json.RawMessage `json:"webpush_subscription"`
 	ConfigID               json.RawMessage `json:"config_id"`
 }
 
@@ -24,14 +26,24 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	target, ok := request.fidPushTarget()
+	target, ok := request.pushTarget()
 	if !ok {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if target != nil && target.ConfigID != s.options.FirebaseConfig.ConfigID {
-		http.Error(w, "stale firebase configuration", http.StatusConflict)
-		return
+	if target != nil {
+		switch target.Kind {
+		case state.KindFID:
+			if target.ConfigID != s.options.FirebaseConfig.ConfigID {
+				http.Error(w, "stale firebase configuration", http.StatusConflict)
+				return
+			}
+		case state.KindWebPush:
+			if target.ConfigID != s.options.WebPushConfigID {
+				http.Error(w, "stale WebPush configuration", http.StatusConflict)
+				return
+			}
+		}
 	}
 
 	login := currentUser(r).Login
@@ -63,18 +75,29 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 	s.sessionClaimMu.Unlock()
 }
 
-func (request sessionRequest) fidPushTarget() (*state.PushTarget, bool) {
+func (request sessionRequest) pushTarget() (*state.PushTarget, bool) {
 	if request.DeviceID == "" {
 		return nil, false
 	}
 	_, tokenPresent, _ := requestString(request.FCMToken)
 	fid, fidPresent, fidValid := requestString(request.FirebaseInstallationID)
+	webPushPresent := request.WebPushSubscription != nil
 	configID, configPresent, configValid := requestString(request.ConfigID)
 	if tokenPresent {
 		return nil, false
 	}
-	if !fidPresent && !configPresent {
+	if !fidPresent && !webPushPresent && !configPresent {
 		return nil, true
+	}
+	if webPushPresent {
+		if fidPresent || !configPresent || !configValid {
+			return nil, false
+		}
+		_, canonical, err := webpush.ParseSubscription(request.WebPushSubscription)
+		if err != nil {
+			return nil, false
+		}
+		return &state.PushTarget{Kind: state.KindWebPush, Value: canonical, ConfigID: configID}, true
 	}
 	if !fidPresent || !configPresent || !fidValid || !configValid {
 		return nil, false

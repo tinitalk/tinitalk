@@ -11,6 +11,7 @@ import (
 	"tinitalk/internal/protocol"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
+	"tinitalk/internal/webpush"
 )
 
 const (
@@ -28,6 +29,7 @@ type deviceRequest struct {
 	DeviceID               string          `json:"device_id"`
 	FCMToken               json.RawMessage `json:"fcm_token"`
 	FirebaseInstallationID json.RawMessage `json:"firebase_installation_id"`
+	WebPushSubscription    json.RawMessage `json:"webpush_subscription"`
 	ConfigID               json.RawMessage `json:"config_id"`
 }
 
@@ -48,6 +50,10 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 	}
 	if target.Kind == state.KindFID && target.ConfigID != s.options.FirebaseConfig.ConfigID {
 		http.Error(w, "stale firebase configuration", http.StatusConflict)
+		return
+	}
+	if target.Kind == state.KindWebPush && target.ConfigID != s.options.WebPushConfigID {
+		http.Error(w, "stale WebPush configuration", http.StatusConflict)
 		return
 	}
 	user := currentUser(r).Login
@@ -74,9 +80,20 @@ func (request deviceRequest) pushTarget() (state.PushTarget, bool) {
 	}
 	token, tokenPresent, tokenValid := requestString(request.FCMToken)
 	fid, fidPresent, fidValid := requestString(request.FirebaseInstallationID)
+	webPushPresent := request.WebPushSubscription != nil
 	configID, configPresent, configValid := requestString(request.ConfigID)
-	if tokenPresent && !fidPresent && !configPresent && tokenValid {
+	if tokenPresent && !fidPresent && !webPushPresent && !configPresent && tokenValid {
 		return state.PushTarget{Kind: state.KindToken, Value: token}, true
+	}
+	if webPushPresent {
+		if tokenPresent || fidPresent || !configPresent || !configValid {
+			return state.PushTarget{}, false
+		}
+		_, canonical, err := webpush.ParseSubscription(request.WebPushSubscription)
+		if err != nil {
+			return state.PushTarget{}, false
+		}
+		return state.PushTarget{Kind: state.KindWebPush, Value: canonical, ConfigID: configID}, true
 	}
 	if tokenPresent || !fidPresent || !configPresent || !fidValid || !configValid {
 		return state.PushTarget{}, false
