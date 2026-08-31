@@ -1,19 +1,24 @@
 package org.tinitalk.push
 
 import android.content.Context
-import android.content.SharedPreferences
-import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import org.tinitalk.data.AccountCollectionStorage
+import org.tinitalk.data.AccountId
+import org.tinitalk.data.AccountStorageException
+import org.tinitalk.data.AccountStorageLock
+import org.tinitalk.data.KeyValueStore
 import org.tinitalk.data.Session
+import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.normalizeServerUrl
+import org.tinitalk.data.sameIdentity
 
 internal data class PendingPushRegistration(
     @SerializedName("server_url") val serverUrl: String,
     @SerializedName("config_id") val configId: String,
     @SerializedName("device_id") val deviceId: String,
     @SerializedName("session_id") val sessionId: String,
-    @SerializedName("firebase_installation_id") val installationId: String,
-    val generation: Long,
+    @SerializedName("subscription") val subscription: WebPushSubscription,
+    @SerializedName("generation") val generation: Long,
 )
 
 internal enum class PushRegistrationClearResult {
@@ -22,116 +27,127 @@ internal enum class PushRegistrationClearResult {
     FAILED,
 }
 
-internal class PushRegistrationCommitException : IllegalStateException("failed to persist push registration")
+internal data class PushRegistrationState(
+    @SerializedName("generation") val generation: Long = 0,
+    @SerializedName("pending") val pending: PendingPushRegistration? = null,
+)
 
-internal interface PushRegistrationPersistence {
-    fun read(): String?
-    fun commit(value: String?): Boolean
-}
-
-internal class PushRegistrationStore internal constructor(
-    private val persistence: PushRegistrationPersistence,
+internal class PushRegistrationStore(
+    private val accountPersistence: KeyValueStore,
 ) {
-    constructor(context: Context) : this(SharedPreferencesPushRegistrationPersistence(context))
+    constructor(context: Context) : this(SharedPreferencesKeyValueStore(context))
 
     fun upsert(
-        serverUrl: String,
-        configId: String,
+        accountId: AccountId,
+        session: Session,
         deviceId: String,
-        sessionId: String,
-        installationId: String,
-    ): PendingPushRegistration = synchronized(StoreLock) {
-        val previousEncoded = persistence.read()
-        val current = readState(previousEncoded)
+        subscription: WebPushSubscription,
+    ): PendingPushRegistration = synchronized(AccountStorageLock) {
+        val collection = AccountCollectionStorage.read(accountPersistence)
+        val current = collection.accounts.firstOrNull { it.id == accountId.value }
+            ?: throw IllegalArgumentException("unknown account ID")
+        val config = current.webPushConfig
+            ?: throw IllegalArgumentException("account WebPush configuration is unavailable")
+        require(current.toSessionIdentity(session)) { "push registration session does not match account" }
+        require(config.isBoundTo(session)) { "push registration configuration does not match account" }
+        require(deviceId.isNotBlank() && subscription.isValid()) { "invalid push registration" }
+
+        val state = current.webPushRegistration ?: PushRegistrationState()
         val pending = PendingPushRegistration(
-            serverUrl = normalizeServerUrl(serverUrl),
-            configId = configId,
+            serverUrl = normalizeServerUrl(session.url),
+            configId = config.configId,
             deviceId = deviceId,
-            sessionId = sessionId,
-            installationId = installationId,
-            generation = current.generation + 1,
+            sessionId = requireNotNull(session.sessionId),
+            subscription = subscription,
+            generation = state.generation + 1,
         )
-        require(pending.isValid()) { "invalid push registration" }
-        if (!persistence.commit(gson.toJson(PushRegistrationState(pending.generation, pending)))) {
-            persistence.commit(previousEncoded)
-            throw PushRegistrationCommitException()
-        }
+        AccountCollectionStorage.write(
+            accountPersistence,
+            collection.copy(accounts = collection.accounts.map {
+                if (it.id == accountId.value) {
+                    it.copy(webPushRegistration = PushRegistrationState(pending.generation, pending))
+                } else {
+                    it
+                }
+            }),
+        )
         pending
     }
 
-    fun load(): PendingPushRegistration? = synchronized(StoreLock) {
-        readState().pending?.takeIf { it.isValid() }
+    fun load(accountId: AccountId): PendingPushRegistration? = synchronized(AccountStorageLock) {
+        AccountCollectionStorage.read(accountPersistence).accounts
+            .firstOrNull { it.id == accountId.value }
+            ?.webPushRegistration
+            ?.pending
+            ?.takeIf(PendingPushRegistration::isValid)
     }
 
     fun loadBoundTo(
-        config: StoredFirebaseConfig?,
+        accountId: AccountId,
+        config: StoredWebPushConfig?,
         session: Session?,
         deviceId: String,
-    ): PendingPushRegistration? = synchronized(StoreLock) {
-        val pending = readState().pending?.takeIf { it.isValid() } ?: return@synchronized null
-        pending.takeIf {
-            config != null &&
-                session != null &&
-                normalizeServerUrl(it.serverUrl) == normalizeServerUrl(config.serverUrl) &&
-                it.configId == config.configId &&
-                normalizeServerUrl(session.url) == normalizeServerUrl(config.serverUrl) &&
-                session.configId == config.configId &&
-                session.sessionId == it.sessionId &&
-                it.deviceId == deviceId
-        }
+    ): PendingPushRegistration? = synchronized(AccountStorageLock) {
+        load(accountId)?.takeIf { it.isBoundTo(config, session, deviceId) }
     }
 
-    fun clearIfGeneration(generation: Long): PushRegistrationClearResult = synchronized(StoreLock) {
-        val previousEncoded = persistence.read()
-        val current = readState(previousEncoded)
-        if (current.pending?.generation != generation) return@synchronized PushRegistrationClearResult.STALE
-        if (persistence.commit(gson.toJson(current.copy(pending = null)))) {
+    fun clearIfGeneration(accountId: AccountId, generation: Long): PushRegistrationClearResult =
+        synchronized(AccountStorageLock) {
+            val collection = AccountCollectionStorage.read(accountPersistence)
+            val current = collection.accounts.firstOrNull { it.id == accountId.value }
+                ?: return@synchronized PushRegistrationClearResult.STALE
+            if (current.webPushRegistration?.pending?.generation != generation) {
+                return@synchronized PushRegistrationClearResult.STALE
+            }
+            try {
+                AccountCollectionStorage.write(
+                    accountPersistence,
+                    collection.copy(accounts = collection.accounts.map {
+                        if (it.id == accountId.value) {
+                            it.copy(webPushRegistration = PushRegistrationState(generation, null))
+                        } else {
+                            it
+                        }
+                    }),
+                )
+            } catch (_: AccountStorageException) {
+                return@synchronized PushRegistrationClearResult.FAILED
+            }
             PushRegistrationClearResult.CLEARED
-        } else {
-            persistence.commit(previousEncoded)
-            PushRegistrationClearResult.FAILED
         }
-    }
 
-    private fun readState(encoded: String? = persistence.read()): PushRegistrationState {
-        encoded ?: return PushRegistrationState()
-        return runCatching { gson.fromJson(encoded, PushRegistrationState::class.java) }
-            .getOrNull()
-            ?.takeIf { it.generation >= 0 }
-            ?: PushRegistrationState()
-    }
-
-    private fun PendingPushRegistration.isValid(): Boolean =
-        serverUrl.isNotBlank() &&
-            configId.isNotBlank() &&
-            deviceId.isNotBlank() &&
-            sessionId.isNotBlank() &&
-            installationId.isNotBlank() &&
-            generation > 0
-
-    private companion object {
-        val StoreLock = Any()
-        val gson = Gson()
+    fun remove(accountId: AccountId): Boolean = synchronized(AccountStorageLock) {
+        val collection = AccountCollectionStorage.read(accountPersistence)
+        val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
+        if (current.webPushRegistration?.pending == null) return@synchronized false
+        AccountCollectionStorage.write(
+            accountPersistence,
+            collection.copy(accounts = collection.accounts.map {
+                if (it.id == accountId.value) it.copy(webPushRegistration = null) else it
+            }),
+        )
+        true
     }
 }
 
-private data class PushRegistrationState(
-    val generation: Long = 0,
-    val pending: PendingPushRegistration? = null,
-)
+private fun org.tinitalk.data.PersistedAccount.toSessionIdentity(session: Session): Boolean =
+    normalizeServerUrl(url) == normalizeServerUrl(session.url) &&
+        login == session.login &&
+        sessionId == session.sessionId &&
+        configId == session.configId
 
-private class SharedPreferencesPushRegistrationPersistence(context: Context) : PushRegistrationPersistence {
-    private val preferences: SharedPreferences =
-        context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
+private fun PendingPushRegistration.isBoundTo(
+    config: StoredWebPushConfig?,
+    session: Session?,
+    deviceId: String,
+): Boolean = config != null && session != null &&
+    normalizeServerUrl(serverUrl) == normalizeServerUrl(config.serverUrl) &&
+    configId == config.configId && config.isBoundTo(session) &&
+    session.sessionId == sessionId && this.deviceId == deviceId
 
-    override fun read(): String? = preferences.getString(StateKey, null)
+private fun PendingPushRegistration.isValid(): Boolean =
+    serverUrl.isNotBlank() && configId.isNotBlank() && deviceId.isNotBlank() &&
+        sessionId.isNotBlank() && subscription.isValid() && generation > 0
 
-    override fun commit(value: String?): Boolean = preferences.edit().apply {
-        if (value == null) remove(StateKey) else putString(StateKey, value)
-    }.commit()
-
-    private companion object {
-        const val PreferencesName = "push_registration"
-        const val StateKey = "state"
-    }
-}
+internal fun PushRegistrationState.isValid(): Boolean =
+    generation >= 0 && (pending == null || pending.generation == generation && pending.isValid())

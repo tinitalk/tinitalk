@@ -1,6 +1,7 @@
 package org.tinitalk.call
 
 import com.google.gson.JsonObject
+import org.tinitalk.data.AccountId
 import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.IceCandidateData
@@ -37,9 +38,11 @@ class ForegroundCallController(
     private val onVideoStateChanged: (CallVideoState<VideoRenderSource>) -> Unit = {},
     private val prepareCameraStart: (String, Long) -> Boolean = { _, _ -> true },
     private val onCameraLeaseReleased: (Long) -> Unit = {},
+    private val accountId: AccountId,
 ) {
     constructor(
         signal: SignalClient,
+        accountId: AccountId,
         mediaFactory: (
             Boolean,
             List<IceServerData>,
@@ -51,6 +54,7 @@ class ForegroundCallController(
         scheduler: TaskScheduler = ExecutorTaskScheduler(),
     ) : this(
         signal = signal,
+        accountId = accountId,
         mediaFactory = { _, videoAllowed, servers, onIce, onIceRemoved, onRestart ->
             mediaFactory(videoAllowed, servers, onIce, onIceRemoved, onRestart)
         },
@@ -409,7 +413,7 @@ class ForegroundCallController(
         }
         updateVideoState(
             videoState
-                .configured(event.callId, videoAllowed)
+                .configured(accountId, event.callId, videoAllowed)
                 .withNetworkGate(event.callId, weakNetworkVideoGate.snapshot().networkGated),
         )
         configuredCallId = event.callId

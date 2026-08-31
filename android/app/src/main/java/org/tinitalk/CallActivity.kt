@@ -33,6 +33,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.content.ContextCompat
 import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.call.CallDirection
+import org.tinitalk.call.AccountCallKey
+import org.tinitalk.call.AccountCallOwner
+import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallPhase
@@ -44,13 +47,17 @@ import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ConnectionHealth
-import org.tinitalk.call.outgoingVisibleState
+import org.tinitalk.call.resolvePinnedCallSession
 import org.tinitalk.call.shouldDismissIncomingOverlay
 import org.tinitalk.data.AndroidKeystoreTokenCipher
+import org.tinitalk.data.AccountId
+import org.tinitalk.data.AccountPeerKey
+import org.tinitalk.data.AccountUnreadState
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.CallHistoryEvents
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
+import org.tinitalk.data.Session
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import org.tinitalk.push.acknowledgeLatestMissedCall
@@ -60,6 +67,7 @@ import org.tinitalk.network.networkAvailability
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingAnswerClaim
 import org.tinitalk.telecom.IncomingCallController
+import org.tinitalk.telecom.OutgoingCallStartResult
 import org.tinitalk.telecom.ProximityController
 import org.tinitalk.ui.call.ActiveCallScreen
 import org.tinitalk.ui.call.EndedCallScreen
@@ -69,6 +77,7 @@ import org.tinitalk.ui.theme.CallBackgroundBottom
 import org.tinitalk.ui.theme.CallBackgroundTop
 import org.tinitalk.ui.theme.TiniTalkTheme
 import java.time.Instant
+import java.util.UUID
 import kotlinx.coroutines.delay
 
 class CallActivity : ComponentActivity() {
@@ -83,9 +92,10 @@ class CallActivity : ComponentActivity() {
     private val actionGate = CallScreenActionGate()
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
     private var videoState by mutableStateOf(VideoCallStateStore.snapshot())
-    private var renderedVideoCallId: String? = null
+    private var renderedVideoCallKey: AccountCallKey? = null
     private var renderedVideoVisible = false
     private var incomingInvite by mutableStateOf<IncomingInvite?>(null)
+    private var outgoingCallKey: AccountCallKey? = null
     private var outgoingLogin by mutableStateOf<String?>(null)
     private var outgoingName by mutableStateOf<String?>(null)
     private var pendingOutgoingStart = false
@@ -129,8 +139,8 @@ class CallActivity : ComponentActivity() {
             }
             actionGate.onCallState(state)
             callState = state
-            if (state.callId != renderedVideoCallId || state.phase != CallPhase.Active) {
-                renderedVideoCallId = null
+            if (state.callKey != renderedVideoCallKey || state.phase != CallPhase.Active) {
+                renderedVideoCallKey = null
                 renderedVideoVisible = false
             }
             updateProximity()
@@ -141,8 +151,8 @@ class CallActivity : ComponentActivity() {
     private val videoObserver: (CallVideoState<VideoRenderSource>) -> Unit = { state ->
         runOnUiThread {
             videoState = state
-            if (state.callId != renderedVideoCallId) {
-                renderedVideoCallId = null
+            if (state.callKey != renderedVideoCallKey) {
+                renderedVideoCallKey = null
                 renderedVideoVisible = false
                 updateProximity()
             }
@@ -156,7 +166,7 @@ class CallActivity : ComponentActivity() {
                 finish()
                 return
             }
-            if (callState.callId == invite.callId && callState.phase != CallPhase.Ringing) return
+            if (callState.callKey == invite.key && callState.phase != CallPhase.Ringing) return
             handler.postDelayed(this, InviteCheckIntervalMillis)
         }
     }
@@ -169,9 +179,15 @@ class CallActivity : ComponentActivity() {
         cameraPermissionRouter = CameraPermissionActionRouter(
             permissionGranted = ::cameraPermissionGranted,
             requestPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
-            enableCamera = { callId -> CallForegroundService.cameraRequested(this, callId, requested = true) },
+            enableCamera = { callKey -> CallForegroundService.cameraRequested(this, callKey, requested = true) },
             cameraVisible = ::cameraVisible,
-            restoredPendingCallId = savedInstanceState?.getString(StatePendingCameraCallId),
+            restoredPendingCallKey = savedInstanceState?.getString(StatePendingCameraAccountId)
+                ?.let(::AccountId)
+                ?.let { accountId ->
+                    savedInstanceState.getString(StatePendingCameraCallId)
+                        ?.takeIf(String::isNotBlank)
+                        ?.let { callId -> AccountCallKey(accountId, callId) }
+                },
         )
         cameraForegroundLifecycle = CallActivityCameraForeground(
             screenInteractive = ::screenInteractive,
@@ -222,7 +238,7 @@ class CallActivity : ComponentActivity() {
                     ?: outgoingName?.takeIf { it.isNotBlank() }
                     ?: "TiniTalk"
                 val durationText = rememberDurationText(visibleState)
-                val visibleVideoState = videoState.takeIf { it.callId == visibleState.callId }
+                val visibleVideoState = videoState.takeIf { it.callKey == visibleState.callKey }
                     ?: CallVideoState()
 
                 when {
@@ -237,8 +253,8 @@ class CallActivity : ComponentActivity() {
                         videoState = visibleVideoState,
                         onMute = { CallForegroundService.mute(this, it) },
                         onSelectEndpoint = { endpoint ->
-                            visibleState.callId?.let { callId ->
-                                CallForegroundService.selectAudioEndpoint(this, callId, endpoint.id)
+                            visibleState.callKey?.let { callKey ->
+                                CallForegroundService.selectAudioEndpoint(this, callKey, endpoint.id)
                             }
                         },
                         onCamera = { enabled ->
@@ -246,7 +262,7 @@ class CallActivity : ComponentActivity() {
                         },
                         onSwitchCamera = ::switchCamera,
                         onVideoVisibilityChanged = { visible ->
-                            updateRenderedVideoVisibility(visibleState.callId, visible)
+                            updateRenderedVideoVisibility(visibleState.callKey, visible)
                         },
                         onEnd = { endCall(visibleState) },
                     )
@@ -272,8 +288,8 @@ class CallActivity : ComponentActivity() {
                             availableEndpoints = visibleState.availableAudioEndpoints,
                             onMute = { CallForegroundService.mute(this, it) },
                             onSelectEndpoint = { endpoint ->
-                                visibleState.callId?.let { callId ->
-                                    CallForegroundService.selectAudioEndpoint(this, callId, endpoint.id)
+                                visibleState.callKey?.let { callKey ->
+                                    CallForegroundService.selectAudioEndpoint(this, callKey, endpoint.id)
                                 }
                             },
                             onCancel = { endCall(visibleState) },
@@ -347,8 +363,9 @@ class CallActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        cameraPermissionRouter.pendingCallId()?.let { callId ->
-            outState.putString(StatePendingCameraCallId, callId)
+        cameraPermissionRouter.pendingCallKey()?.let { callKey ->
+            outState.putString(StatePendingCameraAccountId, callKey.accountId.value)
+            outState.putString(StatePendingCameraCallId, callKey.callId)
         }
         super.onSaveInstanceState(outState)
     }
@@ -356,11 +373,15 @@ class CallActivity : ComponentActivity() {
     private fun applyIntent(intent: Intent?): Boolean {
         val invite = IncomingCallController.inviteFrom(intent)
         if (invite != null) {
+            if (!incomingController.ownsIncoming(this, invite)) {
+                if (callState.phase == CallPhase.Idle || callState.phase == CallPhase.Ended) finish()
+                return false
+            }
             val answerRequested = intent?.action == IncomingCallController.ActionAnswer
             val answerClaim = if (answerRequested) {
                 val liveCall = callState.phase != CallPhase.Idle && callState.phase != CallPhase.Ended
                 when {
-                    liveCall && callState.callId == invite.callId -> IncomingAnswerClaim.AlreadyClaimed
+                    liveCall && callState.callKey == invite.key -> IncomingAnswerClaim.AlreadyClaimed
                     liveCall -> IncomingAnswerClaim.Invalid
                     else -> incomingController.claimAnswer(this, invite)
                 }
@@ -372,8 +393,9 @@ class CallActivity : ComponentActivity() {
                 return false
             }
             if (answerRequested) intent.action = IncomingCallController.ActionIncoming
-            if (incomingInvite?.callId != invite.callId) actionGate.reset()
+            if (incomingInvite?.key != invite.key) actionGate.reset()
             incomingInvite = invite
+            outgoingCallKey = null
             outgoingLogin = null
             outgoingName = null
             pendingOutgoingStart = false
@@ -381,63 +403,145 @@ class CallActivity : ComponentActivity() {
             return true
         }
         val login = intent?.getStringExtra(ExtraOutgoingLogin) ?: return false
+        val accountId = intent.getStringExtra(ExtraOutgoingAccountId)
+            ?.takeIf(String::isNotBlank)
+            ?.let(::AccountId)
+            ?: return false
+        val intentCallId = intent.getStringExtra(ExtraOutgoingCallId)?.takeIf(String::isNotBlank) ?: return false
+        val peerKey = AccountPeerKey(accountId, login)
+        var key = AccountCallKey(accountId, intentCallId)
         val redial = intent.action == ActionRedial
         if (redial) intent.action = null
-        if (redial) acknowledgeMissedCall(login)
         val servicePhase = CallServiceState.snapshot().phase
-        if (redial && servicePhase != CallPhase.Idle && servicePhase != CallPhase.Ended) {
+        var existingCall = false
+        var redialStart: OutgoingCallStartResult? = null
+        if (redial) {
+            val binding = redialBindingFrom(intent) ?: run {
+                finish()
+                return false
+            }
+            val authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+            val accepted = executePinnedRedial(
+                authStore,
+                peerKey,
+                binding,
+                acknowledge = { session -> acknowledgeMissedCall(peerKey, session) },
+                start = {
+                    if (servicePhase != CallPhase.Idle && servicePhase != CallPhase.Ended) {
+                        existingCall = true
+                    } else {
+                        redialStart = CallForegroundService.tryStartOutgoing(
+                            this,
+                            peerKey,
+                            intent.getStringExtra(ExtraOutgoingName).orEmpty().ifBlank { login },
+                            binding,
+                        )
+                    }
+                },
+            )
+            if (!accepted) {
+                finish()
+                return false
+            }
+        }
+        if (redial && existingCall) {
             incomingInvite = null
+            outgoingCallKey = null
             outgoingLogin = null
             outgoingName = null
             pendingOutgoingStart = false
             return true
         }
-        if (outgoingLogin != login) actionGate.reset()
+        if (outgoingCallKey != key) actionGate.reset()
+        outgoingCallKey = key
         outgoingLogin = login
         outgoingName = intent.getStringExtra(ExtraOutgoingName).orEmpty().ifBlank { login }
         incomingInvite = null
         pendingOutgoingStart = true
         if (redial) {
-            if (!CallForegroundService.startOutgoing(this, login, outgoingName.orEmpty())) {
-                Toast.makeText(this, "Нет подключения к интернету", Toast.LENGTH_SHORT).show()
-                outgoingLogin = null
-                outgoingName = null
-                pendingOutgoingStart = false
-                finish()
-                return false
+            when (val started = requireNotNull(redialStart)) {
+                OutgoingCallStartResult.Offline,
+                OutgoingCallStartResult.Unavailable -> {
+                    val message = if (started == OutgoingCallStartResult.Offline) {
+                        "Нет подключения к интернету"
+                    } else {
+                        "Не удалось начать звонок"
+                    }
+                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                    outgoingLogin = null
+                    outgoingName = null
+                    outgoingCallKey = null
+                    pendingOutgoingStart = false
+                    finish()
+                    return false
+                }
+                is OutgoingCallStartResult.Started -> {
+                    key = started.key
+                    outgoingCallKey = key
+                    intent.putExtra(ExtraOutgoingCallId, key.callId)
+                }
+                is OutgoingCallStartResult.Busy -> {
+                    incomingInvite = incomingController.load(this)?.invite?.takeIf { it.owner == started.owner }
+                    outgoingLogin = null
+                    outgoingName = null
+                    outgoingCallKey = null
+                    pendingOutgoingStart = false
+                }
             }
         }
         return true
     }
 
-    private fun acknowledgeMissedCall(login: String) {
+    private fun acknowledgeMissedCall(peer: AccountPeerKey, session: Session) {
         val appContext = applicationContext
         val notifier = IncomingCallNotifier(appContext)
-        val refreshId = notifier.beginMissedCountRefresh()
+        val authStore = AuthStore(SharedPreferencesKeyValueStore(appContext), AndroidKeystoreTokenCipher())
+        val accountRefreshId = authStore.withCurrent(peer.accountId, session) {
+            notifier.beginAccountMissedCountRefresh(peer.accountId)
+        } ?: return
         Thread {
-            val repository = ContactRepository(
-                AuthStore(SharedPreferencesKeyValueStore(appContext), AndroidKeystoreTokenCipher()),
-            )
+            val repository = ContactRepository(authStore)
             val unread = runCatching {
                 acknowledgeLatestMissedCall(
-                    login = login,
-                    loadLatestId = { peer ->
-                        repository.loadCallHistory(limit = 1, peerLogin = peer)?.latestId
+                    login = peer.login,
+                    loadLatestId = { login ->
+                        repository.loadCallHistory(
+                            peer.accountId,
+                            limit = 1,
+                            peerLogin = login,
+                            expectedSession = session,
+                        )?.latestId
                     },
-                    markRead = { peer, throughId ->
-                        repository.markCallHistoryRead(throughId, peerLogin = peer)
+                    markRead = { login, throughId ->
+                        repository.markCallHistoryRead(
+                            peer.accountId,
+                            throughId,
+                            peerLogin = login,
+                            expectedSession = session,
+                        )?.unread
                     },
                 )
             }.getOrNull() ?: return@Thread
-            val update = notifier.updateMissedStateImmediately(unread, refreshId)
-            if (update.applied) CallHistoryEvents.publish(unread)
+            authStore.withCurrent(peer.accountId, session) {
+                val update = notifier.updateAccountMissedState(
+                    peer.accountId,
+                    unread,
+                    accountRefreshId,
+                    redialBinding = CallSessionBinding.from(session),
+                    immediate = true,
+                )
+                if (update.applied) {
+                    CallHistoryEvents.publish(AccountUnreadState(peer.accountId, unread, session))
+                }
+            }
         }.start()
     }
 
     private fun visibleCallState(): CallUiState {
         val invite = incomingInvite
-        if (invite != null && callState.callId != invite.callId) {
+        if (invite != null && callState.callKey != invite.key) {
             return CallUiState(
+                accountId = invite.accountId,
                 callId = invite.callId,
                 peer = CallPeer(invite.caller.ifBlank { "TiniTalk" }, invite.callerLogin),
                 direction = CallDirection.Incoming,
@@ -445,24 +549,34 @@ class CallActivity : ComponentActivity() {
             )
         }
         val login = outgoingLogin
-        if (login != null) return outgoingVisibleState(callState, login, outgoingName.orEmpty())
+        val key = outgoingCallKey
+        if (login != null && key != null) {
+            if (callState.callKey == key && callState.phase != CallPhase.Idle) return callState
+            return CallUiState(
+                accountId = key.accountId,
+                callId = key.callId,
+                peer = CallPeer(outgoingName.orEmpty().ifBlank { login }, login),
+                direction = CallDirection.Outgoing,
+                phase = CallPhase.Connecting,
+            )
+        }
         return callState
     }
 
     private fun answer(invite: IncomingInvite) {
-        if (!actionGate.lock(CallScreenAction.Answer, invite.callId)) return
+        if (!actionGate.lock(CallScreenAction.Answer, invite.key)) return
         incomingController.answer(this, invite)
     }
 
     private fun reject(invite: IncomingInvite) {
-        if (!actionGate.lock(CallScreenAction.Reject, invite.callId)) return
+        if (!actionGate.lock(CallScreenAction.Reject, invite.key)) return
         incomingController.reject(this, invite)
     }
 
     private fun endCall(state: CallUiState) {
-        val actionKey = incomingInvite?.callId
-            ?: outgoingLogin?.let { "outgoing:$it" }
-            ?: state.callId
+        val actionKey = incomingInvite?.key
+            ?: outgoingCallKey
+            ?: state.callKey
             ?: return
         if (!actionGate.lock(CallScreenAction.End, actionKey)) return
         CallForegroundService.end(this)
@@ -474,27 +588,27 @@ class CallActivity : ComponentActivity() {
 
     internal fun disableCamera() {
         val state = visibleCallState()
-        val callId = state.callId ?: return
+        val callKey = state.callKey ?: return
         if (state.phase == CallPhase.Active) {
-            CallForegroundService.cameraRequested(this, callId, requested = false)
+            CallForegroundService.cameraRequested(this, callKey, requested = false)
         }
     }
 
     internal fun switchCamera() {
         val state = visibleCallState()
-        val callId = state.callId ?: return
-        if (state.phase == CallPhase.Active) CallForegroundService.switchCamera(this, callId)
+        val callKey = state.callKey ?: return
+        if (state.phase == CallPhase.Active) CallForegroundService.switchCamera(this, callKey)
     }
 
     private fun publishCameraForeground(visible: Boolean) {
         val state = visibleCallState()
-        val callId = state.callId ?: return
+        val callKey = state.callKey ?: return
         if (state.phase != CallPhase.Active) return
         val permissionGranted = cameraPermissionGranted()
-        if (!cameraForegroundPublicationGate.shouldPublish(callId, visible, permissionGranted)) return
+        if (!cameraForegroundPublicationGate.shouldPublish(callKey, visible, permissionGranted)) return
         CallForegroundService.cameraForeground(
             this,
-            callId,
+            callKey,
             foreground = visible,
             permissionGranted = permissionGranted,
         )
@@ -518,16 +632,16 @@ class CallActivity : ComponentActivity() {
             (callState.phase == CallPhase.Connecting || callState.phase == CallPhase.Ringing)
         val activeConversation = callState.phase == CallPhase.Active &&
             callState.connectedAtElapsedMs != null && connected
-        val videoVisible = renderedVideoCallId == callState.callId && renderedVideoVisible
+        val videoVisible = renderedVideoCallKey == callState.callKey && renderedVideoVisible
         proximityController.setEnabled(
             activityStarted && !videoVisible && earpiece && (outgoingDial || activeConversation),
         )
     }
 
-    private fun updateRenderedVideoVisibility(callId: String?, visible: Boolean) {
+    private fun updateRenderedVideoVisibility(callKey: AccountCallKey?, visible: Boolean) {
         val current = visibleCallState()
-        if (callId == null || current.callId != callId || current.phase != CallPhase.Active) return
-        renderedVideoCallId = callId
+        if (callKey == null || current.callKey != callKey || current.phase != CallPhase.Active) return
+        renderedVideoCallKey = callKey
         renderedVideoVisible = visible
         updateProximity()
     }
@@ -542,24 +656,24 @@ class CallActivity : ComponentActivity() {
 
     private fun restoreIncomingCallNotification() {
         val invite = incomingInvite ?: return
-        val stillRinging = !actionGate.isLocked(invite.callId) &&
+        val stillRinging = !actionGate.isLocked(invite.key) &&
             isCurrentIncoming(invite) &&
             visibleCallState().phase == CallPhase.Ringing
         if (stillRinging) IncomingCallNotifier(this).fullScreenHidden(invite)
     }
 
     private fun isCurrentIncoming(invite: IncomingInvite): Boolean {
-        val activeCallMatches = callState.callId == invite.callId && callState.phase == CallPhase.Active
+        val activeCallMatches = callState.callKey == invite.key && callState.phase == CallPhase.Active
         if (activeCallMatches) return true
-        if (!invite.expiresAt.isAfter(Instant.now()) || incomingController.isTerminal(this, invite.callId)) {
+        if (!invite.expiresAt.isAfter(Instant.now()) || incomingController.isTerminal(this, invite.owner)) {
             return false
         }
         val pending = incomingController.load(this)
-        if (pending?.invite?.callId == invite.callId && pending.action == IncomingCallController.ActionReject) {
+        if (pending?.invite?.key == invite.key && pending.action == IncomingCallController.ActionReject) {
             return false
         }
-        val storedCallMatches = pending?.invite?.callId == invite.callId
-        val liveCallMatches = callState.callId == invite.callId &&
+        val storedCallMatches = pending?.invite?.key == invite.key
+        val liveCallMatches = callState.callKey == invite.key &&
             callState.phase != CallPhase.Idle && callState.phase != CallPhase.Ended
         return storedCallMatches || liveCallMatches
     }
@@ -567,34 +681,92 @@ class CallActivity : ComponentActivity() {
     companion object {
         private const val ExtraOutgoingLogin = "outgoing_login"
         private const val ExtraOutgoingName = "outgoing_name"
+        private const val ExtraOutgoingAccountId = "outgoing_account_id"
+        private const val ExtraOutgoingCallId = "outgoing_call_id"
+        private const val ExtraRedialServerUrl = "redial_server_url"
+        private const val ExtraRedialSessionLogin = "redial_session_login"
+        private const val ExtraRedialSessionId = "redial_session_id"
+        private const val ExtraRedialConfigId = "redial_config_id"
         private const val ActionRedial = "org.tinitalk.action.REDIAL"
         private const val StatePendingCameraCallId = "pending_camera_call_id"
+        private const val StatePendingCameraAccountId = "pending_camera_account_id"
         private const val InviteCheckIntervalMillis = 500L
         private const val IdleGraceMillis = 1_000L
         private const val EndedScreenMillis = 900L
         private const val BusyScreenMillis = 2_200L
 
-        fun outgoingIntent(context: Context, login: String, displayName: String): Intent =
+        fun outgoingIntent(
+            context: Context,
+            peer: AccountPeerKey,
+            displayName: String,
+            callKey: AccountCallKey,
+        ): Intent =
             Intent(context, CallActivity::class.java)
-                .putExtra(ExtraOutgoingLogin, login)
+                .setData(android.net.Uri.parse("tinitalk://outgoing/${android.net.Uri.encode(callKey.localId())}"))
+                .putExtra(ExtraOutgoingAccountId, peer.accountId.value)
+                .putExtra(ExtraOutgoingCallId, callKey.callId)
+                .putExtra(ExtraOutgoingLogin, peer.login)
                 .putExtra(ExtraOutgoingName, displayName)
 
         fun ongoingIntent(context: Context): Intent =
             Intent(context, CallActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
 
-        fun redialIntent(context: Context, login: String, displayName: String): Intent =
-            outgoingIntent(context, login, displayName)
+        fun redialIntent(
+            context: Context,
+            peer: AccountPeerKey,
+            displayName: String,
+            binding: CallSessionBinding,
+        ): Intent {
+            val callKey = AccountCallKey(peer.accountId, UUID.randomUUID().toString())
+            val owner = AccountCallOwner(callKey, binding)
+            return outgoingIntent(
+                context,
+                peer,
+                displayName,
+                callKey,
+            )
+                .setData(android.net.Uri.parse("tinitalk://redial/${android.net.Uri.encode(owner.localId())}"))
                 .setAction(ActionRedial)
+                .putExtra(ExtraRedialServerUrl, binding.serverUrl)
+                .putExtra(ExtraRedialSessionLogin, binding.login)
+                .putExtra(ExtraRedialSessionId, binding.sessionId)
+                .putExtra(ExtraRedialConfigId, binding.configId)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+
+        private fun redialBindingFrom(intent: Intent): CallSessionBinding? {
+            val serverUrl = intent.getStringExtra(ExtraRedialServerUrl)?.takeIf(String::isNotBlank) ?: return null
+            val login = intent.getStringExtra(ExtraRedialSessionLogin)?.takeIf(String::isNotBlank) ?: return null
+            val sessionId = intent.getStringExtra(ExtraRedialSessionId)?.takeIf(String::isNotBlank) ?: return null
+            return CallSessionBinding(
+                serverUrl,
+                login,
+                sessionId,
+                intent.getStringExtra(ExtraRedialConfigId),
+            )
+        }
     }
+}
+
+internal fun executePinnedRedial(
+    authStore: AuthStore,
+    peer: AccountPeerKey,
+    binding: CallSessionBinding,
+    acknowledge: (Session) -> Unit,
+    start: () -> Unit,
+): Boolean {
+    val session = resolvePinnedCallSession(authStore, peer.accountId, binding) ?: return false
+    acknowledge(session)
+    start()
+    return true
 }
 
 internal class CameraForegroundPublicationGate {
     private var published: CameraForegroundPublication? = null
 
-    fun shouldPublish(callId: String, foreground: Boolean, permissionGranted: Boolean): Boolean {
-        val next = CameraForegroundPublication(callId, foreground, permissionGranted)
+    fun shouldPublish(callKey: AccountCallKey, foreground: Boolean, permissionGranted: Boolean): Boolean {
+        val next = CameraForegroundPublication(callKey, foreground, permissionGranted)
         if (next == published) return false
         published = next
         return true
@@ -644,7 +816,7 @@ internal class CallActivityCameraForeground(
 }
 
 private data class CameraForegroundPublication(
-    val callId: String,
+    val callKey: AccountCallKey,
     val foreground: Boolean,
     val permissionGranted: Boolean,
 )

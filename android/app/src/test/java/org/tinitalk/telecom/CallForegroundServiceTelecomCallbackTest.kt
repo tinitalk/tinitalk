@@ -2,6 +2,11 @@ package org.tinitalk.telecom
 
 import android.os.Looper
 import org.tinitalk.call.CallAudioState
+import org.tinitalk.call.AccountCallKey
+import org.tinitalk.call.AccountCallOwner
+import org.tinitalk.call.CallAdmissionAttempt
+import org.tinitalk.call.CallSessionBinding
+import org.tinitalk.call.GlobalCallAdmission
 import org.tinitalk.call.CallCoordinator
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
@@ -10,6 +15,7 @@ import org.tinitalk.call.CallSnapshot
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.SignalClient
 import org.tinitalk.data.signal.SignalEvent
+import org.tinitalk.data.AccountId
 import kotlin.jvm.functions.Function0
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -27,14 +33,25 @@ class CallForegroundServiceTelecomCallbackTest {
     fun acceptsLocalTelecomCallbackAfterCrossedCallAdoptsCanonicalId() {
         val controller = Robolectric.buildService(CallForegroundService::class.java).create()
         val service = controller.get()
-        val coordinator = CallCoordinator("alice", NoopSignalClient()).apply {
+        val accountId = AccountId("account-a")
+        val localKey = AccountCallKey(accountId, LocalTelecomCallId)
+        val canonicalKey = AccountCallKey(accountId, CanonicalCallId)
+        val owner = AccountCallOwner(
+            canonicalKey,
+            CallSessionBinding("https://a.example", "alice", "session-a", "config-a"),
+        )
+        val acquired = GlobalCallAdmission.stage(owner) as CallAdmissionAttempt.Acquired
+        val lease = requireNotNull(GlobalCallAdmission.take(owner))
+        val coordinator = CallCoordinator("alice", NoopSignalClient(), accountId = accountId).apply {
             restoreIncoming(CanonicalCallId, acknowledgeRinging = false)
             accept()
         }
         service.setPrivateField("coordinator", coordinator)
-        service.setPrivateField("telecomCallId", LocalTelecomCallId)
+        service.setPrivateField("telecomCallKey", localKey)
+        service.setPrivateField("callOwner", owner)
+        service.setPrivateField("admissionLease", lease)
         CallUiStateStore.begin(
-            CanonicalCallId,
+            canonicalKey,
             CallPeer("Bob"),
             CallDirection.Outgoing,
             CallPhase.Active,
@@ -43,12 +60,12 @@ class CallForegroundServiceTelecomCallbackTest {
         val endpoints = AudioEndpointState(endpoint, listOf(endpoint))
         var disconnected = false
 
-        val callbacks = service.telecomCallbacksForTest(LocalTelecomCallId) { disconnected = true }
+        val callbacks = service.telecomCallbacksForTest(localKey) { disconnected = true }
         callbacks.onEndpointsChanged(endpoints)
         callbacks.onDisconnect()
         Shadows.shadowOf(Looper.getMainLooper()).idle()
 
-        assertEquals(CallSnapshot(CallPhase.Active, CanonicalCallId, 0), coordinator.snapshot())
+        assertEquals(CallSnapshot(CallPhase.Active, CanonicalCallId, 0, accountId), coordinator.snapshot())
         assertEquals(endpoints, CallAudioState.snapshot())
         assertEquals(endpoint, CallUiStateStore.snapshot().currentAudioEndpoint)
         assertTrue(disconnected)
@@ -63,15 +80,15 @@ class CallForegroundServiceTelecomCallbackTest {
     }
 
     private fun CallForegroundService.telecomCallbacksForTest(
-        callId: String,
+        callKey: AccountCallKey,
         onDisconnect: () -> Unit,
     ): TelecomCallCallbacks {
         val method = javaClass.getDeclaredMethod(
             "telecomCallbacks",
-            String::class.java,
+            AccountCallKey::class.java,
             Function0::class.java,
         ).apply { isAccessible = true }
-        return method.invoke(this, callId, onDisconnect) as TelecomCallCallbacks
+        return method.invoke(this, callKey, onDisconnect) as TelecomCallCallbacks
     }
 
     private class NoopSignalClient : SignalClient {

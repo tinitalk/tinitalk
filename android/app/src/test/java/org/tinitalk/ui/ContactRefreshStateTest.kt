@@ -2,94 +2,107 @@ package org.tinitalk.ui
 
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.CallUnreadState
+import org.tinitalk.data.AccountContact
+import org.tinitalk.data.AccountContactPage
+import org.tinitalk.data.AccountCallHistoryPage
+import org.tinitalk.data.AccountHistory
+import org.tinitalk.data.AccountId
+import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.Contact
-import org.tinitalk.data.ContactPage
 import org.tinitalk.data.UnreadMissedContact
+import org.tinitalk.data.AccountUnreadState
+import org.tinitalk.data.Session
+import org.tinitalk.acceptsAccountUnreadUpdate
+import org.tinitalk.markEachAccountHistoryPage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ContactRefreshStateTest {
     @Test
-    fun unreadMissedStateReplacesContactSubtitles() {
-        val state = MainScreenState(
-            unreadMissedCount = 3,
-            latestUnreadMissedByContact = mapOf("old" to 10L),
+    fun markReadFailureForAStillMarksB() {
+        val a = AccountId("a")
+        val b = AccountId("b")
+        val pages = listOf(
+            AccountCallHistoryPage(a, emptyList(), 0, 1, CallUnreadState(1, emptyList())),
+            AccountCallHistoryPage(b, emptyList(), 0, 2, CallUnreadState(2, emptyList())),
         )
-
-        val updated = state.withUnreadMissedState(
-            CallUnreadState(
-                unreadMissedCount = 2,
-                unreadMissed = listOf(
-                    UnreadMissedContact("anna", 100L),
-                    UnreadMissedContact("ira", 90L),
-                ),
-            ),
-            appliedBadgeCount = 2,
-        )
-
-        assertEquals(2, updated.unreadMissedCount)
-        assertEquals(mapOf("anna" to 100L, "ira" to 90L), updated.latestUnreadMissedByContact)
+        val marked = markEachAccountHistoryPage(pages) { page ->
+            if (page.accountId == a) error("A failed")
+            else AccountUnreadState(b, CallUnreadState(0, emptyList()))
+        }
+        assertEquals(listOf(b), marked.map { it.accountId })
     }
 
     @Test
-    fun refreshedContactsReplaceOnlyContactData() {
-        val historyItem = CallHistoryItem(
-            id = 7,
-            peerLogin = "anna",
-            peerName = "Анна",
-            direction = "incoming",
-            outcome = "completed",
-            reached = true,
-            startedAt = 1_787_740_200,
-            durationSeconds = 30,
-        )
-        val state = MainScreenState(
-            restoring = false,
-            signedIn = true,
-            contacts = listOf(Contact("anna", "Анна")),
-            contactsRefreshing = true,
-            contactsRefreshErrorMessage = "Старая ошибка",
-            history = listOf(historyItem),
-            historyLoaded = true,
-            unreadMissedCount = 4,
-        )
-
-        val refreshed = state.withRefreshedContacts(
-            ContactPage(listOf(Contact("ira", "Ирина")), nextCursor = "next-page"),
-        )
-
-        assertEquals(listOf("ira"), refreshed.contacts.map(Contact::login))
-        assertFalse(refreshed.contactsRefreshing)
-        assertNull(refreshed.contactsRefreshErrorMessage)
-        assertEquals(listOf(historyItem), refreshed.history)
-        assertTrue(refreshed.historyLoaded)
-        assertEquals(4, refreshed.unreadMissedCount)
+    fun queuedUnreadFromReplacedSessionIsRejected() {
+        val current = Session("https://server", "sam", "new")
+        assertFalse(acceptsAccountUnreadUpdate(
+            current,
+            AccountUnreadState(AccountId("a"), CallUnreadState(1, emptyList()), current.copy(token = "old")),
+        ))
     }
 
     @Test
-    fun additionalContactPageAppendsWithoutDuplicates() {
-        val state = MainScreenState(
-            contacts = listOf(Contact("anna", "Анна"), Contact("boris", "Борис")),
-            contactsLoadingMore = true,
-            contactsNextCursor = "next-page",
+    fun lengthPrefixedKeysKeepAmbiguousPartsDistinct() {
+        assertFalse(accountScopedKey(AccountId("a"), "23") == accountScopedKey(AccountId("a2"), "3"))
+    }
+
+    @Test
+    fun historyReducerKeepsFailedAccountCacheCursorAndEqualIdsDistinct() {
+        val a = AccountId("a")
+        val b = AccountId("b")
+        val oldB = AccountHistory(b, history(7, "sam", 1))
+        val pageA = AccountCallHistoryPage(
+            a, listOf(AccountHistory(a, history(7, "sam", 2))), 3, 7,
+            CallUnreadState(1, listOf(UnreadMissedContact("sam", 2))),
         )
 
-        val updated = state.withContactsPage(
-            ContactPage(
-                items = listOf(Contact("boris", "Борис"), Contact("ira", "Ирина")),
-                nextCursor = "",
+        val result = reduceAccountHistory(
+            listOf(a, b), mapOf(b to listOf(oldB)), mapOf(b to 9),
+            listOf(pageA), append = false,
+        )
+
+        assertEquals(listOf(a, b), result.items.map { it.accountId })
+        assertEquals(9L, result.cursors[b])
+    }
+
+    @Test
+    fun contactReducerFiltersRemovedAccountAndRejectsUnrequestedPage() {
+        val a = AccountId("a")
+        val b = AccountId("b")
+        val pageB = AccountContactPage(b, listOf(AccountContact(b, "https://b", Contact("sam", "B"))), "")
+        val result = reduceAccountContacts(listOf(a), emptyMap(), emptyMap(), listOf(pageB), append = false)
+        assertTrue(result.first.isEmpty())
+        assertTrue(result.second.isEmpty())
+    }
+
+    @Test
+    fun accountMergeKeepsEqualLoginsAndUnreadMarkersDistinct() {
+        val first = AccountId("first")
+        val second = AccountId("second")
+
+        val merged = mergeAccountContacts(
+            listOf(first, second),
+            mapOf(
+                first to listOf(AccountContact(first, "https://first.example", Contact("sam", "First Sam"))),
+                second to listOf(AccountContact(second, "https://second.example", Contact("sam", "Second Sam"))),
+            ),
+        )
+        val unread = aggregateUnreadMissed(
+            mapOf(
+                first to CallUnreadState(1, listOf(UnreadMissedContact("sam", 10))),
+                second to CallUnreadState(2, listOf(UnreadMissedContact("sam", 20))),
             ),
         )
 
-        assertEquals(listOf("anna", "boris", "ira"), updated.contacts.map(Contact::login))
-        assertFalse(updated.contactsLoadingMore)
-        assertEquals("", updated.contactsNextCursor)
-        assertNull(updated.contactsLoadMoreErrorMessage)
+        assertEquals(listOf("First Sam", "Second Sam"), merged.map { it.displayName })
+        assertEquals(
+            mapOf(AccountPeerKey(first, "sam") to 10L, AccountPeerKey(second, "sam") to 20L),
+            unread.latestByContact,
+        )
     }
-
     @Test
     fun requestsNextContactPageFiveItemsBeforeEnd() {
         assertFalse(shouldLoadMoreContacts(index = 14, itemCount = 20, nextCursor = "next", loading = false, hasError = false))
@@ -117,6 +130,10 @@ class ContactRefreshStateTest {
         assertTrue(offline.signedIn)
         assertFalse(offline.networkAvailable)
         assertEquals("https://talk.example.com", offline.serverUrl)
-        assertTrue(offline.contacts.isEmpty())
+        assertTrue(offline.accountContacts.isEmpty())
     }
 }
+
+private fun history(id: Long, login: String, startedAt: Long) = CallHistoryItem(
+    id, login, login, "incoming", "completed", true, startedAt, 0,
+)

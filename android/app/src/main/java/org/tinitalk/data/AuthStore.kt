@@ -6,8 +6,12 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import org.tinitalk.push.StoredFirebaseConfig
+import org.tinitalk.push.PushRegistrationState
+import org.tinitalk.push.StoredWebPushConfig
+import org.tinitalk.push.isBoundTo
+import org.tinitalk.push.isValid
 import java.security.KeyStore
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -36,59 +40,296 @@ interface TokenCipher {
 
 data class CipherText(val value: String, val iv: String)
 
+class AccountStorageException(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
+@JvmInline
+value class AccountId(val value: String) {
+    init {
+        require(value.isNotBlank()) { "account ID must not be blank" }
+    }
+}
+
+data class AccountRecord(
+    val id: AccountId,
+    val session: Session,
+    val displayName: String? = null,
+)
+
+internal data class PersistedAccountCollection(
+    val version: Int = AccountCollectionVersion,
+    val accounts: List<PersistedAccount> = emptyList(),
+)
+
+internal data class PersistedAccount(
+    val id: String,
+    val url: String,
+    val login: String,
+    val token: CipherText,
+    val features: Set<String> = emptySet(),
+    val sessionId: String? = null,
+    val configId: String? = null,
+    val displayName: String? = null,
+    val webPushConfig: StoredWebPushConfig? = null,
+    val webPushRegistration: PushRegistrationState? = null,
+)
+
+internal const val AccountCollectionKey = "accounts_v1"
+internal const val AccountMigrationMarkerKey = "accounts_migrated_v1"
+internal const val AccountCollectionVersion = 1
+internal val AccountStorageLock = Any()
+
+internal object AccountCollectionStorage {
+    private val gson = Gson()
+
+    fun read(store: KeyValueStore): PersistedAccountCollection {
+        val encoded = store.get(AccountCollectionKey) ?: return PersistedAccountCollection()
+        return runCatching {
+            val collection = requireNotNull(gson.fromJson(encoded, PersistedAccountCollection::class.java))
+            require(collection.version == AccountCollectionVersion)
+            val identities = mutableSetOf<Pair<String, String>>()
+            val ids = mutableSetOf<String>()
+            require(collection.accounts.all { account ->
+                account.id.isNotBlank() &&
+                    ids.add(account.id) &&
+                    account.url.isNotBlank() &&
+                    account.login.isNotBlank() &&
+                    account.token.value.isNotBlank() &&
+                    account.token.iv.isNotBlank() &&
+                    account.features.size >= 0 &&
+                    account.webPushConfig?.isValid() != false &&
+                    account.webPushRegistration?.isValid() != false &&
+                    identities.add(normalizeServerUrl(account.url) to account.login.trim())
+            })
+            collection
+        }.getOrElse { error ->
+            throw AccountStorageException("invalid account collection", error)
+        }
+    }
+
+    fun write(store: KeyValueStore, collection: PersistedAccountCollection) {
+        val previous = store.get(AccountCollectionKey)
+        try {
+            store.put(AccountCollectionKey, gson.toJson(collection))
+        } catch (error: Exception) {
+            val rollback = runCatching {
+                if (previous == null) store.remove(AccountCollectionKey) else store.put(AccountCollectionKey, previous)
+            }
+            throw AccountStorageException("failed to persist account collection", error).also { failure ->
+                rollback.exceptionOrNull()?.let(failure::addSuppressed)
+            }
+        }
+    }
+}
+
 class AuthStore(
     private val store: KeyValueStore,
     private val cipher: TokenCipher,
+    private val accountIdFactory: () -> AccountId = { AccountId(UUID.randomUUID().toString()) },
 ) {
     fun save(session: Session) {
-        synchronized(SessionLock) {
-            saveUnlocked(session)
+        synchronized(AccountStorageLock) {
+            val collection = ensureMigratedUnlocked()
+            val first = collection.accounts.firstOrNull()
+            if (first == null) {
+                upsertUnlocked(collection, session)
+            } else {
+                require(collection.canReplace(first.id, session)) { "duplicate account identity" }
+                replaceUnlocked(collection, first.id, session)
+            }
             AuthSessionEvents.clear()
         }
     }
 
-    fun load(): Session? = synchronized(SessionLock) { loadUnlocked() }
-
-    fun loadBoundTo(config: StoredFirebaseConfig?): Session? = synchronized(SessionLock) {
-        loadUnlocked()?.takeIf { session -> session.isBoundTo(config) }
+    fun load(): Session? = synchronized(AccountStorageLock) {
+        ensureMigratedUnlocked().accounts.firstOrNull()?.toSession()
     }
 
-    fun clear() = synchronized(SessionLock) {
-        clearUnlocked()
+    fun loadBoundTo(config: StoredWebPushConfig?): Session? = synchronized(AccountStorageLock) {
+        ensureMigratedUnlocked().accounts.firstOrNull()?.toSession()?.takeIf { session -> session.isBoundTo(config) }
+    }
+
+    fun clear() = synchronized(AccountStorageLock) {
+        val collection = ensureMigratedUnlocked()
+        collection.accounts.firstOrNull()?.let { removeUnlocked(collection, it.id) }
         AuthSessionEvents.clear()
     }
 
-    fun clearIfCurrent(session: Session): Boolean = synchronized(SessionLock) {
-        val current = loadUnlocked()
-        if (current.sameIdentity(session)) {
-            clearUnlocked()
-            true
-        } else {
-            false
+    fun clearIfCurrent(session: Session): Boolean = synchronized(AccountStorageLock) {
+        val first = ensureMigratedUnlocked().accounts.firstOrNull() ?: return@synchronized false
+        removeIfCurrentUnlocked(first.id, session)
+    }
+
+    fun saveIfCurrent(expected: Session?, session: Session): Boolean = synchronized(AccountStorageLock) {
+        val collection = ensureMigratedUnlocked()
+        val first = collection.accounts.firstOrNull()
+        if (!first?.toSession().sameIdentity(expected)) return@synchronized false
+        if (first != null && !collection.canReplace(first.id, session)) return@synchronized false
+        if (first == null) upsertUnlocked(collection, session) else replaceUnlocked(collection, first.id, session)
+        AuthSessionEvents.clear()
+        true
+    }
+
+    fun invalidateIfCurrent(session: Session): Boolean = synchronized(AccountStorageLock) {
+        val first = ensureMigratedUnlocked().accounts.firstOrNull() ?: return@synchronized false
+        val current = first.toSession()
+        if (!removeIfCurrentUnlocked(first.id, session)) return@synchronized false
+        AuthSessionEvents.publish(AuthSessionEvent(current))
+        true
+    }
+
+    fun updateFeatures(url: String, features: Set<String>) = synchronized(AccountStorageLock) {
+        val collection = ensureMigratedUnlocked()
+        val first = collection.accounts.firstOrNull() ?: return@synchronized
+        val session = first.toSession()
+        if (session.url == url) {
+            val replacement = session.copy(features = features)
+            replaceUnlocked(collection, first.id, replacement)
         }
     }
 
-    fun saveIfCurrent(expected: Session?, session: Session): Boolean = synchronized(SessionLock) {
-        if (!loadUnlocked().sameIdentity(expected)) return@synchronized false
-        saveUnlocked(session)
-        AuthSessionEvents.clear()
+    fun list(): List<AccountRecord> = synchronized(AccountStorageLock) {
+        ensureMigratedUnlocked().accounts.map { AccountRecord(AccountId(it.id), it.toSession(), it.displayName) }
+    }
+
+    fun get(accountId: AccountId): AccountRecord? = synchronized(AccountStorageLock) {
+        ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }
+            ?.let { AccountRecord(accountId, it.toSession(), it.displayName) }
+    }
+
+    fun webPushConfig(accountId: AccountId): StoredWebPushConfig? = synchronized(AccountStorageLock) {
+        ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }?.webPushConfig
+    }
+
+    fun isCurrent(accountId: AccountId, session: Session): Boolean = synchronized(AccountStorageLock) {
+        ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }
+            ?.toSession()
+            .sameIdentity(session)
+    }
+
+    fun <T> withCurrent(accountId: AccountId, session: Session, block: () -> T): T? = synchronized(AccountStorageLock) {
+        val current = ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }?.toSession()
+        if (!current.sameIdentity(session)) null else block()
+    }
+
+    fun upsert(session: Session): AccountRecord = synchronized(AccountStorageLock) {
+        upsertUnlocked(ensureMigratedUnlocked(), session)
+    }
+
+    fun newAccountId(): AccountId = synchronized(AccountStorageLock) {
+        generateAccountId(ensureMigratedUnlocked())
+    }
+
+    fun add(
+        accountId: AccountId,
+        session: Session,
+        webPushConfig: StoredWebPushConfig,
+        displayName: String,
+    ): AccountRecord = synchronized(AccountStorageLock) {
+        val collection = ensureMigratedUnlocked()
+        require(session.sessionId?.isNotBlank() == true) { "session ID is required" }
+        require(session.configId?.isNotBlank() == true) { "config ID is required" }
+        require(webPushConfig.isValid() && session.isBoundTo(webPushConfig)) { "WebPush configuration does not match session" }
+        require(collection.accounts.none { it.id == accountId.value }) { "duplicate account ID" }
+        require(collection.accounts.none { it.hasSemanticIdentity(session) }) { "duplicate account identity" }
+        val persisted = persistedAccount(accountId.value, session).copy(
+            webPushConfig = webPushConfig,
+            displayName = displayName.trim().takeIf(String::isNotEmpty),
+        )
+        AccountCollectionStorage.write(store, collection.copy(accounts = collection.accounts + persisted))
+        AccountRecord(accountId, session, persisted.displayName)
+    }
+
+    fun remove(accountId: AccountId): Boolean = synchronized(AccountStorageLock) {
+        removeUnlocked(ensureMigratedUnlocked(), accountId.value)
+    }
+
+    fun saveIfCurrent(accountId: AccountId, expected: Session, session: Session): Boolean =
+        synchronized(AccountStorageLock) {
+            val collection = ensureMigratedUnlocked()
+            val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
+            if (!current.toSession().sameIdentity(expected)) return@synchronized false
+            if (!collection.canReplace(current.id, session)) return@synchronized false
+            replaceUnlocked(collection, current.id, session)
+            true
+        }
+
+    fun saveIfCurrent(accountId: AccountId, expected: Session, session: Session, displayName: String?): Boolean =
+        synchronized(AccountStorageLock) {
+            val collection = ensureMigratedUnlocked()
+            val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
+            if (!current.toSession().sameIdentity(expected) || !collection.canReplace(current.id, session)) return@synchronized false
+            val replacement = persistedAccount(current.id, session, current)
+                .copy(displayName = displayName?.trim()?.takeIf(String::isNotEmpty) ?: current.displayName)
+            AccountCollectionStorage.write(
+                store,
+                collection.copy(accounts = collection.accounts.map { if (it.id == current.id) replacement else it }),
+            )
+            true
+        }
+
+    fun activateWebPushIfCurrent(
+        accountId: AccountId,
+        expected: Session,
+        session: Session,
+        config: StoredWebPushConfig,
+    ): Boolean = synchronized(AccountStorageLock) {
+        val collection = ensureMigratedUnlocked()
+        val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
+        if (!current.toSession().sameIdentity(expected) || !collection.canReplace(current.id, session)) {
+            return@synchronized false
+        }
+        require(config.isValid() && session.isBoundTo(config)) { "WebPush configuration does not match session" }
+        val replacement = persistedAccount(current.id, session, current).copy(
+            webPushConfig = config,
+            webPushRegistration = null,
+        )
+        AccountCollectionStorage.write(
+            store,
+            collection.copy(accounts = collection.accounts.map { if (it.id == current.id) replacement else it }),
+        )
         true
     }
 
-    fun invalidateIfCurrent(session: Session): Boolean = synchronized(SessionLock) {
-        val current = loadUnlocked()
-        if (!current.sameIdentity(session)) return@synchronized false
-        clearUnlocked()
-        AuthSessionEvents.publish(AuthSessionEvent(requireNotNull(current)))
+    fun removeIfCurrent(accountId: AccountId, session: Session): Boolean = synchronized(AccountStorageLock) {
+        ensureMigratedUnlocked()
+        removeIfCurrentUnlocked(accountId.value, session)
+    }
+
+    fun invalidateIfCurrent(
+        accountId: AccountId,
+        session: Session,
+        reason: AuthRemovalReason = AuthRemovalReason.SessionReplaced,
+    ): Boolean = synchronized(AccountStorageLock) {
+        val current = ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }
+            ?.toSession()
+            ?: return@synchronized false
+        if (!removeIfCurrentUnlocked(accountId.value, session)) return@synchronized false
+        AuthSessionEvents.publish(AuthSessionEvent(accountId, current, reason))
         true
     }
 
-    fun updateFeatures(url: String, features: Set<String>) = synchronized(SessionLock) {
-        val session = loadUnlocked() ?: return@synchronized
-        if (session.url == url) saveUnlocked(session.copy(features = features))
+    private fun ensureMigratedUnlocked(): PersistedAccountCollection {
+        var collection = AccountCollectionStorage.read(store)
+        if (store.get(AccountMigrationMarkerKey) == "1") return collection
+        val legacy = loadLegacyUnlocked()
+        if (legacy != null) {
+            val duplicate = collection.accounts.firstOrNull { it.hasSemanticIdentity(legacy) }
+            collection = if (duplicate == null) {
+                val persisted = persistedAccount(accountIdFactory().value, legacy)
+                collection.copy(accounts = collection.accounts + persisted)
+            } else {
+                collection
+            }
+            AccountCollectionStorage.write(store, collection)
+        }
+        store.put(AccountMigrationMarkerKey, "1")
+        return collection
     }
 
-    private fun loadUnlocked(): Session? {
+    private fun loadLegacyUnlocked(): Session? {
         val url = store.get("url") ?: return null
         val login = store.get("login") ?: return null
         val token = store.get("token") ?: return null
@@ -103,31 +344,83 @@ class AuthStore(
         return Session(url, login, cipher.decrypt(CipherText(token, iv)), features, sessionId, configId)
     }
 
-    private fun saveUnlocked(session: Session) {
+    private fun persistedAccount(id: String, session: Session, previous: PersistedAccount? = null): PersistedAccount {
         val encrypted = cipher.encrypt(session.token)
-        store.put("url", session.url)
-        store.put("login", session.login)
-        store.put("token", encrypted.value)
-        store.put("iv", encrypted.iv)
-        store.put("features", gson.toJson(session.features.sorted()))
-        if (session.sessionId == null) {
-            store.remove("session_id")
-        } else {
-            store.put("session_id", session.sessionId)
-        }
-        if (session.configId == null) {
-            store.remove("config_id")
-        } else {
-            store.put("config_id", session.configId)
-        }
+        return PersistedAccount(
+            id = id,
+            url = session.url,
+            login = session.login,
+            token = encrypted,
+            features = session.features,
+            sessionId = session.sessionId,
+            configId = session.configId,
+            displayName = previous?.displayName,
+            webPushConfig = previous?.webPushConfig,
+            webPushRegistration = previous?.webPushRegistration,
+        )
     }
 
-    private fun clearUnlocked() {
-        store.remove("url", "login", "token", "iv", "features", "session_id", "config_id")
+    private fun upsertUnlocked(collection: PersistedAccountCollection, session: Session): AccountRecord {
+        val duplicate = collection.accounts.firstOrNull { it.hasSemanticIdentity(session) }
+        val id = duplicate?.id ?: accountIdFactory().value
+        require(duplicate != null || collection.accounts.none { it.id == id }) { "duplicate account ID" }
+        val replacement = persistedAccount(id, session, duplicate)
+        val accounts = if (duplicate == null) {
+            collection.accounts + replacement
+        } else {
+            collection.accounts.map { if (it.id == id) replacement else it }
+        }
+        AccountCollectionStorage.write(store, collection.copy(accounts = accounts))
+        return AccountRecord(AccountId(id), session, replacement.displayName)
+    }
+
+    private fun replaceUnlocked(collection: PersistedAccountCollection, id: String, session: Session) {
+        require(collection.canReplace(id, session)) { "duplicate account identity" }
+        val current = collection.accounts.first { it.id == id }
+        val replacement = persistedAccount(id, session, current)
+        AccountCollectionStorage.write(
+            store,
+            collection.copy(accounts = collection.accounts.map { if (it.id == id) replacement else it }),
+        )
+    }
+
+    private fun removeUnlocked(collection: PersistedAccountCollection, id: String): Boolean {
+        if (collection.accounts.none { it.id == id }) return false
+        AccountCollectionStorage.write(store, collection.copy(accounts = collection.accounts.filterNot { it.id == id }))
+        return true
+    }
+
+    private fun removeIfCurrentUnlocked(id: String, session: Session): Boolean {
+        val collection = AccountCollectionStorage.read(store)
+        val current = collection.accounts.firstOrNull { it.id == id } ?: return false
+        if (!current.toSession().sameIdentity(session)) return false
+        return removeUnlocked(collection, id)
+    }
+
+    private fun PersistedAccount.toSession(): Session = Session(
+        url = url,
+        login = login,
+        token = cipher.decrypt(token),
+        features = features,
+        sessionId = sessionId,
+        configId = configId,
+    )
+
+    private fun PersistedAccount.hasSemanticIdentity(session: Session): Boolean =
+        normalizeServerUrl(url) == normalizeServerUrl(session.url) &&
+            login.trim() == session.login.trim()
+
+    private fun PersistedAccountCollection.canReplace(id: String, session: Session): Boolean =
+        accounts.none { account -> account.id != id && account.hasSemanticIdentity(session) }
+
+    private fun generateAccountId(collection: PersistedAccountCollection): AccountId {
+        while (true) {
+            val candidate = accountIdFactory()
+            if (collection.accounts.none { it.id == candidate.value }) return candidate
+        }
     }
 
     private companion object {
-        val SessionLock = Any()
         val gson = Gson()
         val featureListType = object : TypeToken<List<String>>() {}.type
     }
@@ -142,7 +435,7 @@ internal fun Session?.sameIdentity(other: Session?): Boolean = when {
         configId == other.configId
 }
 
-private fun Session.isBoundTo(config: StoredFirebaseConfig?): Boolean =
+private fun Session.isBoundTo(config: StoredWebPushConfig?): Boolean =
     config != null &&
         !configId.isNullOrBlank() &&
         normalizeServerUrl(url) == normalizeServerUrl(config.serverUrl) &&
@@ -150,22 +443,23 @@ private fun Session.isBoundTo(config: StoredFirebaseConfig?): Boolean =
 
 internal fun normalizeServerUrl(url: String): String = url.trim().trimEnd('/')
 
-class SharedPreferencesKeyValueStore(context: Context) : KeyValueStore {
+internal class SharedPreferencesKeyValueStore(context: Context) : KeyValueStore {
     private val prefs: SharedPreferences = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
 
     override fun get(key: String): String? = prefs.getString(key, null)
 
     override fun put(key: String, value: String) {
-        prefs.edit().putString(key, value).apply()
+        check(prefs.edit().putString(key, value).commit()) { "failed to persist auth state" }
     }
 
     override fun remove(vararg keys: String) {
-        prefs.edit().apply {
+        check(prefs.edit().apply {
             keys.forEach { remove(it) }
-        }.apply()
+        }.commit()) { "failed to remove auth state" }
     }
 
     override fun values(): List<String> = prefs.all.values.mapNotNull { it as? String }
+
 }
 
 class AndroidKeystoreTokenCipher : TokenCipher {

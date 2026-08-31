@@ -19,10 +19,18 @@ object CallServiceState {
         listeners -= listener
     }
 
+    @Synchronized
     fun publish(snapshot: CallSnapshot) {
         current = snapshot
         listeners.forEach { it(snapshot) }
     }
 
     fun reset() = publish(CallSnapshot())
+
+    @Synchronized
+    fun reset(callKey: AccountCallKey): Boolean {
+        if (current.callKey != callKey) return false
+        publish(CallSnapshot())
+        return true
+    }
 }

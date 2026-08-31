@@ -1,6 +1,7 @@
 package org.tinitalk.call
 
 import android.os.SystemClock
+import org.tinitalk.data.AccountId
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.telecom.AudioEndpoint
 import org.tinitalk.telecom.AudioEndpointState
@@ -37,6 +38,7 @@ data class CallPeer(
 )
 
 data class CallUiState(
+    val accountId: AccountId? = null,
     val callId: String? = null,
     val peer: CallPeer? = null,
     val direction: CallDirection? = null,
@@ -49,6 +51,9 @@ data class CallUiState(
     val connectionHealth: ConnectionHealth = ConnectionHealth.None,
     val endReason: CallEndReason? = null,
 ) {
+    val callKey: AccountCallKey?
+        get() = accountId?.let { id -> callId?.let { AccountCallKey(id, it) } }
+
     fun onMediaConnection(state: MediaConnectionState, nowElapsedMs: Long): CallUiState =
         when (state) {
             MediaConnectionState.Connecting -> copy(
@@ -123,7 +128,7 @@ internal enum class CallScreenAction {
 internal class CallScreenActionGate {
     private var locked: Lock? = null
 
-    fun lock(action: CallScreenAction, callKey: String): Boolean {
+    fun lock(action: CallScreenAction, callKey: AccountCallKey): Boolean {
         if (locked?.callKey == callKey) return false
         locked = Lock(action, callKey)
         return true
@@ -132,7 +137,7 @@ internal class CallScreenActionGate {
     fun onCallState(state: CallUiState) {
         val current = locked ?: return
         if (current.action == CallScreenAction.Answer &&
-            current.callKey == state.callId &&
+            current.callKey == state.callKey &&
             state.phase == CallPhase.Active
         ) {
             locked = null
@@ -143,9 +148,9 @@ internal class CallScreenActionGate {
         locked = null
     }
 
-    fun isLocked(callKey: String): Boolean = locked?.callKey == callKey
+    fun isLocked(callKey: AccountCallKey): Boolean = locked?.callKey == callKey
 
-    private data class Lock(val action: CallScreenAction, val callKey: String)
+    private data class Lock(val action: CallScreenAction, val callKey: AccountCallKey)
 }
 
 object CallUiStateStore {
@@ -166,10 +171,11 @@ object CallUiStateStore {
     }
 
     @Synchronized
-    fun begin(callId: String, peer: CallPeer, direction: CallDirection, phase: CallPhase) {
+    fun begin(callKey: AccountCallKey, peer: CallPeer, direction: CallDirection, phase: CallPhase) {
         publish(
             CallUiState(
-                callId = callId,
+                accountId = callKey.accountId,
+                callId = callKey.callId,
                 peer = peer,
                 direction = direction,
                 phase = phase,
@@ -185,11 +191,16 @@ object CallUiStateStore {
     @Synchronized
     fun sync(snapshot: CallSnapshot, endReason: CallEndReason? = null) {
         val now = SystemClock.elapsedRealtime()
-        val base = current.takeIf { it.callId == snapshot.callId } ?: CallUiState(callId = snapshot.callId)
+        val base = current.takeIf { it.callKey == snapshot.callKey } ?: CallUiState(
+            accountId = snapshot.accountId,
+            callId = snapshot.callId,
+        )
         val next = if (snapshot.phase == CallPhase.Ended) {
-            base.copy(callId = snapshot.callId).onEnded(endReason ?: CallEndReason.Failed, now)
+            base.copy(accountId = snapshot.accountId, callId = snapshot.callId)
+                .onEnded(endReason ?: CallEndReason.Failed, now)
         } else {
             base.copy(
+                accountId = snapshot.accountId,
                 callId = snapshot.callId,
                 phase = snapshot.phase,
                 endReason = null,
@@ -214,9 +225,9 @@ object CallUiStateStore {
     }
 
     @Synchronized
-    fun setAudioEndpoints(callId: String, endpoints: AudioEndpointState) {
+    fun setAudioEndpoints(callKey: AccountCallKey, endpoints: AudioEndpointState) {
         val state = current
-        if (state.callId != callId) return
+        if (state.callKey != callKey) return
         publish(
             state.copy(
                 currentAudioEndpoint = endpoints.current,
@@ -231,9 +242,9 @@ object CallUiStateStore {
     }
 
     @Synchronized
-    fun setConnectionHealth(callId: String, health: ConnectionHealth) {
+    fun setConnectionHealth(callKey: AccountCallKey, health: ConnectionHealth) {
         val state = current
-        if (state.callId != callId || state.phase != CallPhase.Active) return
+        if (state.callKey != callKey || state.phase != CallPhase.Active) return
         publish(state.copy(connectionHealth = health))
     }
 
@@ -243,8 +254,8 @@ object CallUiStateStore {
     }
 
     @Synchronized
-    fun reset(callId: String): Boolean {
-        if (current.callId != callId) return false
+    fun reset(callKey: AccountCallKey): Boolean {
+        if (current.callKey != callKey) return false
         publish(CallUiState())
         return true
     }

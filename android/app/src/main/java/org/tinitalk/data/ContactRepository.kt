@@ -1,19 +1,22 @@
 package org.tinitalk.data
 
 import android.content.Context
-import org.tinitalk.push.FirebaseBootstrap
-import org.tinitalk.push.FirebaseBootstrapResult
-import org.tinitalk.push.FirebaseConfigStore
-import org.tinitalk.push.FirebaseRegistration
+import org.tinitalk.cleanupWebPushAccount
+import org.tinitalk.push.AccountWebPushRegistration
 import org.tinitalk.push.DeviceIdentity
-import org.tinitalk.push.PushRegistrationScheduler
-import org.tinitalk.push.PushRegistrationStore
-import org.tinitalk.push.StoredFirebaseConfig
-import org.tinitalk.push.persistRegisteredInstallation
+import org.tinitalk.push.StoredWebPushConfig
+import org.tinitalk.push.UnifiedPushAccountRegistration
+import org.tinitalk.push.WebPushClientConfig
+import org.tinitalk.push.isValid
 
 private const val TINITALK_SERVICE = "tinitalk"
 private const val SUPPORTED_API_VERSION = 3
-private const val DYNAMIC_FCM_FEATURE = "dynamic_fcm_v1"
+private const val WEBPUSH_FEATURE = "webpush_v1"
+
+data class AddedAccount(
+    val account: AccountRecord,
+    val contacts: AccountContactPage,
+)
 
 enum class CompatibilityProblem {
     WrongServer,
@@ -38,27 +41,19 @@ data class ServerCheckDetails(
 
 class ServerCompatibilityException(
     val problem: CompatibilityProblem,
+    val serverUrl: String? = null,
 ) : RuntimeException()
 
-class FirebaseConfigurationRestartRequiredException : IllegalStateException(
-    "Firebase configuration changed; restart the app to continue",
-)
+class DuplicateAccountException : IllegalArgumentException("account already exists")
 
 class ContactRepository internal constructor(
     private val authStore: AuthStore,
-    private val firebaseConfigStore: FirebaseConfigStore?,
-    private val firebaseBootstrap: FirebaseBootstrap?,
-    private val firebaseRegistration: FirebaseRegistration?,
-    private val onSessionActivated: (
-        config: StoredFirebaseConfig,
-        session: Session,
-        deviceId: String,
-        installationId: String,
-    ) -> Unit = { _, _, _, _ -> },
+    private val webPushRegistration: AccountWebPushRegistration? = null,
+    private val onAccountRemoved: (AccountId, Session) -> Unit = { _, _ -> },
     private val apiFactory: (url: String, login: String, token: String, sessionId: String?) -> HouseholdApi =
         { url, login, token, sessionId -> UrlConnectionApiClient(url, login, token, sessionId) },
 ) {
-    constructor(authStore: AuthStore) : this(authStore, null, null, null)
+    constructor(authStore: AuthStore) : this(authStore, null)
 
     constructor(
         authStore: AuthStore,
@@ -66,27 +61,14 @@ class ContactRepository internal constructor(
     ) : this(
         authStore,
         null,
-        null,
-        null,
-        { _, _, _, _ -> },
+        { _, _ -> },
         { url, login, token, _ -> apiFactory(url, login, token) },
     )
 
     constructor(context: Context, authStore: AuthStore) : this(
         authStore,
-        FirebaseConfigStore(context),
-        FirebaseBootstrap(context),
-        FirebaseRegistration(),
-        { config, session, deviceId, installationId ->
-            persistRegisteredInstallation(
-                installationId = installationId,
-                config = config,
-                session = session,
-                deviceId = deviceId,
-                store = PushRegistrationStore(context),
-                enqueue = { PushRegistrationScheduler(context).enqueue() },
-            )
-        },
+        UnifiedPushAccountRegistration(context),
+        { accountId, session -> cleanupWebPushAccount(context, accountId, session) },
     )
 
     fun checkServer(url: String): ServerCheckResult {
@@ -97,7 +79,9 @@ class ContactRepository internal constructor(
         return try {
             val normalizedUrl = url.trim().trimEnd('/')
             val info = apiFactory(normalizedUrl, "", "", null).serverInfo()
-            val result = when (info.compatibilityProblem()) {
+            val problem = info.compatibilityProblem()
+                ?: CompatibilityProblem.ServerOutdated.takeIf { WEBPUSH_FEATURE !in info.features }
+            val result = when (problem) {
                 null -> ServerCheckResult.Available
                 CompatibilityProblem.WrongServer -> ServerCheckResult.WrongServer
                 CompatibilityProblem.ServerOutdated -> ServerCheckResult.ServerOutdated
@@ -118,134 +102,260 @@ class ContactRepository internal constructor(
         }
     }
 
+    fun checkAddAccountServer(url: String): ServerCheckResult = try {
+        val normalizedUrl = normalizeServerUrl(url)
+        apiFactory(normalizedUrl, "", "", null).requireWebPushServer(normalizedUrl)
+        ServerCheckResult.Available
+    } catch (error: ServerCompatibilityException) {
+        when (error.problem) {
+            CompatibilityProblem.WrongServer -> ServerCheckResult.WrongServer
+            CompatibilityProblem.ServerOutdated -> ServerCheckResult.ServerOutdated
+            CompatibilityProblem.AppOutdated -> ServerCheckResult.AppOutdated
+            CompatibilityProblem.Unavailable -> ServerCheckResult.Unavailable
+        }
+    } catch (_: Exception) {
+        ServerCheckResult.Unavailable
+    }
+
     fun signIn(url: String, login: String, token: String, deviceId: String = ""): ContactPage {
         val previous = authStore.load()
+        val accountId = authStore.list().firstOrNull()?.id ?: authStore.newAccountId()
         var session = Session(normalizeServerUrl(url), login.trim(), token.trim())
         var api = api(session)
+        var subscribed = false
+        var persisted = false
         return try {
-            val info = api.requireDynamicFirebaseServer()
-            require(deviceId.isNotBlank()) { "device_id is required for Firebase activation" }
-            val configStore = checkNotNull(firebaseConfigStore) { "Firebase activation is unavailable" }
-            val bootstrap = checkNotNull(firebaseBootstrap) { "Firebase activation is unavailable" }
-            val registration = checkNotNull(firebaseRegistration) { "Firebase activation is unavailable" }
-            val config = api.firebaseConfig()
-            val storedConfig = configStore.save(session.url, config)
-            when (bootstrap.restore()) {
-                FirebaseBootstrapResult.ConfigurationMismatch -> throw FirebaseConfigurationRestartRequiredException()
-                FirebaseBootstrapResult.Absent -> error("persisted Firebase configuration is unavailable")
-                FirebaseBootstrapResult.Initialized,
-                FirebaseBootstrapResult.AlreadyInitialized -> Unit
-            }
-            val firebaseInstallationId = registration.registerAndGetInstallationId()
-            val sessionId = api.claimSession(deviceId, firebaseInstallationId, storedConfig.configId)
+            val info = api.requireWebPushServer()
+            require(deviceId.isNotBlank()) { "device_id is required for push activation" }
+            val registration = checkNotNull(webPushRegistration) { "push activation is unavailable" }
+            val config = api.webPushConfig().toStoredConfig(session.url)
+            val subscription = registration.subscribe(accountId, config)
+            subscribed = true
+            val sessionId = api.claimSession(deviceId, subscription, config.configId)
             session = session.copy(
                 features = info.features,
                 sessionId = sessionId,
-                configId = storedConfig.configId,
+                configId = config.configId,
             )
-            check(authStore.saveIfCurrent(previous, session)) { "authentication state changed" }
-            onSessionActivated(storedConfig, session, deviceId, firebaseInstallationId)
+            if (previous == null) {
+                authStore.add(accountId, session, config, "")
+            } else {
+                check(authStore.activateWebPushIfCurrent(accountId, previous, session, config)) {
+                    "authentication state changed"
+                }
+            }
+            persisted = true
             api = api(session)
             val profile = api.me()
-            api.contactsPage().withoutUser(profile.login)
+            val contacts = api.contactsPage().withoutUser(profile.login)
+            runCatching { authStore.saveIfCurrent(accountId, session, session, profile.displayName) }
+            contacts
         } catch (e: ApiException) {
             handleUnauthorized(e, session)
             throw e
+        } finally {
+            if (subscribed && !persisted) runCatching { webPushRegistration?.unsubscribe(accountId) }
         }
     }
 
-    fun restorableSession(): Session? = authStore.loadBoundTo(firebaseConfigStore?.load())
+    fun restorableSession(): Session? {
+        val account = authStore.list().firstOrNull() ?: return null
+        return authStore.loadBoundTo(authStore.webPushConfig(account.id))
+    }
 
-    fun restoreContacts(): ContactPage? {
-        val storedSession = restorableSession() ?: return null
+    fun accounts(): List<AccountRecord> = authStore.list()
+
+    fun addAccount(url: String, login: String, token: String, deviceId: String): AddedAccount {
+        val existing = authStore.list()
+        require(existing.isNotEmpty()) { "addAccount requires an existing account" }
+        val candidate = Session(normalizeServerUrl(url), login.trim(), token.trim())
+        if (existing.any {
+            normalizeServerUrl(it.session.url) == candidate.url && it.session.login.trim() == candidate.login
+        }) throw DuplicateAccountException()
+        require(deviceId.isNotBlank()) { "device_id is required for push activation" }
+        val registration = checkNotNull(webPushRegistration) { "push activation is unavailable" }
+        val api = api(candidate)
+        val info = api.requireWebPushServer(candidate.url)
+        val config = api.webPushConfig().toStoredConfig(candidate.url)
+        val accountId = authStore.newAccountId()
+        var committed = false
+        try {
+            val subscription = registration.subscribe(accountId, config)
+            val session = candidate.copy(
+                features = info.features,
+                sessionId = api.claimSession(deviceId, subscription, config.configId),
+                configId = config.configId,
+            )
+            val claimedApi = api(session)
+            val profile = claimedApi.me()
+            val contacts = claimedApi.contactsPage().withoutUser(profile.login)
+            val account = authStore.add(accountId, session, config, profile.displayName)
+            committed = true
+            return AddedAccount(account, contacts.boundTo(accountId, session.url))
+        } finally {
+            if (!committed) runCatching { registration.unsubscribe(accountId) }
+        }
+    }
+
+    fun restorableSession(accountId: AccountId): Session? {
+        val account = authStore.get(accountId) ?: return null
+        val config = authStore.webPushConfig(accountId) ?: return null
+        return account.session.takeIf { session ->
+            normalizeServerUrl(session.url) == normalizeServerUrl(config.serverUrl) &&
+                session.configId == config.configId
+        }
+    }
+
+    fun restoreContacts(accountId: AccountId): AccountContactPage? {
+        val account = authStore.get(accountId) ?: return null
+        val storedSession = restorableSession(accountId) ?: return null
         var session = storedSession
         val api = api(session)
         return try {
-            val info = api.requireDynamicFirebaseServer()
+            val info = api.requireWebPushServer(account.session.url)
             session = session.copy(features = info.features)
             val profile = api.me()
             val contacts = api.contactsPage().withoutUser(profile.login)
-            if (authStore.saveIfCurrent(storedSession, session)) contacts else null
+            if (authStore.saveIfCurrent(accountId, storedSession, session, profile.displayName)) {
+                contacts.boundTo(account.id, session.url)
+            } else {
+                null
+            }
         } catch (e: ApiException) {
-            handleUnauthorized(e, session)
+            if (!authStore.isCurrent(accountId, storedSession)) return null
+            handleUnauthorized(e, accountId, session)
             throw e
         }
     }
 
-    fun refreshContacts(cursor: String = ""): ContactPage? {
-        val session = authStore.load() ?: return null
+    fun refreshContacts(accountId: AccountId, cursor: String = ""): AccountContactPage? {
+        val account = authStore.get(accountId) ?: return null
         return try {
-            api(session)
+            val page = api(account.session)
                 .contactsPage(cursor = cursor)
-                .withoutUser(session.login)
+                .withoutUser(account.session.login)
+            if (!authStore.isCurrent(account.id, account.session)) null else page.boundTo(account.id, account.session.url)
         } catch (e: ApiException) {
-            handleUnauthorized(e, session)
+            if (!authStore.isCurrent(account.id, account.session)) return null
+            handleUnauthorized(e, account.id, account.session)
             throw e
         }
     }
 
-    fun updateContactName(login: String, customName: String?): Contact? {
-        val session = authStore.load() ?: return null
+    fun updateContactName(accountId: AccountId, login: String, customName: String?): AccountContact? {
+        val account = authStore.get(accountId) ?: return null
         return try {
-            api(session).updateContactName(login, customName)
+            val contact = api(account.session).updateContactName(login, customName)
+            if (!authStore.isCurrent(account.id, account.session)) null else AccountContact(account.id, account.session.url, contact)
         } catch (e: ApiException) {
-            handleUnauthorized(e, session)
+            if (!authStore.isCurrent(account.id, account.session)) return null
+            handleUnauthorized(e, account.id, account.session)
             throw e
         }
     }
 
-    fun loadCallHistory(before: Long = 0, limit: Int = 50, peerLogin: String? = null): CallHistoryPage? {
-        val session = authStore.load() ?: return null
+    fun loadCallHistory(
+        accountId: AccountId,
+        before: Long = 0,
+        limit: Int = 50,
+        peerLogin: String? = null,
+        expectedSession: Session? = null,
+    ): AccountCallHistoryPage? {
+        val account = authStore.get(accountId) ?: return null
+        if (expectedSession != null && !account.session.sameIdentity(expectedSession)) return null
+        if (!authStore.isCurrent(account.id, account.session)) return null
         return try {
-            api(session).calls(limit, before, peerLogin)
+            val page = api(account.session).calls(limit, before, peerLogin)
+            if (!authStore.isCurrent(account.id, account.session)) null else page.boundTo(account.id, account.session)
         } catch (e: ApiException) {
-            handleUnauthorized(e, session)
+            if (!authStore.isCurrent(account.id, account.session)) return null
+            handleUnauthorized(e, account.id, account.session)
             throw e
         }
     }
 
-    fun markCallHistoryRead(throughId: Long, peerLogin: String? = null): CallUnreadState? {
-        val session = authStore.load() ?: return null
+    fun markCallHistoryRead(
+        accountId: AccountId,
+        throughId: Long,
+        peerLogin: String? = null,
+        expectedSession: Session? = null,
+    ): AccountUnreadState? {
+        val account = authStore.get(accountId) ?: return null
+        if (expectedSession != null && !account.session.sameIdentity(expectedSession)) return null
+        if (!authStore.isCurrent(account.id, account.session)) return null
         return try {
-            api(session).markCallsRead(throughId, peerLogin)
+            val unread = api(account.session).markCallsRead(throughId, peerLogin)
+            if (!authStore.isCurrent(account.id, account.session)) null else AccountUnreadState(account.id, unread, account.session)
         } catch (e: ApiException) {
-            handleUnauthorized(e, session)
+            if (!authStore.isCurrent(account.id, account.session)) return null
+            handleUnauthorized(e, account.id, account.session)
             throw e
         }
     }
 
-    fun signOut() {
-        authStore.clear()
+    fun removeAccount(accountId: AccountId): Boolean {
+        val account = authStore.get(accountId) ?: return false
+        if (!authStore.removeIfCurrent(accountId, account.session)) return false
+        onAccountRemoved(accountId, account.session)
+        return true
     }
 
     private fun api(session: Session): HouseholdApi =
         apiFactory(session.url, session.login, session.token, session.sessionId)
 
     private fun handleUnauthorized(error: ApiException, session: Session) {
+        val account = authStore.list().singleOrNull { it.session.sameIdentity(session) } ?: return
+        handleUnauthorized(error, account.id, session)
+    }
+
+    private fun handleUnauthorized(error: ApiException, accountId: AccountId, session: Session) {
         if (error.code != 401) return
-        if (error.authReason == SessionReplacedReason) {
-            authStore.invalidateIfCurrent(session)
+        val reason = if (error.authReason == SessionReplacedReason) {
+            AuthRemovalReason.SessionReplaced
         } else {
-            authStore.clearIfCurrent(session)
+            AuthRemovalReason.Unauthorized
         }
+        val removed = authStore.invalidateIfCurrent(accountId, session, reason)
+        if (removed) onAccountRemoved(accountId, session)
     }
 }
 
 private fun ContactPage.withoutUser(login: String): ContactPage =
     copy(items = items.filterNot { it.login == login })
 
-private fun HouseholdApi.requireCompatibleServer(): ServerInfo {
+private fun ContactPage.boundTo(accountId: AccountId, serverUrl: String): AccountContactPage = AccountContactPage(
+    accountId = accountId,
+    items = items.map { contact -> AccountContact(accountId, serverUrl, contact) },
+    nextCursor = nextCursor,
+)
+
+private fun CallHistoryPage.boundTo(accountId: AccountId, session: Session? = null): AccountCallHistoryPage = AccountCallHistoryPage(
+    accountId = accountId,
+    items = items.map { item -> AccountHistory(accountId, item) },
+    nextBefore = nextBefore,
+    latestId = latestId,
+    unread = CallUnreadState(unreadMissedCount, unreadMissed),
+    session = session,
+)
+
+private fun HouseholdApi.requireCompatibleServer(serverUrl: String? = null): ServerInfo {
     val info = serverInfo()
-    throw ServerCompatibilityException(info.compatibilityProblem() ?: return info)
+    throw ServerCompatibilityException(info.compatibilityProblem() ?: return info, serverUrl)
 }
 
-private fun HouseholdApi.requireDynamicFirebaseServer(): ServerInfo {
-    val info = requireCompatibleServer()
-    if (DYNAMIC_FCM_FEATURE !in info.features) {
-        throw ServerCompatibilityException(CompatibilityProblem.ServerOutdated)
+private fun HouseholdApi.requireWebPushServer(serverUrl: String? = null): ServerInfo {
+    val info = requireCompatibleServer(serverUrl)
+    if (WEBPUSH_FEATURE !in info.features) {
+        throw ServerCompatibilityException(CompatibilityProblem.ServerOutdated, serverUrl)
     }
     return info
 }
+
+private fun WebPushClientConfig.toStoredConfig(serverUrl: String): StoredWebPushConfig = StoredWebPushConfig(
+    serverUrl = normalizeServerUrl(serverUrl),
+    vapidPublicKey = vapidPublicKey,
+    configId = configId,
+).also { require(it.isValid()) { "invalid WebPush configuration" } }
 
 private fun ServerInfo.compatibilityProblem(): CompatibilityProblem? = when {
     service != TINITALK_SERVICE -> CompatibilityProblem.WrongServer

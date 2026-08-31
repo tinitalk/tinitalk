@@ -51,12 +51,13 @@ import org.tinitalk.ui.theme.CallRejectRed
 import java.time.Instant
 import java.time.ZoneId
 
-internal fun shouldScrollToNewest(previousFirstId: Long?, currentFirstId: Long?): Boolean =
-    previousFirstId != null && currentFirstId != null && previousFirstId != currentFirstId
+internal fun shouldScrollToNewest(previousFirstKey: String?, currentFirstKey: String?): Boolean =
+    previousFirstKey != null && currentFirstKey != null && previousFirstKey != currentFirstKey
 
 @Composable
 fun HistoryScreen(
     items: List<CallHistoryItem>,
+    itemKeys: List<String> = items.map { item -> item.id.toString() },
     internetAvailable: Boolean = true,
     loaded: Boolean,
     loading: Boolean,
@@ -69,13 +70,13 @@ fun HistoryScreen(
     val now = Instant.now()
     val zone = ZoneId.systemDefault()
     val listState = rememberLazyListState()
-    var previousFirstId by remember { mutableStateOf<Long?>(null) }
-    val currentFirstId = items.firstOrNull()?.id
-    LaunchedEffect(currentFirstId) {
-        if (shouldScrollToNewest(previousFirstId, currentFirstId)) {
+    var previousFirstKey by remember { mutableStateOf<String?>(null) }
+    val currentFirstKey = itemKeys.firstOrNull()
+    LaunchedEffect(currentFirstKey) {
+        if (shouldScrollToNewest(previousFirstKey, currentFirstKey)) {
             listState.animateScrollToItem(0)
         }
-        if (currentFirstId != null) previousFirstId = currentFirstId
+        if (currentFirstKey != null) previousFirstKey = currentFirstKey
     }
     when {
         !internetAvailable && items.isEmpty() -> HistoryOffline()
@@ -93,7 +94,7 @@ fun HistoryScreen(
                     HistoryError(errorMessage, onRetry, compact = true, retryEnabled = internetAvailable)
                 }
             }
-            itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+            itemsIndexed(items, key = { index, item -> itemKeys.getOrNull(index) ?: item.id }) { index, item ->
                 Column {
                     val day = historyDayLabel(item.startedAt, now, zone)
                     if (index == 0 || day != historyDayLabel(items[index - 1].startedAt, now, zone)) {

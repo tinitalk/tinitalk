@@ -1,5 +1,6 @@
 package org.tinitalk.ui
 
+import org.tinitalk.data.AccountId
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.CallHistoryPage
 import org.junit.Assert.assertEquals
@@ -44,9 +45,21 @@ class ContactHistoryStateTest {
 
     @Test
     fun staleRequestIsRejectedAfterContactCardCloses() {
-        assertTrue(isCurrentContactHistoryRequest(4, 4, "anna", "anna"))
-        assertFalse(isCurrentContactHistoryRequest(4, 5, "anna", "anna"))
-        assertFalse(isCurrentContactHistoryRequest(4, 4, "anna", null))
+        val account = AccountId("account")
+
+        assertTrue(isCurrentContactHistoryRequest(4, 4, account, account, "anna", "anna"))
+        assertFalse(isCurrentContactHistoryRequest(4, 5, account, account, "anna", "anna"))
+        assertFalse(isCurrentContactHistoryRequest(4, 4, account, account, "anna", null))
+        assertFalse(
+            isCurrentContactHistoryRequest(
+                4,
+                4,
+                AccountId("first"),
+                AccountId("second"),
+                "anna",
+                "anna",
+            ),
+        )
     }
 
     @Test

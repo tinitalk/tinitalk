@@ -1,5 +1,8 @@
 package org.tinitalk.telecom
 
+import org.tinitalk.call.AccountCallKey
+import org.tinitalk.call.CallSessionBinding
+import org.tinitalk.data.AccountId
 import org.tinitalk.push.IncomingInvite
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -7,6 +10,8 @@ import org.junit.Test
 import java.time.Instant
 
 class TelecomCallControllerTest {
+    private val accountId = AccountId("account-a")
+    private fun key(callId: String) = AccountCallKey(accountId, callId)
     @Test
     fun telecomFailureIsNonTerminalButExpiryIsTerminal() {
         var presentationFinishes = 0
@@ -25,9 +30,13 @@ class TelecomCallControllerTest {
     @Test
     fun cachesEndpointsForSelectionWithoutAnotherFlowEmission() {
         val cache = EndpointCache<String>()
-        cache.update("call-1", listOf("earpiece", "speaker"))
+        val keyA = AccountCallKey(AccountId("account-a"), "same-call")
+        val keyB = AccountCallKey(AccountId("account-b"), "same-call")
+        cache.update(keyA, listOf("earpiece", "speaker"))
+        cache.update(keyB, listOf("bluetooth"))
 
-        assertEquals("speaker", cache.find("call-1", "speaker") { it })
+        assertEquals("speaker", cache.find(keyA, "speaker") { it })
+        assertEquals("bluetooth", cache.find(keyB, "bluetooth") { it })
     }
 
     @Test
@@ -55,7 +64,13 @@ class TelecomCallControllerTest {
     fun addsAndControlsIncomingCall() {
         val registrar = FakeTelecomRegistrar()
         val controller = TelecomCallController(registrar)
-        val invite = IncomingInvite("call-1", "Alice", Instant.parse("2026-08-26T10:00:30Z"))
+        val invite = IncomingInvite(
+            accountId,
+            CallSessionBinding("https://a.example", "alice", "session-a", "config-a"),
+            "call-1",
+            "Alice",
+            Instant.parse("2026-08-26T10:00:30Z"),
+        )
         var answered = false
         var answerSucceeded = false
         var disconnected = false
@@ -66,15 +81,15 @@ class TelecomCallControllerTest {
         ))
         registrar.onAnswer?.invoke()
         registrar.onDisconnect?.invoke()
-        controller.answer("call-1") { answerSucceeded = it }
-        controller.reject("call-1")
+        controller.answer(invite.key) { answerSucceeded = it }
+        controller.reject(invite.key)
 
         assertEquals(invite, registrar.invite)
         assertTrue(answered)
         assertTrue(answerSucceeded)
         assertTrue(disconnected)
-        assertEquals("call-1", registrar.answeredCall)
-        assertEquals("call-1", registrar.rejectedCall)
+        assertEquals(invite.key, registrar.answeredCall)
+        assertEquals(invite.key, registrar.rejectedCall)
     }
 
     @Test
@@ -84,15 +99,15 @@ class TelecomCallControllerTest {
         var disconnected = false
         var activationSucceeded = false
 
-        controller.addOutgoing("call-2", "Bob", TelecomCallCallbacks(onDisconnect = { disconnected = true }))
+        controller.addOutgoing(key("call-2"), "Bob", TelecomCallCallbacks(onDisconnect = { disconnected = true }))
         registrar.outgoingDisconnect?.invoke()
-        controller.setActive("call-2") { activationSucceeded = it }
+        controller.setActive(key("call-2")) { activationSucceeded = it }
 
-        assertEquals("call-2", registrar.outgoingCallId)
+        assertEquals(key("call-2"), registrar.outgoingCallId)
         assertEquals("Bob", registrar.outgoingDisplayName)
         assertTrue(disconnected)
         assertTrue(activationSucceeded)
-        assertEquals("call-2", registrar.activeCall)
+        assertEquals(key("call-2"), registrar.activeCall)
     }
 
     @Test
@@ -111,7 +126,7 @@ class TelecomCallControllerTest {
         )
 
         controller.addOutgoing(
-            "call-1",
+            key("call-1"),
             "Bob",
             TelecomCallCallbacks(
                 onDisconnect = {},
@@ -123,7 +138,7 @@ class TelecomCallControllerTest {
         registrar.onActive?.invoke()
         registrar.onInactive?.invoke()
         registrar.onEndpointsChanged?.invoke(expectedRoutes)
-        controller.selectEndpoint("call-1", "speaker-id")
+        controller.selectEndpoint(key("call-1"), "speaker-id")
 
         assertTrue(active)
         assertTrue(inactive)
@@ -139,12 +154,12 @@ class TelecomCallControllerTest {
         var onActive: (() -> Unit)? = null
         var onInactive: (() -> Unit)? = null
         var onEndpointsChanged: ((AudioEndpointState) -> Unit)? = null
-        var answeredCall: String? = null
-        var rejectedCall: String? = null
-        var outgoingCallId: String? = null
+        var answeredCall: AccountCallKey? = null
+        var rejectedCall: AccountCallKey? = null
+        var outgoingCallId: AccountCallKey? = null
         var outgoingDisplayName: String? = null
         var outgoingDisconnect: (() -> Unit)? = null
-        var activeCall: String? = null
+        var activeCall: AccountCallKey? = null
         var selectedEndpointId: String? = null
 
         override fun register(capabilities: TelecomCapabilities) {
@@ -160,8 +175,8 @@ class TelecomCallControllerTest {
             onEndpointsChanged = callbacks.onEndpointsChanged
         }
 
-        override fun addOutgoing(callId: String, displayName: String, callbacks: TelecomCallCallbacks) {
-            outgoingCallId = callId
+        override fun addOutgoing(key: AccountCallKey, displayName: String, callbacks: TelecomCallCallbacks) {
+            outgoingCallId = key
             outgoingDisplayName = displayName
             outgoingDisconnect = callbacks.onDisconnect
             onActive = callbacks.onActive
@@ -169,24 +184,24 @@ class TelecomCallControllerTest {
             onEndpointsChanged = callbacks.onEndpointsChanged
         }
 
-        override fun answer(callId: String, onResult: (Boolean) -> Unit) {
-            answeredCall = callId
+        override fun answer(key: AccountCallKey, onResult: (Boolean) -> Unit) {
+            answeredCall = key
             onResult(true)
         }
 
-        override fun reject(callId: String) {
-            rejectedCall = callId
+        override fun reject(key: AccountCallKey) {
+            rejectedCall = key
         }
 
-        override fun setActive(callId: String, onResult: (Boolean) -> Unit) {
-            activeCall = callId
+        override fun setActive(key: AccountCallKey, onResult: (Boolean) -> Unit) {
+            activeCall = key
             onResult(true)
         }
 
-        override fun selectEndpoint(callId: String, endpointId: String) {
+        override fun selectEndpoint(key: AccountCallKey, endpointId: String) {
             selectedEndpointId = endpointId
         }
 
-        override fun cancel(callId: String) = Unit
+        override fun cancel(key: AccountCallKey) = Unit
     }
 }

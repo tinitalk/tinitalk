@@ -8,6 +8,7 @@ import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlScope
 import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallsManager
+import org.tinitalk.call.AccountCallKey
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import java.time.Duration
@@ -52,12 +53,12 @@ data class TelecomCallCallbacks(
 interface TelecomRegistrar {
     fun register(capabilities: TelecomCapabilities)
     fun addIncoming(invite: IncomingInvite, callbacks: TelecomCallCallbacks)
-    fun addOutgoing(callId: String, displayName: String, callbacks: TelecomCallCallbacks)
-    fun answer(callId: String, onResult: (Boolean) -> Unit = {})
-    fun reject(callId: String)
-    fun setActive(callId: String, onResult: (Boolean) -> Unit = {})
-    fun selectEndpoint(callId: String, endpointId: String)
-    fun cancel(callId: String)
+    fun addOutgoing(key: AccountCallKey, displayName: String, callbacks: TelecomCallCallbacks)
+    fun answer(key: AccountCallKey, onResult: (Boolean) -> Unit = {})
+    fun reject(key: AccountCallKey)
+    fun setActive(key: AccountCallKey, onResult: (Boolean) -> Unit = {})
+    fun selectEndpoint(key: AccountCallKey, endpointId: String)
+    fun cancel(key: AccountCallKey)
 }
 
 class TelecomCallController(private val registrar: TelecomRegistrar) {
@@ -69,19 +70,19 @@ class TelecomCallController(private val registrar: TelecomRegistrar) {
         registrar.addIncoming(invite, callbacks)
     }
 
-    fun addOutgoing(callId: String, displayName: String, callbacks: TelecomCallCallbacks) {
-        registrar.addOutgoing(callId, displayName, callbacks)
+    fun addOutgoing(key: AccountCallKey, displayName: String, callbacks: TelecomCallCallbacks) {
+        registrar.addOutgoing(key, displayName, callbacks)
     }
 
-    fun answer(callId: String, onResult: (Boolean) -> Unit = {}) = registrar.answer(callId, onResult)
+    fun answer(key: AccountCallKey, onResult: (Boolean) -> Unit = {}) = registrar.answer(key, onResult)
 
-    fun reject(callId: String) = registrar.reject(callId)
+    fun reject(key: AccountCallKey) = registrar.reject(key)
 
-    fun setActive(callId: String, onResult: (Boolean) -> Unit = {}) = registrar.setActive(callId, onResult)
+    fun setActive(key: AccountCallKey, onResult: (Boolean) -> Unit = {}) = registrar.setActive(key, onResult)
 
-    fun selectEndpoint(callId: String, endpointId: String) = registrar.selectEndpoint(callId, endpointId)
+    fun selectEndpoint(key: AccountCallKey, endpointId: String) = registrar.selectEndpoint(key, endpointId)
 
-    fun cancel(callId: String) = registrar.cancel(callId)
+    fun cancel(key: AccountCallKey) = registrar.cancel(key)
 }
 
 internal class IncomingTelecomFailureHandler(
@@ -110,7 +111,7 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
             finishPresentation = {
                 IncomingCallController().finishTerminalPresentation(
                     context,
-                    invite.callId,
+                    invite.owner,
                     IncomingCallNotifier(context)::cancel,
                 )
             },
@@ -119,7 +120,7 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
             },
         )
         addCall(
-            callId = invite.callId,
+            key = invite.key,
             displayName = invite.caller,
             direction = CallAttributesCompat.DIRECTION_INCOMING,
             callbacks = callbacks,
@@ -129,9 +130,9 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
         )
     }
 
-    override fun addOutgoing(callId: String, displayName: String, callbacks: TelecomCallCallbacks) {
+    override fun addOutgoing(key: AccountCallKey, displayName: String, callbacks: TelecomCallCallbacks) {
         addCall(
-            callId = callId,
+            key = key,
             displayName = displayName,
             direction = CallAttributesCompat.DIRECTION_OUTGOING,
             callbacks = callbacks,
@@ -139,7 +140,7 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
     }
 
     private fun addCall(
-        callId: String,
+        key: AccountCallKey,
         displayName: String,
         direction: Int,
         callbacks: TelecomCallCallbacks,
@@ -147,17 +148,17 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
         onExpired: () -> Unit = {},
         onTelecomFailure: (Throwable) -> Unit = {},
     ) {
-        val session = TelecomSessions.prepare(callId) ?: return
+        val session = TelecomSessions.prepare(key) ?: return
         val owner = TelecomSessions.scope.launch(start = CoroutineStart.LAZY) {
             val expiry = expiresAt?.let {
                 launch {
                     delay(Duration.between(Instant.now(), it).toMillis().coerceAtLeast(0))
                     try {
-                        TelecomSessions.disconnect(callId, DisconnectCause.MISSED)
+                        TelecomSessions.disconnect(key, DisconnectCause.MISSED)
                         currentCoroutineContext().ensureActive()
                         onExpired()
                     } catch (failure: CancellationException) {
-                        TelecomSessions.abortCancel(callId)
+                        TelecomSessions.abortCancel(key)
                         throw failure
                     }
                 }
@@ -167,13 +168,13 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                 callsManager.addCall(
                     CallAttributesCompat(
                         displayName = displayName.ifEmpty { "TiniTalk" },
-                        address = Uri.parse("sip:$callId@tinitalk"),
+                        address = Uri.parse("sip:${Uri.encode(key.localId())}@tinitalk"),
                         direction = direction,
                         callType = CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
                         callCapabilities = 0,
                     ),
                     onAnswer = {
-                        TelecomSessions.cancelExpiry(callId)
+                        TelecomSessions.cancelExpiry(key)
                         callbacks.onAnswer()
                     },
                     onDisconnect = { callbacks.onDisconnect() },
@@ -189,7 +190,7 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                     }
                     launch {
                         combine(currentCallEndpoint, availableEndpoints) { current, available ->
-                            TelecomSessions.updateEndpoints(callId, session, available)
+                            TelecomSessions.updateEndpoints(key, session, available)
                             AudioEndpointState(
                                 current = current.toAudioEndpoint(),
                                 available = available.map { it.toAudioEndpoint() },
@@ -203,50 +204,50 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                 session.fail(failure)
                 onTelecomFailure(failure)
             } finally {
-                TelecomSessions.finishNormally(callId, session)
+                TelecomSessions.finishNormally(key, session)
             }
         }
         session.attachOwner(owner)
         owner.start()
     }
 
-    override fun answer(callId: String, onResult: (Boolean) -> Unit) {
+    override fun answer(key: AccountCallKey, onResult: (Boolean) -> Unit) {
         TelecomSessions.scope.launch {
             val success = runCatching {
-                TelecomSessions.control(callId)
+                TelecomSessions.control(key)
                     ?.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL) is CallControlResult.Success
             }.getOrDefault(false)
-            if (success) TelecomSessions.cancelExpiry(callId)
+            if (success) TelecomSessions.cancelExpiry(key)
             onResult(success)
         }
     }
 
-    override fun reject(callId: String) {
+    override fun reject(key: AccountCallKey) {
         TelecomSessions.scope.launch {
-            TelecomSessions.disconnect(callId, DisconnectCause.REJECTED)
+            TelecomSessions.disconnect(key, DisconnectCause.REJECTED)
         }
     }
 
-    override fun setActive(callId: String, onResult: (Boolean) -> Unit) {
+    override fun setActive(key: AccountCallKey, onResult: (Boolean) -> Unit) {
         TelecomSessions.scope.launch {
             val success = runCatching {
-                TelecomSessions.control(callId)?.setActive() is CallControlResult.Success
+                TelecomSessions.control(key)?.setActive() is CallControlResult.Success
             }.getOrDefault(false)
             onResult(success)
         }
     }
 
-    override fun selectEndpoint(callId: String, endpointId: String) {
+    override fun selectEndpoint(key: AccountCallKey, endpointId: String) {
         TelecomSessions.scope.launch {
-            val control = TelecomSessions.control(callId) ?: return@launch
-            TelecomSessions.endpoint(callId, endpointId)
+            val control = TelecomSessions.control(key) ?: return@launch
+            TelecomSessions.endpoint(key, endpointId)
                 ?.let { endpoint -> control.requestEndpointChange(endpoint) }
         }
     }
 
-    override fun cancel(callId: String) {
+    override fun cancel(key: AccountCallKey) {
         TelecomSessions.scope.launch {
-            TelecomSessions.disconnect(callId, DisconnectCause.REMOTE)
+            TelecomSessions.disconnect(key, DisconnectCause.REMOTE)
         }
     }
 }
@@ -255,32 +256,32 @@ private fun androidx.core.telecom.CallEndpointCompat.toAudioEndpoint() =
     AudioEndpoint(identifier.toString(), name.toString(), type)
 
 internal class EndpointCache<T> {
-    private val values = ConcurrentHashMap<String, List<T>>()
+    private val values = ConcurrentHashMap<AccountCallKey, List<T>>()
 
-    fun update(callId: String, endpoints: List<T>) {
-        values[callId] = endpoints.toList()
+    fun update(key: AccountCallKey, endpoints: List<T>) {
+        values[key] = endpoints.toList()
     }
 
-    fun find(callId: String, endpointId: String, identifier: (T) -> String): T? =
-        values[callId]?.firstOrNull { identifier(it) == endpointId }
+    fun find(key: AccountCallKey, endpointId: String, identifier: (T) -> String): T? =
+        values[key]?.firstOrNull { identifier(it) == endpointId }
 
-    fun remove(callId: String) {
-        values.remove(callId)
+    fun remove(key: AccountCallKey) {
+        values.remove(key)
     }
 }
 
 private object TelecomSessions {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val sessions = ConcurrentHashMap<String, TelecomSession>()
+    private val sessions = ConcurrentHashMap<AccountCallKey, TelecomSession>()
     private val endpoints = EndpointCache<androidx.core.telecom.CallEndpointCompat>()
 
-    fun prepare(callId: String): TelecomSession? {
+    fun prepare(key: AccountCallKey): TelecomSession? {
         val session = TelecomSession()
-        return if (sessions.putIfAbsent(callId, session) == null) session else null
+        return if (sessions.putIfAbsent(key, session) == null) session else null
     }
 
-    suspend fun control(callId: String): CallControlScope? {
-        val session = sessions[callId] ?: return null
+    suspend fun control(key: AccountCallKey): CallControlScope? {
+        val session = sessions[key] ?: return null
         return try {
             session.control.await()
         } catch (failure: CancellationException) {
@@ -290,8 +291,8 @@ private object TelecomSessions {
         }
     }
 
-    suspend fun disconnect(callId: String, cause: Int) {
-        val session = sessions[callId] ?: return
+    suspend fun disconnect(key: AccountCallKey, cause: Int) {
+        val session = sessions[key] ?: return
         if (!session.beginCancel()) return
         try {
             val control = try {
@@ -303,7 +304,7 @@ private object TelecomSessions {
                 null
             }
             if (control == null || !disconnectControl(control, cause)) {
-                forceRemove(callId, session)
+                forceRemove(key, session)
             }
         } catch (failure: CancellationException) {
             session.abortCancel()
@@ -311,36 +312,36 @@ private object TelecomSessions {
         }
     }
 
-    fun cancelExpiry(callId: String) {
-        sessions[callId]?.cancelExpiry()
+    fun cancelExpiry(key: AccountCallKey) {
+        sessions[key]?.cancelExpiry()
     }
 
-    fun abortCancel(callId: String) {
-        sessions[callId]?.abortCancel()
+    fun abortCancel(key: AccountCallKey) {
+        sessions[key]?.abortCancel()
     }
 
     fun updateEndpoints(
-        callId: String,
+        key: AccountCallKey,
         session: TelecomSession,
         available: List<androidx.core.telecom.CallEndpointCompat>,
     ) {
-        if (sessions[callId] === session) endpoints.update(callId, available)
+        if (sessions[key] === session) endpoints.update(key, available)
     }
 
-    fun endpoint(callId: String, endpointId: String): androidx.core.telecom.CallEndpointCompat? =
-        endpoints.find(callId, endpointId) { it.identifier.toString() }
+    fun endpoint(key: AccountCallKey, endpointId: String): androidx.core.telecom.CallEndpointCompat? =
+        endpoints.find(key, endpointId) { it.identifier.toString() }
 
     suspend fun disconnectDetached(control: CallControlScope, cause: Int) {
         disconnectControl(control, cause)
     }
 
-    fun finishNormally(callId: String, session: TelecomSession) {
-        if (sessions.remove(callId, session)) endpoints.remove(callId)
+    fun finishNormally(key: AccountCallKey, session: TelecomSession) {
+        if (sessions.remove(key, session)) endpoints.remove(key)
         session.finish()
     }
 
-    private fun forceRemove(callId: String, session: TelecomSession) {
-        if (sessions.remove(callId, session)) endpoints.remove(callId)
+    private fun forceRemove(key: AccountCallKey, session: TelecomSession) {
+        if (sessions.remove(key, session)) endpoints.remove(key)
         session.forceClose()
     }
 

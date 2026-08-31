@@ -1,6 +1,7 @@
 package org.tinitalk.call
 
 import org.tinitalk.media.MediaConnectionState
+import org.tinitalk.data.AccountId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -8,6 +9,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CallUiStateTest {
+    private val accountId = AccountId("account-a")
+    private fun key(callId: String) = AccountCallKey(accountId, callId)
     @Test
     fun durationStartsOnFirstMediaConnectionAndKeepsItsAnchorAfterReconnect() {
         var state = CallUiState(phase = CallPhase.Active)
@@ -42,11 +45,11 @@ class CallUiStateTest {
 
     @Test
     fun delayedResetCannotClearTheNextCall() {
-        CallUiStateStore.begin("new-call", CallPeer("Alice"), CallDirection.Incoming, CallPhase.Ringing)
+        CallUiStateStore.begin(key("new-call"), CallPeer("Alice"), CallDirection.Incoming, CallPhase.Ringing)
 
-        assertFalse(CallUiStateStore.reset("old-call"))
+        assertFalse(CallUiStateStore.reset(key("old-call")))
         assertEquals("new-call", CallUiStateStore.snapshot().callId)
-        assertTrue(CallUiStateStore.reset("new-call"))
+        assertTrue(CallUiStateStore.reset(key("new-call")))
     }
 
     @Test
@@ -76,14 +79,14 @@ class CallUiStateTest {
     fun activeIncomingCallReleasesAnswerLockButKeepsHangupLock() {
         val gate = CallScreenActionGate()
 
-        assertTrue(gate.lock(CallScreenAction.Answer, "call-1"))
-        assertFalse(gate.lock(CallScreenAction.Answer, "call-1"))
-        assertFalse(gate.lock(CallScreenAction.Reject, "call-1"))
+        assertTrue(gate.lock(CallScreenAction.Answer, key("call-1")))
+        assertFalse(gate.lock(CallScreenAction.Answer, key("call-1")))
+        assertFalse(gate.lock(CallScreenAction.Reject, key("call-1")))
 
-        gate.onCallState(CallUiState(callId = "call-1", phase = CallPhase.Active))
+        gate.onCallState(CallUiState(accountId = accountId, callId = "call-1", phase = CallPhase.Active))
 
-        assertTrue(gate.lock(CallScreenAction.End, "call-1"))
-        gate.onCallState(CallUiState(callId = "call-1", phase = CallPhase.Active))
-        assertFalse(gate.lock(CallScreenAction.End, "call-1"))
+        assertTrue(gate.lock(CallScreenAction.End, key("call-1")))
+        gate.onCallState(CallUiState(accountId = accountId, callId = "call-1", phase = CallPhase.Active))
+        assertFalse(gate.lock(CallScreenAction.End, key("call-1")))
     }
 }

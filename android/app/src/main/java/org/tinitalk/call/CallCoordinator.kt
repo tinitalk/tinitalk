@@ -1,6 +1,7 @@
 package org.tinitalk.call
 
 import com.google.gson.JsonObject
+import org.tinitalk.data.AccountId
 import org.tinitalk.data.signal.SignalEvent
 import java.util.UUID
 
@@ -27,16 +28,16 @@ class CallCoordinator(
     private val signal: SignalClient,
     private val ids: EventIds = UuidEventIds(),
     serverFeatures: Set<String> = emptySet(),
+    accountId: AccountId = AccountId("single-account"),
 ) {
-    private val machine = CallStateMachine()
+    private val machine = CallStateMachine(accountId)
     private val supportsVideo = "video_1to1" in serverFeatures
     private var connectedCallId: String? = null
 
     fun snapshot(): CallSnapshot = machine.snapshot()
 
-    fun startCall(callee: String) {
+    fun startCall(callee: String, callId: String = ids.nextCallId()) {
         require(callee != self) { "cannot call self" }
-        val callId = ids.nextCallId()
         val payload = JsonObject().apply {
             addProperty("callee_id", callee)
             addProperty("supports_cross_call", true)

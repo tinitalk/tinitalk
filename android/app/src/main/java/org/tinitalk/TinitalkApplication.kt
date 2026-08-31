@@ -3,24 +3,29 @@ package org.tinitalk
 import android.app.Activity
 import android.app.Application
 import android.app.NotificationManager
-import android.content.Intent
+import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import com.google.android.gms.tasks.Task
-import com.google.firebase.messaging.FirebaseMessaging
-import org.tinitalk.call.CallServiceState
-import org.tinitalk.call.CallUiStateStore
+import org.tinitalk.call.CallSessionBinding
+import org.tinitalk.call.GlobalCallAdmission
+import org.tinitalk.call.resolvePinnedCallSession
+import org.tinitalk.data.AccountId
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthSessionEvent
 import org.tinitalk.data.AuthSessionEvents
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.Session
 import org.tinitalk.data.SharedPreferencesKeyValueStore
+import org.tinitalk.network.NetworkAvailability
 import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
-import org.tinitalk.push.FirebaseBootstrap
-import org.tinitalk.push.FirebaseBootstrapResult
-import org.tinitalk.network.NetworkAvailability
+import org.tinitalk.push.IncomingCallPresentationMode
+import org.tinitalk.push.IncomingRingingAcknowledger
+import org.tinitalk.push.PushRegistrationScheduler
+import org.tinitalk.push.UnifiedPushAccountRegistration
+import org.tinitalk.push.currentIncomingCallPresentation
+import org.tinitalk.push.scheduleIncomingExpiry
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
@@ -33,58 +38,74 @@ class TinitalkApplication : Application() {
         private set
     private val authSessionObserver: (AuthSessionEvent) -> Unit = {
         mainHandler.post {
-            if (authStore.load() == null) stopCallsAfterSessionReplacement()
+            it.accountId?.let { accountId ->
+                IncomingCallNotifier(this).syncMissedAccounts(authStore.list().map { record -> record.id })
+                cleanupWebPushAccount(this, accountId)
+            }
+            stopCallsForRemovedSession(it)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        restoreFirebaseAndRegister(
-            restore = { FirebaseBootstrap(this).restore() },
-            register = { FirebaseMessaging.getInstance().register() },
-        )
-        networkAvailability = NetworkAvailability(this)
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+        restoreIncomingCall()
+        IncomingCallNotifier(this).syncMissedAccounts(authStore.list().map { it.id })
+
+        val registration = UnifiedPushAccountRegistration(this)
+        authStore.list().forEach { account ->
+            authStore.webPushConfig(account.id)?.let { config ->
+                runCatching { registration.restore(account.id, config) }
+            }
+        }
+
+        networkAvailability = NetworkAvailability(this)
         registerActivityLifecycleCallbacks(AppActivityVisibility)
         runCatching { TelecomCallController(AndroidTelecomRegistrar(this)).registerAudioOnly() }
         AuthSessionEvents.observe(authSessionObserver)
     }
 
-    private fun stopCallsAfterSessionReplacement() {
+    private fun restoreIncomingCall() {
         val incoming = IncomingCallController()
-        val pendingCallId = incoming.load(this)?.invite?.callId
-        val callIds = listOfNotNull(
-            CallServiceState.snapshot().callId,
-            CallUiStateStore.snapshot().callId,
-            pendingCallId,
-        ).distinct()
-
-        stopService(Intent(this, CallForegroundService::class.java))
-        IncomingCallForegroundService.stop(this)
-        val notifier = IncomingCallNotifier(this)
-        notifier.cancel()
-        notifier.clearMissedCount()
-        pendingCallId?.let { callId ->
-            incoming.rememberTerminal(this, callId)
-            incoming.clear(this, callId)
+        val reclaimed = incoming.reclaimPending(this) { owner ->
+            resolvePinnedCallSession(authStore, owner.key.accountId, owner.sessionBinding) != null
         }
-        val telecom = TelecomCallController(AndroidTelecomRegistrar(this))
-        callIds.forEach { callId -> runCatching { telecom.cancel(callId) } }
-        getSystemService(NotificationManager::class.java).cancel(CallForegroundService.NotificationId)
-        CallServiceState.reset()
-        CallUiStateStore.reset()
+        val invite = reclaimed?.let { key -> incoming.load(this)?.invite?.takeIf { it.key == key } } ?: return
+        if (IncomingCallForegroundService.show(this, invite)) return
+
+        val mode = currentIncomingCallPresentation(this)
+        val shown = IncomingCallNotifier(this).presentIncoming(invite, mode) { notification ->
+            getSystemService(NotificationManager::class.java)
+                .notify(IncomingCallNotifier.NotificationId, notification)
+        }
+        if (shown) {
+            IncomingRingingAcknowledger(this).acknowledge(invite)
+            if (mode == IncomingCallPresentationMode.InApp) incoming.openScreen(this, invite)
+            scheduleIncomingExpiry(this, invite)
+        }
+    }
+
+    private fun stopCallsForRemovedSession(event: AuthSessionEvent) {
+        val binding = CallSessionBinding.from(event.session)
+        val incoming = IncomingCallController()
+        val accountId = event.accountId
+            ?: incoming.load(this)?.invite?.owner?.takeIf { it.sessionBinding == binding }?.key?.accountId
+            ?: GlobalCallAdmission.current()?.owner?.takeIf { it.sessionBinding == binding }?.key?.accountId
+            ?: return
+        incoming.removeAccount(this, accountId, binding)
+        CallForegroundService.accountRemoved(this, accountId, binding)
     }
 }
 
-internal fun restoreFirebaseAndRegister(
-    restore: () -> FirebaseBootstrapResult,
-    register: () -> Task<Void>,
-): FirebaseBootstrapResult {
-    val result = restore()
-    if (result == FirebaseBootstrapResult.Initialized || result == FirebaseBootstrapResult.AlreadyInitialized) {
-        register()
+internal fun cleanupWebPushAccount(context: Context, accountId: AccountId, session: Session? = null) {
+    runCatching { UnifiedPushAccountRegistration(context).unsubscribe(accountId) }
+    runCatching { PushRegistrationScheduler(context).cancel(accountId) }
+    runCatching { IncomingCallNotifier(context).removeAccountMissedCount(accountId) }
+    session?.let {
+        val binding = CallSessionBinding.from(it)
+        IncomingCallController().removeAccount(context, accountId, binding)
+        CallForegroundService.accountRemoved(context, accountId, binding)
     }
-    return result
 }
 
 internal object AppActivityVisibility : Application.ActivityLifecycleCallbacks {

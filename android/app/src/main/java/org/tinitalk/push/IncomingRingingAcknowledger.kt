@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import org.tinitalk.call.CallCoordinator
+import org.tinitalk.call.AccountCallOwner
+import org.tinitalk.call.resolvePinnedCallSession
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SessionReplacedReason
@@ -17,7 +19,7 @@ import okhttp3.OkHttpClient
 
 class IncomingRingingAcknowledger(context: Context) : Closeable {
     private val context = context.applicationContext
-    private var callId: String? = null
+    private var owner: AccountCallOwner? = null
     private var socket: SignalSocket? = null
     private var httpClient: OkHttpClient? = null
     private val handler = Handler(Looper.getMainLooper())
@@ -25,46 +27,63 @@ class IncomingRingingAcknowledger(context: Context) : Closeable {
 
     @Synchronized
     fun acknowledge(invite: IncomingInvite) {
-        if (callId == invite.callId) return
+        start(invite) { coordinator ->
+            coordinator.restoreIncoming(invite.callId, invite.lastSeq) {
+                stop(invite.owner)
+            }
+        }
+    }
+
+    @Synchronized
+    fun rejectBusy(invite: IncomingInvite) {
+        start(invite) { coordinator ->
+            rejectCompetingInvite(coordinator, invite) {
+                stop(invite.owner)
+            }
+        }
+    }
+
+    private fun start(invite: IncomingInvite, prepare: (CallCoordinator) -> Unit) {
+        if (owner == invite.owner) return
         stop()
         val authStore = AuthStore(SharedPreferencesKeyValueStore(context), AndroidKeystoreTokenCipher())
-        val session = authStore.load() ?: return
+        val session = resolvePinnedCallSession(authStore, invite.accountId, invite.sessionBinding) ?: return
         val client = signalingHttpClient()
         val signal = SignalSocket(
             client,
             session,
             deviceId = DeviceIdentity.id(context),
         )
-        callId = invite.callId
+        owner = invite.owner
         socket = signal
         httpClient = client
-        val timeout = Runnable { stop(invite.callId) }
+        val timeout = Runnable { stop(invite.owner) }
         stopTask = timeout
         handler.postDelayed(
             timeout,
             Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0),
         )
-        CallCoordinator(session.login, signal).restoreIncoming(invite.callId, invite.lastSeq) {
-            stop(invite.callId)
-        }
+        prepare(CallCoordinator(session.login, signal, serverFeatures = session.features, accountId = invite.accountId))
         runCatching {
             signal.connect(
                 onEvent = {},
                 onError = { failure ->
-                    if (failure.code == SessionReplacedReason) authStore.invalidateIfCurrent(session)
-                    stop(invite.callId)
+                    if (failure.code == SessionReplacedReason) {
+                        authStore.invalidateIfCurrent(invite.accountId, session)
+                    }
+                    stop(invite.owner)
                 },
             )
         }
-            .onFailure { stop(invite.callId) }
+            .onFailure { stop(invite.owner) }
     }
 
     @Synchronized
-    fun stop(expectedCallId: String? = null) {
-        if (expectedCallId != null && callId != expectedCallId) return
+    fun stop(expectedOwner: AccountCallOwner? = null) {
+        if (expectedOwner != null && owner != expectedOwner) return
         stopTask?.let(handler::removeCallbacks)
         stopTask = null
-        callId = null
+        owner = null
         socket?.close()
         httpClient?.dispatcher?.executorService?.shutdownNow()
         httpClient?.connectionPool?.evictAll()
@@ -73,4 +92,14 @@ class IncomingRingingAcknowledger(context: Context) : Closeable {
     }
 
     override fun close() = stop()
+}
+
+internal fun rejectCompetingInvite(
+    coordinator: CallCoordinator,
+    invite: IncomingInvite,
+    onSettled: (() -> Unit)? = null,
+) {
+    coordinator.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
+    coordinator.resume()
+    coordinator.reject(onSettled)
 }

@@ -73,6 +73,7 @@ private val contactAvatarColors = listOf(
 @Composable
 fun ContactScreen(
     contact: Contact,
+    identityKey: String = contact.login,
     internetAvailable: Boolean = true,
     nameUpdate: ContactNameUpdateState,
     history: ContactHistoryState,
@@ -85,7 +86,7 @@ fun ContactScreen(
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
 ) {
-    var renameVisible by rememberSaveable(contact.login) { mutableStateOf(false) }
+    var renameVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     val name = contactDisplayName(contact.displayName)
     val action = contactCallAction(contact.login, ongoingCall, internetAvailable)
     val relevantUpdate = nameUpdate.takeIf { it.login == contact.login }
@@ -317,6 +318,7 @@ fun ContactScreen(
     if (renameVisible) {
         RenameContactDialog(
             contact = contact,
+            identityKey = identityKey,
             internetAvailable = internetAvailable,
             saving = relevantUpdate?.saving == true,
             errorMessage = relevantUpdate?.errorMessage,
@@ -385,6 +387,7 @@ private fun ContactAvatar(contact: Contact, name: String, size: androidx.compose
 @Composable
 private fun RenameContactDialog(
     contact: Contact,
+    identityKey: String,
     internetAvailable: Boolean,
     saving: Boolean,
     errorMessage: String?,
@@ -392,7 +395,7 @@ private fun RenameContactDialog(
     onRename: (customName: String?) -> Unit,
     onErrorCleared: () -> Unit,
 ) {
-    var value by rememberSaveable(contact.login) { mutableStateOf(contact.displayName) }
+    var value by rememberSaveable(identityKey) { mutableStateOf(contact.displayName) }
     val trimmed = value.trim()
 
     AlertDialog(

@@ -1,5 +1,7 @@
 package org.tinitalk.call
 
+import org.tinitalk.data.AccountId
+
 enum class CallPhase {
     Idle,
     Ringing,
@@ -12,10 +14,13 @@ data class CallSnapshot(
     val phase: CallPhase = CallPhase.Idle,
     val callId: String? = null,
     val lastSeq: Long = 0,
-)
+    val accountId: AccountId? = null,
+) {
+    val callKey: AccountCallKey? get() = callId?.let { id -> accountId?.let { AccountCallKey(it, id) } }
+}
 
-class CallStateMachine {
-    private var snapshot = CallSnapshot()
+class CallStateMachine(private val accountId: AccountId = AccountId("single-account")) {
+    private var snapshot = CallSnapshot(accountId = accountId)
 
     fun snapshot(): CallSnapshot = snapshot
 
@@ -33,7 +38,7 @@ class CallStateMachine {
 
     fun reset() {
         require(snapshot.phase == CallPhase.Ended) { "only ended call can be reset" }
-        snapshot = CallSnapshot()
+        snapshot = CallSnapshot(accountId = accountId)
     }
 
     private fun allowed(current: CallPhase, next: CallPhase): Boolean =

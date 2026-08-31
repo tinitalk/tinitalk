@@ -7,9 +7,9 @@ import org.junit.Test
 class HistoryAutoScrollTest {
     @Test
     fun `scrolls only when an already shown history receives a new first entry`() {
-        assertFalse(shouldScrollToNewest(previousFirstId = null, currentFirstId = 10))
-        assertFalse(shouldScrollToNewest(previousFirstId = 10, currentFirstId = 10))
-        assertFalse(shouldScrollToNewest(previousFirstId = 10, currentFirstId = null))
-        assertTrue(shouldScrollToNewest(previousFirstId = 10, currentFirstId = 11))
+        assertFalse(shouldScrollToNewest(previousFirstKey = null, currentFirstKey = "a:10"))
+        assertFalse(shouldScrollToNewest(previousFirstKey = "a:10", currentFirstKey = "a:10"))
+        assertFalse(shouldScrollToNewest(previousFirstKey = "a:10", currentFirstKey = null))
+        assertTrue(shouldScrollToNewest(previousFirstKey = "a:7", currentFirstKey = "b:7"))
     }
 }
