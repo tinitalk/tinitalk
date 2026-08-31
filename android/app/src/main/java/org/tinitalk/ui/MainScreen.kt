@@ -341,6 +341,8 @@ fun MainScreen(
                 )
                 state.accountPage == AccountPage.Profile -> ProfileScreen(
                     accounts = state.accounts,
+                    internetAvailable = state.networkAvailable,
+                    onCheckServer = onCheckServerDetails,
                     onBack = onCloseProfile,
                     onAdd = onOpenAddAccount,
                     onRemoveAccount = onRemoveAccount,
