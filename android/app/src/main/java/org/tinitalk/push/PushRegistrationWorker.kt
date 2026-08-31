@@ -106,18 +106,33 @@ class PushRegistrationWorker(
             AndroidKeystoreTokenCipher(),
         )
         val config = authStore.webPushConfig(accountId) ?: return Result.success()
-        if (runCatching {
-                UnifiedPushAccountRegistration(applicationContext).restore(accountId, config)
-            }.isFailure
-        ) {
+        val account = try {
+            authStore.get(accountId) ?: return Result.success()
+        } catch (_: AccountStorageException) {
+            return Result.success()
+        } catch (_: Exception) {
             return Result.retry()
+        }
+        val registrationStore = PushRegistrationStore(applicationContext)
+        val deviceId = DeviceIdentity.id(applicationContext)
+        if (registrationStore.loadBoundTo(accountId, config, account.session, deviceId) == null) {
+            val subscription = try {
+                UnifiedPushAccountRegistration(applicationContext).subscribe(accountId, config)
+            } catch (_: Exception) {
+                return Result.retry()
+            }
+            try {
+                registrationStore.upsert(accountId, account.session, deviceId, subscription)
+            } catch (_: Exception) {
+                return Result.retry()
+            }
         }
 
         val runner = PushRegistrationRunner(
             accountId = accountId,
-            registrationStore = PushRegistrationStore(applicationContext),
+            registrationStore = registrationStore,
             authStore = authStore,
-            deviceId = { DeviceIdentity.id(applicationContext) },
+            deviceId = { deviceId },
             onAccountRemoved = { id -> cleanupWebPushAccount(applicationContext, id) },
             upload = { session, pending ->
                 UrlConnectionApiClient(
