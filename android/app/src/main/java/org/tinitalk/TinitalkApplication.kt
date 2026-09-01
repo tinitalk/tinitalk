@@ -56,7 +56,7 @@ class TinitalkApplication : Application() {
         Thread({
             runCatching {
                 val scheduler = PushRegistrationScheduler(this)
-                authStore.list().forEach { account -> scheduler.enqueue(account.id) }
+                authStore.list().forEach { account -> scheduler.enqueueRestore(account.id) }
             }
         }, "tinitalk-push-restore").start()
 

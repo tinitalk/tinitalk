@@ -10,14 +10,17 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.Operation
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkRequest
 import com.google.common.util.concurrent.ListenableFuture
 import org.tinitalk.data.AccountId
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 internal interface PushRegistrationWorkEnqueuer {
     fun enqueueUniqueWork(
@@ -34,20 +37,33 @@ internal class PushRegistrationScheduler internal constructor(
 ) {
     constructor(context: Context) : this(WorkManagerPushRegistrationEnqueuer(context))
 
-    fun enqueue(accountId: AccountId) {
-        enqueue(accountId, subscription = null, isRecovery = false)
+    fun enqueueRestore(accountId: AccountId) {
+        enqueue(accountId, subscription = null, urgent = false, isRecovery = false)
     }
 
-    fun enqueue(accountId: AccountId, subscription: WebPushSubscription) {
-        enqueue(accountId, subscription, isRecovery = false)
+    fun enqueueUrgent(accountId: AccountId) {
+        enqueue(accountId, subscription = null, urgent = true, isRecovery = false)
+    }
+
+    fun enqueueUrgent(accountId: AccountId, subscription: WebPushSubscription) {
+        enqueue(accountId, subscription, urgent = true, isRecovery = false)
     }
 
     private fun enqueue(
         accountId: AccountId,
         subscription: WebPushSubscription?,
+        urgent: Boolean,
         isRecovery: Boolean,
+        generation: Long? = null,
     ) {
-        val request = OneTimeWorkRequestBuilder<PushRegistrationWorker>()
+        val urgentGeneration = if (urgent) {
+            generation ?: NextUrgentGeneration.incrementAndGet().also { next ->
+                LatestUrgentGeneration.merge(accountId, next, ::maxOf)
+            }
+        } else {
+            null
+        }
+        val requestBuilder = OneTimeWorkRequestBuilder<PushRegistrationWorker>()
             .setInputData(pushRegistrationInput(accountId, subscription))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(
@@ -55,22 +71,26 @@ internal class PushRegistrationScheduler internal constructor(
                 WorkRequest.MIN_BACKOFF_MILLIS,
                 TimeUnit.MILLISECONDS,
             )
-            .build()
+        if (urgent) requestBuilder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        val request = requestBuilder.build()
         val result = try {
-            enqueuer.enqueueUniqueWork(
-                uniqueWorkName(accountId),
-                ExistingWorkPolicy.REPLACE,
-                request,
-            )
+            synchronized(EnqueueLocks.computeIfAbsent(accountId) { Any() }) {
+                if (urgent && LatestUrgentGeneration[accountId] != urgentGeneration) return
+                enqueuer.enqueueUniqueWork(
+                    uniqueWorkName(accountId),
+                    if (urgent) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+                    request,
+                )
+            }
         } catch (error: Exception) {
             recoverOrReport("enqueue", accountId, isRecovery, error) {
-                enqueue(accountId, subscription, isRecovery = true)
+                enqueue(accountId, subscription, urgent, isRecovery = true, generation = urgentGeneration)
             }
             return
         }
         observe(result) { error ->
             recoverOrReport("enqueue", accountId, isRecovery, error) {
-                enqueue(accountId, subscription, isRecovery = true)
+                enqueue(accountId, subscription, urgent, isRecovery = true, generation = urgentGeneration)
             }
         }
     }
@@ -135,6 +155,9 @@ internal class PushRegistrationScheduler internal constructor(
         private const val UniqueWorkNamePrefix = "webpush-registration:"
         private const val LogTag = "PushRegistration"
 
+        private val EnqueueLocks = ConcurrentHashMap<AccountId, Any>()
+        private val LatestUrgentGeneration = ConcurrentHashMap<AccountId, Long>()
+        private val NextUrgentGeneration = AtomicLong()
         internal fun uniqueWorkName(accountId: AccountId): String = UniqueWorkNamePrefix + accountId.value
 
         private val DirectExecutor = Executor(Runnable::run)

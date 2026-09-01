@@ -5,29 +5,32 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.Operation
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkRequest
 import androidx.concurrent.futures.ResolvableFuture
 import com.google.common.util.concurrent.ListenableFuture
 import org.tinitalk.data.AccountId
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PushRegistrationSchedulerTest {
     @Test
-    fun keysNetworkWorkAndRequiredInputByOpaqueAccountId() {
+    fun startupRestoreKeepsExistingWorkWithoutUsingExpeditedQuota() {
         val enqueuer = RecordingPushRegistrationWorkEnqueuer()
         val scheduler = PushRegistrationScheduler(enqueuer)
 
-        scheduler.enqueue(AccountId("account-a"))
-        scheduler.enqueue(AccountId("account-b"))
+        scheduler.enqueueRestore(AccountId("account-a"))
+        scheduler.enqueueRestore(AccountId("account-b"))
 
         assertEquals(2, enqueuer.requests.size)
         enqueuer.requests.zip(listOf("account-a", "account-b")).forEach { (call, accountId) ->
             assertEquals("webpush-registration:$accountId", call.name)
-            assertEquals(ExistingWorkPolicy.REPLACE, call.policy)
+            assertEquals(ExistingWorkPolicy.KEEP, call.policy)
             assertEquals(accountId, call.request.workSpec.input.getString(PushRegistrationWorker.AccountIdInputKey))
             assertTrue(call.request.workSpec.input.getBoolean("force_refresh", false))
+            assertFalse(call.request.workSpec.expedited)
             assertEquals(NetworkType.CONNECTED, call.request.workSpec.constraints.requiredNetworkType)
             assertEquals(BackoffPolicy.EXPONENTIAL, call.request.workSpec.backoffPolicy)
             assertEquals(WorkRequest.MIN_BACKOFF_MILLIS, call.request.workSpec.backoffDelayDuration)
@@ -43,10 +46,15 @@ class PushRegistrationSchedulerTest {
             keys = WebPushKeys("p256dh-a", "auth-a"),
         )
 
-        PushRegistrationScheduler(enqueuer).enqueue(AccountId("account-a"), subscription)
+        PushRegistrationScheduler(enqueuer).enqueueUrgent(AccountId("account-a"), subscription)
 
         val input = enqueuer.requests.single().request.workSpec.input
         assertEquals(ExistingWorkPolicy.REPLACE, enqueuer.requests.single().policy)
+        assertTrue(enqueuer.requests.single().request.workSpec.expedited)
+        assertEquals(
+            OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST,
+            enqueuer.requests.single().request.workSpec.outOfQuotaPolicy,
+        )
         assertEquals(
             "https://fcm.googleapis.com/fcm/send/endpoint-a",
             input.getString(PushRegistrationWorker.EndpointInputKey),
@@ -54,6 +62,71 @@ class PushRegistrationSchedulerTest {
         assertEquals("p256dh-a", input.getString(PushRegistrationWorker.P256dhInputKey))
         assertEquals("auth-a", input.getString(PushRegistrationWorker.AuthInputKey))
         assertEquals(false, input.getBoolean(PushRegistrationWorker.ForceRefreshInputKey, true))
+    }
+
+    @Test
+    fun registrationRecoveryReplacesOldWorkAndRunsExpedited() {
+        val enqueuer = RecordingPushRegistrationWorkEnqueuer()
+
+        PushRegistrationScheduler(enqueuer).enqueueUrgent(AccountId("account-a"))
+
+        val call = enqueuer.requests.single()
+        assertEquals(ExistingWorkPolicy.REPLACE, call.policy)
+        assertTrue(call.request.workSpec.expedited)
+        assertTrue(call.request.workSpec.input.getBoolean(PushRegistrationWorker.ForceRefreshInputKey, false))
+    }
+
+    @Test
+    fun lateFailureOfOldEndpointDoesNotReplaceNewerEndpoint() {
+        val oldEnqueue = ResolvableFuture.create<Operation.State.SUCCESS>()
+        val enqueuer = RecordingPushRegistrationWorkEnqueuer(
+            enqueueResults = ArrayDeque(listOf(oldEnqueue, successfulOperation())),
+        )
+        val scheduler = PushRegistrationScheduler(enqueuer)
+
+        scheduler.enqueueUrgent(
+            AccountId("account-a"),
+            WebPushSubscription("https://push.example/old", WebPushKeys("old-key", "old-auth")),
+        )
+        scheduler.enqueueUrgent(
+            AccountId("account-a"),
+            WebPushSubscription("https://push.example/new", WebPushKeys("new-key", "new-auth")),
+        )
+        oldEnqueue.setException(IllegalStateException("late enqueue failure"))
+
+        assertEquals(2, enqueuer.requests.size)
+        assertEquals(
+            listOf("https://push.example/old", "https://push.example/new"),
+            enqueuer.requests.map { it.request.workSpec.input.getString(PushRegistrationWorker.EndpointInputKey) },
+        )
+    }
+
+    @Test
+    fun startupRestoreDoesNotSuppressUrgentEndpointRecovery() {
+        val urgentEnqueue = ResolvableFuture.create<Operation.State.SUCCESS>()
+        val enqueuer = RecordingPushRegistrationWorkEnqueuer(
+            enqueueResults = ArrayDeque(
+                listOf(urgentEnqueue, successfulOperation(), successfulOperation()),
+            ),
+        )
+        val scheduler = PushRegistrationScheduler(enqueuer)
+
+        scheduler.enqueueUrgent(
+            AccountId("account-a"),
+            WebPushSubscription("https://push.example/current", WebPushKeys("key", "auth")),
+        )
+        scheduler.enqueueRestore(AccountId("account-a"))
+        urgentEnqueue.setException(IllegalStateException("late enqueue failure"))
+
+        assertEquals(
+            listOf(ExistingWorkPolicy.REPLACE, ExistingWorkPolicy.KEEP, ExistingWorkPolicy.REPLACE),
+            enqueuer.requests.map(EnqueueCall::policy),
+        )
+        assertEquals(
+            listOf("https://push.example/current", null, "https://push.example/current"),
+            enqueuer.requests.map { it.request.workSpec.input.getString(PushRegistrationWorker.EndpointInputKey) },
+        )
+        assertTrue(enqueuer.requests.last().request.workSpec.expedited)
     }
 
     @Test
@@ -74,7 +147,7 @@ class PushRegistrationSchedulerTest {
         )
         val scheduler = PushRegistrationScheduler(enqueuer)
 
-        scheduler.enqueue(AccountId("account-a"))
+        scheduler.enqueueUrgent(AccountId("account-a"))
         assertEquals(1, enqueuer.requests.size)
 
         first.setException(IllegalStateException("asynchronous WorkManager failure"))
@@ -125,7 +198,7 @@ class PushRegistrationSchedulerTest {
             enqueueFailures = ArrayDeque(listOf(IllegalStateException("synchronous failure"))),
         )
 
-        PushRegistrationScheduler(enqueuer).enqueue(AccountId("account-a"))
+        PushRegistrationScheduler(enqueuer).enqueueUrgent(AccountId("account-a"))
 
         assertEquals(2, enqueuer.requests.size)
         assertEquals(2, enqueuer.requests.map { it.request.id }.distinct().size)
@@ -186,7 +259,8 @@ private class RecordingPushRegistrationWorkEnqueuer(
         return cancelResults.removeFirstOrNull() ?: successfulOperation()
     }
 
-    private fun successfulOperation() = ResolvableFuture.create<Operation.State.SUCCESS>().apply {
-        set(Operation.SUCCESS)
-    }
+}
+
+private fun successfulOperation() = ResolvableFuture.create<Operation.State.SUCCESS>().apply {
+    set(Operation.SUCCESS)
 }

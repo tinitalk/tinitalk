@@ -1,8 +1,13 @@
 package org.tinitalk.push
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import androidx.work.ForegroundInfo
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import org.tinitalk.R
 import org.tinitalk.cleanupWebPushAccount
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountStorageException
@@ -182,6 +187,27 @@ class PushRegistrationWorker(
     appContext: Context,
     workerParameters: WorkerParameters,
 ) : Worker(appContext, workerParameters) {
+    override fun getForegroundInfo(): ForegroundInfo {
+        val manager = applicationContext.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                ForegroundChannelId,
+                "Подключение TiniTalk",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply { setShowBadge(false) },
+        )
+        val notification = Notification.Builder(applicationContext, ForegroundChannelId)
+            .setSmallIcon(R.drawable.ic_server_available)
+            .setContentTitle("TiniTalk")
+            .setContentText("Обновляем подключение к серверу")
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setShowWhen(false)
+            .build()
+        return ForegroundInfo(foregroundNotificationId(), notification)
+    }
+
     override fun doWork(): Result {
         val accountId = inputData.getString(AccountIdInputKey)
             ?.let { value -> runCatching { AccountId(value) }.getOrNull() }
@@ -288,11 +314,16 @@ class PushRegistrationWorker(
         const val EndpointInputKey = "endpoint"
         const val P256dhInputKey = "p256dh"
         const val AuthInputKey = "auth"
+        private const val ForegroundChannelId = "push-registration"
+        private const val ForegroundNotificationIdPrefix = 0x40000000
 
         // Keep locks for the process lifetime: removing one while a cancelled worker waits on it
         // could create a second lock and allow two registrations for one account to overlap.
         private val AccountLocks = ConcurrentHashMap<AccountId, Any>()
     }
+
+    private fun foregroundNotificationId(): Int = ForegroundNotificationIdPrefix or
+        ((inputData.getString(AccountIdInputKey)?.hashCode() ?: id.hashCode()) and 0x3fffffff)
 }
 
 private fun androidx.work.Data.webPushSubscription(): WebPushSubscription? {

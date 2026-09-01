@@ -36,7 +36,7 @@ class TinitalkPushService : PushService() {
             keys = WebPushKeys(keys.pubKey, keys.auth),
         ).takeIf(WebPushSubscription::isValid) ?: return
         if (GlobalWebPushEndpointHandoff.complete(accountId, subscription)) return
-        PushRegistrationScheduler(this).enqueue(accountId, subscription)
+        PushRegistrationScheduler(this).enqueueUrgent(accountId, subscription)
     }
 
     @Synchronized
@@ -60,7 +60,7 @@ class TinitalkPushService : PushService() {
                 IllegalStateException("WebPush registration failed: $reason"),
             )
         ) return
-        PushRegistrationScheduler(this).enqueue(accountId)
+        PushRegistrationScheduler(this).enqueueUrgent(accountId)
     }
 
     override fun onUnregistered(instance: String) {
@@ -70,7 +70,7 @@ class TinitalkPushService : PushService() {
                 IllegalStateException("WebPush registration was removed"),
             )
         ) return
-        PushRegistrationScheduler(this).enqueue(accountId)
+        PushRegistrationScheduler(this).enqueueUrgent(accountId)
     }
 
     private fun authStore() = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
