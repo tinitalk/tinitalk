@@ -22,7 +22,7 @@ func Open(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?_foreign_keys=on")
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,6 @@ func (db *DB) configure() error {
 		"PRAGMA journal_mode=DELETE",
 		"PRAGMA synchronous=EXTRA",
 		"PRAGMA locking_mode=NORMAL",
-		"PRAGMA foreign_keys=ON",
 	}
 	for _, pragma := range pragmas {
 		if _, err := db.sql.Exec(pragma); err != nil {

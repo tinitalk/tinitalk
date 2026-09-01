@@ -157,6 +157,28 @@ func TestMigrateSchemaRollsBackEntireChainOnError(t *testing.T) {
 	}
 }
 
+func TestMigrateSchemaEnforcesForeignKeysAfterConnectionReplacement(t *testing.T) {
+	db := testStateDB(t)
+	db.sql.SetMaxIdleConns(0)
+	version := currentSchemaVersion()
+	migrations := []string{`
+		INSERT INTO auth_tokens(user_id, token_sha256)
+		VALUES(999, 'orphan');
+	`}
+
+	if err := db.migrateSchema(version, version, migrations); err == nil {
+		t.Fatal("migrateSchema error = nil, want foreign key failure")
+	}
+
+	var orphanRows int
+	if err := db.sql.QueryRow("SELECT COUNT(*) FROM auth_tokens WHERE token_sha256 = 'orphan'").Scan(&orphanRows); err != nil {
+		t.Fatal(err)
+	}
+	if orphanRows != 0 {
+		t.Fatalf("orphan auth tokens after failed migration = %d, want 0", orphanRows)
+	}
+}
+
 func TestUsersTokensAndRollback(t *testing.T) {
 	db := testStateDB(t)
 	token, err := db.AddUser("alice", "Alice")
