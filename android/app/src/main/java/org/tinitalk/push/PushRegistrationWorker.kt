@@ -16,6 +16,7 @@ import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.UrlConnectionApiClient
 import org.tinitalk.data.sameIdentity
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 
 internal enum class PushRegistrationAttemptResult {
     SUCCESS,
@@ -101,6 +102,14 @@ class PushRegistrationWorker(
         val accountId = inputData.getString(AccountIdInputKey)
             ?.let { value -> runCatching { AccountId(value) }.getOrNull() }
             ?: return Result.success()
+        return synchronized(AccountLocks.computeIfAbsent(accountId) { Any() }) {
+            // Cancelling a synchronous Worker does not interrupt doWork(). Let an older run
+            // finish first, then skip cancelled waiters so the newest endpoint is written last.
+            if (isStopped) Result.success() else runForAccount(accountId)
+        }
+    }
+
+    private fun runForAccount(accountId: AccountId): Result {
         val authStore = AuthStore(
             SharedPreferencesKeyValueStore(applicationContext),
             AndroidKeystoreTokenCipher(),
@@ -115,7 +124,17 @@ class PushRegistrationWorker(
         }
         val registrationStore = PushRegistrationStore(applicationContext)
         val deviceId = DeviceIdentity.id(applicationContext)
-        if (registrationStore.loadBoundTo(accountId, config, account.session, deviceId) == null) {
+        val pending = registrationStore.loadBoundTo(accountId, config, account.session, deviceId)
+        val endpointSubscription = inputData.webPushSubscription()
+        if (endpointSubscription != null && pending?.subscription != endpointSubscription) {
+            try {
+                registrationStore.upsert(accountId, account.session, deviceId, endpointSubscription)
+            } catch (_: Exception) {
+                return Result.retry()
+            }
+        } else if (endpointSubscription == null &&
+            (inputData.getBoolean(ForceRefreshInputKey, false) || pending == null)
+        ) {
             val subscription = try {
                 UnifiedPushAccountRegistration(applicationContext).subscribe(accountId, config)
             } catch (_: Exception) {
@@ -151,5 +170,24 @@ class PushRegistrationWorker(
 
     companion object {
         const val AccountIdInputKey = "account_id"
+        const val ForceRefreshInputKey = "force_refresh"
+        const val EndpointInputKey = "endpoint"
+        const val P256dhInputKey = "p256dh"
+        const val AuthInputKey = "auth"
+
+        // Keep locks for the process lifetime: removing one while a cancelled worker waits on it
+        // could create a second lock and allow two registrations for one account to overlap.
+        private val AccountLocks = ConcurrentHashMap<AccountId, Any>()
     }
+}
+
+private fun androidx.work.Data.webPushSubscription(): WebPushSubscription? {
+    val subscription = WebPushSubscription(
+        endpoint = getString(PushRegistrationWorker.EndpointInputKey) ?: return null,
+        keys = WebPushKeys(
+            p256dh = getString(PushRegistrationWorker.P256dhInputKey) ?: return null,
+            auth = getString(PushRegistrationWorker.AuthInputKey) ?: return null,
+        ),
+    )
+    return subscription.takeIf(WebPushSubscription::isValid)
 }

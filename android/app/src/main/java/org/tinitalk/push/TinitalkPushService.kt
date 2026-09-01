@@ -17,7 +17,6 @@ import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.CallHistoryEvents
 import org.tinitalk.data.ContactRepository
-import org.tinitalk.data.Session
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
@@ -40,21 +39,7 @@ class TinitalkPushService : PushService() {
             keys = WebPushKeys(keys.pubKey, keys.auth),
         ).takeIf(WebPushSubscription::isValid) ?: return
         if (GlobalWebPushEndpointHandoff.complete(accountId, subscription)) return
-
-        val authStore = authStore()
-        val account = authStore.get(accountId) ?: return
-        val config = authStore.webPushConfig(accountId) ?: return
-        runCatching {
-            persistRegisteredSubscription(
-                accountId = accountId,
-                subscription = subscription,
-                config = config,
-                session = account.session,
-                deviceId = DeviceIdentity.id(this),
-                store = PushRegistrationStore(this),
-                enqueue = { PushRegistrationScheduler(this).enqueue(accountId) },
-            )
-        }
+        PushRegistrationScheduler(this).enqueue(accountId, subscription)
     }
 
     @Synchronized
@@ -73,14 +58,22 @@ class TinitalkPushService : PushService() {
 
     override fun onRegistrationFailed(reason: FailedReason, instance: String) {
         val accountId = instance.toAccountId() ?: return
-        GlobalWebPushEndpointHandoff.fail(accountId, IllegalStateException("WebPush registration failed: $reason"))
-        if (authStore().get(accountId) != null) PushRegistrationScheduler(this).enqueue(accountId)
+        if (GlobalWebPushEndpointHandoff.fail(
+                accountId,
+                IllegalStateException("WebPush registration failed: $reason"),
+            )
+        ) return
+        PushRegistrationScheduler(this).enqueue(accountId)
     }
 
     override fun onUnregistered(instance: String) {
         val accountId = instance.toAccountId() ?: return
-        GlobalWebPushEndpointHandoff.fail(accountId, IllegalStateException("WebPush registration was removed"))
-        if (authStore().get(accountId) != null) PushRegistrationScheduler(this).enqueue(accountId)
+        if (GlobalWebPushEndpointHandoff.fail(
+                accountId,
+                IllegalStateException("WebPush registration was removed"),
+            )
+        ) return
+        PushRegistrationScheduler(this).enqueue(accountId)
     }
 
     private fun authStore() = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
@@ -238,33 +231,6 @@ internal fun invalidateReplacedAccount(
     val removed = authStore.invalidateIfCurrent(account.id, account.session)
     if (removed) onAccountRemoved(account.id)
     return removed
-}
-
-internal fun persistRegisteredSubscription(
-    accountId: AccountId,
-    subscription: WebPushSubscription,
-    config: StoredWebPushConfig,
-    session: Session,
-    deviceId: String,
-    store: PushRegistrationStore,
-    enqueue: () -> Unit,
-) {
-    session.sessionId?.takeIf(String::isNotBlank) ?: return
-    var failure: Exception? = null
-    try {
-        val current = store.loadBoundTo(accountId, config, session, deviceId)
-        if (current?.subscription != subscription) {
-            store.upsert(accountId, session, deviceId, subscription)
-        }
-    } catch (error: Exception) {
-        failure = error
-    }
-    try {
-        enqueue()
-    } catch (error: Exception) {
-        if (failure == null) failure = error else failure.addSuppressed(error)
-    }
-    failure?.let { throw it }
 }
 
 private fun String.toAccountId(): AccountId? = runCatching { AccountId(this) }.getOrNull()

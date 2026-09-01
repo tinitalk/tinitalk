@@ -53,12 +53,12 @@ class TinitalkApplication : Application() {
         restoreIncomingCall()
         IncomingCallNotifier(this).syncMissedAccounts(authStore.list().map { it.id })
 
-        val registration = UnifiedPushAccountRegistration(this)
-        authStore.list().forEach { account ->
-            authStore.webPushConfig(account.id)?.let { config ->
-                runCatching { registration.restore(account.id, config) }
+        Thread({
+            runCatching {
+                val scheduler = PushRegistrationScheduler(this)
+                authStore.list().forEach { account -> scheduler.enqueue(account.id) }
             }
-        }
+        }, "tinitalk-push-restore").start()
 
         networkAvailability = NetworkAvailability(this)
         registerActivityLifecycleCallbacks(AppActivityVisibility)

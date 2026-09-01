@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
+import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
@@ -11,7 +12,6 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.Operation
 import androidx.work.WorkManager
 import androidx.work.WorkRequest
-import androidx.work.workDataOf
 import com.google.common.util.concurrent.ListenableFuture
 import org.tinitalk.data.AccountId
 import java.util.concurrent.CancellationException
@@ -35,12 +35,20 @@ internal class PushRegistrationScheduler internal constructor(
     constructor(context: Context) : this(WorkManagerPushRegistrationEnqueuer(context))
 
     fun enqueue(accountId: AccountId) {
-        enqueue(accountId, isRecovery = false)
+        enqueue(accountId, subscription = null, isRecovery = false)
     }
 
-    private fun enqueue(accountId: AccountId, isRecovery: Boolean) {
+    fun enqueue(accountId: AccountId, subscription: WebPushSubscription) {
+        enqueue(accountId, subscription, isRecovery = false)
+    }
+
+    private fun enqueue(
+        accountId: AccountId,
+        subscription: WebPushSubscription?,
+        isRecovery: Boolean,
+    ) {
         val request = OneTimeWorkRequestBuilder<PushRegistrationWorker>()
-            .setInputData(workDataOf(PushRegistrationWorker.AccountIdInputKey to accountId.value))
+            .setInputData(pushRegistrationInput(accountId, subscription))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(
                 BackoffPolicy.EXPONENTIAL,
@@ -51,18 +59,18 @@ internal class PushRegistrationScheduler internal constructor(
         val result = try {
             enqueuer.enqueueUniqueWork(
                 uniqueWorkName(accountId),
-                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                ExistingWorkPolicy.REPLACE,
                 request,
             )
         } catch (error: Exception) {
             recoverOrReport("enqueue", accountId, isRecovery, error) {
-                enqueue(accountId, isRecovery = true)
+                enqueue(accountId, subscription, isRecovery = true)
             }
             return
         }
         observe(result) { error ->
             recoverOrReport("enqueue", accountId, isRecovery, error) {
-                enqueue(accountId, isRecovery = true)
+                enqueue(accountId, subscription, isRecovery = true)
             }
         }
     }
@@ -132,6 +140,21 @@ internal class PushRegistrationScheduler internal constructor(
         private val DirectExecutor = Executor(Runnable::run)
     }
 }
+
+private fun pushRegistrationInput(
+    accountId: AccountId,
+    subscription: WebPushSubscription?,
+): Data = Data.Builder()
+    .putString(PushRegistrationWorker.AccountIdInputKey, accountId.value)
+    .putBoolean(PushRegistrationWorker.ForceRefreshInputKey, subscription == null)
+    .apply {
+        subscription?.let {
+            putString(PushRegistrationWorker.EndpointInputKey, it.endpoint)
+            putString(PushRegistrationWorker.P256dhInputKey, it.keys.p256dh)
+            putString(PushRegistrationWorker.AuthInputKey, it.keys.auth)
+        }
+    }
+    .build()
 
 private class WorkManagerPushRegistrationEnqueuer(context: Context) : PushRegistrationWorkEnqueuer {
     private val workManager = WorkManager.getInstance(context)

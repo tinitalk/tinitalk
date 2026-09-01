@@ -10,6 +10,7 @@ import androidx.concurrent.futures.ResolvableFuture
 import com.google.common.util.concurrent.ListenableFuture
 import org.tinitalk.data.AccountId
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PushRegistrationSchedulerTest {
@@ -24,13 +25,35 @@ class PushRegistrationSchedulerTest {
         assertEquals(2, enqueuer.requests.size)
         enqueuer.requests.zip(listOf("account-a", "account-b")).forEach { (call, accountId) ->
             assertEquals("webpush-registration:$accountId", call.name)
-            assertEquals(ExistingWorkPolicy.APPEND_OR_REPLACE, call.policy)
+            assertEquals(ExistingWorkPolicy.REPLACE, call.policy)
             assertEquals(accountId, call.request.workSpec.input.getString(PushRegistrationWorker.AccountIdInputKey))
+            assertTrue(call.request.workSpec.input.getBoolean("force_refresh", false))
             assertEquals(NetworkType.CONNECTED, call.request.workSpec.constraints.requiredNetworkType)
             assertEquals(BackoffPolicy.EXPONENTIAL, call.request.workSpec.backoffPolicy)
             assertEquals(WorkRequest.MIN_BACKOFF_MILLIS, call.request.workSpec.backoffDelayDuration)
             assertEquals(PushRegistrationWorker::class.java.name, call.request.workSpec.workerClassName)
         }
+    }
+
+    @Test
+    fun endpointRefreshCarriesTheExactSubscription() {
+        val enqueuer = RecordingPushRegistrationWorkEnqueuer()
+        val subscription = WebPushSubscription(
+            endpoint = "https://fcm.googleapis.com/fcm/send/endpoint-a",
+            keys = WebPushKeys("p256dh-a", "auth-a"),
+        )
+
+        PushRegistrationScheduler(enqueuer).enqueue(AccountId("account-a"), subscription)
+
+        val input = enqueuer.requests.single().request.workSpec.input
+        assertEquals(ExistingWorkPolicy.REPLACE, enqueuer.requests.single().policy)
+        assertEquals(
+            "https://fcm.googleapis.com/fcm/send/endpoint-a",
+            input.getString(PushRegistrationWorker.EndpointInputKey),
+        )
+        assertEquals("p256dh-a", input.getString(PushRegistrationWorker.P256dhInputKey))
+        assertEquals("auth-a", input.getString(PushRegistrationWorker.AuthInputKey))
+        assertEquals(false, input.getBoolean(PushRegistrationWorker.ForceRefreshInputKey, true))
     }
 
     @Test
