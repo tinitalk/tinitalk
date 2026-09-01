@@ -323,7 +323,9 @@ class IncomingCallNotifier(private val context: Context) {
             builder
                 .setSmallIcon(R.drawable.ic_call_ringing)
                 .setContentTitle("Входящий звонок")
-                .setContentText(invite.caller.ifEmpty { "TiniTalk" })
+                .setContentText(
+                    if (Build.VERSION.SDK_INT >= 31) "Входящий звонок" else invite.caller.ifEmpty { "TiniTalk" },
+                )
                 .setCategory(Notification.CATEGORY_CALL)
                 .setPriority(
                     if (mode == IncomingCallPresentationMode.InApp) {

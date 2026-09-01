@@ -2,6 +2,7 @@ package org.tinitalk.push
 
 import android.app.Notification
 import android.app.NotificationManager
+import android.app.Person
 import org.tinitalk.CallActivity
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.AccountId
@@ -186,6 +187,21 @@ class IncomingCallNotifierTest {
         assertEquals(NotificationManager.IMPORTANCE_LOW, manager.getNotificationChannel(inApp.channelId).importance)
         incoming.finishTerminalPresentation(context, invite.owner) {}
         notifier.cancel()
+    }
+
+    @Test
+    fun callStyleShowsCallerWithIncomingStatusText() {
+        val context = RuntimeEnvironment.getApplication()
+        val invite = invite("call-text")
+        val incoming = IncomingCallController()
+        incoming.admitIncoming(context, invite)
+
+        val notification = IncomingCallNotifier(context).buildIncomingNotification(invite)!!
+        val caller = notification.extras.getParcelable(Notification.EXTRA_CALL_PERSON, Person::class.java)
+
+        assertEquals("Alice", caller?.name)
+        assertEquals("Входящий звонок", notification.extras.getCharSequence(Notification.EXTRA_TEXT))
+        incoming.finishTerminalPresentation(context, invite.owner) {}
     }
 
     @Test
