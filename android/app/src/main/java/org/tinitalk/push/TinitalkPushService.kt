@@ -12,11 +12,8 @@ import org.tinitalk.call.GlobalCallAdmission
 import org.tinitalk.cleanupWebPushAccount
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountRecord
-import org.tinitalk.data.AccountUnreadState
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
-import org.tinitalk.data.CallHistoryEvents
-import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
@@ -187,37 +184,18 @@ internal class IncomingPushHandler(private val context: android.content.Context)
                 incoming.finishTerminalPresentation(context, owner, notifier::cancel)
             }
         }
-        if (cancellation.shouldRefreshMissedCount()) refreshMissedCount(notifier, latest, account.id)
+        if (cancellation.shouldRefreshMissedCount()) scheduleMissedCountRefresh(notifier, latest, account)
     }
 
-    private fun refreshMissedCount(notifier: IncomingCallNotifier, latest: IncomingInvite?, accountId: AccountId) {
+    private fun scheduleMissedCountRefresh(
+        notifier: IncomingCallNotifier,
+        latest: IncomingInvite?,
+        account: AccountRecord,
+    ) {
         val store = authStore()
-        val pinned = store.get(accountId) ?: return
         notifier.syncMissedAccounts(store.list().map { it.id })
-        val refreshId = notifier.beginAccountMissedCountRefresh(accountId)
-        val page = runCatching {
-            ContactRepository(store).loadCallHistory(accountId, limit = 1, expectedSession = pinned.session)
-        }.getOrNull()
-        if (page != null) {
-            store.withCurrent(accountId, pinned.session) {
-                val update = notifier.updateAccountMissedState(
-                    accountId,
-                    page.unread,
-                    refreshId,
-                    latest,
-                    redialBinding = CallSessionBinding.from(pinned.session),
-                    immediate = true,
-                )
-                if (update.applied) {
-                    CallHistoryEvents.publish(AccountUnreadState(accountId, page.unread, pinned.session))
-                }
-            }
-        } else {
-            store.withCurrent(accountId, pinned.session) {
-                notifier.syncMissedAccounts(store.list().map { it.id })
-                latest?.let { notifier.showAccountMissedIfAbsent(accountId, it) }
-            }
-        }
+        latest?.let { notifier.showAccountMissedIfAbsent(account.id, it) }
+        MissedCountRefreshScheduler(context).enqueue(account.id)
     }
 
     private fun authStore() = AuthStore(SharedPreferencesKeyValueStore(context), AndroidKeystoreTokenCipher())
