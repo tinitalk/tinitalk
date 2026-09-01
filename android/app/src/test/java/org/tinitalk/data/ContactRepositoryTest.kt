@@ -83,6 +83,27 @@ class ContactRepositoryTest {
     }
 
     @Test
+    fun addingAnotherLoginFromTheSameServerIsRejectedBeforePushRegistration() {
+        val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
+        val first = Session("https://a.example", "alice", "token-a", setOf("webpush_v1"), "session-a", "config-a")
+        auth.add(auth.newAccountId(), first, storedConfig(first), "Alice")
+        val registration = RecordingWebPushRegistration()
+        val repository = ContactRepository(
+            auth,
+            registration,
+            apiFactory = { _, _, _, _ -> RecordingApi("anna", "config-a") },
+        )
+
+        assertThrows(DuplicateAccountException::class.java) {
+            repository.addAccount("A.EXAMPLE/", "anna", "token-b", "phone")
+        }
+
+        assertTrue(registration.subscribed.isEmpty())
+        assertEquals(listOf("alice"), auth.list().map { it.session.login })
+    }
+
+    @Test
     fun serverWithoutWebPushIsRejectedBeforeRegistration() {
         val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
         val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
@@ -96,6 +117,21 @@ class ContactRepositoryTest {
             repository.addAccount("https://b.example", "bob", "token-b", "phone")
         }
         assertTrue(registration.subscribed.isEmpty())
+    }
+
+    @Test
+    fun apiVersionFourIsTheCompatibilityBoundary() {
+        for ((version, expected) in mapOf(
+            3 to ServerCheckResult.ServerOutdated,
+            4 to ServerCheckResult.Available,
+            5 to ServerCheckResult.AppOutdated,
+        )) {
+            val repository = ContactRepository(
+                AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()),
+                apiFactory = { _, _, _, _ -> RecordingApi("alice", "config", apiVersion = version) },
+            )
+            assertEquals(expected, repository.checkAddAccountServer("talk.example"))
+        }
     }
 
     @Test
@@ -233,6 +269,7 @@ private class RecordingWebPushRegistration : AccountWebPushRegistration {
 private class RecordingApi(
     private val login: String,
     private val configId: String,
+    private val apiVersion: Int = 4,
     private val features: Set<String> = setOf("webpush_v1"),
     private val contactPages: Map<String, ContactPage>? = null,
     private val failedCursor: String? = null,
@@ -240,7 +277,7 @@ private class RecordingApi(
     var claimedDeviceId: String? = null
     var claimedSubscription: WebPushSubscription? = null
 
-    override fun serverInfo() = ServerInfo("tinitalk", "ok", 3, features = features)
+    override fun serverInfo() = ServerInfo("tinitalk", "ok", apiVersion, features = features)
     override fun webPushConfig() = WebPushClientConfig(
         "BNVQmPpYlVnSqeE5_UfDgJQG4YIqq7FPPHUZ6riR5TqQh_9ZgfkrdmHH99yqCGMiMSRuOJ5hK3sLrx_cUpnF4U4",
         configId,

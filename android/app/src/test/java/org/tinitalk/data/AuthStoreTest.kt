@@ -8,6 +8,21 @@ import org.junit.Test
 
 class AuthStoreTest {
     @Test
+    fun versionPointNineDoesNotImportLegacySingleAccount() {
+        val persistence = MemoryKeyValueStore()
+        val encrypted = PrefixTokenCipher().encrypt("legacy-token")
+        persistence.put("url", "https://old.example")
+        persistence.put("login", "alice")
+        persistence.put("token", encrypted.value)
+        persistence.put("iv", encrypted.iv)
+
+        val accounts = AuthStore(persistence, PrefixTokenCipher()).list()
+
+        assertTrue(accounts.isEmpty())
+        assertNull(persistence.get("token"))
+    }
+
+    @Test
     fun acceptsServerAddressesWithoutHttpsPrefix() {
         assertEquals("https://talk.example.com", httpsServerUrl(" talk.example.com/ "))
         assertEquals("https://talk.example.com", httpsServerUrl("https://talk.example.com/"))

@@ -7,14 +7,12 @@ import (
 	"time"
 
 	"tinitalk/internal/auth"
-	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
 
 type Options struct {
 	AllowInsecureLoopback bool
-	FirebaseConfig        firebaseconfig.Config
 	WebPushPublicKey      string
 	WebPushConfigID       string
 	Hub                   *signaling.Hub
@@ -48,7 +46,7 @@ var defaultSocketTiming = socketTiming{
 	pingInterval: 20 * time.Second,
 }
 
-const apiVersion = 3
+const apiVersion = 4
 
 var serverCommit = "unknown"
 
@@ -75,7 +73,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.health)
-	s.mux.Handle("/api/firebase-config", s.requireBasicAuth(http.HandlerFunc(s.firebaseConfig)))
 	s.mux.Handle("/api/webpush-config", s.requireBasicAuth(http.HandlerFunc(s.webPushConfig)))
 	s.mux.Handle("/api/session", s.requireBasicAuth(http.HandlerFunc(s.session)))
 	s.mux.Handle("/api/me", s.requireAuth(http.HandlerFunc(s.profile)))
@@ -89,11 +86,7 @@ func (s *Server) routes() {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	features := []string{"video_1to1", "single_device_session"}
-	if s.options.FirebaseConfig.ConfigID != "" {
-		features = append(features, "dynamic_fcm_v1")
-	}
-	features = append(features, "webpush_v1")
+	features := []string{"video_1to1", "single_device_session", "webpush_v1"}
 	writeJSON(w, struct {
 		Service    string   `json:"service"`
 		Status     string   `json:"status"`

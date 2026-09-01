@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
 
 type DB struct {
 	sql *sql.DB
@@ -73,11 +73,8 @@ func (db *DB) Pragmas() (map[string]string, error) {
 	return out, nil
 }
 
-func (db *DB) Init(fcmServiceAccount, firebaseAndroidConfig []byte) error {
-	if err := db.ensureSecret("turn_secret", randomToken); err != nil {
-		return err
-	}
-	return db.initFirebase(fcmServiceAccount, firebaseAndroidConfig)
+func (db *DB) Init() error {
+	return db.ensureSecret("turn_secret", randomToken)
 }
 
 func (db *DB) ensureSecret(key string, create func() (string, error)) error {

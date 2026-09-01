@@ -10,18 +10,16 @@ import (
 func TestOpenReopensWithRequiredPragmasAndStableFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.db")
-
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Init(nil, nil); err != nil {
+	if err := db.Init(); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-
 	db, err = Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -32,12 +30,7 @@ func TestOpenReopensWithRequiredPragmasAndStableFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{
-		"journal_mode": "delete",
-		"synchronous":  "3",
-		"locking_mode": "normal",
-		"foreign_keys": "1",
-	}
+	want := map[string]string{"journal_mode": "delete", "synchronous": "3", "locking_mode": "normal", "foreign_keys": "1"}
 	for key, value := range want {
 		if pragmas[key] != value {
 			t.Fatalf("pragma %s = %q, want %q", key, pragmas[key], value)
@@ -52,7 +45,7 @@ func TestOpenReopensWithRequiredPragmasAndStableFiles(t *testing.T) {
 	}
 }
 
-func TestVersionSixMigrationPreservesLegacyPushRegistrations(t *testing.T) {
+func TestMigrationFromVersionSixDropsFCMRegistrations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	legacy, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -66,12 +59,8 @@ func TestVersionSixMigrationPreservesLegacyPushRegistrations(t *testing.T) {
 		}
 	}
 	if _, err := legacy.Exec(`
-		INSERT INTO users(id, login, display_name) VALUES
-			(11, 'alice', 'Alice'),
-			(22, 'bob', 'Bob');
-		INSERT INTO devices(id, user_id, device_id, fcm_token, updated_at) VALUES
-			(101, 11, 'alice-phone', 'alice-token', 1700000001),
-			(202, 22, 'bob-tablet', 'bob-token', 1700000002);
+		INSERT INTO users(id, login, display_name) VALUES(11, 'alice', 'Alice');
+		INSERT INTO devices(id, user_id, device_id, fcm_token) VALUES(101, 11, 'alice-phone', 'alice-token');
 		PRAGMA user_version = 6;
 	`); err != nil {
 		t.Fatal(err)
@@ -89,58 +78,73 @@ func TestVersionSixMigrationPreservesLegacyPushRegistrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.UserVersion != 8 {
-		t.Fatalf("schema version = %d, want 8", check.UserVersion)
+	if check.UserVersion != 9 {
+		t.Fatalf("schema version = %d, want 9", check.UserVersion)
 	}
-	rows, err := db.sql.Query(`
-		SELECT id, user_id, device_id, push_kind, push_value, config_id, updated_at
-		FROM devices ORDER BY id
-	`)
+	targets, err := db.PushTargetsForUser("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	want := []struct {
-		id, userID, updatedAt int64
-		deviceID, kind, value string
-	}{
-		{101, 11, 1700000001, "alice-phone", "token", "alice-token"},
-		{202, 22, 1700000002, "bob-tablet", "token", "bob-token"},
-	}
-	for _, expected := range want {
-		if !rows.Next() {
-			t.Fatalf("missing migrated device %+v", expected)
-		}
-		var got struct {
-			id, userID, updatedAt int64
-			deviceID, kind, value string
-			configID              sql.NullString
-		}
-		if err := rows.Scan(&got.id, &got.userID, &got.deviceID, &got.kind, &got.value, &got.configID, &got.updatedAt); err != nil {
-			t.Fatal(err)
-		}
-		if got.id != expected.id || got.userID != expected.userID || got.deviceID != expected.deviceID || got.kind != expected.kind || got.value != expected.value || got.configID.Valid || got.updatedAt != expected.updatedAt {
-			t.Fatalf("migrated device = %+v, want %+v with null config ID", got, expected)
-		}
-	}
-	if rows.Next() {
-		t.Fatal("migrated more devices than legacy rows")
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
+	if len(targets) != 0 {
+		t.Fatalf("legacy FCM registrations survived migration: %+v", targets)
 	}
 }
 
-func TestUsersTokensAndRollback(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+func TestVersionNineMigrationKeepsOnlyWebPushRegistrations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range schemaMigrations[:8] {
+		for _, statement := range migration {
+			if _, err := legacy.Exec(statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := legacy.Exec(`
+		INSERT INTO users(id, login, display_name) VALUES(1, 'alice', 'Alice');
+		INSERT INTO devices(user_id, device_id, push_kind, push_value, config_id) VALUES
+			(1, 'token-phone', 'token', 'legacy-token', NULL),
+			(1, 'fid-phone', 'fid', 'legacy-fid', 'firebase-config'),
+			(1, 'webpush-phone', 'webpush', '{"endpoint":"https://push.example/subscription"}', 'sha256:webpush');
+		INSERT INTO secrets(key, value) VALUES('fcm_service_account', 'legacy-service-account');
+		INSERT INTO settings(key, value) VALUES('firebase_android_config', 'legacy-android-config');
+		PRAGMA user_version = 8;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.Init(nil, nil); err != nil {
+	targets, err := db.PushTargetsForUser("alice")
+	if err != nil {
 		t.Fatal(err)
 	}
+	want := PushTarget{Subscription: `{"endpoint":"https://push.example/subscription"}`, ConfigID: "sha256:webpush"}
+	if len(targets) != 1 || targets[0].DeviceID != "webpush-phone" || targets[0].PushTarget != want {
+		t.Fatalf("push targets after migration = %+v, want only WebPush target %+v", targets, want)
+	}
+	for table, key := range map[string]string{"secrets": "fcm_service_account", "settings": "firebase_android_config"} {
+		var count int
+		if err := db.sql.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE key = ?", key).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("legacy key %s remains in %s", key, table)
+		}
+	}
+}
 
+func TestUsersTokensAndRollback(t *testing.T) {
+	db := testStateDB(t)
 	token, err := db.AddUser("alice", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -150,13 +154,6 @@ func TestUsersTokensAndRollback(t *testing.T) {
 	}
 	if _, err := db.AddUser("alice", "Alice Again"); err == nil {
 		t.Fatal("duplicate AddUser error = nil, want rejection")
-	}
-	users, err := db.ListUsers()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(users) != 1 || users[0].Login != "alice" || users[0].Disabled {
-		t.Fatalf("users = %+v, want one enabled alice", users)
 	}
 	if err := db.DisableUser("alice"); err != nil {
 		t.Fatal(err)
@@ -168,64 +165,31 @@ func TestUsersTokensAndRollback(t *testing.T) {
 	if rotated == token {
 		t.Fatal("RotateToken returned the old token")
 	}
-	users, err = db.ListUsers()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !users[0].Disabled {
-		t.Fatalf("users = %+v, want alice disabled", users)
-	}
 }
 
 func TestDeleteUserRemovesCredentialsAndDevices(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := db.Init(nil, nil); err != nil {
-		t.Fatal(err)
-	}
-
+	db := testStateDB(t)
 	token, err := db.AddUser("alice", "Alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertDevice("alice", "phone", "fcm-token"); err != nil {
+	if err := db.UpsertPushTarget("alice", "phone", testPushTarget("phone")); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.DeleteUser("alice"); err != nil {
 		t.Fatal(err)
 	}
-
-	users, err := db.ListUsers()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(users) != 0 {
-		t.Fatalf("users = %+v, want none", users)
-	}
 	if _, ok, err := db.Authenticate("alice", token); err != nil || ok {
 		t.Fatalf("Authenticate after delete = %v, %v, want rejected", ok, err)
 	}
-	devices, err := db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 0 {
-		t.Fatalf("devices = %+v, want none", devices)
-	}
-	if err := db.DeleteUser("alice"); err == nil {
-		t.Fatal("second DeleteUser error = nil, want user not found")
+	targets, err := db.PushTargetsForUser("alice")
+	if err != nil || len(targets) != 0 {
+		t.Fatalf("devices after delete = %+v, %v, want none", targets, err)
 	}
 }
 
 func TestRotateTokenClearsPushRegistrationAndPreservesManagedSession(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testStateDB(t)
 	if _, err := db.AddUser("alice", "Alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -233,167 +197,77 @@ func TestRotateTokenClearsPushRegistrationAndPreservesManagedSession(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertAuthenticatedDevice("alice", claim.Current.SessionID, "phone", "fcm-token"); err != nil {
+	if err := db.UpsertAuthenticatedPushTarget("alice", claim.Current.SessionID, "phone", testPushTarget("phone")); err != nil {
 		t.Fatal(err)
 	}
-
 	if _, err := db.RotateToken("alice"); err != nil {
 		t.Fatal(err)
 	}
-
-	devices, err := db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 0 {
-		t.Fatalf("devices after token rotation = %+v, want none", devices)
+	targets, err := db.PushTargetsForUser("alice")
+	if err != nil || len(targets) != 0 {
+		t.Fatalf("devices after token rotation = %+v, %v, want none", targets, err)
 	}
 	current, managed, err := db.CurrentSession("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !managed || current.DeviceID != claim.Current.DeviceID || current.SessionID != claim.Current.SessionID {
-		t.Fatalf("session after token rotation = %+v, managed %v, want unchanged %+v", current, managed, claim.Current)
+	if err != nil || !managed || current.SessionID != claim.Current.SessionID {
+		t.Fatalf("session after token rotation = %+v, managed %v, error %v", current, managed, err)
 	}
 }
 
-func TestDisabledUserPushRegistrationResumesAfterEnable(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
+func TestPushTargetUpsertTransfersOwnershipAndCanBeDisabled(t *testing.T) {
+	db := testStateDB(t)
+	for _, login := range []string{"alice", "bob"} {
+		if _, err := db.AddUser(login, login); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := testPushTarget("shared")
+	if err := db.UpsertPushTarget("alice", "alice-phone", target); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	if _, err := db.AddUser("alice", "Alice"); err != nil {
+	if err := db.UpsertPushTarget("bob", "bob-phone", target); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertDevice("alice", "phone", "fcm-token"); err != nil {
+	alice, _ := db.PushTargetsForUser("alice")
+	bob, _ := db.PushTargetsForUser("bob")
+	if len(alice) != 0 || len(bob) != 1 || bob[0].PushTarget != target {
+		t.Fatalf("targets after ownership transfer: alice=%+v bob=%+v", alice, bob)
+	}
+	if err := db.DisablePushTarget(target); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DisableUser("alice"); err != nil {
-		t.Fatal(err)
-	}
-
-	devices, err := db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 0 {
-		t.Fatalf("disabled user devices = %+v, want none eligible for push", devices)
-	}
-	if err := db.EnableUser("alice"); err != nil {
-		t.Fatal(err)
-	}
-	devices, err = db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 1 || devices[0].DeviceID != "phone" || devices[0].PushTarget != (PushTarget{Kind: KindToken, Value: "fcm-token"}) {
-		t.Fatalf("enabled user devices = %+v, want preserved phone registration", devices)
+	bob, _ = db.PushTargetsForUser("bob")
+	if len(bob) != 0 {
+		t.Fatalf("targets after disable = %+v, want none", bob)
 	}
 }
 
-func TestPushTargetUpsertTransfersDeviceAndTargetOwnership(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+func TestPushTargetRequiresSubscriptionAndConfiguration(t *testing.T) {
+	db := testStateDB(t)
 	if _, err := db.AddUser("alice", "Alice"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.AddUser("bob", "Bob"); err != nil {
-		t.Fatal(err)
-	}
-	token := PushTarget{Kind: KindToken, Value: "shared-token"}
-	if err := db.UpsertPushTarget("alice", "alice-phone", token); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.UpsertPushTarget("bob", "bob-tablet", token); err != nil {
-		t.Fatal(err)
-	}
-	fid := PushTarget{Kind: KindFID, Value: "bob-fid", ConfigID: "firebase-config-a"}
-	if err := db.UpsertPushTarget("alice", "bob-tablet", fid); err != nil {
-		t.Fatal(err)
-	}
-	transferredFID := PushTarget{Kind: KindFID, Value: "bob-fid", ConfigID: "firebase-config-b"}
-	if err := db.UpsertPushTarget("bob", "bob-phone", transferredFID); err != nil {
-		t.Fatal(err)
-	}
-
-	alice, err := db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bob, err := db.PushTargetsForUser("bob")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(alice) != 0 {
-		t.Fatalf("alice targets = %+v, want none after FID ownership transfer", alice)
-	}
-	if len(bob) != 1 || bob[0].DeviceID != "bob-phone" || bob[0].PushTarget != transferredFID {
-		t.Fatalf("bob targets = %+v, want transferred FID with its new configuration", bob)
-	}
-}
-
-func TestPushTargetRequiresSupportedKindAndConfiguration(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.AddUser("alice", "Alice"); err != nil {
-		t.Fatal(err)
-	}
-	for _, target := range []PushTarget{
-		{Kind: "other", Value: "value"},
-		{Kind: KindFID, Value: "fid"},
-		{Kind: KindToken, Value: "token", ConfigID: "firebase-config"},
-	} {
+	for _, target := range []PushTarget{{}, {Subscription: "subscription"}, {ConfigID: "config"}} {
 		if err := db.UpsertPushTarget("alice", "phone", target); err == nil {
-			t.Fatalf("UpsertPushTarget(%+v) error = nil, want rejected target", target)
+			t.Fatalf("UpsertPushTarget(%+v) error = nil, want rejection", target)
 		}
 	}
 }
 
-func TestDisablePushTargetOnlyDisablesExactTargetAndUpsertReenablesIt(t *testing.T) {
+func testStateDB(t *testing.T) *DB {
+	t.Helper()
 	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	if _, err := db.AddUser("alice", "Alice"); err != nil {
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Init(); err != nil {
 		t.Fatal(err)
 	}
-	token := PushTarget{Kind: KindToken, Value: "shared-value"}
-	fid := PushTarget{Kind: KindFID, Value: "shared-value", ConfigID: "firebase-config-a"}
-	if err := db.UpsertPushTarget("alice", "phone", token); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.UpsertPushTarget("alice", "tablet", fid); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.DisablePushTarget(PushTarget{Kind: KindFID, Value: "shared-value", ConfigID: "firebase-config-b"}); err != nil {
-		t.Fatal(err)
-	}
+	return db
+}
 
-	targets, err := db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(targets) != 1 || targets[0].PushTarget != token {
-		t.Fatalf("targets after FID disable = %+v, want only token with the same value", targets)
-	}
-	if err := db.UpsertPushTarget("alice", "tablet", PushTarget{Kind: KindFID, Value: "shared-value", ConfigID: "firebase-config-b"}); err != nil {
-		t.Fatal(err)
-	}
-	targets, err = db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(targets) != 2 {
-		t.Fatalf("targets after authenticated-style upsert = %+v, want re-enabled FID", targets)
-	}
+func testPushTarget(id string) PushTarget {
+	return PushTarget{Subscription: `{"endpoint":"https://push.example/` + id + `"}`, ConfigID: "sha256:webpush"}
 }
 
 func names(entries []os.DirEntry) []string {

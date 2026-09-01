@@ -1209,7 +1209,7 @@ private fun List<org.tinitalk.data.AccountRecord>.aboutServerUrl(): String =
     configuredAboutServerUrl(map { it.session.url })
 
 private fun userErrorMessage(error: Throwable): String = when (error) {
-    is org.tinitalk.data.DuplicateAccountException -> "Этот аккаунт уже добавлен"
+    is org.tinitalk.data.DuplicateAccountException -> "Аккаунт с этого сервера уже добавлен"
     is ServerCompatibilityException -> when (error.problem) {
         CompatibilityProblem.WrongServer -> "По этому адресу нет сервера TiniTalk. Проверьте адрес"
         CompatibilityProblem.ServerOutdated -> error.serverUrl

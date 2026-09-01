@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import org.tinitalk.push.PushRegistrationState
 import org.tinitalk.push.StoredWebPushConfig
 import org.tinitalk.push.isBoundTo
@@ -77,7 +76,7 @@ internal data class PersistedAccount(
 )
 
 internal const val AccountCollectionKey = "accounts_v1"
-internal const val AccountMigrationMarkerKey = "accounts_migrated_v1"
+private val LegacyAccountKeys = arrayOf("accounts_migrated_v1", "url", "login", "token", "iv", "features", "session_id", "config_id")
 internal const val AccountCollectionVersion = 1
 internal val AccountStorageLock = Any()
 
@@ -317,36 +316,10 @@ class AuthStore(
     }
 
     private fun ensureMigratedUnlocked(): PersistedAccountCollection {
-        var collection = AccountCollectionStorage.read(store)
-        if (store.get(AccountMigrationMarkerKey) == "1") return collection
-        val legacy = loadLegacyUnlocked()
-        if (legacy != null) {
-            val duplicate = collection.accounts.firstOrNull { it.hasSemanticIdentity(legacy) }
-            collection = if (duplicate == null) {
-                val persisted = persistedAccount(accountIdFactory().value, legacy)
-                collection.copy(accounts = collection.accounts + persisted)
-            } else {
-                collection
-            }
-            AccountCollectionStorage.write(store, collection)
+        if (LegacyAccountKeys.any { store.get(it) != null }) {
+            store.remove(*LegacyAccountKeys)
         }
-        store.put(AccountMigrationMarkerKey, "1")
-        return collection
-    }
-
-    private fun loadLegacyUnlocked(): Session? {
-        val url = store.get("url") ?: return null
-        val login = store.get("login") ?: return null
-        val token = store.get("token") ?: return null
-        val iv = store.get("iv") ?: return null
-        val features = store.get("features")
-            ?.let { encoded ->
-                runCatching { gson.fromJson<List<String>>(encoded, featureListType).toSet() }.getOrNull()
-            }
-            .orEmpty()
-        val sessionId = store.get("session_id")?.takeIf(String::isNotEmpty)
-        val configId = store.get("config_id")?.takeIf(String::isNotEmpty)
-        return Session(url, login, cipher.decrypt(CipherText(token, iv)), features, sessionId, configId)
+        return AccountCollectionStorage.read(store)
     }
 
     private fun persistedAccount(id: String, session: Session, previous: PersistedAccount? = null): PersistedAccount {
@@ -425,10 +398,6 @@ class AuthStore(
         }
     }
 
-    private companion object {
-        val gson = Gson()
-        val featureListType = object : TypeToken<List<String>>() {}.type
-    }
 }
 
 internal fun Session?.sameIdentity(other: Session?): Boolean = when {

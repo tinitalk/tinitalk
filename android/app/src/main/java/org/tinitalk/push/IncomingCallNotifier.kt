@@ -616,7 +616,6 @@ object IncomingPushPayload {
 
     fun matchesTarget(data: Map<String, String>, session: Session?, deviceId: String): Boolean {
         val keys = listOf("target_login", "target_device_id", "target_session_id")
-        if (keys.none(data::containsKey)) return true
         if (!keys.all(data::containsKey)) return false
         session ?: return false
         return data["target_login"] == session.login &&

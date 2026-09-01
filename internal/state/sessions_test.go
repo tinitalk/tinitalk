@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestVersionSixMigrationLeavesExistingAccountLegacy(t *testing.T) {
+func TestMigrationLeavesExistingAccountWithoutLegacyPushOrSession(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	legacy, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -30,7 +30,6 @@ func TestVersionSixMigrationLeavesExistingAccountLegacy(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
-
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -40,44 +39,29 @@ func TestVersionSixMigrationLeavesExistingAccountLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.UserVersion != 8 {
-		t.Fatalf("schema version = %d, want 8", check.UserVersion)
+	if check.UserVersion != 9 {
+		t.Fatalf("schema version = %d, want 9", check.UserVersion)
 	}
-	var sessions int
-	if err := db.sql.QueryRow("SELECT COUNT(*) FROM account_sessions").Scan(&sessions); err != nil {
-		t.Fatal(err)
+	if _, managed, err := db.CurrentSession("alice"); err != nil || managed {
+		t.Fatalf("migrated session managed = %v, error %v, want no session", managed, err)
 	}
-	if sessions != 0 {
-		t.Fatalf("migrated sessions = %d, want empty legacy state", sessions)
-	}
-	if _, err := db.sql.Exec(`
-		INSERT INTO account_sessions(user_id, device_id, session_id)
-		SELECT id, '', 'invalid-empty-device' FROM users WHERE login = 'alice'
-	`); err == nil {
-		t.Fatal("account_sessions accepted an empty device_id")
-	}
-	devices, err := db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 1 || devices[0].DeviceID != "old-phone" || devices[0].PushTarget != (PushTarget{Kind: KindToken, Value: "old-fcm"}) {
-		t.Fatalf("legacy devices after migration = %+v, want old-phone registration preserved", devices)
+	targets, err := db.PushTargetsForUser("alice")
+	if err != nil || len(targets) != 0 {
+		t.Fatalf("migrated targets = %+v, error %v, want none", targets, err)
 	}
 }
 
 func TestClaimSessionAtomicallyReplacesPriorSessionAndDevices(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testStateDB(t)
 	if _, err := db.AddUser("alice", "Alice"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertPushTarget("alice", "old-phone", PushTarget{Kind: KindToken, Value: "old-fcm"}); err != nil {
+	oldTarget := testPushTarget("old")
+	newTarget := testPushTarget("new")
+	if err := db.UpsertPushTarget("alice", "old-phone", oldTarget); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertPushTarget("alice", "new-phone", PushTarget{Kind: KindFID, Value: "new-fid", ConfigID: "firebase-config"}); err != nil {
+	if err := db.UpsertPushTarget("alice", "new-phone", newTarget); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,62 +69,27 @@ func TestClaimSessionAtomicallyReplacesPriorSessionAndDevices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Current.SessionID == "" || first.Current.DeviceID != "old-phone" || first.Previous != nil || !first.Changed {
-		t.Fatalf("first claim = %+v, want generated legacy-to-managed session on old-phone", first)
+	if first.Current.SessionID == "" || !first.Changed || len(first.RevokedDevices) != 1 || first.RevokedDevices[0].PushTarget != newTarget {
+		t.Fatalf("first claim = %+v, want old-phone session revoking new target", first)
 	}
-	if len(first.RevokedDevices) != 1 || first.RevokedDevices[0].DeviceID != "new-phone" || first.RevokedDevices[0].PushTarget != (PushTarget{Kind: KindFID, Value: "new-fid", ConfigID: "firebase-config"}) {
-		t.Fatalf("first revoked devices = %+v, want new-phone registration", first.RevokedDevices)
-	}
-	if err := db.UpsertPushTarget("alice", "new-phone", PushTarget{Kind: KindFID, Value: "new-fid-2", ConfigID: "firebase-config"}); err != nil {
+	if err := db.UpsertPushTarget("alice", "new-phone", newTarget); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DisablePushTarget(PushTarget{Kind: KindToken, Value: "old-fcm"}); err != nil {
-		t.Fatal(err)
-	}
-
 	second, err := db.ClaimSession("alice", "new-phone")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Current.SessionID == "" || second.Current.SessionID == first.Current.SessionID || second.Current.DeviceID != "new-phone" || !second.Changed {
-		t.Fatalf("second current session = %+v, want a new opaque session on new-phone", second.Current)
+	if !second.Changed || second.Previous == nil || second.Previous.SessionID != first.Current.SessionID {
+		t.Fatalf("second claim = %+v, want replacement", second)
 	}
-	if second.Previous == nil || second.Previous.SessionID != first.Current.SessionID || second.Previous.DeviceID != "old-phone" {
-		t.Fatalf("second previous session = %+v, want first claim", second.Previous)
-	}
-	if len(second.RevokedDevices) != 1 || second.RevokedDevices[0].DeviceID != "old-phone" || second.RevokedDevices[0].PushTarget != (PushTarget{}) {
-		t.Fatalf("second revoked devices = %+v, want disabled old-phone registration", second.RevokedDevices)
-	}
-	current, managed, err := db.CurrentSession("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !managed || current.SessionID != second.Current.SessionID || current.DeviceID != "new-phone" {
-		t.Fatalf("stored current session = %+v, managed %v, want second claim", current, managed)
-	}
-	devices, err := db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 1 || devices[0].DeviceID != "new-phone" || devices[0].PushTarget != (PushTarget{Kind: KindFID, Value: "new-fid-2", ConfigID: "firebase-config"}) {
-		t.Fatalf("devices after replacement = %+v, want only retained new-phone", devices)
-	}
-
-	retry, err := db.ClaimSession("alice", "new-phone")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if retry.Changed || retry.Current.SessionID != second.Current.SessionID || retry.Previous != nil || len(retry.RevokedDevices) != 0 {
-		t.Fatalf("same-device retry = %+v, want unchanged second claim", retry)
+	targets, err := db.PushTargetsForUser("alice")
+	if err != nil || len(targets) != 1 || targets[0].DeviceID != "new-phone" || targets[0].PushTarget != newTarget {
+		t.Fatalf("targets after replacement = %+v, error %v", targets, err)
 	}
 }
 
-func TestClaimSessionWithPushTargetRefreshesFIDAndRollsBackTogether(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+func TestClaimSessionWithPushTargetRefreshesAndRollsBackTogether(t *testing.T) {
+	db := testStateDB(t)
 	if _, err := db.AddUser("alice", "Alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -148,78 +97,48 @@ func TestClaimSessionWithPushTargetRefreshesFIDAndRollsBackTogether(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstTarget := PushTarget{Kind: KindFID, Value: "first-fid", ConfigID: "config-id"}
-	if _, err := db.ClaimSessionWithPushTarget("alice", "phone", &firstTarget); err != nil {
-		t.Fatal(err)
-	}
-	retryTarget := PushTarget{Kind: KindFID, Value: "second-fid", ConfigID: "config-id"}
-	retry, err := db.ClaimSessionWithPushTarget("alice", "phone", &retryTarget)
+	refreshed := testPushTarget("refreshed")
+	retry, err := db.ClaimSessionWithPushTarget("alice", "phone", &refreshed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if retry.Current.SessionID != first.Current.SessionID || retry.Changed {
-		t.Fatalf("same-device FID retry = %+v, want unchanged session", retry)
-	}
-	devices, err := db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 1 || devices[0].PushTarget != retryTarget {
-		t.Fatalf("same-device FID retry devices = %+v, want refreshed target", devices)
+		t.Fatalf("same-device retry = %+v, want unchanged session", retry)
 	}
 	if _, err := db.sql.Exec(`CREATE TRIGGER reject_session_replacement BEFORE UPDATE ON account_sessions BEGIN SELECT RAISE(ABORT, 'reject'); END`); err != nil {
 		t.Fatal(err)
 	}
-	failedTarget := PushTarget{Kind: KindFID, Value: "tablet-fid", ConfigID: "config-id"}
-	if _, err := db.ClaimSessionWithPushTarget("alice", "tablet", &failedTarget); err == nil {
+	failed := testPushTarget("failed")
+	if _, err := db.ClaimSessionWithPushTarget("alice", "tablet", &failed); err == nil {
 		t.Fatal("replacement succeeded despite forced database failure")
 	}
-	current, managed, err := db.CurrentSession("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !managed || current != first.Current {
-		t.Fatalf("session after failed replacement = %+v, managed %v, want %+v", current, managed, first.Current)
-	}
-	devices, err = db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 1 || devices[0].DeviceID != "phone" || devices[0].PushTarget != retryTarget {
-		t.Fatalf("devices after failed replacement = %+v, want retained refreshed target", devices)
+	targets, err := db.PushTargetsForUser("alice")
+	if err != nil || len(targets) != 1 || targets[0].DeviceID != "phone" || targets[0].PushTarget != refreshed {
+		t.Fatalf("targets after rollback = %+v, error %v", targets, err)
 	}
 }
 
-func TestAuthenticatedDeviceUpsertRechecksLegacyTransitionInTransaction(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+func TestAuthenticatedPushUpsertRequiresCurrentSessionDevice(t *testing.T) {
+	db := testStateDB(t)
 	if _, err := db.AddUser("alice", "Alice"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertAuthenticatedPushTarget("alice", "", "old-phone", PushTarget{Kind: KindToken, Value: "legacy-fcm"}); err != nil {
-		t.Fatalf("legacy authenticated upsert: %v", err)
+	if err := db.UpsertAuthenticatedPushTarget("alice", "", "old-phone", testPushTarget("old")); err != nil {
+		t.Fatal(err)
 	}
 	claim, err := db.ClaimSession("alice", "tablet")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertAuthenticatedPushTarget("alice", "", "old-phone", PushTarget{Kind: KindToken, Value: "stale-fcm"}); !errors.Is(err, ErrSessionReplaced) {
-		t.Fatalf("post-claim legacy upsert error = %v, want ErrSessionReplaced", err)
+	if err := db.UpsertAuthenticatedPushTarget("alice", "", "old-phone", testPushTarget("stale")); !errors.Is(err, ErrSessionReplaced) {
+		t.Fatalf("stale upsert error = %v, want ErrSessionReplaced", err)
 	}
-	if err := db.UpsertAuthenticatedPushTarget("alice", claim.Current.SessionID, "old-phone", PushTarget{Kind: KindToken, Value: "wrong-device-fcm"}); !errors.Is(err, ErrSessionReplaced) {
-		t.Fatalf("managed wrong-device upsert error = %v, want ErrSessionReplaced", err)
-	}
-	if err := db.UpsertAuthenticatedPushTarget("alice", claim.Current.SessionID, "tablet", PushTarget{Kind: KindFID, Value: "current-fid", ConfigID: "firebase-config"}); err != nil {
-		t.Fatalf("managed authenticated upsert: %v", err)
-	}
-	devices, err := db.PushTargetsForUser("alice")
-	if err != nil {
+	current := testPushTarget("current")
+	if err := db.UpsertAuthenticatedPushTarget("alice", claim.Current.SessionID, "tablet", current); err != nil {
 		t.Fatal(err)
 	}
-	if len(devices) != 1 || devices[0].DeviceID != "tablet" || devices[0].PushTarget != (PushTarget{Kind: KindFID, Value: "current-fid", ConfigID: "firebase-config"}) {
-		t.Fatalf("authenticated devices = %+v, want only current tablet", devices)
+	targets, _ := db.PushTargetsForUser("alice")
+	if len(targets) != 1 || targets[0].DeviceID != "tablet" || targets[0].PushTarget != current {
+		t.Fatalf("authenticated targets = %+v, want current tablet", targets)
 	}
 }

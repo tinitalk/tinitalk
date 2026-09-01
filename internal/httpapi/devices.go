@@ -26,11 +26,9 @@ const (
 )
 
 type deviceRequest struct {
-	DeviceID               string          `json:"device_id"`
-	FCMToken               json.RawMessage `json:"fcm_token"`
-	FirebaseInstallationID json.RawMessage `json:"firebase_installation_id"`
-	WebPushSubscription    json.RawMessage `json:"webpush_subscription"`
-	ConfigID               json.RawMessage `json:"config_id"`
+	DeviceID            string          `json:"device_id"`
+	WebPushSubscription json.RawMessage `json:"webpush_subscription"`
+	ConfigID            json.RawMessage `json:"config_id"`
 }
 
 func (s *Server) device(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +37,9 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req deviceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -48,11 +48,7 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if target.Kind == state.KindFID && target.ConfigID != s.options.FirebaseConfig.ConfigID {
-		http.Error(w, "stale firebase configuration", http.StatusConflict)
-		return
-	}
-	if target.Kind == state.KindWebPush && target.ConfigID != s.options.WebPushConfigID {
+	if target.ConfigID != s.options.WebPushConfigID {
 		http.Error(w, "stale WebPush configuration", http.StatusConflict)
 		return
 	}
@@ -78,27 +74,19 @@ func (request deviceRequest) pushTarget() (state.PushTarget, bool) {
 	if request.DeviceID == "" {
 		return state.PushTarget{}, false
 	}
-	token, tokenPresent, tokenValid := requestString(request.FCMToken)
-	fid, fidPresent, fidValid := requestString(request.FirebaseInstallationID)
 	webPushPresent := request.WebPushSubscription != nil
 	configID, configPresent, configValid := requestString(request.ConfigID)
-	if tokenPresent && !fidPresent && !webPushPresent && !configPresent && tokenValid {
-		return state.PushTarget{Kind: state.KindToken, Value: token}, true
-	}
 	if webPushPresent {
-		if tokenPresent || fidPresent || !configPresent || !configValid {
+		if !configPresent || !configValid {
 			return state.PushTarget{}, false
 		}
 		_, canonical, err := webpush.ParseSubscription(request.WebPushSubscription)
 		if err != nil {
 			return state.PushTarget{}, false
 		}
-		return state.PushTarget{Kind: state.KindWebPush, Value: canonical, ConfigID: configID}, true
+		return state.PushTarget{Subscription: canonical, ConfigID: configID}, true
 	}
-	if tokenPresent || !fidPresent || !configPresent || !fidValid || !configValid {
-		return state.PushTarget{}, false
-	}
-	return state.PushTarget{Kind: state.KindFID, Value: fid, ConfigID: configID}, true
+	return state.PushTarget{}, false
 }
 
 func (s *Server) socket(w http.ResponseWriter, r *http.Request) {

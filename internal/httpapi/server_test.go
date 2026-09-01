@@ -12,14 +12,13 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
 
 func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	db, tokens := testDB(t)
-	server := NewServer(db, Options{AllowInsecureLoopback: true})
+	server := NewServer(db, Options{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush"})
 
 	me := request(t, server, http.MethodGet, "/api/me", nil, "alice", tokens["alice"])
 	if me.Code != http.StatusOK {
@@ -44,12 +43,9 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 		t.Fatalf("contacts missing bob: %s", contacts.Body.String())
 	}
 
-	device := request(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","fcm_token":"secret-fcm"}`), "alice", tokens["alice"])
+	device := request(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","webpush_subscription":{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=server-test","keys":{"p256dh":"BEkDdNnpEcD8M4mRGOFJWTDJ4GkDI5Xs3vpIOrAaBZKRCVv6V3sB3CFujTFiD6DHda7W8pCyChJDU205otrbCAw","auth":"AAAAAAAAAAAAAAAAAAAAAA"}},"config_id":"sha256:webpush"}`), "alice", tokens["alice"])
 	if device.Code != http.StatusNoContent {
 		t.Fatalf("/api/device status = %d, body %s", device.Code, device.Body.String())
-	}
-	if bytes.Contains(device.Body.Bytes(), []byte("secret-fcm")) {
-		t.Fatalf("device response leaked token: %s", device.Body.String())
 	}
 }
 
@@ -59,7 +55,7 @@ func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	t.Cleanup(func() { serverCommit = previousCommit })
 
 	db, _ := testDB(t)
-	server := NewServer(db, Options{FirebaseConfig: firebaseConfigForTest()})
+	server := NewServer(db, Options{})
 
 	response := request(t, server, http.MethodGet, "/healthz", nil, "", "")
 	if response.Code != http.StatusOK {
@@ -75,33 +71,13 @@ func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil {
 		t.Fatal(err)
 	}
-	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 3 || health.Commit != "01234567" {
-		t.Fatalf("health = %+v, want tinitalk, ok, API version 3, commit 01234567", health)
-	}
-	want := []string{"video_1to1", "single_device_session", "dynamic_fcm_v1", "webpush_v1"}
-	if fmt.Sprint(health.Features) != fmt.Sprint(want) {
-		t.Fatalf("health features = %v, want %v", health.Features, want)
-	}
-}
-
-func TestHealthAdvertisesOnlyWebPushWhenLegacyFirebaseIsNotConfigured(t *testing.T) {
-	db, _ := testDB(t)
-	server := NewServer(db, Options{})
-	response := request(t, server, http.MethodGet, "/healthz", nil, "", "")
-	var health struct {
-		Features []string `json:"features"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil {
-		t.Fatal(err)
+	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 4 || health.Commit != "01234567" {
+		t.Fatalf("health = %+v, want tinitalk, ok, API version 4, commit 01234567", health)
 	}
 	want := []string{"video_1to1", "single_device_session", "webpush_v1"}
 	if fmt.Sprint(health.Features) != fmt.Sprint(want) {
 		t.Fatalf("health features = %v, want %v", health.Features, want)
 	}
-}
-
-func firebaseConfigForTest() firebaseconfig.Config {
-	return firebaseconfig.Config{ConfigID: "config-id"}
 }
 
 func TestSocketRequiresSignalingProtocolV2(t *testing.T) {
@@ -499,7 +475,7 @@ func testDB(t *testing.T) (*state.DB, map[string]string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Init(nil, nil); err != nil {
+	if err := db.Init(); err != nil {
 		t.Fatal(err)
 	}
 	tokens := map[string]string{}

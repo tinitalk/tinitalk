@@ -10,7 +10,7 @@ import org.tinitalk.push.WebPushClientConfig
 import org.tinitalk.push.isValid
 
 private const val TINITALK_SERVICE = "tinitalk"
-private const val SUPPORTED_API_VERSION = 3
+private const val SUPPORTED_API_VERSION = 4
 private const val WEBPUSH_FEATURE = "webpush_v1"
 
 data class AddedAccount(
@@ -44,7 +44,7 @@ class ServerCompatibilityException(
     val serverUrl: String? = null,
 ) : RuntimeException()
 
-class DuplicateAccountException : IllegalArgumentException("account already exists")
+class DuplicateAccountException : IllegalArgumentException("server already exists")
 
 class ContactRepository internal constructor(
     private val authStore: AuthStore,
@@ -178,7 +178,7 @@ class ContactRepository internal constructor(
         require(existing.isNotEmpty()) { "addAccount requires an existing account" }
         val candidate = Session(requireNotNull(httpsServerUrl(url)), login.trim(), token.trim())
         if (existing.any {
-            normalizeServerUrl(it.session.url) == candidate.url && it.session.login.trim() == candidate.login
+            normalizeServerUrl(it.session.url).equals(candidate.url, ignoreCase = true)
         }) throw DuplicateAccountException()
         require(deviceId.isNotBlank()) { "device_id is required for push activation" }
         val registration = checkNotNull(webPushRegistration) { "push activation is unavailable" }

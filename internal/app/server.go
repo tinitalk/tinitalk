@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/httpapi"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
@@ -15,7 +14,6 @@ import (
 type ServerConfig struct {
 	Addr                  string
 	AllowInsecureLoopback bool
-	FirebaseConfig        firebaseconfig.Config
 	WebPushPublicKey      string
 	WebPushConfigID       string
 	Hub                   *signaling.Hub
@@ -37,7 +35,6 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 		Addr: addr,
 		Handler: httpapi.NewServer(db, httpapi.Options{
 			AllowInsecureLoopback: config.AllowInsecureLoopback,
-			FirebaseConfig:        config.FirebaseConfig,
 			WebPushPublicKey:      config.WebPushPublicKey,
 			WebPushConfigID:       config.WebPushConfigID,
 			Hub:                   hub,

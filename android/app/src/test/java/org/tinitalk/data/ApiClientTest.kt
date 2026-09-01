@@ -48,7 +48,7 @@ class ApiClientTest {
         val server = MockWebServer()
         server.enqueue(
             MockResponse().setBody(
-                """{"service":"tinitalk","status":"ok","api_version":3,"features":["video_1to1","future_feature"]}""",
+                """{"service":"tinitalk","status":"ok","api_version":4,"features":["video_1to1","future_feature"]}""",
             ),
         )
         server.start()

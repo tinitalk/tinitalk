@@ -7,12 +7,10 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/pion/logging v0.2.4
 	github.com/pion/turn/v5 v5.0.0
-	golang.org/x/oauth2 v0.33.0
 	modernc.org/sqlite v1.57.0
 )
 
 require (
-	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

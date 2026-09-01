@@ -49,7 +49,7 @@ func (s HTTPWebPushSender) Send(request WebPushRequest) error {
 		return nil
 	}
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		return ErrInvalidRegistration
+		return ErrInvalidPushSubscription
 	}
 	return fmt.Errorf("WebPush send failed: HTTP %d", response.StatusCode)
 }

@@ -154,6 +154,29 @@ var schemaMigrations = [][]string{
 		`DROP TABLE devices`,
 		`ALTER TABLE devices_new RENAME TO devices`,
 	},
+	{
+		`CREATE TABLE devices_new(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			device_id TEXT NOT NULL,
+			webpush_subscription TEXT,
+			webpush_config_id TEXT,
+			updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+			UNIQUE(user_id, device_id),
+			CHECK(
+				(webpush_subscription IS NULL AND webpush_config_id IS NULL) OR
+				(webpush_subscription IS NOT NULL AND webpush_subscription <> '' AND webpush_config_id IS NOT NULL AND webpush_config_id <> '')
+			)
+		)`,
+		`INSERT INTO devices_new(id, user_id, device_id, webpush_subscription, webpush_config_id, updated_at)
+		 SELECT id, user_id, device_id, push_value, config_id, updated_at
+		 FROM devices
+		 WHERE push_kind = 'webpush'`,
+		`DROP TABLE devices`,
+		`ALTER TABLE devices_new RENAME TO devices`,
+		`DELETE FROM secrets WHERE key = 'fcm_service_account'`,
+		`DELETE FROM settings WHERE key = 'firebase_android_config'`,
+	},
 }
 
 func (db *DB) migrate() error {

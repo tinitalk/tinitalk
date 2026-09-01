@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import org.tinitalk.CallActivity
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.AccountId
+import org.tinitalk.data.Session
 import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.call.CallAdmission
@@ -41,6 +42,26 @@ class IncomingCallNotifierTest {
         Instant.now().plusSeconds(30),
     )
     private fun controller() = IncomingCallController(CallAdmissionHandoff(CallAdmission()))
+
+    @Test
+    fun incomingPushRequiresExactSessionTarget() {
+        val session = Session("https://a.example", "alice", "token", sessionId = "session-a")
+
+        assertEquals(false, IncomingPushPayload.matchesTarget(mapOf("type" to "incoming_call"), session, "phone"))
+        assertEquals(
+            true,
+            IncomingPushPayload.matchesTarget(
+                mapOf(
+                    "target_login" to "alice",
+                    "target_device_id" to "phone",
+                    "target_session_id" to "session-a",
+                ),
+                session,
+                "phone",
+            ),
+        )
+    }
+
     @Test
     fun serverMissedStateWithoutAnExactSessionOmitsRedial() {
         val context = RuntimeEnvironment.getApplication()

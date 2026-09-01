@@ -44,8 +44,8 @@ func TestOpenMigratesVersionOneDatabaseWithoutLosingUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.UserVersion != 8 {
-		t.Fatalf("schema version = %d, want 8", check.UserVersion)
+	if check.UserVersion != 9 {
+		t.Fatalf("schema version = %d, want 9", check.UserVersion)
 	}
 	users, err := db.ListUsers()
 	if err != nil {
