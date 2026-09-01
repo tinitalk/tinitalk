@@ -2,6 +2,7 @@ package notify
 
 import (
 	"errors"
+	"log"
 	"strconv"
 	"time"
 
@@ -10,12 +11,15 @@ import (
 )
 
 var ErrInvalidPushSubscription = errors.New("invalid WebPush subscription")
+var ErrTemporaryPushDelivery = errors.New("temporary WebPush delivery failure")
 
 const (
 	RequestTimeout        = 5 * time.Second
 	callNotificationTTL   = 30 * time.Second
 	missedNotificationTTL = 28 * 24 * time.Hour
 )
+
+var defaultWebPushRetryDelays = []time.Duration{250 * time.Millisecond}
 
 type PushTargetStore interface {
 	PushTargetsForUser(login string) ([]state.Device, error)
@@ -44,12 +48,17 @@ func (s DBPushTargetStore) ContactDisplayName(owner, contact string) (string, er
 }
 
 type PushNotifier struct {
-	store  PushTargetStore
-	sender WebPushSender
+	store       PushTargetStore
+	sender      WebPushSender
+	retryDelays []time.Duration
 }
 
 func NewPushNotifier(store PushTargetStore, sender WebPushSender) *PushNotifier {
-	return &PushNotifier{store: store, sender: sender}
+	return &PushNotifier{
+		store:       store,
+		sender:      sender,
+		retryDelays: append([]time.Duration(nil), defaultWebPushRetryDelays...),
+	}
 }
 
 func (n *PushNotifier) IncomingCall(caller, callee string, event signaling.DeliveredEvent) {
@@ -74,8 +83,11 @@ func (n *PushNotifier) SessionReplaced(login, revokedSessionID string, devices [
 			continue
 		}
 		message := SessionReplacedMessage(login, revokedSessionID, device.DeviceID)
-		if errors.Is(n.sendTarget(device.PushTarget, message), ErrInvalidPushSubscription) {
+		err := n.sendTarget(device.PushTarget, message)
+		if errors.Is(err, ErrInvalidPushSubscription) {
 			_ = n.store.DisablePushTarget(device.PushTarget)
+		} else if err != nil {
+			log.Printf("WebPush delivery failed after retries (type=%s)", message.Data["type"])
 		}
 	}
 }
@@ -102,8 +114,11 @@ func (n *PushNotifier) send(callee string, message PushMessage) {
 				targeted.Data["target_device_id"] = device.DeviceID
 			}
 		}
-		if errors.Is(n.sendTarget(device.PushTarget, targeted), ErrInvalidPushSubscription) {
+		err := n.sendTarget(device.PushTarget, targeted)
+		if errors.Is(err, ErrInvalidPushSubscription) {
 			_ = n.store.DisablePushTarget(device.PushTarget)
+		} else if err != nil {
+			log.Printf("WebPush delivery failed after retries (type=%s)", targeted.Data["type"])
 		}
 	}
 }
@@ -112,11 +127,20 @@ func (n *PushNotifier) sendTarget(target state.PushTarget, message PushMessage) 
 	if n.sender == nil {
 		return errors.New("WebPush sender is unavailable")
 	}
-	return n.sender.Send(WebPushRequest{
+	request := WebPushRequest{
 		Subscription: target.Subscription,
 		Data:         cloneData(message.Data),
 		TTL:          message.ttl,
-	})
+	}
+	err := n.sender.Send(request)
+	for _, delay := range n.retryDelays {
+		if !errors.Is(err, ErrTemporaryPushDelivery) {
+			break
+		}
+		time.Sleep(delay)
+		err = n.sender.Send(request)
+	}
+	return err
 }
 
 type WebPushRequest struct {

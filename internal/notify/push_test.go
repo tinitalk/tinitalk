@@ -1,8 +1,12 @@
 package notify
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +40,68 @@ func TestHTTPWebPushSenderUsesUrgentDeliveryAndInvalidatesGoneEndpoint(t *testin
 	client.status = http.StatusGone
 	if err := sender.Send(request); !errors.Is(err, ErrInvalidPushSubscription) {
 		t.Fatalf("gone endpoint error = %v, want invalid subscription", err)
+	}
+	client.status = http.StatusServiceUnavailable
+	if err := sender.Send(request); !errors.Is(err, ErrTemporaryPushDelivery) {
+		t.Fatalf("unavailable endpoint error = %v, want temporary delivery failure", err)
+	}
+}
+
+func TestHTTPWebPushSenderDoesNotRetryPermanentLocalOrHTTPFailures(t *testing.T) {
+	keys, err := webpushlib.GenerateVAPIDKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &captureWebPushClient{status: 600}
+	sender := HTTPWebPushSender{Client: client, VAPIDKeys: keys, Subscriber: "https://talk.example"}
+	request := WebPushRequest{
+		Subscription: notifySubscription("account"),
+		Data:         map[string]string{"type": "incoming_call", "call_id": "call-1"},
+		TTL:          30 * time.Second,
+	}
+	if err := sender.Send(request); err == nil || errors.Is(err, ErrTemporaryPushDelivery) {
+		t.Fatalf("HTTP 600 error = %v, want permanent delivery failure", err)
+	}
+	request.Data["oversized"] = strings.Repeat("x", 5000)
+	if err := sender.Send(request); err == nil || errors.Is(err, ErrTemporaryPushDelivery) {
+		t.Fatalf("oversized payload error = %v, want permanent local failure", err)
+	}
+}
+
+func TestNotifierRetriesTemporaryWebPushFailure(t *testing.T) {
+	sender := &fakeWebPushSender{errs: []error{
+		fmt.Errorf("first attempt: %w", ErrTemporaryPushDelivery),
+		nil,
+	}}
+	notifier := NewPushNotifier(
+		&fakePushTargetStore{targets: []state.Device{{PushTarget: notifyTarget("phone")}}},
+		sender,
+	)
+	notifier.retryDelays = []time.Duration{0}
+
+	notifier.IncomingCall("alice", "bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1"}})
+
+	if sender.calls != 2 {
+		t.Fatalf("send calls = %d, want initial attempt and one retry", sender.calls)
+	}
+}
+
+func TestNotifierReportsExhaustedTemporaryWebPushFailure(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	sender := &fakeWebPushSender{err: fmt.Errorf("provider unavailable: %w", ErrTemporaryPushDelivery)}
+	notifier := NewPushNotifier(
+		&fakePushTargetStore{targets: []state.Device{{PushTarget: notifyTarget("phone")}}},
+		sender,
+	)
+	notifier.retryDelays = []time.Duration{0}
+
+	notifier.IncomingCall("alice", "bob", signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1"}})
+
+	if !strings.Contains(output.String(), "WebPush delivery failed after retries") {
+		t.Fatalf("log output = %q, want exhausted delivery failure", output.String())
 	}
 }
 
@@ -150,6 +216,7 @@ func (s *fakePushTargetStore) DisablePushTarget(target state.PushTarget) error {
 type fakeWebPushSender struct {
 	calls    int
 	err      error
+	errs     []error
 	last     WebPushRequest
 	requests []WebPushRequest
 }
@@ -158,6 +225,11 @@ func (s *fakeWebPushSender) Send(request WebPushRequest) error {
 	s.calls++
 	s.last = request
 	s.requests = append(s.requests, request)
+	if len(s.errs) > 0 {
+		err := s.errs[0]
+		s.errs = s.errs[1:]
+		return err
+	}
 	return s.err
 }
 
