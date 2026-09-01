@@ -133,6 +133,47 @@ class IncomingCallNotifierTest {
     }
 
     @Test
+    fun missedRedialUsesNewestAccountInsteadOfLastUpdatedAccount() {
+        val context = RuntimeEnvironment.getApplication()
+        val notifier = IncomingCallNotifier(context)
+        val newestAccount = AccountId("newest-account")
+        val olderAccount = AccountId("older-account")
+        val newestBinding = CallSessionBinding("https://new.example", "new", "new-session", "new-config")
+        val olderBinding = CallSessionBinding("https://old.example", "old", "old-session", "old-config")
+        notifier.syncMissedAccounts(listOf(newestAccount, olderAccount))
+
+        notifier.updateAccountMissedState(
+            newestAccount,
+            CallUnreadState(
+                2,
+                listOf(
+                    UnreadMissedContact("new-peer-older", 50, "Старый на новом сервере"),
+                    UnreadMissedContact("new-peer", 200, "Новый"),
+                ),
+            ),
+            notifier.beginAccountMissedCountRefresh(newestAccount),
+            redialBinding = newestBinding,
+            immediate = true,
+        )
+        notifier.updateAccountMissedState(
+            olderAccount,
+            CallUnreadState(1, listOf(UnreadMissedContact("old-peer", 100, "Старый"))),
+            notifier.beginAccountMissedCountRefresh(olderAccount),
+            redialBinding = olderBinding,
+            immediate = true,
+        )
+
+        val notification = context.getSystemService(NotificationManager::class.java)
+            .activeNotifications
+            .single { it.notification.category == Notification.CATEGORY_MISSED_CALL }
+            .notification
+        val redialIntent = Shadows.shadowOf(notification.actions.single().actionIntent).savedIntent
+
+        assertEquals("new-peer", redialIntent.getStringExtra("outgoing_login"))
+        assertEquals("new-session", redialIntent.getStringExtra("redial_session_id"))
+    }
+
+    @Test
     fun inviteBackedMissedRedialCarriesItsSessionBinding() {
         val context = RuntimeEnvironment.getApplication()
         val notifier = IncomingCallNotifier(context)
