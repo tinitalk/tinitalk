@@ -1,88 +1,99 @@
 package org.tinitalk.push
 
+import org.tinitalk.data.AccountId
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class MissedBadgeCounterTest {
     @Test
-    fun ignoresAStaleCountAfterANewerCallWasRecorded() {
-        val counter = MissedBadgeCounter()
-        val staleRequest = counter.beginRefresh()
-        val latestRequest = counter.beginRefresh()
-
-        assertTrue(counter.update(latestRequest, count = 2).applied)
-        val stale = counter.update(staleRequest, count = 0)
-
-        assertFalse(stale.applied)
-        assertEquals(2, stale.count)
+    fun missedRedialRequiresItsAccountIdentity() {
+        assertTrue(shouldOfferMissedRedial("sam", true))
+        assertFalse(shouldOfferMissedRedial("sam", false))
     }
 
     @Test
-    fun latePreMarkResponseCannotRestoreAReadBadge() {
-        val counter = MissedBadgeCounter()
-        val beforeMark = counter.beginRefresh()
-        val afterMark = counter.beginRefresh()
-
-        assertEquals(0, counter.update(afterMark, count = 0).count)
-        val late = counter.update(beforeMark, count = 2)
-
-        assertFalse(late.applied)
-        assertEquals(0, late.count)
+    fun persistedCountsHydrateOnlyActiveAccounts() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val preferences = context.getSharedPreferences("badge-test", android.content.Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        val store = AccountMissedBadgeStore(preferences)
+        val a = AccountId("persist-a")
+        val b = AccountId("persist-b")
+        store.save(mapOf(a to 2, b to 4))
+        val counter = AccountMissedBadgeCounter()
+        assertEquals(4, counter.sync(listOf(b), store.load()))
+        assertEquals(mapOf(b to 4), counter.snapshot())
     }
 
     @Test
-    fun failedNewerRefreshStillInvalidatesAnOlderResponse() {
-        val counter = MissedBadgeCounter()
-        val oldRequest = counter.beginRefresh()
-        counter.beginRefresh()
+    fun persistedSyncWritesTheSameFilteredSnapshotItHydrates() {
+        val a = AccountId("persist-a")
+        val b = AccountId("persist-b")
+        val saved = mutableListOf<Map<AccountId, Int>>()
+        val updater = AccountMissedBadgeUpdater(AccountMissedBadgeCounter()) {}
 
-        assertFalse(counter.update(oldRequest, count = 3).applied)
-        assertEquals(0, counter.update(oldRequest, count = 3).count)
+        assertEquals(4, updater.syncPersisted(listOf(b), { mapOf(a to 9, b to 4) }, saved::add))
+
+        assertEquals(listOf(mapOf(b to 4)), saved)
+        assertEquals(mapOf(b to 4), updater.snapshot())
     }
 
     @Test
-    fun defersUpdatedCountPublication() {
+    fun accountCountsAggregateAndStaleOrRemovedAccountCannotResurrect() {
+        val a = AccountId("a")
+        val b = AccountId("b")
+        val counter = AccountMissedBadgeCounter()
+        counter.sync(listOf(a, b))
+        val staleA = counter.beginRefresh(a)
+        val freshA = counter.beginRefresh(a)
+        val freshB = counter.beginRefresh(b)
+
+        assertEquals(2, counter.update(a, freshA, 2).count)
+        assertEquals(5, counter.update(b, freshB, 3).count)
+        assertFalse(counter.update(b, freshA, 9).applied)
+        assertFalse(counter.update(a, staleA, 0).applied)
+        counter.remove(a)
+        assertFalse(counter.update(a, freshA, 9).applied)
+        assertEquals(mapOf(b to 3), counter.snapshot())
+    }
+
+    @Test
+    fun autoMarkTokenSupersedesHistoryFetchAndYieldsToALaterPush() {
+        val account = AccountId("a")
+        val counter = AccountMissedBadgeCounter()
+        counter.sync(listOf(account))
+        val historyFetch = counter.beginRefresh(account)
+        val autoMark = counter.beginRefresh(account)
+
+        assertFalse(counter.update(account, historyFetch, 3).applied)
+        val laterPush = counter.beginRefresh(account)
+        assertFalse(counter.update(account, autoMark, 0).applied)
+        assertEquals(2, counter.update(account, laterPush, 2).count)
+    }
+
+    @Test
+    fun queuedOlderPublishIsSuppressedAndInitialCountsHydrate() {
+        val a = AccountId("a")
+        val b = AccountId("b")
         val pending = ArrayDeque<() -> Unit>()
         val published = mutableListOf<Int>()
-        val badges = MissedBadgeUpdater(MissedBadgeCounter()) { task -> pending.addLast(task) }
-        val refreshId = badges.beginRefresh()
-
-        assertEquals(3, badges.update(refreshId, count = 3, publish = published::add).count)
-        assertTrue(published.isEmpty())
+        val updater = AccountMissedBadgeUpdater(AccountMissedBadgeCounter()) { pending.addLast(it) }
+        updater.sync(listOf(a, b), mapOf(b to 4))
+        val aRefresh = updater.beginRefresh(a)
+        updater.update(a, aRefresh, 2, {}, published::add)
+        val bRefresh = updater.beginRefresh(b)
+        updater.updateImmediately(b, bRefresh, 1, {}, published::add)
 
         pending.removeFirst().invoke()
-
         assertEquals(listOf(3), published)
     }
 
-    @Test
-    fun immediateUpdatePublishesBeforeReturning() {
-        val pending = ArrayDeque<() -> Unit>()
-        val published = mutableListOf<Int>()
-        val badges = MissedBadgeUpdater(MissedBadgeCounter()) { task -> pending.addLast(task) }
-        val refreshId = badges.beginRefresh()
-
-        badges.updateImmediately(refreshId, count = 1) { published += it }
-
-        assertEquals(listOf(1), published)
-        assertTrue(pending.isEmpty())
-    }
-
-    @Test
-    fun acceptedRefreshNotifiesRegisteredObserverImmediately() {
-        val pending = ArrayDeque<() -> Unit>()
-        val observed = mutableListOf<Int>()
-        val badges = MissedBadgeUpdater(MissedBadgeCounter()) { task -> pending.addLast(task) }
-        val observer: (Int) -> Unit = observed::add
-        badges.observe(observer)
-
-        val refreshId = badges.beginRefresh()
-        badges.update(refreshId, count = 3, publish = {})
-
-        assertEquals(listOf(0, 3), observed)
-        assertEquals(1, pending.size)
-        badges.removeObserver(observer)
-    }
 }

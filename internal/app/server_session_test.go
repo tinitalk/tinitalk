@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/state"
 )
+
+const testWebPushSubscription = `{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=app-test","keys":{"p256dh":"BEkDdNnpEcD8M4mRGOFJWTDJ4GkDI5Xs3vpIOrAaBZKRCVv6V3sB3CFujTFiD6DHda7W8pCyChJDU205otrbCAw","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`
 
 func TestNewHTTPServerWiresSessionReplacementNotifier(t *testing.T) {
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
@@ -23,15 +24,13 @@ func TestNewHTTPServerWiresSessionReplacementNotifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertDevice("alice", "old-phone", "old-fcm"); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.UpsertPushTarget("alice", "old-tablet", state.PushTarget{Kind: state.KindFID, Value: "old-fid", ConfigID: "config-id"}); err != nil {
+	target := state.PushTarget{Subscription: testWebPushSubscription, ConfigID: "sha256:webpush"}
+	if err := db.UpsertPushTarget("alice", "old-phone", target); err != nil {
 		t.Fatal(err)
 	}
 	notifier := &captureSessionNotifier{calls: make(chan capturedSessionReplacement, 1)}
-	server := NewHTTPServer(db, ServerConfig{AllowInsecureLoopback: true, SessionNotifier: notifier})
-	req := httptest.NewRequest(http.MethodPost, "/api/session", bytes.NewBufferString(`{"device_id":"tablet"}`))
+	server := NewHTTPServer(db, ServerConfig{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush", SessionNotifier: notifier})
+	req := httptest.NewRequest(http.MethodPost, "/api/session", bytes.NewBufferString(`{"device_id":"tablet","webpush_subscription":`+testWebPushSubscription+`,"config_id":"sha256:webpush"}`))
 	req.SetBasicAuth("alice", token)
 	recorder := httptest.NewRecorder()
 	server.Handler.ServeHTTP(recorder, req)
@@ -40,21 +39,21 @@ func TestNewHTTPServerWiresSessionReplacementNotifier(t *testing.T) {
 	}
 	select {
 	case got := <-notifier.calls:
-		if got.login != "alice" || got.revokedSessionID != "" || len(got.devices) != 2 || got.devices[0].PushTarget != (state.PushTarget{Kind: state.KindToken, Value: "old-fcm"}) || got.devices[1].PushTarget != (state.PushTarget{Kind: state.KindFID, Value: "old-fid", ConfigID: "config-id"}) {
-			t.Fatalf("captured replacement = %+v, want legacy token and FID targets", got)
+		if got.login != "alice" || got.revokedSessionID != "" || len(got.devices) != 1 || got.devices[0].PushTarget != target {
+			t.Fatalf("captured replacement = %+v, want WebPush target", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("session replacement notifier was not called")
 	}
 }
 
-func TestNewHTTPServerWiresFirebaseConfiguration(t *testing.T) {
+func TestNewHTTPServerWiresWebPushConfiguration(t *testing.T) {
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.Init(nil, nil); err != nil {
+	if err := db.Init(); err != nil {
 		t.Fatal(err)
 	}
 	token, err := db.AddUser("alice", "Alice")
@@ -63,27 +62,22 @@ func TestNewHTTPServerWiresFirebaseConfiguration(t *testing.T) {
 	}
 	server := NewHTTPServer(db, ServerConfig{
 		AllowInsecureLoopback: true,
-		FirebaseConfig: firebaseconfig.Config{
-			MobileSDKAppID: "app-id",
-			CurrentKey:     "api-key",
-			ProjectID:      "project-id",
-			ProjectNumber:  "123",
-			ConfigID:       "config-id",
-		},
+		WebPushPublicKey:      "vapid-public-key",
+		WebPushConfigID:       "sha256:webpush",
 	})
-	req := httptest.NewRequest(http.MethodGet, "/api/firebase-config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/webpush-config", nil)
 	req.SetBasicAuth("alice", token)
 	response := httptest.NewRecorder()
 	server.Handler.ServeHTTP(response, req)
 	if response.Code != http.StatusOK {
-		t.Fatalf("Firebase config status = %d, body %s", response.Code, response.Body.String())
+		t.Fatalf("WebPush config status = %d, body %s", response.Code, response.Body.String())
 	}
 	var got map[string]string
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["config_id"] != "config-id" {
-		t.Fatalf("Firebase config = %#v, want startup configuration", got)
+	if got["vapid_public_key"] != "vapid-public-key" || got["config_id"] != "sha256:webpush" {
+		t.Fatalf("WebPush config = %#v, want startup configuration", got)
 	}
 }
 

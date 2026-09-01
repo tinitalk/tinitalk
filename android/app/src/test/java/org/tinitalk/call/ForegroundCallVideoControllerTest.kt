@@ -2,6 +2,7 @@ package org.tinitalk.call
 
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import org.tinitalk.data.AccountId
 import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.media.CallStats
 import org.tinitalk.media.CameraAttempt
@@ -18,6 +19,9 @@ import org.tinitalk.media.IceServerData
 import org.tinitalk.media.MediaSession
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.media.SerializedCameraLifecycle
+import org.tinitalk.media.TaskScheduler
+import org.tinitalk.media.ExecutorTaskScheduler
+import org.tinitalk.media.VideoRenderSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -30,6 +34,32 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 class ForegroundCallVideoControllerTest {
+    private fun ForegroundCallController(
+        signal: SignalClient,
+        mediaFactory: (
+            String,
+            Boolean,
+            List<IceServerData>,
+            (IceCandidateData) -> Unit,
+            (List<IceCandidateData>) -> Unit,
+            () -> Unit,
+        ) -> MediaSession,
+        ids: EventIds = UuidEventIds(),
+        scheduler: TaskScheduler = ExecutorTaskScheduler(),
+        onVideoStateChanged: (CallVideoState<VideoRenderSource>) -> Unit = {},
+        prepareCameraStart: (String, Long) -> Boolean = { _, _ -> true },
+        onCameraLeaseReleased: (Long) -> Unit = {},
+    ): ForegroundCallController = ForegroundCallController(
+        signal = signal,
+        mediaFactory = mediaFactory,
+        ids = ids,
+        scheduler = scheduler,
+        onVideoStateChanged = onVideoStateChanged,
+        prepareCameraStart = prepareCameraStart,
+        onCameraLeaseReleased = onCameraLeaseReleased,
+        accountId = TestAccount,
+    )
+
     @Test
     fun cameraLifecyclePublishesVideoStateWithoutDuplicates() {
         val signal = RecordingSignalClient()
@@ -802,5 +832,6 @@ class ForegroundCallVideoControllerTest {
     private companion object {
         const val CurrentCall = "call-1"
         const val ReplacementCall = "call-2"
+        val TestAccount = AccountId("video-controller-test-account")
     }
 }

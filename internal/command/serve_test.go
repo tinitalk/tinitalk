@@ -1,78 +1,12 @@
 package command
 
 import (
-	"bytes"
 	"crypto/tls"
-	"net"
-	"strings"
 	"testing"
 	"time"
 
-	"tinitalk/internal/state"
 	"tinitalk/internal/turnserver"
 )
-
-func TestServeRequiresStoredFCMServiceAccount(t *testing.T) {
-	dir := t.TempDir()
-	if err := Run(&bytes.Buffer{}, "init", "--data-dir", dir); err != nil {
-		t.Fatal(err)
-	}
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-
-	err = runServe([]string{
-		"--data-dir", dir,
-		"--loopback-insecure",
-		"--addr", listener.Addr().String(),
-	})
-
-	if err == nil || !strings.Contains(err.Error(), "FCM service account is missing") {
-		t.Fatalf("serve without FCM service account error = %v, want missing-FCM rejection", err)
-	}
-}
-
-func TestServeRejectsMissingOrCorruptAndroidFirebaseConfiguration(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		setting string
-	}{
-		{name: "missing", setting: ""},
-		{name: "corrupt", setting: "{"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			serviceAccount, androidConfig := writeFirebaseFiles(t, "demo")
-			if err := Run(&bytes.Buffer{}, "init", "--data-dir", dir, "--fcm-service-account", serviceAccount, "--firebase-android-config", androidConfig); err != nil {
-				t.Fatal(err)
-			}
-			db, err := state.OpenDir(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := db.SetSetting("firebase_android_config", test.setting); err != nil {
-				_ = db.Close()
-				t.Fatal(err)
-			}
-			if err := db.Close(); err != nil {
-				t.Fatal(err)
-			}
-
-			listener, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer listener.Close()
-			err = runServe([]string{"--data-dir", dir, "--loopback-insecure", "--addr", listener.Addr().String()})
-			if err == nil {
-				t.Fatal("serve accepted incomplete Android Firebase configuration")
-			}
-		})
-	}
-}
 
 func TestParseServeOptionsRequiresExternalCertificateInProduction(t *testing.T) {
 	options, err := parseServeOptions(productionServeArgs())

@@ -1,275 +1,186 @@
 package org.tinitalk.data
 
-import org.tinitalk.push.StoredFirebaseConfig
+import org.tinitalk.push.StoredWebPushConfig
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
 
 class AuthStoreTest {
     @Test
-    fun loadsLegacySessionWithEmptyServerFeatures() {
-        val prefs = MemoryKeyValueStore().apply {
-            put("url", "https://host")
-            put("login", "alice")
-            put("token", "nekot-terces")
-            put("iv", "iv")
+    fun versionPointNineIgnoresLegacySingleAccountWithoutDeletingIt() {
+        val persistence = MemoryKeyValueStore()
+        val encrypted = PrefixTokenCipher().encrypt("legacy-token")
+        persistence.put("url", "https://old.example")
+        persistence.put("login", "alice")
+        persistence.put("token", encrypted.value)
+        persistence.put("iv", encrypted.iv)
+
+        val accounts = AuthStore(persistence, PrefixTokenCipher()).list()
+
+        assertTrue(accounts.isEmpty())
+        assertEquals(encrypted.value, persistence.get("token"))
+    }
+
+    @Test
+    fun acceptsServerAddressesWithoutHttpsPrefix() {
+        assertEquals("https://talk.example.com", httpsServerUrl(" talk.example.com/ "))
+        assertEquals("https://talk.example.com", httpsServerUrl("https://talk.example.com/"))
+        assertEquals("https://talk.example.com", httpsServerUrl("HTTPS://TALK.EXAMPLE.COM:443/"))
+        assertEquals("https://talk.example.com:8443", httpsServerUrl("TALK.EXAMPLE.COM:8443/"))
+        assertEquals("https://talk_server.example.com", httpsServerUrl("HTTPS://TALK_SERVER.EXAMPLE.COM:443/"))
+        assertNull(httpsServerUrl("https://"))
+        assertNull(httpsServerUrl("http://talk.example.com"))
+    }
+
+    @Test
+    fun rejectsAnotherAccountOnTheSameCanonicalServer() {
+        val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
+        val first = session("https://a.example", "alice", "session-a", "config-a")
+        val duplicate = session("https://A.EXAMPLE:443/", "anna", "session-b", "config-b")
+        store.add(store.newAccountId(), first, config(first), "Alice")
+
+        assertThrows(IllegalArgumentException::class.java) {
+            store.add(store.newAccountId(), duplicate, config(duplicate), "Anna")
         }
 
-        val session = AuthStore(prefs, PrefixTokenCipher()).load()
-
-        assertEquals("https://host", session?.url)
-        assertEquals("alice", session?.login)
-        assertEquals("secret-token", session?.token)
-        assertEquals(emptySet<String>(), session?.features)
-        assertNull(session?.sessionId)
-        assertNull(session?.configId)
+        assertEquals(listOf("alice"), store.list().map { it.session.login })
     }
 
     @Test
-    fun savesAndLoadsServerFeaturesWithSession() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val session = Session("https://host", "alice", "token", setOf("video_1to1", "future_feature"))
+    fun storesTwoAccountsWithIndependentWebPushConfigurations() {
+        val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
+        val sessionA = session("https://a.example", "alice", "session-a", "config-a")
+        val sessionB = session("https://b.example", "bob", "session-b", "config-b")
+        val accountA = store.add(store.newAccountId(), sessionA, config(sessionA), "Alice")
+        val accountB = store.add(store.newAccountId(), sessionB, config(sessionB), "Bob")
 
-        store.save(session)
-
-        assertEquals(session, store.load())
+        assertEquals(listOf(accountA, accountB), store.list())
+        assertEquals(config(sessionA), store.webPushConfig(accountA.id))
+        assertEquals(config(sessionB), store.webPushConfig(accountB.id))
     }
 
     @Test
-    fun savesAndLoadsOpaqueSessionId() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val session = Session(
-            "https://host",
-            "alice",
-            "token",
-            setOf("single_device_session"),
-            sessionId = "session-123",
-            configId = "sha256:config",
-        )
+    fun activatesWebPushOnlyForTheCurrentExistingSession() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { AccountId("account-a") }
+        val old = Session("https://a.example", "alice", "token", sessionId = "old")
+        val account = store.upsert(old)
+        val activated = old.copy(sessionId = "new", configId = "config-a")
 
-        store.save(session)
+        assertTrue(store.activateWebPushIfCurrent(account.id, old, activated, config(activated)))
 
-        assertEquals(session, store.load())
+        assertEquals(activated, store.get(account.id)?.session)
+        assertEquals(config(activated), store.webPushConfig(account.id))
     }
 
     @Test
-    fun savingLegacySessionRemovesPreviousActivationBinding() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(
-            Session(
-                "https://host",
-                "alice",
-                "token",
-                sessionId = "session-123",
-                configId = "sha256:config",
-            ),
-        )
+    fun removingOneAccountLeavesTheOtherUntouched() {
+        val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
+        val sessionA = session("https://a.example", "alice", "session-a", "config-a")
+        val sessionB = session("https://b.example", "bob", "session-b", "config-b")
+        val accountA = store.add(store.newAccountId(), sessionA, config(sessionA), "Alice")
+        val accountB = store.add(store.newAccountId(), sessionB, config(sessionB), "Bob")
 
-        store.save(Session("https://host", "alice", "token"))
+        assertTrue(store.removeIfCurrent(accountA.id, sessionA))
 
-        assertNull(store.load()?.sessionId)
-        assertNull(store.load()?.configId)
+        assertNull(store.get(accountA.id))
+        assertEquals(accountB, store.get(accountB.id))
     }
 
     @Test
-    fun loadsOnlySessionsBoundToTheSameNormalizedServerAndConfiguration() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val session = Session(
-            " https://host.example/// ",
-            "alice",
-            "token",
-            sessionId = "session-123",
-            configId = "sha256:config",
-        )
-        store.save(session)
+    fun updatesMatchingServerWithoutReencryptingTokens() {
+        val persistence = CountingKeyValueStore()
+        val cipher = CountingTokenCipher()
+        val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
+        val store = AuthStore(persistence, cipher) { ids.removeFirst() }
+        store.add(store.newAccountId(), session("https://a.example", "alice", "session-a", "config-a"), config(session("https://a.example", "alice", "session-a", "config-a")), "Alice")
+        store.add(store.newAccountId(), session("https://b.example", "bob", "session-b", "config-b"), config(session("https://b.example", "bob", "session-b", "config-b")), "Bob")
+        val before = AccountCollectionStorage.read(persistence).accounts.associate { it.id to it.token }
+        persistence.resetWrites()
+        cipher.reset()
 
-        val cases = listOf(
-            storedConfig("https://host.example", "sha256:config") to session,
-            storedConfig("https://other.example", "sha256:config") to null,
-            storedConfig("https://host.example", "sha256:other") to null,
-            null to null,
-        )
+        store.updateFeatures("https://a.example/", setOf("webpush_v1", "multi_account_v1"))
 
-        cases.forEach { (config, expected) ->
-            assertEquals(expected, store.loadBoundTo(config))
-        }
-        store.save(session.copy(configId = null))
-        assertNull(store.loadBoundTo(storedConfig("https://host.example", "sha256:config")))
+        val accounts = AccountCollectionStorage.read(persistence).accounts
+        assertEquals(setOf("webpush_v1", "multi_account_v1"), accounts.single { it.id == "account-a" }.features)
+        assertEquals(setOf("webpush_v1"), accounts.single { it.id == "account-b" }.features)
+        assertEquals(before, accounts.associate { it.id to it.token })
+        assertEquals(1, persistence.writes)
+        assertEquals(0, cipher.encryptions)
+        assertEquals(0, cipher.decryptions)
     }
 
     @Test
-    fun savesCiphertextInsteadOfPlainToken() {
-        val prefs = MemoryKeyValueStore()
-        val store = AuthStore(prefs, PrefixTokenCipher())
+    fun unchangedFeaturesDoNotRewriteAccountStorage() {
+        val persistence = CountingKeyValueStore()
+        val cipher = CountingTokenCipher()
+        val store = AuthStore(persistence, cipher) { AccountId("account-a") }
+        val account = session("https://a.example", "alice", "session-a", "config-a")
+        store.add(store.newAccountId(), account, config(account), "Alice")
+        persistence.resetWrites()
+        cipher.reset()
 
-        store.save(Session("https://host", "alice", "secret-token"))
+        store.updateFeatures("https://a.example", setOf("webpush_v1"))
 
-        assertFalse(prefs.values().any { it.contains("secret-token") })
-        assertEquals(Session("https://host", "alice", "secret-token"), store.load())
-    }
-
-    @Test
-    fun clearRemovesSession() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        store.save(Session("https://host", "alice", "secret-token"))
-
-        store.clear()
-
-        assertNull(store.load())
-    }
-
-    @Test
-    fun conditionalClearDoesNotEraseConcurrentSaveFromAnotherStore() {
-        val values = PausingKeyValueStore()
-        val first = AuthStore(values, PrefixTokenCipher())
-        val second = AuthStore(values, PrefixTokenCipher())
-        val oldSession = Session("https://host", "alice", "old")
-        val newSession = Session("https://host", "bob", "new")
-        first.save(oldSession)
-        values.pauseNextIvRead.set(true)
-
-        val clearing = thread { first.clearIfCurrent(oldSession) }
-        assertTrue(values.ivReadStarted.await(1, TimeUnit.SECONDS))
-        val saveFinished = CountDownLatch(1)
-        val saving = thread {
-            second.save(newSession)
-            saveFinished.countDown()
-        }
-        saveFinished.await(1, TimeUnit.SECONDS)
-        values.releaseIvRead.countDown()
-        clearing.join()
-        saving.join()
-
-        assertEquals(newSession, first.load())
-    }
-
-    @Test
-    fun conditionalClearTreatsSessionAndConfigurationIdsAsPartOfIdentity() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val revoked = Session(
-            "https://host",
-            "alice",
-            "token",
-            sessionId = "session-old",
-            configId = "config-old",
-        )
-        val replacement = revoked.copy(sessionId = "session-new", configId = "config-new")
-        store.save(replacement)
-
-        val cleared = store.clearIfCurrent(revoked)
-
-        assertFalse(cleared)
-        assertEquals(replacement, store.load())
-    }
-
-    @Test
-    fun conditionalSaveCannotResurrectClearedSession() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val restored = Session("https://host", "alice", "token", sessionId = "session-old")
-        store.save(restored)
-        assertTrue(store.clearIfCurrent(restored))
-
-        val saved = store.saveIfCurrent(restored, restored.copy(features = setOf("single_device_session")))
-
-        assertFalse(saved)
-        assertNull(store.load())
-    }
-
-    @Test
-    fun conditionalSaveInstallsManualSessionWhenStartingIdentityIsUnchanged() {
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val previous = Session("https://host", "alice", "old-token")
-        val claimed = Session("https://host", "alice", "new-token", sessionId = "session-new")
-        store.save(previous)
-
-        val saved = store.saveIfCurrent(previous, claimed)
-
-        assertTrue(saved)
-        assertEquals(claimed, store.load())
-    }
-
-    @Test
-    fun replacementInvalidationPublishesOnlyAfterExactConditionalClear() {
-        AuthSessionEvents.clear()
-        val events = mutableListOf<AuthSessionEvent>()
-        val observer: (AuthSessionEvent) -> Unit = events::add
-        AuthSessionEvents.observe(observer)
-        try {
-            val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-            val old = Session("https://host", "alice", "token", sessionId = "session-old")
-            val current = old.copy(sessionId = "session-new")
-            store.save(current)
-
-            assertFalse(store.invalidateIfCurrent(old))
-            assertTrue(events.isEmpty())
-            assertTrue(store.invalidateIfCurrent(current))
-            assertEquals(listOf(AuthSessionEvent(current)), events)
-            assertNull(store.load())
-        } finally {
-            AuthSessionEvents.removeObserver(observer)
-            AuthSessionEvents.clear()
-        }
-    }
-
-    @Test
-    fun savingNewSessionClearsStickyReplacementEvent() {
-        AuthSessionEvents.clear()
-        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val old = Session("https://host", "alice", "token", sessionId = "session-old")
-        store.save(old)
-        assertTrue(store.invalidateIfCurrent(old))
-
-        store.save(old.copy(sessionId = "session-new"))
-        val replayed = mutableListOf<AuthSessionEvent>()
-        val observer: (AuthSessionEvent) -> Unit = replayed::add
-        AuthSessionEvents.observe(observer)
-        try {
-            assertTrue(replayed.isEmpty())
-        } finally {
-            AuthSessionEvents.removeObserver(observer)
-            AuthSessionEvents.clear()
-        }
+        assertEquals(0, persistence.writes)
+        assertEquals(0, cipher.encryptions)
+        assertEquals(0, cipher.decryptions)
     }
 }
 
-private fun storedConfig(serverUrl: String, configId: String) = StoredFirebaseConfig(
-    serverUrl = serverUrl,
-    applicationId = "1:123:android:abc",
-    apiKey = "public-api-key",
-    projectId = "demo-project",
-    gcmSenderId = "123",
-    configId = configId,
+private fun session(url: String, login: String, sessionId: String, configId: String) =
+    Session(url, login, "token-$login", setOf("webpush_v1"), sessionId, configId)
+
+private fun config(session: Session) = StoredWebPushConfig(
+    serverUrl = session.url,
+    vapidPublicKey = "BNVQmPpYlVnSqeE5_UfDgJQG4YIqq7FPPHUZ6riR5TqQh_9ZgfkrdmHH99yqCGMiMSRuOJ5hK3sLrx_cUpnF4U4",
+    configId = requireNotNull(session.configId),
 )
 
-private class PausingKeyValueStore : KeyValueStore {
-    private val values = ConcurrentHashMap<String, String>()
-    val pauseNextIvRead = AtomicBoolean(false)
-    val ivReadStarted = CountDownLatch(1)
-    val releaseIvRead = CountDownLatch(1)
+private class CountingKeyValueStore : KeyValueStore {
+    private val delegate = MemoryKeyValueStore()
+    var writes = 0
+        private set
 
-    override fun get(key: String): String? {
-        val value = values[key]
-        if (key == "iv" && pauseNextIvRead.compareAndSet(true, false)) {
-            ivReadStarted.countDown()
-            releaseIvRead.await(2, TimeUnit.SECONDS)
-        }
-        return value
-    }
+    override fun get(key: String): String? = delegate.get(key)
 
     override fun put(key: String, value: String) {
-        values[key] = value
+        writes++
+        delegate.put(key, value)
     }
 
-    override fun remove(vararg keys: String) {
-        keys.forEach(values::remove)
+    override fun remove(vararg keys: String) = delegate.remove(*keys)
+
+    override fun values(): List<String> = delegate.values()
+
+    fun resetWrites() {
+        writes = 0
+    }
+}
+
+private class CountingTokenCipher : TokenCipher {
+    private val delegate = PrefixTokenCipher()
+    var encryptions = 0
+        private set
+    var decryptions = 0
+        private set
+
+    override fun encrypt(plain: String): CipherText {
+        encryptions++
+        return delegate.encrypt(plain)
     }
 
-    override fun values(): List<String> = values.values.toList()
+    override fun decrypt(cipherText: CipherText): String {
+        decryptions++
+        return delegate.decrypt(cipherText)
+    }
+
+    fun reset() {
+        encryptions = 0
+        decryptions = 0
+    }
 }

@@ -3,7 +3,8 @@ package org.tinitalk.data
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.annotations.SerializedName
-import org.tinitalk.push.FirebaseClientConfig
+import org.tinitalk.push.WebPushClientConfig
+import org.tinitalk.push.WebPushSubscription
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -40,6 +41,31 @@ data class ContactPage(
     val items: List<Contact>,
     @SerializedName("next_cursor") val nextCursor: String,
 )
+
+/**
+ * Android-side identity wrapper. The server's contact model remains unchanged;
+ * an AccountId is required whenever that model leaves the repository boundary.
+ */
+data class AccountContact(
+    val accountId: AccountId,
+    val serverUrl: String,
+    val contact: Contact,
+) {
+    val login: String get() = contact.login
+    val displayName: String get() = contact.displayName
+    val defaultDisplayName: String get() = contact.defaultDisplayName
+    val customName: String? get() = contact.customName
+    val peerKey: AccountPeerKey get() = AccountPeerKey(accountId, login)
+}
+
+data class AccountPeerKey(val accountId: AccountId, val login: String)
+
+data class AccountHistoryKey(val accountId: AccountId, val id: Long)
+
+data class AccountContactPage(
+    val accountId: AccountId,
+    val items: List<AccountContact>,
+)
 private data class ContactWire(
     val login: String,
     @SerializedName("display_name") val displayName: String,
@@ -67,6 +93,7 @@ data class CallHistoryItem(
 data class UnreadMissedContact(
     @SerializedName("peer_login") val peerLogin: String,
     @SerializedName("started_at") val startedAt: Long,
+    @SerializedName("peer_name") val peerName: String? = null,
 )
 data class CallUnreadState(
     @SerializedName("unread_missed_count") val unreadMissedCount: Int,
@@ -78,6 +105,37 @@ data class CallHistoryPage(
     @SerializedName("latest_id") val latestId: Long,
     @SerializedName("unread_missed_count") val unreadMissedCount: Int,
     @SerializedName("unread_missed") val unreadMissed: List<UnreadMissedContact> = emptyList(),
+)
+
+data class AccountHistory(
+    val accountId: AccountId,
+    val item: CallHistoryItem,
+) {
+    val id: Long get() = item.id
+    val peerLogin: String get() = item.peerLogin
+    val peerName: String get() = item.peerName
+    val direction: String get() = item.direction
+    val outcome: String get() = item.outcome
+    val reached: Boolean get() = item.reached
+    val startedAt: Long get() = item.startedAt
+    val durationSeconds: Long get() = item.durationSeconds
+    val key: AccountHistoryKey get() = AccountHistoryKey(accountId, id)
+}
+
+data class AccountCallHistoryPage(
+    val accountId: AccountId,
+    val items: List<AccountHistory>,
+    val nextBefore: Long,
+    val latestId: Long,
+    val unread: CallUnreadState,
+    val session: Session? = null,
+)
+
+data class AccountUnreadState(
+    val accountId: AccountId,
+    val unread: CallUnreadState,
+    /** Null only for the single-account Task 6 compatibility bridge. */
+    val session: Session? = null,
 )
 private data class CallHistoryPageWire(
     val items: List<CallHistoryItem>?,
@@ -111,14 +169,16 @@ class ApiException(
 
 interface HouseholdApi {
     fun serverInfo(): ServerInfo
-    fun firebaseConfig(): FirebaseClientConfig
+    fun webPushConfig(): WebPushClientConfig = error("WebPush is unavailable")
     fun me(): Profile
     fun contactsPage(limit: Int = 20, cursor: String = ""): ContactPage
     fun updateContactName(login: String, customName: String?): Contact
     fun calls(limit: Int = 50, before: Long = 0, peerLogin: String? = null): CallHistoryPage
     fun markCallsRead(throughId: Long, peerLogin: String? = null): CallUnreadState
-    fun putDevice(deviceId: String, firebaseInstallationId: String, configId: String)
-    fun claimSession(deviceId: String, firebaseInstallationId: String, configId: String): String
+    fun putDevice(deviceId: String, subscription: WebPushSubscription, configId: String): Unit =
+        error("WebPush is unavailable")
+    fun claimSession(deviceId: String, subscription: WebPushSubscription, configId: String): String =
+        error("WebPush is unavailable")
 }
 
 class UrlConnectionApiClient(
@@ -130,8 +190,8 @@ class UrlConnectionApiClient(
     override fun serverInfo(): ServerInfo =
         get("/healthz", ServerInfoWire::class.java, authenticated = false).toServerInfo()
 
-    override fun firebaseConfig(): FirebaseClientConfig =
-        get("/api/firebase-config", FirebaseClientConfig::class.java, includeSessionId = false)
+    override fun webPushConfig(): WebPushClientConfig =
+        get("/api/webpush-config", WebPushClientConfig::class.java, includeSessionId = false)
 
     override fun me(): Profile =
         get("/api/me", Profile::class.java)
@@ -163,13 +223,13 @@ class UrlConnectionApiClient(
         return put("/api/calls/read", request, CallHistoryReadResult::class.java).toCallUnreadState()
     }
 
-    override fun putDevice(deviceId: String, firebaseInstallationId: String, configId: String) {
+    override fun putDevice(deviceId: String, subscription: WebPushSubscription, configId: String) {
         write<Unit>(
             "PUT",
             "/api/device",
             linkedMapOf(
                 "device_id" to deviceId,
-                "firebase_installation_id" to firebaseInstallationId,
+                "webpush_subscription" to subscription,
                 "config_id" to configId,
             ),
             null,
@@ -177,13 +237,13 @@ class UrlConnectionApiClient(
         )
     }
 
-    override fun claimSession(deviceId: String, firebaseInstallationId: String, configId: String): String =
+    override fun claimSession(deviceId: String, subscription: WebPushSubscription, configId: String): String =
         write(
             "POST",
             "/api/session",
             linkedMapOf(
                 "device_id" to deviceId,
-                "firebase_installation_id" to firebaseInstallationId,
+                "webpush_subscription" to subscription,
                 "config_id" to configId,
             ),
             SessionClaimWire::class.java,

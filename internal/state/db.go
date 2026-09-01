@@ -14,8 +14,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 7
-
 type DB struct {
 	sql *sql.DB
 }
@@ -24,17 +22,17 @@ func Open(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?_foreign_keys=on")
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	wrapped := &DB{sql: db}
-	if err := wrapped.configure(); err != nil {
+	if err := wrapped.initializeSchema(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := wrapped.migrate(); err != nil {
+	if err := wrapped.configure(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -51,7 +49,6 @@ func (db *DB) configure() error {
 		"PRAGMA journal_mode=DELETE",
 		"PRAGMA synchronous=EXTRA",
 		"PRAGMA locking_mode=NORMAL",
-		"PRAGMA foreign_keys=ON",
 	}
 	for _, pragma := range pragmas {
 		if _, err := db.sql.Exec(pragma); err != nil {
@@ -73,11 +70,8 @@ func (db *DB) Pragmas() (map[string]string, error) {
 	return out, nil
 }
 
-func (db *DB) Init(fcmServiceAccount, firebaseAndroidConfig []byte) error {
-	if err := db.ensureSecret("turn_secret", randomToken); err != nil {
-		return err
-	}
-	return db.initFirebase(fcmServiceAccount, firebaseAndroidConfig)
+func (db *DB) Init() error {
+	return db.ensureSecret("turn_secret", randomToken)
 }
 
 func (db *DB) ensureSecret(key string, create func() (string, error)) error {
@@ -124,6 +118,6 @@ func OpenDir(dataDir string) (*DB, error) {
 	return Open(path)
 }
 
-func newerSchemaError(version int) error {
-	return fmt.Errorf("database schema %d is newer than supported %d", version, schemaVersion)
+func unsupportedSchemaError(version int) error {
+	return fmt.Errorf("database schema %d is unsupported; expected %d", version, currentSchemaVersion())
 }

@@ -1,5 +1,6 @@
 package org.tinitalk.call
 
+import org.tinitalk.data.AccountId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -32,9 +33,16 @@ class CallVideoStateTest {
         val receiving = CallVideoState<String>(callId = CurrentCall, allowed = true)
             .withRemoteSending(CurrentCall, enabled = true)
 
-        val replacement = receiving.configured(ReplacementCall, videoAllowed = true)
+        val replacement = receiving.configured(AccountA, ReplacementCall, videoAllowed = true)
 
         assertFalse(replacement.remoteSending)
+    }
+
+    @Test
+    fun configuredVideoStateCarriesAccountCallKey() {
+        val state = CallVideoState<String>().configured(AccountA, SameCall, videoAllowed = true)
+
+        assertEquals(AccountCallKey(AccountA, SameCall), state.callKey)
     }
 
     @Test
@@ -104,5 +112,7 @@ class CallVideoStateTest {
     private companion object {
         const val CurrentCall = "call-1"
         const val ReplacementCall = "call-2"
+        const val SameCall = "same-call"
+        val AccountA = AccountId("account-a")
     }
 }

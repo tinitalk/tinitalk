@@ -1,6 +1,6 @@
 # Call Signaling Contract
 
-The current HTTP API and WebSocket signaling protocol version is `2`.
+The current HTTP API version is `4`; the WebSocket signaling protocol version is `2`.
 
 All signaling messages use one JSON envelope:
 

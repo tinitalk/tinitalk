@@ -2,8 +2,10 @@ package org.tinitalk.ui
 
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.CallHistoryPage
+import org.tinitalk.data.AccountId
 
 data class ContactHistoryState(
+    val accountId: AccountId? = null,
     val peerLogin: String? = null,
     val items: List<CallHistoryItem> = emptyList(),
     val loaded: Boolean = false,
@@ -46,9 +48,13 @@ fun shouldLoadMoreHistory(
 fun isCurrentContactHistoryRequest(
     requestGeneration: Int,
     currentGeneration: Int,
+    requestAccountId: AccountId,
+    currentAccountId: AccountId?,
     requestLogin: String,
     currentLogin: String?,
-): Boolean = requestGeneration == currentGeneration && requestLogin == currentLogin
+): Boolean = requestGeneration == currentGeneration &&
+    requestAccountId == currentAccountId &&
+    requestLogin == currentLogin
 
 fun isCurrentSessionRequest(requestGeneration: Int, currentGeneration: Int): Boolean =
     requestGeneration == currentGeneration

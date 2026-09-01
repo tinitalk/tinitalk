@@ -3,27 +3,27 @@ package org.tinitalk.data
 import java.util.concurrent.CopyOnWriteArraySet
 
 internal class CallHistoryEventBus {
-    private val observers = CopyOnWriteArraySet<(CallUnreadState) -> Unit>()
+    private val accountObservers = CopyOnWriteArraySet<(AccountUnreadState) -> Unit>()
 
-    fun observe(observer: (CallUnreadState) -> Unit) {
-        observers += observer
+    fun observeAccount(observer: (AccountUnreadState) -> Unit) {
+        accountObservers += observer
     }
 
-    fun removeObserver(observer: (CallUnreadState) -> Unit) {
-        observers -= observer
+    fun removeAccountObserver(observer: (AccountUnreadState) -> Unit) {
+        accountObservers -= observer
     }
 
-    fun publish(unread: CallUnreadState) {
-        observers.forEach { observer -> runCatching { observer(unread) } }
+    fun publish(unread: AccountUnreadState) {
+        accountObservers.forEach { observer -> runCatching { observer(unread) } }
     }
 }
 
 internal object CallHistoryEvents {
     private val events = CallHistoryEventBus()
 
-    fun observe(observer: (CallUnreadState) -> Unit) = events.observe(observer)
+    fun observeAccount(observer: (AccountUnreadState) -> Unit) = events.observeAccount(observer)
 
-    fun removeObserver(observer: (CallUnreadState) -> Unit) = events.removeObserver(observer)
+    fun removeAccountObserver(observer: (AccountUnreadState) -> Unit) = events.removeAccountObserver(observer)
 
-    fun publish(unread: CallUnreadState) = events.publish(unread)
+    fun publish(unread: AccountUnreadState) = events.publish(unread)
 }

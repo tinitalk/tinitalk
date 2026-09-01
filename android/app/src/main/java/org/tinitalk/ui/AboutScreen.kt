@@ -55,7 +55,7 @@ internal fun AboutScreen(
     onBack: () -> Unit,
 ) {
     var details by remember(serverUrl) { mutableStateOf<ServerCheckDetails?>(null) }
-    var checking by remember(serverUrl) { mutableStateOf(true) }
+    var checking by remember(serverUrl) { mutableStateOf(serverUrl.isNotBlank()) }
     val presentation = serverCheckPresentation(
         serverReady = serverUrl.isNotBlank(),
         checking = checking,
@@ -64,7 +64,7 @@ internal fun AboutScreen(
     )
 
     LaunchedEffect(serverUrl, internetAvailable) {
-        if (!internetAvailable) {
+        if (!internetAvailable || serverUrl.isBlank()) {
             checking = false
             return@LaunchedEffect
         }
@@ -138,7 +138,7 @@ internal fun AboutScreen(
                             ),
                         )
                     }
-                    item(key = "about-server") {
+                    if (serverUrl.isNotBlank()) item(key = "about-server") {
                         AboutInfoCard(
                             title = "Сервер",
                             values = listOf(
@@ -150,7 +150,7 @@ internal fun AboutScreen(
                             ),
                         )
                     }
-                    item(key = "about-server-status") {
+                    if (serverUrl.isNotBlank()) item(key = "about-server-status") {
                         ServerStatusCard(presentation)
                     }
                 }

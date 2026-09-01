@@ -94,7 +94,7 @@ func (db *DB) ClaimSessionWithPushTarget(login, deviceID string, target *PushTar
 	claim.Changed = true
 
 	rows, err := tx.Query(`
-		SELECT ?, device_id, push_kind, push_value, config_id
+		SELECT ?, device_id, webpush_subscription, webpush_config_id
 		FROM devices
 		WHERE user_id = ? AND device_id <> ?
 		ORDER BY device_id
@@ -104,14 +104,13 @@ func (db *DB) ClaimSessionWithPushTarget(login, deviceID string, target *PushTar
 	}
 	for rows.Next() {
 		var device Device
-		var kind, value, configID sql.NullString
-		if err := rows.Scan(&device.UserLogin, &device.DeviceID, &kind, &value, &configID); err != nil {
+		var subscription, configID sql.NullString
+		if err := rows.Scan(&device.UserLogin, &device.DeviceID, &subscription, &configID); err != nil {
 			_ = rows.Close()
 			return SessionClaim{}, err
 		}
-		if kind.Valid {
-			device.PushTarget.Kind = PushTargetKind(kind.String)
-			device.PushTarget.Value = value.String
+		if subscription.Valid {
+			device.PushTarget.Subscription = subscription.String
 		}
 		if configID.Valid {
 			device.PushTarget.ConfigID = configID.String

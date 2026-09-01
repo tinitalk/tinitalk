@@ -13,6 +13,10 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
     <application
         android:name=".TinitalkApplication"
         android:icon="@drawable/ic_launcher_settings_v5"
@@ -21,7 +25,6 @@
         android:label="TiniTalk"
         android:allowBackup="false"
         android:supportsRtl="true">
-        <meta-data android:name="firebase_messaging_installation_id_enabled" android:value="true" />
         <activity
             android:name=".MainActivity"
             android:icon="@mipmap/ic_launcher"
@@ -51,10 +54,10 @@
             android:name=".telecom.CallActionReceiver"
             android:exported="false" />
         <service
-            android:name=".push.TinitalkMessagingService"
+            android:name=".push.TinitalkPushService"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
             </intent-filter>
         </service>
     </application>

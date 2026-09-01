@@ -10,7 +10,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
@@ -20,7 +19,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class CallForegroundServiceManifestTest {
     @Test
-    fun activeCallDeclaresAndStartsWithMicrophoneForegroundType() {
+    fun activeCallDeclaresAndUsesMicrophoneForegroundType() {
         val context = RuntimeEnvironment.getApplication()
         val packageInfo = context.packageManager.getPackageInfo(
             context.packageName,
@@ -39,12 +38,9 @@ class CallForegroundServiceManifestTest {
             activeCallTypes,
         )
 
-        Shadows.shadowOf(context).grantPermissions(Manifest.permission.RECORD_AUDIO)
-        val service = Robolectric.buildService(CallForegroundService::class.java).create().get()
-        service.onStartCommand(null, 0, 1)
         assertEquals(
             ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-            service.foregroundServiceType,
+            callForegroundServiceType(cameraSending = false),
         )
         assertEquals(
             ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or

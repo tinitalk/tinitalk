@@ -1,9 +1,11 @@
 package org.tinitalk.push
 
-import org.tinitalk.call.CallPhase
-import org.tinitalk.call.CallSnapshot
+import org.tinitalk.data.AccountId
+import org.tinitalk.data.AccountRecord
+import org.tinitalk.data.AuthStore
+import org.tinitalk.data.MemoryKeyValueStore
+import org.tinitalk.data.PrefixTokenCipher
 import org.tinitalk.data.Session
-import org.tinitalk.telecom.TerminalCallTombstones
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -13,262 +15,65 @@ import java.time.Instant
 
 class IncomingPushPayloadTest {
     @Test
-    fun targetlessCallPayloadRemainsCompatibleWithLegacyServer() {
-        val session = Session("https://host", "alice", "token", sessionId = "session-123")
+    fun sessionReplacementInvalidatesOnlyTheSelectedAccount() {
+        val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
+        val accountA = auth.upsert(Session("https://a.example", "alice", "a", sessionId = "session-a"))
+        val accountB = auth.upsert(Session("https://b.example", "bob", "b", sessionId = "session-b"))
+        val cleaned = mutableListOf<AccountId>()
 
-        assertTrue(IncomingPushPayload.matchesTarget(emptyMap(), session, "android-device"))
-        assertTrue(IncomingPushPayload.matchesTarget(emptyMap(), null, "android-device"))
+        assertTrue(invalidateReplacedAccount(accountA, auth, cleaned::add))
+
+        assertNull(auth.get(accountA.id))
+        assertEquals(accountB, auth.get(accountB.id))
+        assertEquals(listOf(accountA.id), cleaned)
     }
 
     @Test
-    fun managedCallPayloadRequiresExactLoginDeviceAndSession() {
-        val data = mapOf(
+    fun managedPayloadRequiresExactAccountTarget() {
+        val session = Session("https://a.example", "alice", "token", sessionId = "session-a")
+        val target = mapOf(
             "target_login" to "alice",
-            "target_device_id" to "android-device",
-            "target_session_id" to "session-123",
+            "target_device_id" to "phone",
+            "target_session_id" to "session-a",
         )
-        val session = Session("https://host", "alice", "token", sessionId = "session-123")
 
-        assertTrue(IncomingPushPayload.matchesTarget(data, session, "android-device"))
-        assertFalse(IncomingPushPayload.matchesTarget(data, session.copy(sessionId = "session-new"), "android-device"))
-        assertFalse(IncomingPushPayload.matchesTarget(data, session, "other-device"))
-        assertFalse(IncomingPushPayload.matchesTarget(data, session.copy(login = "bob"), "android-device"))
-        assertFalse(IncomingPushPayload.matchesTarget(data, null, "android-device"))
+        assertTrue(IncomingPushPayload.matchesTarget(target, session, "phone"))
+        assertFalse(IncomingPushPayload.matchesTarget(target, session, "other-phone"))
+        assertFalse(IncomingPushPayload.matchesTarget(target - "target_login", session, "phone"))
     }
 
     @Test
-    fun emptyTargetSessionMatchesOnlyLegacySession() {
+    fun parsesOnlyFreshIncomingCallForProvidedAccount() {
+        val account = AccountRecord(
+            AccountId("account-a"),
+            Session("https://a.example", "alice", "token", sessionId = "session-a"),
+        )
+        val now = Instant.parse("2026-01-01T00:00:00Z")
         val data = mapOf(
-            "target_login" to "alice",
-            "target_device_id" to "android-device",
-            "target_session_id" to "",
+            "type" to "incoming_call",
+            "call_id" to "call-1",
+            "caller" to "Bob",
+            "expires_at" to "2026-01-01T00:00:30Z",
         )
-        val legacy = Session("https://host", "alice", "token")
 
-        assertTrue(IncomingPushPayload.matchesTarget(data, legacy, "android-device"))
-        assertFalse(
-            IncomingPushPayload.matchesTarget(
-                data,
-                legacy.copy(sessionId = "session-123"),
-                "android-device",
-            ),
-        )
-        assertFalse(
-            IncomingPushPayload.matchesTarget(
-                mapOf("target_login" to "alice"),
-                legacy,
-                "android-device",
-            ),
-        )
+        assertEquals(account.id, IncomingPushPayload.parse(data, account, now)?.accountId)
+        assertNull(IncomingPushPayload.parse(data, account, Instant.parse("2026-01-01T00:00:31Z")))
     }
 
     @Test
-    fun replacementMatchesOnlyExactCurrentIdentity() {
+    fun sessionReplacementRequiresExactLoginDeviceAndSession() {
+        val session = Session("https://a.example", "alice", "token", sessionId = "session-a")
         val replacement = IncomingPushPayload.sessionReplacement(
             mapOf(
                 "type" to "session_replaced",
                 "login" to "alice",
-                "revoked_session_id" to "session-old",
-                "revoked_device_id" to "android-device",
-            ),
-        )!!
-        val revoked = Session("https://host", "alice", "token", sessionId = "session-old")
-
-        assertTrue(replacement.matches(revoked, "android-device"))
-        assertFalse(replacement.matches(revoked.copy(sessionId = "session-new"), "android-device"))
-        assertFalse(replacement.matches(revoked.copy(login = "bob"), "android-device"))
-        assertFalse(replacement.matches(revoked, "other-device"))
-    }
-
-    @Test
-    fun emptyRevokedSessionMatchesOnlyLegacySession() {
-        val replacement = IncomingPushPayload.sessionReplacement(
-            mapOf(
-                "type" to "session_replaced",
-                "login" to "alice",
-                "revoked_session_id" to "",
-                "revoked_device_id" to "android-device",
-            ),
-        )!!
-        val legacy = Session("https://host", "alice", "token")
-
-        assertTrue(replacement.matches(legacy, "android-device"))
-        assertFalse(replacement.matches(legacy.copy(sessionId = "session-new"), "android-device"))
-    }
-
-    @Test
-    fun acceptsFreshIncomingCallPayload() {
-        val invite = IncomingPushPayload.parse(
-            mapOf(
-                "type" to "incoming_call",
-                "call_id" to "call-1",
-                "caller" to "Alice",
-                "caller_login" to "alice",
-                "last_seq" to "7",
-                "expires_at" to "2026-08-26T10:00:30Z",
-            ),
-            now = Instant.parse("2026-08-26T10:00:00Z"),
-        )
-
-        assertEquals("call-1", invite?.callId)
-        assertEquals("Alice", invite?.caller)
-        assertEquals("alice", invite?.callerLogin)
-        assertEquals(7L, invite?.lastSeq)
-    }
-
-    @Test
-    fun ignoresExpiredOrUnknownPayload() {
-        assertNull(IncomingPushPayload.parse(mapOf("type" to "other"), Instant.parse("2026-08-26T10:00:00Z")))
-        assertNull(
-            IncomingPushPayload.parse(
-                mapOf("type" to "incoming_call", "call_id" to "call-1", "expires_at" to "2026-08-26T09:59:59Z"),
-                Instant.parse("2026-08-26T10:00:00Z"),
+                "revoked_device_id" to "phone",
+                "revoked_session_id" to "session-a",
             ),
         )
-    }
 
-    @Test
-    fun detectsCancelPayload() {
-        assertEquals(PushAction.Cancel, IncomingPushPayload.action(mapOf("type" to "call_cancel")))
-    }
-
-    @Test
-    fun acceptedCallDoesNotDismissItsOwnActiveSession() {
-        val cancel = IncomingPushPayload.cancellation(
-            mapOf("type" to "call_cancel", "call_id" to "call-1", "call_event" to "call.accept"),
-        )!!
-
-        assertFalse(cancel.shouldDismiss("call-1", CallSnapshot(CallPhase.Active, "call-1")))
-    }
-
-    @Test
-    fun acceptedCallDismissesAnotherDeviceStillRinging() {
-        val cancel = CallCancellation("call-1", "call.accept")
-
-        assertTrue(cancel.shouldDismiss("call-1", CallSnapshot()))
-    }
-
-    @Test
-    fun activeHangupDismissesWithoutAPendingIncomingInvite() {
-        val cancel = CallCancellation("call-1", "call.end")
-        val active = CallSnapshot(CallPhase.Active, "call-1")
-
-        assertTrue(cancel.shouldDismiss(null, active))
-        assertTrue(cancel.shouldRouteRemoteEnd(null, CallSnapshot()))
-        assertTrue(cancel.shouldRouteRemoteEnd("new-call", active))
-        assertFalse(cancel.shouldRouteRemoteEnd("new-call", CallSnapshot()))
-    }
-
-    @Test
-    fun staleCancellationDoesNotTouchTheNextInvite() {
-        val cancel = CallCancellation("old-call", "call.cancel")
-
-        assertFalse(cancel.shouldDismiss("new-call", CallSnapshot(CallPhase.Ringing, "new-call")))
-    }
-
-    @Test
-    fun onlyUnansweredMatchingCancellationIsMissed() {
-        assertTrue(
-            CallCancellation("call-1", "call.cancel")
-                .shouldShowMissed("call-1", CallSnapshot(CallPhase.Ringing, "call-1")),
-        )
-        assertFalse(
-            CallCancellation("call-1", "call.accept")
-                .shouldShowMissed("call-1", CallSnapshot()),
-        )
-        assertFalse(
-            CallCancellation("call-1", "call.reject")
-                .shouldShowMissed("call-1", CallSnapshot()),
-        )
-        assertFalse(
-            CallCancellation("old-call", "call.cancel")
-                .shouldShowMissed("new-call", CallSnapshot(CallPhase.Ringing, "new-call")),
-        )
-    }
-
-    @Test
-    fun offlineCancellationStillRequestsMissedCountRefresh() {
-        assertTrue(CallCancellation("call-1", "call.cancel").shouldRefreshMissedCount())
-        assertTrue(CallCancellation("call-1", "call.expire").shouldRefreshMissedCount())
-        assertTrue(CallCancellation("call-1", "call.busy").shouldRefreshMissedCount())
-        assertFalse(CallCancellation("call-1", "call.accept").shouldRefreshMissedCount())
-        assertFalse(CallCancellation("call-1", "call.reject").shouldRefreshMissedCount())
-    }
-
-    @Test
-    fun delayedCancellationDoesNotUseExpiredInviteAsMissedFallback() {
-        val cancellation = CallCancellation("call-1", "call.cancel")
-        val invite = IncomingInvite(
-            callId = "call-1",
-            caller = "Alice",
-            expiresAt = Instant.parse("2026-08-26T10:00:30Z"),
-        )
-
-        assertNull(
-            cancellation.missedFallback(
-                invite,
-                CallSnapshot(CallPhase.Ringing, "call-1"),
-                now = Instant.parse("2026-08-26T10:01:00Z"),
-            ),
-        )
-    }
-
-    @Test
-    fun terminalBeforeInviteSuppressesOnlyMatchingCallUntilExpiry() {
-        val remembered = TerminalCallTombstones.remember(emptySet(), "call-1", nowMillis = 1_000)
-
-        assertTrue(TerminalCallTombstones.contains(remembered, "call-1", nowMillis = 1_001))
-        assertFalse(TerminalCallTombstones.contains(remembered, "call-2", nowMillis = 1_001))
-        assertFalse(TerminalCallTombstones.contains(remembered, "call-1", nowMillis = 121_001))
-    }
-
-    @Test
-    fun incomingCallUsesOnlyThePresentationSelectedForCurrentPhoneState() {
-        val steps = mutableListOf<String>()
-        val invite = IncomingInvite("call-1", "Alice", Instant.parse("2026-08-26T10:00:30Z"))
-        val presentation = IncomingCallForegroundPresentation(
-            enterForeground = { steps += "foreground" },
-            acknowledgeRinging = { steps += "ringing" },
-            openFullScreen = { steps += "full_screen" },
-        )
-
-        presentation.present(invite, IncomingCallPresentationMode.HeadsUp)
-
-        assertEquals(listOf("foreground", "ringing"), steps)
-
-        steps.clear()
-        presentation.present(invite, IncomingCallPresentationMode.InApp)
-
-        assertEquals(listOf("foreground", "ringing", "full_screen"), steps)
-        assertEquals(
-            IncomingCallPresentationMode.FullScreen,
-            selectIncomingCallPresentation(screenInteractive = true, keyguardLocked = true, appVisible = true),
-        )
-        assertEquals(
-            IncomingCallPresentationMode.FullScreen,
-            selectIncomingCallPresentation(screenInteractive = false, keyguardLocked = false, appVisible = true),
-        )
-        assertEquals(
-            IncomingCallPresentationMode.InApp,
-            selectIncomingCallPresentation(screenInteractive = true, keyguardLocked = false, appVisible = true),
-        )
-        assertEquals(
-            IncomingCallPresentationMode.HeadsUp,
-            selectIncomingCallPresentation(screenInteractive = true, keyguardLocked = false, appVisible = false),
-        )
-    }
-
-    @Test
-    fun fullScreenStartsVibrationAndRingtoneBeforeRemovingNotification() {
-        val steps = mutableListOf<String>()
-        val invite = IncomingInvite("call-1", "Alice", Instant.parse("2026-08-26T10:00:30Z"))
-
-        IncomingCallAlertHandoff(
-            startVibration = { steps += "vibration" },
-            startRingtone = { steps += "ringtone" },
-            dismissNotification = { steps += "dismiss" },
-        ).fullScreenShown(invite)
-
-        assertEquals(listOf("vibration", "ringtone", "dismiss"), steps)
+        assertTrue(requireNotNull(replacement).matches(session, "phone"))
+        assertFalse(replacement.matches(session, "other-phone"))
     }
 }

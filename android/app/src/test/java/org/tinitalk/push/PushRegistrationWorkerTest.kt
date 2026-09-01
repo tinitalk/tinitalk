@@ -1,242 +1,326 @@
 package org.tinitalk.push
 
+import org.tinitalk.data.AccountId
 import org.tinitalk.data.ApiException
-import org.tinitalk.data.AuthSessionEvent
-import org.tinitalk.data.AuthSessionEvents
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.KeyValueStore
 import org.tinitalk.data.MemoryKeyValueStore
 import org.tinitalk.data.PrefixTokenCipher
 import org.tinitalk.data.Session
 import org.tinitalk.data.SessionReplacedReason
 import java.io.IOException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PushRegistrationWorkerTest {
     @Test
-    fun newlyActivatedAccountRunsAfterSuccessfulStaleUploadAndOwnsTheFid() {
-        val registrationStore = PushRegistrationStore(RecordingPushRegistrationPersistence())
-        val authStore = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-        val config = storedConfig("https://server.example.test", "config-1")
-        val alice = Session(
-            config.serverUrl,
-            "alice",
-            "alice-token",
-            sessionId = "alice-session",
-            configId = config.configId,
-        )
-        val bob = Session(
-            config.serverUrl,
-            "bob",
-            "bob-token",
-            sessionId = "bob-session",
-            configId = config.configId,
-        )
-        authStore.save(alice)
-        registrationStore.upsert(
-            config.serverUrl,
-            config.configId,
-            "device-1",
-            "alice-session",
-            "fid-shared",
-        )
-        var serverOwner = "alice"
-        var enqueued = 0
-        val staleAliceRunner = PushRegistrationRunner(
-            registrationStore,
-            loadConfig = { config },
-            authStore = authStore,
-            deviceId = { "device-1" },
-            upload = { uploadedSession, _ ->
-                serverOwner = "bob" // Bob's session claim committed first.
-                authStore.save(bob)
-                persistRegisteredInstallation(
-                    installationId = "fid-shared",
-                    config = config,
-                    session = bob,
-                    deviceId = "device-1",
-                    store = registrationStore,
-                    enqueue = { enqueued++ },
-                )
-                serverOwner = uploadedSession.login // Alice's delayed request completes last.
-            },
-        )
-
-        assertEquals(PushRegistrationAttemptResult.SUCCESS, staleAliceRunner.runAttempt())
-        assertEquals("alice", serverOwner)
-        assertEquals("bob-session", registrationStore.load()?.sessionId)
-        assertEquals(1, enqueued)
-
-        val bobSuccessor = PushRegistrationRunner(
-            registrationStore,
-            loadConfig = { config },
-            authStore = authStore,
-            deviceId = { "device-1" },
-            upload = { uploadedSession, _ -> serverOwner = uploadedSession.login },
-        )
-        assertEquals(PushRegistrationAttemptResult.SUCCESS, bobSuccessor.runAttempt())
-        assertEquals("bob", serverOwner)
-        assertNull(registrationStore.load())
-    }
-
-    @Test
-    fun appliesRetryAndReloginPolicyWithoutDiscardingPendingRegistration() {
+    fun onlyConfirmedSessionReplacementRemovesTheAccount() {
         data class Case(
             val name: String,
-            val failure: Throwable?,
-            val expected: PushRegistrationAttemptResult,
-            val authCleared: Boolean = false,
-            val invalidated: Boolean = false,
+            val error: Throwable,
+            val expectedResult: String,
+            val removed: Boolean,
         )
         val cases = listOf(
-            Case("204", null, PushRegistrationAttemptResult.SUCCESS),
-            Case("offline", IOException("offline"), PushRegistrationAttemptResult.RETRY),
-            Case("408", ApiException(408, "timeout"), PushRegistrationAttemptResult.RETRY),
-            Case("429", ApiException(429, "busy"), PushRegistrationAttemptResult.RETRY),
-            Case("5xx", ApiException(503, "down"), PushRegistrationAttemptResult.RETRY),
-            Case("ordinary 401", ApiException(401, "unauthorized"), PushRegistrationAttemptResult.SUCCESS, authCleared = true),
+            Case("ordinary 401", ApiException(401, "unauthorized"), "SUCCESS", false),
+            Case("bad request", ApiException(400, "bad request"), "SUCCESS", false),
+            Case("stale config", ApiException(409, "stale config"), "REFRESH_CONFIG", false),
+            Case("offline", IOException("offline"), "RETRY", false),
+            Case("timeout", ApiException(408, "timeout"), "RETRY", false),
+            Case("rate limited", ApiException(429, "rate limited"), "RETRY", false),
+            Case("server failure", ApiException(503, "unavailable"), "RETRY", false),
             Case(
                 "session replaced",
                 ApiException(401, "unauthorized", SessionReplacedReason),
-                PushRegistrationAttemptResult.SUCCESS,
-                authCleared = true,
-                invalidated = true,
+                "SUCCESS",
+                true,
             ),
-            Case("permanent 409", ApiException(409, "conflict"), PushRegistrationAttemptResult.SUCCESS, authCleared = true),
-            Case("unexpected 302", ApiException(302, "redirect"), PushRegistrationAttemptResult.SUCCESS),
         )
 
         cases.forEach { case ->
-            val fixture = workerFixture(case.failure)
-            val invalidations = mutableListOf<AuthSessionEvent>()
-            val observer: (AuthSessionEvent) -> Unit = { invalidations += it }
-            AuthSessionEvents.observe(observer)
-            try {
-                assertEquals(case.name, case.expected, fixture.runner.runAttempt())
-                assertEquals(case.name, case.authCleared, fixture.authStore.load() == null)
-                assertEquals(case.name, case.invalidated, invalidations.isNotEmpty())
-                assertEquals(case.name, "current-token", fixture.uploadedSession?.token)
-                if (case.failure == null) {
-                    assertEquals(case.name, null, fixture.registrationStore.load())
-                } else {
-                    assertEquals(case.name, "fid-old", fixture.registrationStore.load()?.installationId)
-                }
-            } finally {
-                AuthSessionEvents.removeObserver(observer)
-                AuthSessionEvents.clear()
+            val fixture = registrationFixture(case.error)
+
+            val result = fixture.runner.runAttempt()
+
+            assertEquals(case.name, case.expectedResult, result.name)
+            if (case.removed) {
+                assertNull(case.name, fixture.authStore.get(fixture.accountId))
+                assertEquals(case.name, listOf(fixture.accountId), fixture.removedAccounts)
+            } else {
+                assertNotNull(case.name, fixture.authStore.get(fixture.accountId))
+                assertNotNull(case.name, fixture.registrationStore.load(fixture.accountId))
+                assertEquals(case.name, emptyList<AccountId>(), fixture.removedAccounts)
             }
         }
     }
 
     @Test
-    fun staleOrReplacedStateIsATerminalNoOpAndCannotMutateNewerState() {
-        val configConflict = workerFixture(null, currentConfigId = "config-new")
-        assertEquals(PushRegistrationAttemptResult.SUCCESS, configConflict.runner.runAttempt())
-        assertEquals(0, configConflict.uploadCount)
-        assertEquals("fid-old", configConflict.registrationStore.load()?.installationId)
+    fun staleConfigIsFetchedStoredAndRegisteredWithANewSubscription() {
+        val fixture = registrationFixture(ApiException(409, "stale config"))
+        val refreshedSubscription = WebPushSubscription(
+            "https://push.example/refreshed",
+            WebPushKeys("p256dh-new", "auth-new"),
+        )
+        var fetchedFor: Session? = null
+        var subscribedWith: StoredWebPushConfig? = null
+        val refresher = StaleWebPushConfigRefresher(
+            accountId = fixture.accountId,
+            authStore = fixture.authStore,
+            deviceId = "device-a",
+            fetch = { session ->
+                fetchedFor = session
+                WebPushClientConfig("vapid-new", "config-new")
+            },
+            subscribe = { _, config ->
+                subscribedWith = config
+                refreshedSubscription
+            },
+            onStaleSubscription = { error("account must remain current") },
+        )
+        val original = requireNotNull(fixture.authStore.get(fixture.accountId)).session
 
-        val generationRace = workerFixture(null)
-        generationRace.onUpload = {
-            generationRace.registrationStore.upsert(
-                "https://server.example.test",
-                "config-1",
-                "device-1",
-                "session-1",
-                "fid-new",
-            )
-        }
-        assertEquals(PushRegistrationAttemptResult.SUCCESS, generationRace.runner.runAttempt())
-        assertEquals("fid-new", generationRace.registrationStore.load()?.installationId)
+        assertTrue(refresher.refresh(original))
 
-        data class TerminalRace(val failure: ApiException, val replaceAuth: Boolean)
-        listOf(
-            TerminalRace(ApiException(401, "unauthorized"), replaceAuth = true),
-            TerminalRace(ApiException(401, "unauthorized", SessionReplacedReason), replaceAuth = true),
-            TerminalRace(ApiException(302, "redirect"), replaceAuth = false),
-        ).forEach { race ->
-            val terminalRace = workerFixture(race.failure)
-            terminalRace.onUpload = {
-                if (race.replaceAuth) {
-                    terminalRace.authStore.save(
-                        Session(
-                            "https://server.example.test",
-                            "bob",
-                            "new-token",
-                            sessionId = "session-new",
-                            configId = "config-1",
-                        ),
-                    )
-                }
-                terminalRace.registrationStore.upsert(
-                    "https://server.example.test",
-                    "config-1",
-                    "device-1",
-                    if (race.replaceAuth) "session-new" else "session-1",
-                    "fid-new",
-                )
-            }
-            assertEquals(PushRegistrationAttemptResult.SUCCESS, terminalRace.runner.runAttempt())
-            assertEquals("fid-new", terminalRace.registrationStore.load()?.installationId)
-            assertEquals(
-                if (race.replaceAuth) "session-new" else "session-1",
-                terminalRace.authStore.load()?.sessionId,
+        assertEquals(original, fetchedFor)
+        assertEquals("config-new", fixture.authStore.get(fixture.accountId)?.session?.configId)
+        assertEquals("config-new", fixture.authStore.webPushConfig(fixture.accountId)?.configId)
+        assertEquals("config-new", subscribedWith?.configId)
+        val pending = requireNotNull(fixture.registrationStore.load(fixture.accountId))
+        assertEquals("config-new", pending.configId)
+        assertEquals(refreshedSubscription, pending.subscription)
+    }
+
+    @Test
+    fun successfulConfigRefreshIsFollowedByOneUploadRetry() {
+        val attempts = ArrayDeque(
+            listOf(
+                PushRegistrationAttemptResult.REFRESH_CONFIG,
+                PushRegistrationAttemptResult.SUCCESS,
+            ),
+        )
+        var refreshes = 0
+
+        val result = runPushRegistrationAttempt(
+            attempt = { attempts.removeFirst() },
+            refreshConfig = { refreshes++; true },
+        )
+
+        assertEquals(PushRegistrationAttemptResult.SUCCESS, result)
+        assertEquals(1, refreshes)
+        assertTrue(attempts.isEmpty())
+    }
+
+    @Test
+    fun configRefreshRetriesOnlyTemporaryFailures() {
+        data class Case(val error: Throwable, val expected: PushRegistrationAttemptResult)
+        val cases = listOf(
+            Case(ApiException(400, "bad request"), PushRegistrationAttemptResult.SUCCESS),
+            Case(ApiException(401, "unauthorized"), PushRegistrationAttemptResult.SUCCESS),
+            Case(ApiException(403, "forbidden"), PushRegistrationAttemptResult.SUCCESS),
+            Case(ApiException(404, "not found"), PushRegistrationAttemptResult.SUCCESS),
+            Case(IOException("offline"), PushRegistrationAttemptResult.RETRY),
+            Case(ApiException(408, "timeout"), PushRegistrationAttemptResult.RETRY),
+            Case(ApiException(429, "rate limited"), PushRegistrationAttemptResult.RETRY),
+            Case(ApiException(503, "unavailable"), PushRegistrationAttemptResult.RETRY),
+        )
+
+        cases.forEach { case ->
+            val result = runPushRegistrationAttempt(
+                attempt = { PushRegistrationAttemptResult.REFRESH_CONFIG },
+                refreshConfig = { throw case.error },
             )
+
+            assertEquals(case.error.toString(), case.expected, result)
         }
     }
 
     @Test
-    fun retriesWhenSuccessfulUploadCannotDurablyClearTheSameGeneration() {
-        val fixture = workerFixture(null)
-        fixture.onUpload = {
-            if (fixture.uploadCount == 1) fixture.persistence.acceptCommits = false
-        }
+    fun staleAccountIsRejectedBeforeExternalSubscribe() {
+        val fixture = registrationFixture(ApiException(409, "stale config"))
+        val original = requireNotNull(fixture.authStore.get(fixture.accountId)).session
+        val currentConfig = StoredWebPushConfig("https://a.example", "vapid-current", "config-current")
+        val current = original.copy(token = "token-current", sessionId = "session-current", configId = currentConfig.configId)
+        assertTrue(fixture.authStore.removeIfCurrent(fixture.accountId, original))
+        fixture.authStore.add(fixture.accountId, current, currentConfig, "Alice")
+        var subscriptions = 0
+        val refresher = StaleWebPushConfigRefresher(
+            accountId = fixture.accountId,
+            authStore = fixture.authStore,
+            deviceId = "device-a",
+            fetch = { WebPushClientConfig("vapid-new", "config-new") },
+            subscribe = { _, _ ->
+                subscriptions++
+                WebPushSubscription("https://push.example/stale", WebPushKeys("p256dh", "auth"))
+            },
+            onStaleSubscription = { error("external state must not change") },
+        )
 
-        assertEquals(PushRegistrationAttemptResult.RETRY, fixture.runner.runAttempt())
-        assertEquals("fid-old", fixture.registrationStore.load()?.installationId)
-        fixture.persistence.acceptCommits = true
-        fixture.onUpload = {}
-        assertEquals(PushRegistrationAttemptResult.SUCCESS, fixture.runner.runAttempt())
-        assertEquals(2, fixture.uploadCount)
-        assertEquals(null, fixture.registrationStore.load())
+        assertFalse(refresher.refresh(original))
+        assertEquals(0, subscriptions)
+        assertEquals(current, fixture.authStore.get(fixture.accountId)?.session)
     }
+
+    @Test
+    fun sessionMutationDuringSubscribeRestoresTheCurrentExternalConfig() {
+        val fixture = registrationFixture(ApiException(409, "stale config"))
+        val original = requireNotNull(fixture.authStore.get(fixture.accountId)).session
+        val currentConfig = StoredWebPushConfig("https://a.example", "vapid-current", "config-current")
+        val current = original.copy(token = "token-current", sessionId = "session-current", configId = currentConfig.configId)
+        val registration = RecordingAccountWebPushRegistration()
+        val refresher = StaleWebPushConfigRefresher(
+            accountId = fixture.accountId,
+            authStore = fixture.authStore,
+            deviceId = "device-a",
+            fetch = { WebPushClientConfig("vapid-new", "config-new") },
+            subscribe = { _, _ ->
+                assertTrue(fixture.authStore.removeIfCurrent(fixture.accountId, original))
+                fixture.authStore.add(fixture.accountId, current, currentConfig, "Alice")
+                WebPushSubscription("https://push.example/stale", WebPushKeys("p256dh", "auth"))
+            },
+            onStaleSubscription = { accountId ->
+                recoverCurrentWebPushRegistration(accountId, fixture.authStore, registration)
+            },
+        )
+
+        assertFalse(refresher.refresh(original))
+
+        assertEquals(current, fixture.authStore.get(fixture.accountId)?.session)
+        assertEquals(listOf(fixture.accountId to currentConfig), registration.restored)
+        assertTrue(registration.unsubscribed.isEmpty())
+    }
+
+    @Test
+    fun transientRestoreFailureDoesNotUnsubscribeAValidAccount() {
+        val fixture = registrationFixture(ApiException(409, "stale config"))
+        val failure = IOException("temporary UnifiedPush failure")
+        val registration = RecordingAccountWebPushRegistration(restoreFailure = failure)
+
+        val actual = runCatching {
+            recoverCurrentWebPushRegistration(fixture.accountId, fixture.authStore, registration)
+        }.exceptionOrNull()
+
+        assertEquals(failure, actual)
+        assertTrue(registration.unsubscribed.isEmpty())
+    }
+
+    @Test
+    fun missingAccountRecoveryDoesNotUnsubscribeANewerRegistration() {
+        val fixture = registrationFixture(ApiException(409, "stale config"))
+        val current = requireNotNull(fixture.authStore.get(fixture.accountId)).session
+        assertTrue(fixture.authStore.removeIfCurrent(fixture.accountId, current))
+        val registration = RecordingAccountWebPushRegistration()
+
+        recoverCurrentWebPushRegistration(fixture.accountId, fixture.authStore, registration)
+
+        assertTrue(registration.unsubscribed.isEmpty())
+    }
+
+    @Test
+    fun refreshedConfigAndPendingRegistrationUseOnePersistentWrite() {
+        val persistence = CountingKeyValueStore()
+        val fixture = RegistrationFixture(ApiException(409, "stale config"), persistence)
+        persistence.resetPutCount()
+        val refresher = StaleWebPushConfigRefresher(
+            accountId = fixture.accountId,
+            authStore = fixture.authStore,
+            deviceId = "device-a",
+            fetch = { WebPushClientConfig("vapid-new", "config-new") },
+            subscribe = { _, _ ->
+                WebPushSubscription("https://push.example/new", WebPushKeys("p256dh-new", "auth-new"))
+            },
+            onStaleSubscription = { error("account must remain current") },
+        )
+        val original = requireNotNull(fixture.authStore.get(fixture.accountId)).session
+
+        assertTrue(refresher.refresh(original))
+
+        assertEquals(1, persistence.putCount)
+        assertEquals("config-new", fixture.authStore.webPushConfig(fixture.accountId)?.configId)
+        assertEquals("config-new", fixture.registrationStore.load(fixture.accountId)?.configId)
+    }
+
 }
 
-private class WorkerFixture(failure: Throwable?, currentConfigId: String) {
-    val persistence = RecordingPushRegistrationPersistence()
+private class RegistrationFixture(
+    error: Throwable,
+    private val persistence: KeyValueStore = MemoryKeyValueStore(),
+) {
+    val accountId = AccountId("account-a")
+    val authStore = AuthStore(persistence, PrefixTokenCipher())
     val registrationStore = PushRegistrationStore(persistence)
-    val authStore = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
-    private val config = storedConfig("https://server.example.test", currentConfigId)
-    var uploadedSession: Session? = null
-    var uploadCount = 0
-    var onUpload: () -> Unit = {}
+    val removedAccounts = mutableListOf<AccountId>()
     val runner: PushRegistrationRunner
 
     init {
-        registrationStore.upsert(
-            "https://server.example.test",
-            "config-1",
-            "device-1",
-            "session-1",
-            "fid-old",
+        val config = StoredWebPushConfig("https://a.example", "vapid-a", "config-a")
+        val session = Session(
+            url = config.serverUrl,
+            login = "alice",
+            token = "token-a",
+            sessionId = "session-a",
+            configId = config.configId,
         )
-        authStore.save(session("https://server.example.test", "session-1", currentConfigId))
+        authStore.add(accountId, session, config, "Alice")
+        registrationStore.upsert(
+            accountId,
+            session,
+            "device-a",
+            WebPushSubscription("https://push.example/a", WebPushKeys("p256dh-a", "auth-a")),
+        )
         runner = PushRegistrationRunner(
-            registrationStore,
-            loadConfig = { config },
+            accountId = accountId,
+            registrationStore = registrationStore,
             authStore = authStore,
-            deviceId = { "device-1" },
-            upload = { current, _ ->
-                uploadCount++
-                uploadedSession = current
-                onUpload()
-                failure?.let { throw it }
-            },
+            deviceId = { "device-a" },
+            onAccountRemoved = removedAccounts::add,
+            upload = { _, _ -> throw error },
         )
     }
 }
 
-private fun workerFixture(
-    failure: Throwable?,
-    currentConfigId: String = "config-1",
-) = WorkerFixture(failure, currentConfigId)
+private class CountingKeyValueStore(
+    private val delegate: MemoryKeyValueStore = MemoryKeyValueStore(),
+) : KeyValueStore {
+    var putCount: Int = 0
+        private set
+
+    fun resetPutCount() {
+        putCount = 0
+    }
+
+    override fun get(key: String): String? = delegate.get(key)
+
+    override fun put(key: String, value: String) {
+        putCount++
+        delegate.put(key, value)
+    }
+
+    override fun remove(vararg keys: String) = delegate.remove(*keys)
+
+    override fun values(): List<String> = delegate.values()
+}
+
+private fun registrationFixture(error: Throwable) = RegistrationFixture(error)
+
+private class RecordingAccountWebPushRegistration(
+    private val restoreFailure: Throwable? = null,
+) : AccountWebPushRegistration {
+    val restored = mutableListOf<Pair<AccountId, StoredWebPushConfig>>()
+    val unsubscribed = mutableListOf<AccountId>()
+
+    override fun subscribe(accountId: AccountId, config: StoredWebPushConfig): WebPushSubscription =
+        error("subscribe is not expected")
+
+    override fun restore(accountId: AccountId, config: StoredWebPushConfig) {
+        restoreFailure?.let { throw it }
+        restored += accountId to config
+    }
+
+    override fun unsubscribe(accountId: AccountId) {
+        unsubscribed += accountId
+    }
+}

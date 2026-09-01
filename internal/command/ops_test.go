@@ -30,7 +30,7 @@ func TestDoctorRedactsSecretsAndReportsChecks(t *testing.T) {
 		"database.foreign_keys: ok",
 		"users.count: 1",
 		"turn.secret: ok",
-		"fcm.access: missing",
+		"webpush.vapid: ok",
 		"port.turn_udp: free",
 		"port.turn_tcp: free",
 		"port.turn_tls: free",

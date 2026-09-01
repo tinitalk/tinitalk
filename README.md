@@ -1,7 +1,7 @@
 # TiniTalk
 
 Self-hosted Android-аудиозвонки для небольшой семьи. Сервер - один Go-бинарник:
-HTTPS/WSS-сигналинг, SQLite-состояние, FCM-пробуждение входящих звонков и
+HTTPS/WSS-сигналинг, SQLite-состояние, WebPush-пробуждение входящих звонков и
 встроенный TURN fallback.
 
 ## Быстрый старт
@@ -11,9 +11,7 @@ HTTPS/WSS-сигналинг, SQLite-состояние, FCM-пробужден�
 ```bash
 make server
 sudo install -m 0755 dist/tinitalk-linux-amd64 /usr/local/bin/tinitalk
-sudo -u tinitalk tinitalk init \
-  --fcm-service-account firebase-service-account.json \
-  --firebase-android-config google-services.json
+sudo -u tinitalk tinitalk init
 sudo -u tinitalk tinitalk user add alice "Alice"
 make client
 ```
@@ -43,110 +41,28 @@ WSL interop. Если JDK или `cmd.exe` лежат нестандартно, 
 или `WINDOWS_CMD`. На обычном Linux Gradle использует `JAVA_HOME` и Android SDK
 из окружения.
 
-## Firebase и FCM
+## Push-уведомления
 
-Для работы приложения FCM обязателен. Сервер владеет обоими Firebase-файлами:
-оператор передаёт `firebase-service-account.json` и `google-services.json` команде
-`tinitalk init`. Оба файла должны относиться к одному Firebase project; пока
-поддерживаются старые APK, Firebase project менять нельзя.
+Сервер и Android-клиент не требуют собственного Firebase project,
+`google-services.json` или service account. При `tinitalk init` сервер создаёт
+пару WebPush VAPID-ключей и сохраняет её в `state.db`. Клиент получает публичный
+ключ при входе и регистрирует отдельную WebPush-подписку для каждого аккаунта.
 
-После успешного импорта сервер сохраняет private service account и разобранный
-публичный Android-конфиг в SQLite, поэтому исходные JSON-файлы можно удалить с
-сервера. Приватный service account клиентам не возвращается. Не помещай ни один
-из этих файлов в APK или исходное дерево Android.
+Один APK может одновременно работать с несколькими TiniTalk-серверами. Push для
+аккаунтов доставляются через встроенный UnifiedPush distributor, поэтому
+Firebase-настройки разных владельцев серверов больше не конфликтуют. Серверу
+нужен исходящий HTTPS-доступ к адресу WebPush-подписки.
 
-Для нового сервера импортируй оба файла:
-
-```bash
-sudo -u tinitalk tinitalk init \
-  --fcm-service-account firebase-service-account.json \
-  --firebase-android-config google-services.json
-```
-
-Для уже работающего сервера, в SQLite которого service account уже сохранён,
-достаточно обновить Android-конфиг:
+После инициализации проверь конфигурацию:
 
 ```bash
-sudo -u tinitalk tinitalk init --firebase-android-config google-services.json
+tinitalk doctor --data-dir /var/lib/tinitalk
 ```
 
-### Как открыть Firebase Console
+Строка `webpush.vapid` должна иметь значение `ok`.
 
-1. Открой в браузере:
-
-```text
-https://console.firebase.google.com/
-```
-
-2. Войди в Google-аккаунт.
-3. Если Firebase project для TiniTalk уже есть, кликни по нему.
-4. Если проекта еще нет, нажми `Create a project` / `Создать проект` и пройди
-   мастер создания. Google Analytics можно включить или пропустить - для
-   TiniTalk это не принципиально.
-5. Внутри проекта нажми шестеренку рядом с `Project Overview`.
-6. Выбери `Project settings`.
-
-Дальше в `Project settings` есть две нужные вкладки; скачанные из них файлы
-передай серверу при инициализации:
-
-```text
-General          -> для google-services.json
-Service accounts -> для firebase-service-account.json
-```
-
-### Android google-services.json
-
-Это публичный Android-конфиг для сервера: новый generic APK получает его
-публичные параметры при входе, а не во время сборки.
-
-Как получить:
-
-1. Открой `Project settings` -> `General`.
-2. В блоке `Your apps` нажми Android-иконку или выбери уже созданное Android
-   app.
-3. Если добавляешь новое Android app, Android package name должен быть:
-
-```text
-org.tinitalk
-```
-
-4. Нажми `Register app`.
-5. Скачай `google-services.json` и передай его оператору сервера для
-   `--firebase-android-config`.
-
-### Server firebase-service-account.json
-
-Нужен серверу, чтобы отправлять FCM push при входящем звонке.
-
-Как получить:
-
-1. Открой тот же Firebase project.
-2. Открой `Project settings` -> `Service accounts`.
-3. Нажми `Generate new private key`.
-4. Подтверди `Generate key`.
-5. Сохрани скачанный JSON как, например:
-
-```text
-firebase-service-account.json
-```
-
-Не коммить этот файл. В нем есть приватный ключ.
-
-Передай этот файл оператору сервера для `--fcm-service-account`.
-
-### Совместимый rollout
-
-Сначала обнови сервер и импортируй Android-конфиг из того же Firebase project,
-что и у старого APK. Старый APK со встроенным конфигом продолжает использовать
-сохранённый FCM token этого project. Затем можно выпускать generic APK: при входе
-он загружает с сервера только публичные Firebase options, регистрирует FID, и
-сервер атомарно сохраняет session вместе с FID. При последующих холодных стартах
-приложение использует локально сохранённые options, без загрузки конфига при
-каждом входящем звонке.
-
-API остаётся `v3`, signaling protocol остаётся `v2`; Basic authentication,
-session authentication и payload звонка не меняются. Это обязательство покрывает
-старый APK со встроенным конфигом, а не произвольные исторические клиенты.
+Android-клиент 0.9 работает с HTTP API 4. Старые клиенты и серверы с API 3
+несовместимы с этой версией.
 
 ## Сертификат
 
@@ -230,20 +146,20 @@ make check
   TURN relay-порты.
 - `/var/lib/tinitalk/state.db` должен принадлежать `tinitalk:tinitalk` и иметь
   mode `0600`.
-- Не коммить Firebase service account JSON, `state.db`, APK и собранные
-  бинарники.
-- Для обновления: останови сервис, замени `/usr/local/bin/tinitalk`, запусти
-  `doctor` от root пока низкие порты свободны, затем снова запусти сервис.
+- Не коммить `state.db`, APK и собранные бинарники.
+- Перед обновлением останови сервис и создай backup командой `tinitalk backup`.
+  Затем замени `/usr/local/bin/tinitalk`, запусти `doctor` от root пока низкие
+  порты свободны и снова запусти сервис.
 - Для восстановления: останови сервис, скопируй проверенный backup в
   `/var/lib/tinitalk/state.db`, поправь owner/mode, запусти сервис и выполни
   `doctor`.
 
 ## Заметки по Android
 
-- Generic APK не содержит server-selected Firebase-конфига и собирается без
-  Firebase JSON-файлов. Один и тот же APK может работать с другим self-hosted
-  сервером и его Firebase project без пересборки: сначала очисти данные
-  приложения, затем войди снова. Эта версия поддерживает один активный аккаунт.
+- В одном приложении можно добавить
+  несколько аккаунтов на разных self-hosted серверах; каждый аккаунт имеет
+  собственные авторизацию, WebPush-подписку, контакты, историю и звонки.
+- После обновления с версии 0.8 нужно войти в аккаунты заново.
 - После перезагрузки Android не заявляй доставку Direct Boot: тестировать
   входящий звонок можно только после того, как устройство хотя бы раз
   разблокировали.

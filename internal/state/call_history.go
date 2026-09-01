@@ -44,6 +44,7 @@ type CallHistoryItem struct {
 
 type UnreadMissedContact struct {
 	PeerLogin string
+	PeerName  string
 	StartedAt time.Time
 }
 
@@ -294,6 +295,21 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 	}
 	page.UnreadMissed = unread.Count
 	page.LatestUnreadMissed = unread.LatestUnreadByContact
+	var beforeStartedAt int64
+	if before > 0 {
+		if err := db.sql.QueryRow(`
+			SELECT started_at FROM call_history
+			WHERE id = ?
+				AND ended_at IS NOT NULL
+				AND (caller_id = ? OR callee_id = ?)
+				AND (? = 0 OR (caller_id = ? AND callee_id = ?) OR (caller_id = ? AND callee_id = ?))
+		`, before, userID, userID, peerID, userID, peerID, peerID, userID).Scan(&beforeStartedAt); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return page, errors.New("history cursor is invalid")
+			}
+			return page, err
+		}
+	}
 
 	rows, err := db.sql.Query(`
 		SELECT h.id, h.call_id, h.caller_id, peer.login,
@@ -306,12 +322,12 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 		WHERE h.ended_at IS NOT NULL
 			AND (h.caller_id = ? OR h.callee_id = ?)
 			AND (? = 0 OR (h.caller_id = ? AND h.callee_id = ?) OR (h.caller_id = ? AND h.callee_id = ?))
-			AND (? = 0 OR h.id < ?)
-		ORDER BY h.id DESC
+			AND (? = 0 OR h.started_at < ? OR (h.started_at = ? AND h.id < ?))
+		ORDER BY h.started_at DESC, h.id DESC
 		LIMIT ?
 	`, userID, userID, userID, userID,
 		peerID, userID, peerID, peerID, userID,
-		before, before, limit+1)
+		before, beforeStartedAt, beforeStartedAt, before, limit+1)
 	if err != nil {
 		return page, err
 	}
@@ -456,14 +472,16 @@ func unreadMissedState(queryer callHistoryQueryer, userID int64) (CallUnreadStat
 		return state, err
 	}
 	rows, err := queryer.Query(`
-		SELECT caller.login, MAX(history.started_at)
+		SELECT caller.login, COALESCE(personal.custom_name, caller.display_name), MAX(history.started_at)
 		FROM call_history_unread unread
 		JOIN call_history history ON history.id = unread.call_history_id
 		JOIN users caller ON caller.id = history.caller_id
+		LEFT JOIN user_contacts personal
+			ON personal.owner_user_id = ? AND personal.contact_user_id = caller.id
 		WHERE unread.user_id = ?
-		GROUP BY caller.id, caller.login
+		GROUP BY caller.id, caller.login, personal.custom_name, caller.display_name
 		ORDER BY MAX(history.id) DESC
-	`, userID)
+	`, userID, userID)
 	if err != nil {
 		return state, err
 	}
@@ -471,7 +489,7 @@ func unreadMissedState(queryer callHistoryQueryer, userID int64) (CallUnreadStat
 	for rows.Next() {
 		var contact UnreadMissedContact
 		var startedAt int64
-		if err := rows.Scan(&contact.PeerLogin, &startedAt); err != nil {
+		if err := rows.Scan(&contact.PeerLogin, &contact.PeerName, &startedAt); err != nil {
 			return state, err
 		}
 		contact.StartedAt = time.Unix(startedAt, 0).UTC()

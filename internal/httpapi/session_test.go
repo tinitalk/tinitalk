@@ -20,12 +20,20 @@ const (
 	testReplacedReason   = "session_replaced"
 )
 
-func TestSessionClaimTransitionsLegacyAccountAndReplacesPriorClaim(t *testing.T) {
+func webPushSubscription(endpoint string) []byte {
+	return []byte(`{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=` + endpoint + `","keys":{"p256dh":"BEkDdNnpEcD8M4mRGOFJWTDJ4GkDI5Xs3vpIOrAaBZKRCVv6V3sB3CFujTFiD6DHda7W8pCyChJDU205otrbCAw","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`)
+}
+
+func webPushBody(deviceID, endpoint string) []byte {
+	return []byte(`{"device_id":"` + deviceID + `","webpush_subscription":` + string(webPushSubscription(endpoint)) + `,"config_id":"sha256:webpush"}`)
+}
+
+func TestSessionClaimReplacesPriorClaim(t *testing.T) {
 	db, tokens := testDB(t)
-	server := NewServer(db, Options{AllowInsecureLoopback: true})
+	server := NewServer(db, Options{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush"})
 
 	if got := request(t, server, http.MethodGet, "/api/me", nil, "alice", tokens["alice"]); got.Code != http.StatusOK {
-		t.Fatalf("legacy /api/me status = %d, want 200", got.Code)
+		t.Fatalf("/api/me status = %d, want 200", got.Code)
 	}
 	if got := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(`{"device_id":""}`), "alice", tokens["alice"], ""); got.Code != http.StatusBadRequest {
 		t.Fatalf("empty claim status = %d, want 400", got.Code)
@@ -54,92 +62,84 @@ func TestSessionClaimTransitionsLegacyAccountAndReplacesPriorClaim(t *testing.T)
 	}
 }
 
-func TestSessionClaimFIDActivationValidatesShapeAndConfigBeforeMutation(t *testing.T) {
+func TestWebPushRegistrationClaimsSessionAndRefreshesDevice(t *testing.T) {
 	db, tokens := testDB(t)
-	server := NewServer(db, Options{AllowInsecureLoopback: true, FirebaseConfig: firebaseConfigForTest()})
-	legacy := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(`{"device_id":"phone"}`), "alice", tokens["alice"], "")
-	if legacy.Code != http.StatusOK {
-		t.Fatalf("legacy session status = %d, body %s", legacy.Code, legacy.Body.String())
+	server := NewServer(db, Options{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush"})
+	const keys = `"keys":{"p256dh":"BEkDdNnpEcD8M4mRGOFJWTDJ4GkDI5Xs3vpIOrAaBZKRCVv6V3sB3CFujTFiD6DHda7W8pCyChJDU205otrbCAw","auth":"AAAAAAAAAAAAAAAAAAAAAA"}`
+	claimBody := []byte(`{"device_id":"phone","webpush_subscription":{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=first",` + keys + `},"config_id":"sha256:webpush"}`)
+	claimed := requestWithSession(t, server, http.MethodPost, "/api/session", claimBody, "alice", tokens["alice"], "")
+	if claimed.Code != http.StatusOK {
+		t.Fatalf("WebPush session status = %d, body %s", claimed.Code, claimed.Body.String())
 	}
-	var legacyBody map[string]string
-	if err := json.Unmarshal(legacy.Body.Bytes(), &legacyBody); err != nil {
+	var response map[string]string
+	if err := json.Unmarshal(claimed.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(legacyBody) != 1 || legacyBody["session_id"] == "" {
-		t.Fatalf("legacy session response = %#v, want only a session_id", legacyBody)
-	}
-	for name, body := range map[string]string{
-		"partial fid":      `{"device_id":"tablet","firebase_installation_id":"fid"}`,
-		"null config":      `{"device_id":"tablet","config_id":null}`,
-		"mixed":            `{"device_id":"tablet","fcm_token":"token","firebase_installation_id":"fid","config_id":"config-id"}`,
-		"mixed null token": `{"device_id":"tablet","fcm_token":null,"firebase_installation_id":"fid","config_id":"config-id"}`,
-	} {
-		if got := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(body), "alice", tokens["alice"], ""); got.Code != http.StatusBadRequest {
-			t.Fatalf("%s session status = %d, want 400", name, got.Code)
-		}
-	}
-	stale := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(`{"device_id":"tablet","firebase_installation_id":"fid","config_id":"stale-config"}`), "alice", tokens["alice"], "")
-	if stale.Code != http.StatusConflict {
-		t.Fatalf("stale config session status = %d, want 409", stale.Code)
-	}
-	current, managed, err := db.CurrentSession("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !managed || current.SessionID != legacyBody["session_id"] || current.DeviceID != "phone" {
-		t.Fatalf("session after stale config = %+v, managed %v, want phone legacy session", current, managed)
-	}
-	activated := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(`{"device_id":"tablet","firebase_installation_id":"first-fid","config_id":"config-id"}`), "alice", tokens["alice"], "")
-	if activated.Code != http.StatusOK {
-		t.Fatalf("FID session status = %d, body %s", activated.Code, activated.Body.String())
-	}
-	var activatedBody map[string]string
-	if err := json.Unmarshal(activated.Body.Bytes(), &activatedBody); err != nil {
-		t.Fatal(err)
-	}
-	if len(activatedBody) != 1 || activatedBody["session_id"] == "" || activatedBody["session_id"] == legacyBody["session_id"] {
-		t.Fatalf("FID session response = %#v, want one new session_id", activatedBody)
-	}
-	retry := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(`{"device_id":"tablet","firebase_installation_id":"second-fid","config_id":"config-id"}`), "alice", tokens["alice"], "")
-	if retry.Code != http.StatusOK {
-		t.Fatalf("FID retry status = %d, body %s", retry.Code, retry.Body.String())
-	}
-	var retryBody map[string]string
-	if err := json.Unmarshal(retry.Body.Bytes(), &retryBody); err != nil {
-		t.Fatal(err)
-	}
-	if retryBody["session_id"] != activatedBody["session_id"] {
-		t.Fatalf("FID retry session = %#v, want %q", retryBody, activatedBody["session_id"])
+
+	refreshBody := []byte(`{"device_id":"phone","webpush_subscription":{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=refreshed",` + keys + `},"config_id":"sha256:webpush"}`)
+	refreshed := requestWithSession(t, server, http.MethodPut, "/api/device", refreshBody, "alice", tokens["alice"], response["session_id"])
+	if refreshed.Code != http.StatusNoContent {
+		t.Fatalf("WebPush device refresh status = %d, body %s", refreshed.Code, refreshed.Body.String())
 	}
 	devices, err := db.PushTargetsForUser("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := state.PushTarget{Kind: state.KindFID, Value: "second-fid", ConfigID: "config-id"}
-	if len(devices) != 1 || devices[0].DeviceID != "tablet" || devices[0].PushTarget != want {
-		t.Fatalf("FID activation devices = %+v, want tablet %+v", devices, want)
+	if len(devices) != 1 || devices[0].PushTarget.ConfigID != "sha256:webpush" {
+		t.Fatalf("WebPush devices = %+v", devices)
+	}
+	var subscription struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.Unmarshal([]byte(devices[0].PushTarget.Subscription), &subscription); err != nil {
+		t.Fatal(err)
+	}
+	if subscription.Endpoint != "https://fcm.distributor.unifiedpush.org/wpfcm?t=refreshed" {
+		t.Fatalf("stored WebPush endpoint = %q", subscription.Endpoint)
+	}
+}
+
+func TestLegacyPushRegistrationIsRejected(t *testing.T) {
+	db, tokens := testDB(t)
+	server := NewServer(db, Options{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush"})
+
+	for name, body := range map[string]string{
+		"missing WebPush":       `{"device_id":"phone"}`,
+		"FCM token":             `{"device_id":"phone","fcm_token":"legacy-token"}`,
+		"Firebase installation": `{"device_id":"phone","firebase_installation_id":"legacy-fid","config_id":"legacy-config"}`,
+	} {
+		response := requestWithSession(t, server, http.MethodPost, "/api/session", []byte(body), "alice", tokens["alice"], "")
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("%s session status = %d, want 400", name, response.Code)
+		}
+	}
+
+	sessionID := claimHTTPSession(t, server, "alice", tokens["alice"], "phone")
+	response := requestWithSession(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","fcm_token":"legacy-token"}`), "alice", tokens["alice"], sessionID)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("legacy device status = %d, want 400", response.Code)
 	}
 }
 
 func TestManagedDeviceRegistrationRequiresCurrentSessionDevice(t *testing.T) {
 	db, tokens := testDB(t)
-	server := NewServer(db, Options{AllowInsecureLoopback: true})
+	server := NewServer(db, Options{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush"})
 	first := claimHTTPSession(t, server, "alice", tokens["alice"], "phone")
 
-	valid := requestWithSession(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","fcm_token":"phone-fcm"}`), "alice", tokens["alice"], first)
+	valid := requestWithSession(t, server, http.MethodPut, "/api/device", webPushBody("phone", "phone"), "alice", tokens["alice"], first)
 	if valid.Code != http.StatusNoContent {
 		t.Fatalf("current phone registration status = %d, body %s", valid.Code, valid.Body.String())
 	}
 	if valid.Body.Len() != 0 {
-		t.Fatalf("legacy device response body = %q, want empty", valid.Body.String())
+		t.Fatalf("device response body = %q, want empty", valid.Body.String())
 	}
-	mismatch := requestWithSession(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"tablet","fcm_token":"wrong-fcm"}`), "alice", tokens["alice"], first)
+	mismatch := requestWithSession(t, server, http.MethodPut, "/api/device", webPushBody("tablet", "wrong"), "alice", tokens["alice"], first)
 	assertSessionReplacedResponse(t, "mismatched device", mismatch)
 
 	second := claimHTTPSession(t, server, "alice", tokens["alice"], "tablet")
-	stale := requestWithSession(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","fcm_token":"stale-fcm"}`), "alice", tokens["alice"], first)
+	stale := requestWithSession(t, server, http.MethodPut, "/api/device", webPushBody("phone", "stale"), "alice", tokens["alice"], first)
 	assertSessionReplacedResponse(t, "stale device request", stale)
-	current := requestWithSession(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"tablet","fcm_token":"tablet-fcm"}`), "alice", tokens["alice"], second)
+	current := requestWithSession(t, server, http.MethodPut, "/api/device", webPushBody("tablet", "current"), "alice", tokens["alice"], second)
 	if current.Code != http.StatusNoContent {
 		t.Fatalf("replacement tablet registration status = %d, body %s", current.Code, current.Body.String())
 	}
@@ -147,53 +147,16 @@ func TestManagedDeviceRegistrationRequiresCurrentSessionDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(devices) != 1 || devices[0].DeviceID != "tablet" || devices[0].PushTarget != (state.PushTarget{Kind: state.KindToken, Value: "tablet-fcm"}) {
+	want := state.PushTarget{Subscription: string(webPushSubscription("current")), ConfigID: "sha256:webpush"}
+	if len(devices) != 1 || devices[0].DeviceID != "tablet" || devices[0].PushTarget != want {
 		t.Fatalf("managed devices = %+v, want only current tablet", devices)
-	}
-}
-
-func TestDeviceFIDRegistrationValidatesShapeAndConfigBeforeMutation(t *testing.T) {
-	db, tokens := testDB(t)
-	server := NewServer(db, Options{AllowInsecureLoopback: true, FirebaseConfig: firebaseConfigForTest()})
-	for name, body := range map[string]string{
-		"partial fid":        `{"device_id":"phone","firebase_installation_id":"fid"}`,
-		"legacy null config": `{"device_id":"phone","fcm_token":"token","config_id":null}`,
-		"mixed":              `{"device_id":"phone","fcm_token":"token","firebase_installation_id":"fid","config_id":"config-id"}`,
-		"mixed null token":   `{"device_id":"phone","fcm_token":null,"firebase_installation_id":"fid","config_id":"config-id"}`,
-	} {
-		if got := request(t, server, http.MethodPut, "/api/device", []byte(body), "alice", tokens["alice"]); got.Code != http.StatusBadRequest {
-			t.Fatalf("%s device status = %d, want 400", name, got.Code)
-		}
-	}
-	stale := request(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","firebase_installation_id":"fid","config_id":"stale-config"}`), "alice", tokens["alice"])
-	if stale.Code != http.StatusConflict {
-		t.Fatalf("stale config device status = %d, want 409", stale.Code)
-	}
-	devices, err := db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 0 {
-		t.Fatalf("devices after stale config = %+v, want unchanged empty targets", devices)
-	}
-	activated := request(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","firebase_installation_id":"fid","config_id":"config-id"}`), "alice", tokens["alice"])
-	if activated.Code != http.StatusNoContent || activated.Body.Len() != 0 {
-		t.Fatalf("FID device response = %d/%q, want 204/empty", activated.Code, activated.Body.String())
-	}
-	devices, err = db.PushTargetsForUser("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := state.PushTarget{Kind: state.KindFID, Value: "fid", ConfigID: "config-id"}
-	if len(devices) != 1 || devices[0].PushTarget != want {
-		t.Fatalf("FID device targets = %+v, want %+v", devices, want)
 	}
 }
 
 func TestSocketRejectsStaleSessionAndClaimClosesExistingConnection(t *testing.T) {
 	db, tokens := testDB(t)
 	hub := signaling.NewHub(signaling.NoopNotifier{})
-	handler := NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub})
+	handler := NewServer(db, Options{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush", Hub: hub})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	first := claimHTTPSession(t, handler, "alice", tokens["alice"], "phone")
@@ -241,12 +204,12 @@ func TestSocketRejectsStaleSessionAndClaimClosesExistingConnection(t *testing.T)
 
 func TestSessionClaimDoesNotWaitForTargetedPushDelivery(t *testing.T) {
 	db, tokens := testDB(t)
-	if err := db.UpsertDevice("alice", "old-phone", "old-fcm"); err != nil {
+	if err := db.UpsertPushTarget("alice", "old-phone", state.PushTarget{Subscription: string(webPushSubscription("old-phone")), ConfigID: "sha256:webpush"}); err != nil {
 		t.Fatal(err)
 	}
 	notifier := &blockingSessionNotifier{started: make(chan struct{}), release: make(chan struct{})}
-	handler := NewServer(db, Options{AllowInsecureLoopback: true, SessionNotifier: notifier})
-	req := httptest.NewRequest(http.MethodPost, "/api/session", bytes.NewBufferString(`{"device_id":"tablet"}`))
+	handler := NewServer(db, Options{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush", SessionNotifier: notifier})
+	req := httptest.NewRequest(http.MethodPost, "/api/session", bytes.NewReader(webPushBody("tablet", "tablet")))
 	req.SetBasicAuth("alice", tokens["alice"])
 	recorder := httptest.NewRecorder()
 	response := make(chan *httptest.ResponseRecorder, 1)
@@ -272,7 +235,7 @@ func TestSessionClaimDoesNotWaitForTargetedPushDelivery(t *testing.T) {
 
 func claimHTTPSession(t *testing.T, handler http.Handler, login, token, deviceID string) string {
 	t.Helper()
-	response := requestWithSession(t, handler, http.MethodPost, "/api/session", []byte(`{"device_id":"`+deviceID+`"}`), login, token, "")
+	response := requestWithSession(t, handler, http.MethodPost, "/api/session", webPushBody(deviceID, "claim-"+deviceID), login, token, "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("claim %s status = %d, body %s", deviceID, response.Code, response.Body.String())
 	}

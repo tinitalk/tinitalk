@@ -2,7 +2,18 @@ package org.tinitalk.data
 
 import java.util.concurrent.CopyOnWriteArraySet
 
-data class AuthSessionEvent(val session: Session)
+enum class AuthRemovalReason {
+    SessionReplaced,
+    Unauthorized,
+}
+
+data class AuthSessionEvent(
+    val accountId: AccountId?,
+    val session: Session,
+    val reason: AuthRemovalReason = AuthRemovalReason.SessionReplaced,
+) {
+    constructor(session: Session) : this(null, session)
+}
 
 object AuthSessionEvents {
     private val observers = CopyOnWriteArraySet<(AuthSessionEvent) -> Unit>()

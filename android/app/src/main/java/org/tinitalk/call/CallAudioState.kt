@@ -25,9 +25,9 @@ object CallAudioState {
         listeners.forEach { it(state) }
     }
 
-    fun publish(callId: String, state: AudioEndpointState) {
+    fun publish(callKey: AccountCallKey, state: AudioEndpointState) {
         publish(state)
-        CallUiStateStore.setAudioEndpoints(callId, state)
+        CallUiStateStore.setAudioEndpoints(callKey, state)
     }
 
     fun reset() {

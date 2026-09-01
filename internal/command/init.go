@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"tinitalk/internal/app"
-	"tinitalk/internal/firebaseconfig"
 	"tinitalk/internal/httpapi"
 	"tinitalk/internal/notify"
 	"tinitalk/internal/signaling"
@@ -49,30 +48,18 @@ func runInit(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	var fcmServiceAccount, firebaseAndroidConfig []byte
-	for len(rest) > 0 {
-		if len(rest) < 2 {
-			return errors.New("usage: tinitalk init [--data-dir DIR] [--fcm-service-account FILE] [--firebase-android-config FILE]")
-		}
-		switch rest[0] {
-		case "--fcm-service-account":
-			fcmServiceAccount, err = os.ReadFile(rest[1])
-		case "--firebase-android-config":
-			firebaseAndroidConfig, err = os.ReadFile(rest[1])
-		default:
-			return errors.New("usage: tinitalk init [--data-dir DIR] [--fcm-service-account FILE] [--firebase-android-config FILE]")
-		}
-		if err != nil {
-			return err
-		}
-		rest = rest[2:]
+	if len(rest) > 0 {
+		return errors.New("usage: tinitalk init [--data-dir DIR]")
 	}
 	db, err := state.OpenDir(dataDir)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	if err := db.Init(fcmServiceAccount, firebaseAndroidConfig); err != nil {
+	if err := db.Init(); err != nil {
+		return err
+	}
+	if _, err := db.EnsureWebPushVAPID(); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(w, "state: %s\n", dataDir)
@@ -100,24 +87,21 @@ func runServe(args []string) error {
 	}
 	notifier := signaling.Notifier(signaling.NoopNotifier{})
 	var sessionNotifier httpapi.SessionReplacementNotifier
-	fcmServiceAccount, firebaseAndroidConfig, err := loadFirebaseConfiguration(db)
+	webPushVAPID, err := db.EnsureWebPushVAPID()
 	if err != nil {
 		return err
 	}
 	{
-		project := firebaseAndroidConfig.ProjectID
-		bearer, err := notify.BearerTokenFromServiceAccount(ctx, fcmServiceAccount)
-		if err != nil {
-			return err
-		}
-		sender := notify.HTTPv1Sender{
-			Client:      &http.Client{Timeout: notify.RequestTimeout},
-			Endpoint:    "https://fcm.googleapis.com/v1/projects/" + project + "/messages:send",
-			BearerToken: bearer,
-		}
-		fcmNotifier := notify.NewFCMNotifier(notify.DBPushTargetStore{DB: db}, sender, project)
-		notifier = fcmNotifier
-		sessionNotifier = fcmNotifier
+		pushNotifier := notify.NewPushNotifier(
+			notify.DBPushTargetStore{DB: db},
+			notify.HTTPWebPushSender{
+				Client:     &http.Client{Timeout: notify.RequestTimeout},
+				VAPIDKeys:  webPushVAPID.Keys,
+				Subscriber: "https://tinitalk.org",
+			},
+		)
+		notifier = pushNotifier
+		sessionNotifier = pushNotifier
 	}
 	hub := signaling.NewHub(notifier)
 	hub.SetCallHistoryStore(db)
@@ -149,7 +133,8 @@ func runServe(args []string) error {
 	server := app.NewHTTPServer(db, app.ServerConfig{
 		Addr:                  options.addr,
 		AllowInsecureLoopback: options.allowLoopback,
-		FirebaseConfig:        firebaseAndroidConfig,
+		WebPushPublicKey:      webPushVAPID.PublicKey,
+		WebPushConfigID:       webPushVAPID.ConfigID,
 		Hub:                   hub,
 		SessionNotifier:       sessionNotifier,
 		ICEConfigProvider:     iceConfig,
@@ -182,27 +167,6 @@ func runServe(args []string) error {
 		}
 		return nil
 	}
-}
-
-func loadFirebaseConfiguration(db *state.DB) ([]byte, firebaseconfig.Config, error) {
-	serviceAccount, err := db.Secret("fcm_service_account")
-	if err != nil {
-		return nil, firebaseconfig.Config{}, err
-	}
-	if len(serviceAccount) == 0 {
-		return nil, firebaseconfig.Config{}, errors.New("FCM service account is missing; run tinitalk init --fcm-service-account FILE")
-	}
-	config, err := db.FirebaseConfig()
-	if err != nil {
-		return nil, firebaseconfig.Config{}, err
-	}
-	if config.ConfigID == "" {
-		return nil, firebaseconfig.Config{}, errors.New("FCM Android configuration is missing; run tinitalk init --firebase-android-config FILE")
-	}
-	if err := firebaseconfig.ValidatePair(serviceAccount, config); err != nil {
-		return nil, firebaseconfig.Config{}, err
-	}
-	return serviceAccount, config, nil
 }
 
 func turnServerConfig(options serveOptions, tlsConfig *tls.Config, issuer turnserver.CredentialIssuer) turnserver.Config {

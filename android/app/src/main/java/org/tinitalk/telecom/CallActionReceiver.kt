@@ -13,6 +13,10 @@ class CallActionReceiver : BroadcastReceiver() {
         val controller = IncomingCallController()
         val pending = PendingCallAction(goAsync()::finish)
         Handler(Looper.getMainLooper()).postDelayed(pending::finish, ActionTimeoutMillis)
+        if (!controller.ownsIncoming(context, invite)) {
+            pending.finish()
+            return
+        }
         when (intent.action) {
             IncomingCallController.ActionAnswer -> controller.answer(context, invite, pending::finish)
             IncomingCallController.ActionReject -> {

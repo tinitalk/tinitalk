@@ -1,5 +1,5 @@
 [versions]
-agp = "8.13.1"
+agp = "9.1.1"
 kotlin = "2.2.20"
 coreKtx = "1.17.0"
 activity = "1.10.1"
@@ -11,14 +11,14 @@ okhttp = "4.12.0"
 androidxTest = "1.7.0"
 webrtc = "144.7559.12"
 coreTelecom = "1.0.1"
-firebaseBom = "34.17.0"
 coroutines = "1.8.1"
-composeBom = "2026.06.00"
+composeBom = "2026.08.00"
 work = "2.11.2"
+unifiedPush = "3.3.5"
+embeddedFcmDistributor = "3.1.0"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 
 [libraries]
@@ -34,9 +34,6 @@ androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTes
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTest" }
 androidx-core-telecom = { module = "androidx.core:core-telecom", version.ref = "coreTelecom" }
 webrtc = { module = "io.github.webrtc-sdk:android", version.ref = "webrtc" }
-firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
-firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
-firebase-installations = { module = "com.google.firebase:firebase-installations" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
@@ -46,3 +43,5 @@ androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
 androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "work" }
 androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "work" }
+unifiedpush-connector = { module = "org.unifiedpush.android:connector", version.ref = "unifiedPush" }
+unifiedpush-embedded-fcm = { module = "org.unifiedpush.android:embedded-fcm-distributor", version.ref = "embeddedFcmDistributor" }

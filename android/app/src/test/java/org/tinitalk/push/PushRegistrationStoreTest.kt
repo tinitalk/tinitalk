@@ -1,136 +1,48 @@
 package org.tinitalk.push
 
+import org.tinitalk.data.AccountId
+import org.tinitalk.data.AuthStore
+import org.tinitalk.data.MemoryKeyValueStore
+import org.tinitalk.data.PrefixTokenCipher
 import org.tinitalk.data.Session
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class PushRegistrationStoreTest {
     @Test
-    fun survivesRestartComparesGenerationAndNeverReusesClearedGeneration() {
-        val persistence = RecordingPushRegistrationPersistence()
-        val firstStore = PushRegistrationStore(persistence)
-        val first = firstStore.upsert(
-            "https://server.example.test/",
-            "config-1",
-            "device-1",
-            "session-1",
-            "fid-1",
+    fun newerEndpointWinsAndCannotBeClearedByStaleWorker() {
+        val persistence = MemoryKeyValueStore()
+        val accounts = AuthStore(persistence, PrefixTokenCipher())
+        val accountId = AccountId("account-a")
+        val session = Session(
+            "https://a.example",
+            "alice",
+            "token-a",
+            sessionId = "session-a",
+            configId = "config-a",
         )
-        val restored = PushRegistrationStore(persistence)
+        accounts.add(
+            accountId,
+            session,
+            StoredWebPushConfig("https://a.example", "vapid-a", "config-a"),
+            "Alice",
+        )
+        val store = PushRegistrationStore(persistence)
 
-        assertEquals(first, restored.load())
-        val second = restored.upsert(
-            "https://server.example.test",
-            "config-1",
-            "device-1",
-            "session-1",
-            "fid-2",
-        )
+        val first = store.upsert(accountId, session, "device", subscription("first"))
+        val second = store.upsert(accountId, session, "device", subscription("second"))
+
         assertEquals(1L, first.generation)
         assertEquals(2L, second.generation)
-        assertEquals(PushRegistrationClearResult.STALE, restored.clearIfGeneration(first.generation))
-        assertEquals(second, restored.load())
-        assertEquals(PushRegistrationClearResult.CLEARED, restored.clearIfGeneration(second.generation))
-        assertNull(restored.load())
-
-        val third = PushRegistrationStore(persistence).upsert(
-            "https://server.example.test",
-            "config-1",
-            "device-1",
-            "session-1",
-            "fid-3",
-        )
-        assertEquals(3L, third.generation)
+        assertEquals(PushRegistrationClearResult.STALE, store.clearIfGeneration(accountId, first.generation))
+        assertEquals(second, store.load(accountId))
+        assertEquals(PushRegistrationClearResult.CLEARED, store.clearIfGeneration(accountId, second.generation))
+        assertNull(store.load(accountId))
     }
 
-    @Test
-    fun exposesCommitFailureWithoutLosingThePendingRow() {
-        val persistence = RecordingPushRegistrationPersistence()
-        val store = PushRegistrationStore(persistence)
-        val pending = store.upsert(
-            "https://server.example.test",
-            "config-1",
-            "device-1",
-            "session-1",
-            "fid-1",
-        )
-        val encodedPending = persistence.value
-        persistence.acceptCommits = false
-
-        assertEquals(PushRegistrationClearResult.FAILED, store.clearIfGeneration(pending.generation))
-        assertEquals(encodedPending, persistence.value)
-        assertEquals(pending, store.load())
-        assertThrows(PushRegistrationCommitException::class.java) {
-            store.upsert(
-                "https://server.example.test",
-                "config-1",
-                "device-1",
-                "session-1",
-                "fid-2",
-            )
-        }
-        assertEquals(encodedPending, persistence.value)
-        assertEquals(pending, store.load())
-    }
-
-    @Test
-    fun isolatesPendingRowsFromStaleConfigSessionAndDeviceBindings() {
-        val store = PushRegistrationStore(RecordingPushRegistrationPersistence())
-        val pending = store.upsert(
-            "https://server.example.test",
-            "config-1",
-            "device-1",
-            "session-1",
-            "fid-1",
-        )
-        val exactConfig = storedConfig("https://server.example.test/", "config-1")
-        val exactSession = session("https://server.example.test/", "session-1", "config-1")
-
-        assertEquals(pending, store.loadBoundTo(exactConfig, exactSession, "device-1"))
-        listOf(
-            Triple(storedConfig("https://other.example.test", "config-1"), exactSession, "device-1"),
-            Triple(storedConfig("https://server.example.test", "config-2"), exactSession, "device-1"),
-            Triple(exactConfig, session("https://server.example.test", "session-2", "config-1"), "device-1"),
-            Triple(exactConfig, session("https://server.example.test", "session-1", "config-2"), "device-1"),
-            Triple(exactConfig, exactSession, "device-2"),
-        ).forEach { (config, currentSession, deviceId) ->
-            assertNull(store.loadBoundTo(config, currentSession, deviceId))
-        }
-    }
+    private fun subscription(token: String) = WebPushSubscription(
+        endpoint = "https://fcm.googleapis.com/fcm/send/$token",
+        keys = WebPushKeys("p256dh", "auth"),
+    )
 }
-
-internal class RecordingPushRegistrationPersistence(
-    var value: String? = null,
-) : PushRegistrationPersistence {
-    var acceptCommits = true
-    var commitCount = 0
-    var onCommit: (() -> Unit)? = null
-
-    override fun read(): String? = value
-
-    override fun commit(value: String?): Boolean {
-        commitCount++
-        onCommit?.invoke()
-        this.value = value
-        return acceptCommits
-    }
-}
-
-internal fun storedConfig(serverUrl: String, configId: String) = StoredFirebaseConfig(
-    serverUrl = serverUrl,
-    applicationId = "1:123:android:abc",
-    apiKey = "public-api-key",
-    projectId = "demo-project",
-    gcmSenderId = "123",
-    configId = configId,
-)
-
-internal fun session(serverUrl: String, sessionId: String, configId: String) = Session(
-    url = serverUrl,
-    login = "alice",
-    token = "current-token",
-    sessionId = sessionId,
-    configId = configId,
-)

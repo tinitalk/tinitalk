@@ -12,6 +12,9 @@ import (
 
 func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 	db, tokens := testDB(t)
+	if err := db.SetContactName("bob", "alice", "Mom"); err != nil {
+		t.Fatal(err)
+	}
 	started := time.Date(2026, 8, 26, 10, 30, 0, 0, time.UTC)
 	recordMissedHistoryCall(t, db, "call-1", started)
 	server := NewServer(db, Options{AllowInsecureLoopback: true})
@@ -36,6 +39,7 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 		UnreadMissedCount int   `json:"unread_missed_count"`
 		UnreadMissed      []struct {
 			PeerLogin string `json:"peer_login"`
+			PeerName  string `json:"peer_name"`
 			StartedAt int64  `json:"started_at"`
 		} `json:"unread_missed"`
 	}
@@ -46,7 +50,7 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 		t.Fatalf("history items = %d, want 1", len(page.Items))
 	}
 	item := page.Items[0]
-	if item.PeerLogin != "alice" || item.PeerName != "Alice" || item.Direction != "incoming" || item.Outcome != "cancelled_after_ringing" {
+	if item.PeerLogin != "alice" || item.PeerName != "Mom" || item.Direction != "incoming" || item.Outcome != "cancelled_after_ringing" {
 		t.Fatalf("history item = %+v", item)
 	}
 	if !item.Reached {
@@ -58,7 +62,7 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 	if page.LatestID != item.ID || page.NextBefore != 0 || page.UnreadMissedCount != 1 {
 		t.Fatalf("history metadata = %+v", page)
 	}
-	if len(page.UnreadMissed) != 1 || page.UnreadMissed[0].PeerLogin != "alice" || page.UnreadMissed[0].StartedAt != started.Unix() {
+	if len(page.UnreadMissed) != 1 || page.UnreadMissed[0].PeerLogin != "alice" || page.UnreadMissed[0].PeerName != "Mom" || page.UnreadMissed[0].StartedAt != started.Unix() {
 		t.Fatalf("unread missed contacts = %+v", page.UnreadMissed)
 	}
 }

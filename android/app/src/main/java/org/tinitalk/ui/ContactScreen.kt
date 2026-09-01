@@ -48,9 +48,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
@@ -73,6 +76,8 @@ private val contactAvatarColors = listOf(
 @Composable
 fun ContactScreen(
     contact: Contact,
+    identityKey: String = contact.login,
+    accountServerUrl: String? = null,
     internetAvailable: Boolean = true,
     nameUpdate: ContactNameUpdateState,
     history: ContactHistoryState,
@@ -85,7 +90,7 @@ fun ContactScreen(
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
 ) {
-    var renameVisible by rememberSaveable(contact.login) { mutableStateOf(false) }
+    var renameVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     val name = contactDisplayName(contact.displayName)
     val action = contactCallAction(contact.login, ongoingCall, internetAvailable)
     val relevantUpdate = nameUpdate.takeIf { it.login == contact.login }
@@ -172,6 +177,7 @@ fun ContactScreen(
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
+                                    Spacer(Modifier.width(32.dp))
                                     Text(
                                         text = name,
                                         modifier = Modifier.weight(1f, fill = false),
@@ -192,12 +198,35 @@ fun ContactScreen(
                                 }
                             }
                             Text(
-                                if (internetAvailable) {
-                                    "Нажмите на имя, чтобы изменить"
-                                } else {
-                                    "Для изменения имени нужен интернет"
+                                buildAnnotatedString {
+                                    withStyle(
+                                        SpanStyle(
+                                            color = if (accountServerUrl == null) {
+                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            },
+                                            fontWeight = if (accountServerUrl == null) {
+                                                FontWeight.Light
+                                            } else {
+                                                FontWeight.SemiBold
+                                            },
+                                        ),
+                                    ) {
+                                        append(contact.login)
+                                    }
+                                    accountServerUrl?.let { serverUrl ->
+                                        withStyle(
+                                            SpanStyle(
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                                fontWeight = FontWeight.Light,
+                                            ),
+                                        ) {
+                                            append("@")
+                                            append(serverAddress(serverUrl))
+                                        }
+                                    }
                                 },
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodyMedium,
                                 textAlign = TextAlign.Center,
                             )
@@ -317,6 +346,7 @@ fun ContactScreen(
     if (renameVisible) {
         RenameContactDialog(
             contact = contact,
+            identityKey = identityKey,
             internetAvailable = internetAvailable,
             saving = relevantUpdate?.saving == true,
             errorMessage = relevantUpdate?.errorMessage,
@@ -385,6 +415,7 @@ private fun ContactAvatar(contact: Contact, name: String, size: androidx.compose
 @Composable
 private fun RenameContactDialog(
     contact: Contact,
+    identityKey: String,
     internetAvailable: Boolean,
     saving: Boolean,
     errorMessage: String?,
@@ -392,7 +423,7 @@ private fun RenameContactDialog(
     onRename: (customName: String?) -> Unit,
     onErrorCleared: () -> Unit,
 ) {
-    var value by rememberSaveable(contact.login) { mutableStateOf(contact.displayName) }
+    var value by rememberSaveable(identityKey) { mutableStateOf(contact.displayName) }
     val trimmed = value.trim()
 
     AlertDialog(
@@ -418,15 +449,6 @@ private fun RenameContactDialog(
                         }
                     },
                 )
-                if (contact.customName != null) {
-                    TextButton(
-                        onClick = { onRename(null) },
-                        enabled = !saving && internetAvailable,
-                        modifier = Modifier.align(Alignment.Start),
-                    ) {
-                        Text("Вернуть исходное имя")
-                    }
-                }
             }
         },
         confirmButton = {

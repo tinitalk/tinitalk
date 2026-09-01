@@ -2,7 +2,6 @@ import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
 }
 
@@ -33,14 +32,14 @@ val commitHash = runCatching {
 
 android {
     namespace = "org.tinitalk"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.tinitalk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.8"
+        versionCode = 13
+        versionName = "0.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
         buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
@@ -91,11 +90,10 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.okhttp)
     implementation(libs.webrtc)
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.messaging)
-    implementation(libs.firebase.installations)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.work.runtime)
+    implementation(libs.unifiedpush.connector)
+    implementation(libs.unifiedpush.embedded.fcm)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

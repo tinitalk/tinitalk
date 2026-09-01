@@ -13,7 +13,7 @@ func TestBasicAuthenticatorAcceptsOnlyActiveEnabledTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.Init(nil, nil); err != nil {
+	if err := db.Init(); err != nil {
 		t.Fatal(err)
 	}
 	aliceToken, err := db.AddUser("alice", "Alice")

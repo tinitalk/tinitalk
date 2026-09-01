@@ -5,6 +5,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonNull
 import com.google.gson.JsonObject
 import com.google.gson.JsonPrimitive
+import org.tinitalk.data.AccountId
 import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.IceCandidateData
@@ -12,6 +13,7 @@ import org.tinitalk.media.IceServerData
 import org.tinitalk.media.CallStats
 import org.tinitalk.media.MediaSession
 import org.tinitalk.media.CancellableTask
+import org.tinitalk.media.ExecutorTaskScheduler
 import org.tinitalk.media.TaskScheduler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -1022,6 +1024,25 @@ class ForegroundCallControllerTest {
 
     private fun activeSnapshot(): CallSnapshot = CallSnapshot(CallPhase.Active, callId, 1)
 
+    private fun ForegroundCallController(
+        signal: SignalClient,
+        mediaFactory: (
+            Boolean,
+            List<IceServerData>,
+            (IceCandidateData) -> Unit,
+            (List<IceCandidateData>) -> Unit,
+            () -> Unit,
+        ) -> MediaSession,
+        ids: EventIds = UuidEventIds(),
+        scheduler: TaskScheduler = ExecutorTaskScheduler(),
+    ): ForegroundCallController = ForegroundCallController(
+        signal = signal,
+        accountId = TestAccount,
+        mediaFactory = mediaFactory,
+        ids = ids,
+        scheduler = scheduler,
+    )
+
     private fun event(type: String, payload: JsonObject = JsonObject()): SignalEvent =
         SignalEvent("00000000-0000-0000-0000-000000000001", callId, type, 10L, payload)
 
@@ -1165,5 +1186,6 @@ class ForegroundCallControllerTest {
 
     private companion object {
         const val callId = "00000000-0000-0000-0000-000000000099"
+        val TestAccount = AccountId("controller-test-account")
     }
 }

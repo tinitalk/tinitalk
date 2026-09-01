@@ -1,6 +1,7 @@
 package org.tinitalk.call
 
 import com.google.gson.JsonObject
+import org.tinitalk.data.AccountId
 import org.tinitalk.data.signal.SignalEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -40,7 +41,10 @@ class CallCoordinatorTest {
             ),
         )
 
-        assertEquals(CallSnapshot(CallPhase.Active, canonical, 2), coordinator.snapshot())
+        assertEquals(
+            CallSnapshot(CallPhase.Active, canonical, 2, AccountId("single-account")),
+            coordinator.snapshot(),
+        )
     }
 
     @Test
@@ -245,7 +249,7 @@ class CallCoordinatorTest {
 
         coordinator.finish()
 
-        assertEquals(CallSnapshot(), coordinator.snapshot())
+        assertEquals(CallSnapshot(accountId = AccountId("single-account")), coordinator.snapshot())
     }
 
     private fun event(type: String, seq: Long): SequencedSignalEvent =

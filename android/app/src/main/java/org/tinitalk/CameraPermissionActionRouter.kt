@@ -1,35 +1,36 @@
 package org.tinitalk
 
 import org.tinitalk.call.CallPhase
+import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallVideoState
 
 internal class CameraPermissionActionRouter(
     private val permissionGranted: () -> Boolean,
     private val requestPermission: () -> Unit,
-    private val enableCamera: (String) -> Unit,
+    private val enableCamera: (AccountCallKey) -> Unit,
     private val cameraVisible: () -> Boolean = { true },
-    restoredPendingCallId: String? = null,
+    restoredPendingCallKey: AccountCallKey? = null,
 ) {
-    private var pendingCallId: String? = restoredPendingCallId
+    private var pendingCallKey: AccountCallKey? = restoredPendingCallKey
 
-    fun pendingCallId(): String? = pendingCallId
+    fun pendingCallKey(): AccountCallKey? = pendingCallKey
 
     fun request(call: CallUiState, video: CallVideoState<*>) {
-        val callId = eligibleCallId(call, video) ?: return
+        val callKey = eligibleCallKey(call, video) ?: return
         if (permissionGranted()) {
-            pendingCallId = callId
+            pendingCallKey = callKey
             enablePendingIfEligible(call, video)
         } else {
-            pendingCallId = callId
+            pendingCallKey = callKey
             requestPermission()
         }
     }
 
     fun onPermissionResult(granted: Boolean, call: CallUiState, video: CallVideoState<*>) {
-        val requestedCallId = pendingCallId ?: return
-        if (!granted || !permissionGranted() || eligibleCallId(call, video) != requestedCallId) {
-            pendingCallId = null
+        val requestedCallKey = pendingCallKey ?: return
+        if (!granted || !permissionGranted() || eligibleCallKey(call, video) != requestedCallKey) {
+            pendingCallKey = null
             return
         }
         enablePendingIfEligible(call, video)
@@ -38,20 +39,16 @@ internal class CameraPermissionActionRouter(
     fun onVisible(call: CallUiState, video: CallVideoState<*>) = enablePendingIfEligible(call, video)
 
     private fun enablePendingIfEligible(call: CallUiState, video: CallVideoState<*>) {
-        val requestedCallId = pendingCallId ?: return
+        val requestedCallKey = pendingCallKey ?: return
         if (!permissionGranted() || !cameraVisible()) return
-        if (eligibleCallId(call, video) != requestedCallId) {
-            pendingCallId = null
+        if (eligibleCallKey(call, video) != requestedCallKey) {
+            pendingCallKey = null
             return
         }
-        pendingCallId = null
-        enableCamera(requestedCallId)
+        pendingCallKey = null
+        enableCamera(requestedCallKey)
     }
 
-    private fun eligibleCallId(call: CallUiState, video: CallVideoState<*>): String? {
-        val callId = call.callId ?: return null
-        return callId.takeIf {
-            call.phase == CallPhase.Active && video.callId == callId && video.allowed
-        }
-    }
+    private fun eligibleCallKey(call: CallUiState, video: CallVideoState<*>): AccountCallKey? =
+        call.callKey?.takeIf { call.phase == CallPhase.Active && video.callKey == it && video.allowed }
 }

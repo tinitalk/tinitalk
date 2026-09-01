@@ -1,5 +1,6 @@
 package org.tinitalk.call
 
+import org.tinitalk.data.AccountId
 import org.tinitalk.media.VideoRenderSource
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -20,12 +21,16 @@ data class CallVideoState<out Track>(
     val localTrack: Track? = null,
     val remoteTrack: Track? = null,
     val failure: String? = null,
+    val accountId: AccountId? = null,
 ) {
-    fun configured(nextCallId: String, videoAllowed: Boolean): CallVideoState<Track> =
-        if (callId == nextCallId) {
-            if (videoAllowed) copy(allowed = true) else CallVideoState(callId = nextCallId)
+    val callKey: AccountCallKey?
+        get() = accountId?.let { id -> callId?.let { AccountCallKey(id, it) } }
+
+    fun configured(nextAccountId: AccountId, nextCallId: String, videoAllowed: Boolean): CallVideoState<Track> =
+        if (callKey == AccountCallKey(nextAccountId, nextCallId)) {
+            if (videoAllowed) copy(allowed = true) else CallVideoState(callId = nextCallId, accountId = nextAccountId)
         } else {
-            CallVideoState(callId = nextCallId, allowed = videoAllowed)
+            CallVideoState(callId = nextCallId, allowed = videoAllowed, accountId = nextAccountId)
         }
 
     fun withPermission(callbackCallId: String, granted: Boolean): CallVideoState<Track> =

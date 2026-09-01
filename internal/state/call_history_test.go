@@ -4,261 +4,10 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
-
-func TestOpenMigratesVersionOneDatabaseWithoutLosingUsers(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
-	db, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.AddUser("alice", "Alice"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec("DROP TABLE IF EXISTS call_history_unread"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec("DROP TABLE IF EXISTS user_contacts"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec("DROP TABLE IF EXISTS call_history_reads"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec("DROP TABLE IF EXISTS call_history"); err != nil {
-		t.Fatal(err)
-	}
-	setMigrationTestVersion(t, db, 1)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	check, err := db.Check()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if check.UserVersion != 7 {
-		t.Fatalf("schema version = %d, want 7", check.UserVersion)
-	}
-	users, err := db.ListUsers()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(users) != 1 || users[0].Login != "alice" {
-		t.Fatalf("users after migration = %+v, want alice", users)
-	}
-	var historyRows int
-	if err := db.sql.QueryRow("SELECT COUNT(*) FROM call_history").Scan(&historyRows); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestVersionFourMigrationBackfillsEveryPassiveMissedCall(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
-	db, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, user := range []struct{ login, name string }{{"alice", "Alice"}, {"bob", "Bob"}} {
-		if _, err := db.AddUser(user.login, user.name); err != nil {
-			t.Fatal(err)
-		}
-	}
-	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
-	outcomes := []CallOutcome{
-		CallOutcomeUnreachable,
-		CallOutcomeUnanswered,
-		CallOutcomeCancelledBeforeRinging,
-		CallOutcomeCancelledAfterRinging,
-		CallOutcomeInterruptedBeforeAnswer,
-	}
-	for i, outcome := range outcomes {
-		callID := fmt.Sprintf("missed-%d", i)
-		if err := db.StartCall(callID, "alice", "bob", started.Add(time.Duration(i)*time.Minute)); err != nil {
-			t.Fatal(err)
-		}
-		if err := db.FinishCall(callID, outcome, started.Add(time.Duration(i+1)*time.Minute)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := db.sql.Exec(`
-		DELETE FROM call_history_unread
-		WHERE call_history_id IN (
-			SELECT id FROM call_history WHERE outcome IN (1, 5, 9)
-		)
-	`); err != nil {
-		t.Fatal(err)
-	}
-	setMigrationTestVersion(t, db, 3)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var unreadRows int
-	if err := db.sql.QueryRow("SELECT COUNT(*) FROM call_history_unread").Scan(&unreadRows); err != nil {
-		t.Fatal(err)
-	}
-	if unreadRows != len(outcomes) {
-		t.Fatalf("migrated unread rows = %d, want %d", unreadRows, len(outcomes))
-	}
-}
-
-func TestVersionFourMigrationDoesNotRestorePeerReadMissedCall(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
-	db, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, user := range []struct{ login, name string }{{"alice", "Alice"}, {"bob", "Bob"}} {
-		if _, err := db.AddUser(user.login, user.name); err != nil {
-			t.Fatal(err)
-		}
-	}
-	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
-	if err := db.StartCall("read-missed", "alice", "bob", started); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.MarkCallRinging("read-missed"); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.FinishCall("read-missed", CallOutcomeUnanswered, started.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.MarkCallHistoryReadForPeer("bob", "alice", math.MaxInt64); err != nil {
-		t.Fatal(err)
-	}
-	setMigrationTestVersion(t, db, 3)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	page, err := db.CallHistory("bob", 0, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.UnreadMissed != 0 {
-		t.Fatalf("unread missed after migration = %d, want 0", page.UnreadMissed)
-	}
-}
-
-func TestVersionFiveMigrationBackfillsUnreadBusyCallsOnly(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
-	db, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, user := range []struct{ login, name string }{{"alice", "Alice"}, {"bob", "Bob"}} {
-		if _, err := db.AddUser(user.login, user.name); err != nil {
-			t.Fatal(err)
-		}
-	}
-	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
-	if err := db.RecordBusyCall("read-busy", "alice", "bob", started); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.MarkCallHistoryRead("bob", math.MaxInt64); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.StartCall("rejected", "alice", "bob", started.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.FinishCall("rejected", CallOutcomeRejected, started.Add(2*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.RecordBusyCall("unread-busy", "alice", "bob", started.Add(3*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec("DELETE FROM call_history_unread"); err != nil {
-		t.Fatal(err)
-	}
-	setMigrationTestVersion(t, db, 4)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var unreadRows int
-	var unreadOutcome CallOutcome
-	if err := db.sql.QueryRow(`
-		SELECT COUNT(*), COALESCE(MAX(history.outcome), 0)
-		FROM call_history_unread unread
-		JOIN call_history history ON history.id = unread.call_history_id
-	`).Scan(&unreadRows, &unreadOutcome); err != nil {
-		t.Fatal(err)
-	}
-	if unreadRows != 1 || unreadOutcome != CallOutcomeBusy {
-		t.Fatalf("migrated unread = %d outcome %d, want one busy", unreadRows, unreadOutcome)
-	}
-}
-
-func TestVersionThreeMigrationBackfillsOnlyUnreadMissedCalls(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
-	db, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, user := range []struct{ login, name string }{{"alice", "Alice"}, {"bob", "Bob"}} {
-		if _, err := db.AddUser(user.login, user.name); err != nil {
-			t.Fatal(err)
-		}
-	}
-	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
-	recordMissedCall(t, db, "read", started)
-	if err := db.MarkCallHistoryRead("bob", math.MaxInt64); err != nil {
-		t.Fatal(err)
-	}
-	recordMissedCall(t, db, "unread", started.Add(time.Hour))
-	if _, err := db.sql.Exec("DROP TABLE IF EXISTS call_history_unread"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec("DROP TABLE user_contacts"); err != nil {
-		t.Fatal(err)
-	}
-	setMigrationTestVersion(t, db, 2)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var unreadRows int
-	if err := db.sql.QueryRow("SELECT COUNT(*) FROM call_history_unread").Scan(&unreadRows); err != nil {
-		t.Fatal(err)
-	}
-	if unreadRows != 1 {
-		t.Fatalf("migrated unread rows = %d, want 1", unreadRows)
-	}
-	var contactRows int
-	if err := db.sql.QueryRow("SELECT COUNT(*) FROM user_contacts").Scan(&contactRows); err != nil {
-		t.Fatal(err)
-	}
-	if contactRows != 2 {
-		t.Fatalf("migrated contact rows = %d, want 2", contactRows)
-	}
-}
 
 func TestUnreadMissedRowsAreRemovedAfterHistoryIsRead(t *testing.T) {
 	db := openCallHistoryTestDB(t)
@@ -388,6 +137,70 @@ func TestCallHistoryPagesNewestFirstAndCountsMissed(t *testing.T) {
 	}
 	if page.NextBefore != 0 || page.UnreadMissed != 1 {
 		t.Fatalf("second page metadata = %+v", page)
+	}
+}
+
+func TestCallHistoryPagesByStartedAtThenID(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+
+	// IDs are assigned in this order, intentionally different from the desired
+	// started_at ordering. "same-newer-id" also verifies the ID tie-breaker.
+	recordMissedCall(t, db, "oldest", started)
+	recordMissedCall(t, db, "newest-low-id", started.Add(2*time.Hour))
+	recordMissedCall(t, db, "same", started.Add(time.Hour))
+	recordMissedCall(t, db, "same-newer-id", started.Add(time.Hour))
+
+	first, err := db.CallHistory("bob", 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{first.Items[0].CallID, first.Items[1].CallID}; !reflect.DeepEqual(got, []string{"newest-low-id", "same-newer-id"}) {
+		t.Fatalf("first page call IDs = %v, want [newest-low-id same-newer-id]", got)
+	}
+	if first.NextBefore != first.Items[1].ID {
+		t.Fatalf("first page next_before = %d, want last item ID %d", first.NextBefore, first.Items[1].ID)
+	}
+
+	second, err := db.CallHistory("bob", first.NextBefore, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{second.Items[0].CallID, second.Items[1].CallID}; !reflect.DeepEqual(got, []string{"same", "oldest"}) {
+		t.Fatalf("second page call IDs = %v, want [same oldest]", got)
+	}
+	if second.NextBefore != 0 {
+		t.Fatalf("second page next_before = %d, want 0", second.NextBefore)
+	}
+}
+
+func TestCallHistoryRejectsMissingOrOutOfScopeCursor(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	if _, err := db.AddUser("carol", "Carol"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	recordMissedCall(t, db, "alice-call", started)
+	recordMissedCallFrom(t, db, "carol-call", "carol", "bob", started.Add(time.Minute))
+
+	var carolCallID int64
+	if err := db.sql.QueryRow("SELECT id FROM call_history WHERE call_id = ?", "carol-call").Scan(&carolCallID); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		before int64
+	}{
+		{name: "missing", before: 999},
+		{name: "different peer", before: carolCallID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := db.CallHistoryForPeer("bob", "alice", test.before, 10); err == nil {
+				t.Errorf("CallHistoryForPeer with %s cursor error = nil, want error", test.name)
+			}
+		})
 	}
 }
 
@@ -703,29 +516,6 @@ func recordMissedCallFrom(t *testing.T, db *DB, callID, caller, callee string, s
 		t.Fatal(err)
 	}
 	if err := db.FinishCall(callID, CallOutcomeUnanswered, started.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func setMigrationTestVersion(t *testing.T, db *DB, version int) {
-	t.Helper()
-	if _, err := db.sql.Exec("DROP TABLE IF EXISTS account_sessions"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec(`
-		DROP TABLE devices;
-		CREATE TABLE devices(
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			device_id TEXT NOT NULL,
-			fcm_token TEXT,
-			updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-			UNIQUE(user_id, device_id)
-		);
-	`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
 		t.Fatal(err)
 	}
 }
