@@ -48,9 +48,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
@@ -74,6 +77,7 @@ private val contactAvatarColors = listOf(
 fun ContactScreen(
     contact: Contact,
     identityKey: String = contact.login,
+    accountServerUrl: String? = null,
     internetAvailable: Boolean = true,
     nameUpdate: ContactNameUpdateState,
     history: ContactHistoryState,
@@ -173,6 +177,7 @@ fun ContactScreen(
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
+                                    Spacer(Modifier.width(32.dp))
                                     Text(
                                         text = name,
                                         modifier = Modifier.weight(1f, fill = false),
@@ -193,12 +198,35 @@ fun ContactScreen(
                                 }
                             }
                             Text(
-                                if (internetAvailable) {
-                                    "Нажмите на имя, чтобы изменить"
-                                } else {
-                                    "Для изменения имени нужен интернет"
+                                buildAnnotatedString {
+                                    withStyle(
+                                        SpanStyle(
+                                            color = if (accountServerUrl == null) {
+                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            },
+                                            fontWeight = if (accountServerUrl == null) {
+                                                FontWeight.Light
+                                            } else {
+                                                FontWeight.SemiBold
+                                            },
+                                        ),
+                                    ) {
+                                        append(contact.login)
+                                    }
+                                    accountServerUrl?.let { serverUrl ->
+                                        withStyle(
+                                            SpanStyle(
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                                fontWeight = FontWeight.Light,
+                                            ),
+                                        ) {
+                                            append("@")
+                                            append(serverAddress(serverUrl))
+                                        }
+                                    }
                                 },
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodyMedium,
                                 textAlign = TextAlign.Center,
                             )
@@ -421,15 +449,6 @@ private fun RenameContactDialog(
                         }
                     },
                 )
-                if (contact.customName != null) {
-                    TextButton(
-                        onClick = { onRename(null) },
-                        enabled = !saving && internetAvailable,
-                        modifier = Modifier.align(Alignment.Start),
-                    ) {
-                        Text("Вернуть исходное имя")
-                    }
-                }
             }
         },
         confirmButton = {

@@ -2,7 +2,6 @@ package org.tinitalk.ui
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
@@ -11,13 +10,15 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.unit.dp
 import org.tinitalk.data.ServerCheckDetails
 import org.tinitalk.data.ServerCheckResult
 import org.tinitalk.data.AccountId
+import org.tinitalk.data.AccountContact
+import org.tinitalk.data.Contact
 import org.tinitalk.ui.theme.TiniTalkTheme
 import org.junit.Rule
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -33,13 +34,20 @@ class AppMenuTest {
     val composeRule = createEmptyComposeRule()
 
     @Test
-    fun menuItemsHaveLargeTapTargets() {
+    fun headerOpensAboutAndProfileDirectly() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        var profileOpened = false
         composeRule.runOnUiThread {
             activity.get().setContent {
                 TiniTalkTheme(darkTheme = true) {
                     MainScreen(
-                        state = MainScreenState(restoring = false, signedIn = true),
+                        state = MainScreenState(
+                            restoring = false,
+                            signedIn = true,
+                            accounts = listOf(
+                                AccountSummary(AccountId("account"), "https://talk.example", "alex", "Alex"),
+                            ),
+                        ),
                         contactNameUpdate = ContactNameUpdateState(),
                         ongoingCall = null,
                         loginResetKey = 0,
@@ -66,7 +74,7 @@ class AppMenuTest {
                         onContactHistoryHidden = {},
                         onLoadMoreContactHistory = {},
                         onRetryContactHistory = {},
-                        onOpenProfile = {},
+                        onOpenProfile = { profileOpened = true },
                         onCloseProfile = {},
                         onOpenAddAccount = {},
                         onCloseAddAccount = {},
@@ -77,9 +85,12 @@ class AppMenuTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("\u041c\u0435\u043d\u044e").performClick()
-        composeRule.onNodeWithText("\u041e \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435").assertHeightIsAtLeast(64.dp)
-        composeRule.onNodeWithText("\u041f\u0440\u043e\u0444\u0438\u043b\u044c").assertHeightIsAtLeast(64.dp)
+        composeRule.onAllNodesWithContentDescription("Меню").assertCountEquals(0)
+        composeRule.onNodeWithContentDescription("О программе").performClick()
+        composeRule.onNodeWithText("О программе").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Назад").performClick()
+        composeRule.onNodeWithContentDescription("Профиль").performClick()
+        assertTrue(profileOpened)
 
         activity.pause().stop().destroy()
     }
@@ -126,13 +137,17 @@ class AppMenuTest {
 
     @Test
     fun serverPresentationUsesDistinctConfiguredServersSafeHostsAndUnambiguousAboutServer() {
+        val duplicateA = AccountContact(AccountId("a"), "https://a.example", Contact("alex", " Саша "))
+        val duplicateB = AccountContact(AccountId("b"), "https://b.example", Contact("sasha", "саша"))
+        val unique = AccountContact(AccountId("a"), "https://a.example", Contact("maria", "Мария"))
+        val sameServerA = AccountContact(AccountId("a"), "https://a.example", Contact("petr", "Пётр"))
+        val sameServerB = AccountContact(AccountId("a"), "https://a.example/", Contact("petya", "ПЁТР"))
+
         assertEquals(
-            false,
-            shouldShowServerSubtitles(listOf(" https://same.example/ ", "https://same.example")),
-        )
-        assertEquals(
-            true,
-            shouldShowServerSubtitles(listOf("https://a.example", "https://b.example")),
+            setOf(duplicateA.peerKey, duplicateB.peerKey),
+            contactsRequiringServerSubtitle(
+                listOf(duplicateA, duplicateB, unique, sameServerA, sameServerB),
+            ),
         )
         assertEquals("talk.example", serverHostname("https://talk.example/path"))
         assertEquals("talk.example/path", serverAddress("https://talk.example/path"))

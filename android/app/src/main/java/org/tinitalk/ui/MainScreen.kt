@@ -3,6 +3,7 @@ package org.tinitalk.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,14 +41,12 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
@@ -59,6 +58,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -185,8 +185,20 @@ data class AccountSummary(
     val displayName: String?,
 )
 
-internal fun shouldShowServerSubtitles(serverUrls: List<String>): Boolean =
-    serverUrls.map(::normalizeServerUrl).distinct().size > 1
+internal fun contactsRequiringServerSubtitle(contacts: List<AccountContact>): Set<AccountPeerKey> =
+    contacts
+        .groupBy { contactDisplayName(it.displayName).lowercase(Locale.ROOT) }
+        .values
+        .asSequence()
+        .filter { group ->
+            group
+                .map { normalizeServerUrl(it.serverUrl).lowercase(Locale.ROOT) }
+                .distinct()
+                .size > 1
+        }
+        .flatten()
+        .map(AccountContact::peerKey)
+        .toSet()
 
 internal fun configuredAboutServerUrl(serverUrls: List<String>): String =
     serverUrls.map(::normalizeServerUrl).distinct().singleOrNull().orEmpty()
@@ -349,6 +361,7 @@ fun MainScreen(
                 )
                 !state.permissions.allRequiredGranted -> PermissionsScreen(
                     permissions = state.permissions,
+                    multipleAccounts = state.accounts.size > 1,
                     onRequestNotifications = onRequestNotifications,
                     onRequestMicrophone = onRequestMicrophone,
                     onRequestFullScreenCalls = onRequestFullScreenCalls,
@@ -496,6 +509,7 @@ private fun LoginScreen(
 @Composable
 private fun PermissionsScreen(
     permissions: AppPermissionsState,
+    multipleAccounts: Boolean,
     onRequestNotifications: () -> Unit,
     onRequestMicrophone: () -> Unit,
     onRequestFullScreenCalls: () -> Unit,
@@ -503,7 +517,7 @@ private fun PermissionsScreen(
     onAbout: () -> Unit,
     onOpenProfile: () -> Unit,
 ) {
-    AppPage(onAbout = onAbout, onOpenProfile = onOpenProfile) {
+    AppPage(multipleAccounts, onAbout, onOpenProfile) {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         ) {
@@ -658,7 +672,7 @@ private fun HomeScreen(
         Box(
             modifier = if (selectedAccountContact == null) Modifier else Modifier.clearAndSetSemantics {},
         ) {
-            AppPage(onAbout = onAbout, onOpenProfile = onOpenProfile) {
+            AppPage(state.accounts.size > 1, onAbout, onOpenProfile) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     if (ongoingCall != null) {
                         OngoingCallBanner(ongoingCall, onOpenCall)
@@ -670,7 +684,6 @@ private fun HomeScreen(
                         if (page == 0) {
                             ContactsPage(
                                 contacts = visibleContacts,
-                                showServer = shouldShowServerSubtitles(state.accounts.map(AccountSummary::serverUrl)),
                                 latestUnreadMissedByContact = state.latestUnreadMissedByAccountContact,
                                 internetAvailable = state.networkAvailable,
                                 listState = contactsListState,
@@ -752,6 +765,12 @@ private fun HomeScreen(
             ContactScreen(
                 contact = contact.contact,
                 identityKey = accountScopedKey(contact.accountId, contact.login),
+                accountServerUrl = contact.serverUrl.takeIf {
+                    state.accounts
+                        .map { normalizeServerUrl(it.serverUrl).lowercase(Locale.ROOT) }
+                        .distinct()
+                        .size > 1
+                },
                 internetAvailable = state.networkAvailable,
                 nameUpdate = contactNameUpdate.takeIf { it.key == contact.peerKey }
                     ?: ContactNameUpdateState(),
@@ -780,7 +799,6 @@ private fun HomeScreen(
 @Composable
 private fun ContactsPage(
     contacts: List<AccountContact>,
-    showServer: Boolean,
     latestUnreadMissedByContact: Map<AccountPeerKey, Long>,
     internetAvailable: Boolean,
     listState: LazyListState,
@@ -788,6 +806,7 @@ private fun ContactsPage(
     onRefresh: () -> Unit,
     onContactSelected: (AccountContact) -> Unit,
 ) {
+    val contactsWithServerSubtitle = remember(contacts) { contactsRequiringServerSubtitle(contacts) }
     PullToRefreshBox(
         isRefreshing = refreshing,
         onRefresh = { if (internetAvailable) onRefresh() },
@@ -828,7 +847,11 @@ private fun ContactsPage(
                 items(contacts, key = { contact -> accountScopedKey(contact.accountId, contact.login) }) { contact ->
                     ContactRow(
                         contact.contact,
-                        serverHostname = if (showServer) serverHostname(contact.serverUrl) else null,
+                        serverHostname = if (contact.peerKey in contactsWithServerSubtitle) {
+                            serverHostname(contact.serverUrl)
+                        } else {
+                            null
+                        },
                         latestUnreadMissedAt = latestUnreadMissedByContact[contact.peerKey],
                     ) { onContactSelected(contact) }
                 }
@@ -988,80 +1011,40 @@ private fun ContactRow(
 
 @Composable
 private fun AppPage(
+    multipleAccounts: Boolean,
     onAbout: () -> Unit,
     onOpenProfile: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             Row(
                 modifier = Modifier.fillMaxWidth().height(68.dp).padding(horizontal = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                AppMark(42.dp)
-                Spacer(Modifier.width(12.dp))
-                Text("TiniTalk", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                CompositionLocalProvider(LocalRippleConfiguration provides null) {
+                    Row(
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .clickable(onClick = onAbout)
+                            .semantics { contentDescription = "О программе" },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AppMark(42.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("TiniTalk", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    }
+                }
                 Spacer(Modifier.weight(1f))
-                Box {
-                    IconButton(
-                        onClick = { menuExpanded = true },
-                        modifier = Modifier.semantics { contentDescription = "Меню" },
-                    ) {
-                        Text("⋮", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    }
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false },
-                        modifier = Modifier.widthIn(min = 240.dp),
-                    ) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    "О программе",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                            },
-                            onClick = {
-                                menuExpanded = false
-                                onAbout()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_info),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(24.dp),
-                                )
-                            },
-                            modifier = Modifier.heightIn(min = 64.dp),
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
-                            colors = MenuDefaults.itemColors(leadingIconColor = BrandGold),
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    "Профиль",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                            },
-                            onClick = {
-                                menuExpanded = false
-                                onOpenProfile()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_contacts),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(24.dp),
-                                )
-                            },
-                            modifier = Modifier.heightIn(min = 64.dp),
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
-                            colors = MenuDefaults.itemColors(leadingIconColor = BrandGold),
-                        )
-                    }
+                IconButton(onClick = onOpenProfile) {
+                    Icon(
+                        painter = painterResource(
+                            if (multipleAccounts) R.drawable.ic_contacts else R.drawable.ic_person,
+                        ),
+                        contentDescription = "Профиль",
+                        modifier = Modifier.size(26.dp),
+                        tint = Color.White,
+                    )
                 }
             }
             Box(modifier = Modifier.weight(1f)) { content() }
