@@ -2,6 +2,7 @@ package org.tinitalk.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -128,10 +130,24 @@ private fun ProfileAccountCard(
         result = details?.result,
         internetAvailable = internetAvailable,
     )
-    val statusColor = when (presentation.indicator) {
-        ServerCheckIndicator.Available -> CallAnswerGreen
-        ServerCheckIndicator.Incompatible -> BrandGold
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    val statusText = when {
+        !internetAvailable -> "Нет интернета"
+        else -> when (presentation.indicator) {
+            ServerCheckIndicator.Checking -> "Проверяем…"
+            ServerCheckIndicator.Available -> "Сервер доступен"
+            ServerCheckIndicator.Unavailable -> "Сервер недоступен"
+            ServerCheckIndicator.Incompatible -> "Несовместимая версия"
+        }
+    }
+    val incompatibleColor = if (isSystemInDarkTheme()) Color(0xFFFFA726) else Color(0xFFC45100)
+    val statusColor = when {
+        !internetAvailable -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> when (presentation.indicator) {
+            ServerCheckIndicator.Checking -> MaterialTheme.colorScheme.onSurfaceVariant
+            ServerCheckIndicator.Available -> CallAnswerGreen
+            ServerCheckIndicator.Unavailable -> CallRejectRed
+            ServerCheckIndicator.Incompatible -> incompatibleColor
+        }
     }
 
     LaunchedEffect(account.serverUrl, internetAvailable) {
@@ -210,13 +226,13 @@ private fun ProfileAccountCard(
                     )
                     ServerCheckIndicator.Unavailable -> Icon(
                         painterResource(R.drawable.ic_server_unavailable),
-                        contentDescription = presentation.message,
+                        contentDescription = statusText,
                         modifier = Modifier.size(16.dp),
                         tint = statusColor,
                     )
                     ServerCheckIndicator.Incompatible -> Icon(
                         painterResource(R.drawable.ic_server_incompatible),
-                        contentDescription = presentation.message,
+                        contentDescription = statusText,
                         modifier = Modifier.size(16.dp),
                         tint = statusColor,
                     )
@@ -226,7 +242,7 @@ private fun ProfileAccountCard(
                     Spacer(Modifier.size(6.dp))
                 }
                 Text(
-                    presentation.message,
+                    statusText,
                     modifier = Modifier.weight(1f),
                     color = statusColor,
                     style = MaterialTheme.typography.bodySmall,

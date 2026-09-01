@@ -294,6 +294,21 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 	}
 	page.UnreadMissed = unread.Count
 	page.LatestUnreadMissed = unread.LatestUnreadByContact
+	var beforeStartedAt int64
+	if before > 0 {
+		if err := db.sql.QueryRow(`
+			SELECT started_at FROM call_history
+			WHERE id = ?
+				AND ended_at IS NOT NULL
+				AND (caller_id = ? OR callee_id = ?)
+				AND (? = 0 OR (caller_id = ? AND callee_id = ?) OR (caller_id = ? AND callee_id = ?))
+		`, before, userID, userID, peerID, userID, peerID, peerID, userID).Scan(&beforeStartedAt); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return page, errors.New("history cursor is invalid")
+			}
+			return page, err
+		}
+	}
 
 	rows, err := db.sql.Query(`
 		SELECT h.id, h.call_id, h.caller_id, peer.login,
@@ -306,12 +321,12 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 		WHERE h.ended_at IS NOT NULL
 			AND (h.caller_id = ? OR h.callee_id = ?)
 			AND (? = 0 OR (h.caller_id = ? AND h.callee_id = ?) OR (h.caller_id = ? AND h.callee_id = ?))
-			AND (? = 0 OR h.id < ?)
-		ORDER BY h.id DESC
+			AND (? = 0 OR h.started_at < ? OR (h.started_at = ? AND h.id < ?))
+		ORDER BY h.started_at DESC, h.id DESC
 		LIMIT ?
 	`, userID, userID, userID, userID,
 		peerID, userID, peerID, peerID, userID,
-		before, before, limit+1)
+		before, beforeStartedAt, beforeStartedAt, before, limit+1)
 	if err != nil {
 		return page, err
 	}

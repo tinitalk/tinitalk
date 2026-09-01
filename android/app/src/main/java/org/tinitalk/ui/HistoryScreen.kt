@@ -2,6 +2,8 @@ package org.tinitalk.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,12 +22,15 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -54,6 +60,7 @@ import java.time.ZoneId
 internal fun shouldScrollToNewest(previousFirstKey: String?, currentFirstKey: String?): Boolean =
     previousFirstKey != null && currentFirstKey != null && previousFirstKey != currentFirstKey
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
     items: List<CallHistoryItem>,
@@ -62,15 +69,20 @@ fun HistoryScreen(
     loaded: Boolean,
     loading: Boolean,
     loadingMore: Boolean,
-    nextBefore: Long,
+    hasMore: Boolean,
     errorMessage: String?,
+    unavailableServers: List<String> = emptyList(),
     onLoadMore: () -> Unit,
-    onRetry: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     val now = Instant.now()
     val zone = ZoneId.systemDefault()
     val listState = rememberLazyListState()
     var previousFirstKey by remember { mutableStateOf<String?>(null) }
+    var unavailableDialogVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(unavailableServers) {
+        if (unavailableServers.isEmpty()) unavailableDialogVisible = false
+    }
     val currentFirstKey = itemKeys.firstOrNull()
     LaunchedEffect(currentFirstKey) {
         if (shouldScrollToNewest(previousFirstKey, currentFirstKey)) {
@@ -78,57 +90,145 @@ fun HistoryScreen(
         }
         if (currentFirstKey != null) previousFirstKey = currentFirstKey
     }
-    when {
-        !internetAvailable && items.isEmpty() -> HistoryOffline()
-        loading && items.isEmpty() -> HistoryLoading()
-        loaded && items.isEmpty() && errorMessage == null -> HistoryEmpty()
-        items.isEmpty() && errorMessage != null -> HistoryError(errorMessage, onRetry, retryEnabled = internetAvailable)
-        else -> LazyColumn(
-            state = listState,
+    Box(modifier = Modifier.fillMaxSize()) {
+        PullToRefreshBox(
+            isRefreshing = loading && items.isNotEmpty(),
+            onRefresh = { if (internetAvailable) onRefresh() },
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (errorMessage != null) {
-                item(key = "history-error") {
-                    HistoryError(errorMessage, onRetry, compact = true, retryEnabled = internetAvailable)
-                }
-            }
-            itemsIndexed(items, key = { index, item -> itemKeys.getOrNull(index) ?: item.id }) { index, item ->
-                Column {
-                    val day = historyDayLabel(item.startedAt, now, zone)
-                    if (index == 0 || day != historyDayLabel(items[index - 1].startedAt, now, zone)) {
-                        Text(
-                            text = day,
-                            modifier = Modifier.padding(start = 4.dp, top = if (index == 0) 4.dp else 14.dp, bottom = 8.dp),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+            when {
+                !internetAvailable && items.isEmpty() -> HistoryOffline()
+                loading && items.isEmpty() -> HistoryLoading()
+                loaded && items.isEmpty() && errorMessage == null -> HistoryEmpty()
+                items.isEmpty() && errorMessage != null -> HistoryError(errorMessage)
+                else -> LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = 10.dp,
+                        end = 16.dp,
+                        bottom = if (unavailableServers.isEmpty()) 10.dp else 78.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    itemsIndexed(items, key = { index, item -> itemKeys.getOrNull(index) ?: item.id }) { index, item ->
+                        Column {
+                            val day = historyDayLabel(item.startedAt, now, zone)
+                            if (index == 0 || day != historyDayLabel(items[index - 1].startedAt, now, zone)) {
+                                Text(
+                                    text = day,
+                                    modifier = Modifier.padding(start = 4.dp, top = if (index == 0) 4.dp else 14.dp, bottom = 8.dp),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            HistoryRow(item)
+                            if (shouldLoadMoreHistory(
+                                    index = index,
+                                    itemCount = items.size,
+                                    nextBefore = if (hasMore) 1L else 0L,
+                                    loading = loadingMore,
+                                    hasError = false,
+                                    internetAvailable = internetAvailable,
+                                )
+                            ) {
+                                LaunchedEffect(itemKeys.getOrNull(index), hasMore) { onLoadMore() }
+                            }
+                        }
                     }
-                    HistoryRow(item)
-                    if (shouldLoadMoreHistory(
-                            index = index,
-                            itemCount = items.size,
-                            nextBefore = nextBefore,
-                            loading = loadingMore,
-                            hasError = errorMessage != null,
-                            internetAvailable = internetAvailable,
-                        )
-                    ) {
-                        LaunchedEffect(nextBefore) { onLoadMore() }
-                    }
-                }
-            }
-            if (loadingMore) {
-                item(key = "history-loading-more") {
-                    Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 2.dp)
+                    if (loadingMore) {
+                        item(key = "history-loading-more") {
+                            Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 2.dp)
+                            }
+                        }
                     }
                 }
             }
         }
+        if (unavailableServers.isNotEmpty()) {
+            HistoryIncompleteBanner(
+                modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 10.dp),
+                onClick = { unavailableDialogVisible = true },
+            )
+        }
     }
+    if (unavailableDialogVisible) {
+        HistoryUnavailableDialog(
+            servers = unavailableServers,
+            onDismiss = { unavailableDialogVisible = false },
+        )
+    }
+}
+
+@Composable
+private fun HistoryIncompleteBanner(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val background = lerp(MaterialTheme.colorScheme.surface, BrandGold, 0.18f)
+    Surface(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = background,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        border = BorderStroke(1.dp, BrandGold.copy(alpha = 0.72f)),
+        shadowElevation = 4.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_server_incompatible),
+                contentDescription = null,
+                tint = BrandGold,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "История загружена не полностью",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HistoryUnavailableDialog(servers: List<String>, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_server_incompatible),
+                    contentDescription = null,
+                    tint = BrandGold,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text("История загружена не полностью")
+            }
+        },
+        text = {
+            if (servers.size == 1) {
+                Text("Не удалось получить историю с сервера ${servers[0]}")
+            } else {
+                Column {
+                    Text("Не удалось получить историю с серверов")
+                    Spacer(Modifier.height(12.dp))
+                    servers.forEach { server ->
+                        Text(server, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Закрыть") }
+        },
+    )
 }
 
 @Composable
@@ -260,7 +360,7 @@ private fun HistoryLoading() {
 @Composable
 private fun HistoryOffline() {
     Column(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -277,7 +377,7 @@ private fun HistoryOffline() {
 @Composable
 private fun HistoryEmpty() {
     Column(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -301,18 +401,12 @@ private fun HistoryEmpty() {
 @Composable
 private fun HistoryError(
     message: String,
-    onRetry: () -> Unit,
-    compact: Boolean = false,
-    retryEnabled: Boolean = true,
 ) {
     Column(
-        modifier = (if (compact) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
-            .padding(if (compact) 12.dp else 32.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = onRetry, enabled = retryEnabled) { Text("Повторить") }
     }
 }

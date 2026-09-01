@@ -69,7 +69,6 @@ class AppMenuTest {
                         onContactsRefreshMessageHandled = {},
                         onHistoryVisible = {},
                         onLoadMoreHistory = {},
-                        onRetryHistory = {},
                         onContactHistoryVisible = {},
                         onContactHistoryHidden = {},
                         onLoadMoreContactHistory = {},
@@ -123,12 +122,12 @@ class AppMenuTest {
         }
 
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodesWithText("Сервер TiniTalk доступен").fetchSemanticsNodes().size == 2
+            composeRule.onAllNodesWithText("Сервер доступен").fetchSemanticsNodes().size == 2
         }
         composeRule.onNodeWithText("API v3 (11111111)").assertIsDisplayed()
         composeRule.onNodeWithText("API v7 (77777777)").assertIsDisplayed()
-        composeRule.onAllNodesWithText("Сервер TiniTalk доступен").assertCountEquals(2)
-        composeRule.onAllNodesWithContentDescription("Сервер TiniTalk доступен").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Сервер доступен").assertCountEquals(2)
+        composeRule.onAllNodesWithContentDescription("Сервер доступен").assertCountEquals(0)
         composeRule.onAllNodesWithContentDescription("Выйти").assertCountEquals(2)
         composeRule.onAllNodesWithText("Выйти").assertCountEquals(0)
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -388,6 +389,70 @@ func TestCallHistoryPagesNewestFirstAndCountsMissed(t *testing.T) {
 	}
 	if page.NextBefore != 0 || page.UnreadMissed != 1 {
 		t.Fatalf("second page metadata = %+v", page)
+	}
+}
+
+func TestCallHistoryPagesByStartedAtThenID(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+
+	// IDs are assigned in this order, intentionally different from the desired
+	// started_at ordering. "same-newer-id" also verifies the ID tie-breaker.
+	recordMissedCall(t, db, "oldest", started)
+	recordMissedCall(t, db, "newest-low-id", started.Add(2*time.Hour))
+	recordMissedCall(t, db, "same", started.Add(time.Hour))
+	recordMissedCall(t, db, "same-newer-id", started.Add(time.Hour))
+
+	first, err := db.CallHistory("bob", 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{first.Items[0].CallID, first.Items[1].CallID}; !reflect.DeepEqual(got, []string{"newest-low-id", "same-newer-id"}) {
+		t.Fatalf("first page call IDs = %v, want [newest-low-id same-newer-id]", got)
+	}
+	if first.NextBefore != first.Items[1].ID {
+		t.Fatalf("first page next_before = %d, want last item ID %d", first.NextBefore, first.Items[1].ID)
+	}
+
+	second, err := db.CallHistory("bob", first.NextBefore, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{second.Items[0].CallID, second.Items[1].CallID}; !reflect.DeepEqual(got, []string{"same", "oldest"}) {
+		t.Fatalf("second page call IDs = %v, want [same oldest]", got)
+	}
+	if second.NextBefore != 0 {
+		t.Fatalf("second page next_before = %d, want 0", second.NextBefore)
+	}
+}
+
+func TestCallHistoryRejectsMissingOrOutOfScopeCursor(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	if _, err := db.AddUser("carol", "Carol"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	recordMissedCall(t, db, "alice-call", started)
+	recordMissedCallFrom(t, db, "carol-call", "carol", "bob", started.Add(time.Minute))
+
+	var carolCallID int64
+	if err := db.sql.QueryRow("SELECT id FROM call_history WHERE call_id = ?", "carol-call").Scan(&carolCallID); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		before int64
+	}{
+		{name: "missing", before: 999},
+		{name: "different peer", before: carolCallID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := db.CallHistoryForPeer("bob", "alice", test.before, 10); err == nil {
+				t.Errorf("CallHistoryForPeer with %s cursor error = nil, want error", test.name)
+			}
+		})
 	}
 }
 

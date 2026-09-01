@@ -66,6 +66,8 @@ import org.tinitalk.ui.AccountSummary
 import org.tinitalk.ui.ContactNameViewModel
 import org.tinitalk.ui.ContactHistoryState
 import org.tinitalk.ui.HistoryRefreshGate
+import org.tinitalk.ui.HISTORY_PAGE_SIZE
+import org.tinitalk.ui.accountHistoryWindow
 import org.tinitalk.ui.isHistoryVisibleToUser
 import org.tinitalk.ui.shouldMarkHistoryRead
 import org.tinitalk.ui.isCurrentContactHistoryRequest
@@ -200,7 +202,6 @@ class MainActivity : ComponentActivity() {
                     onContactsRefreshMessageHandled = ::clearContactsRefreshMessage,
                     onHistoryVisible = ::showHistory,
                     onLoadMoreHistory = ::loadMoreHistory,
-                    onRetryHistory = ::retryHistory,
                     onContactHistoryVisible = ::showContactHistory,
                     onContactHistoryHidden = ::hideContactHistory,
                     onLoadMoreContactHistory = ::loadMoreContactHistory,
@@ -330,6 +331,8 @@ class MainActivity : ComponentActivity() {
                 historyLoading = false,
                 historyLoadingMore = false,
                 historyNextBefores = emptyMap(),
+                historyVisibleLimit = HISTORY_PAGE_SIZE,
+                historyUnavailableAccounts = emptySet(),
                 historyErrorMessage = null,
                 contactHistory = ContactHistoryState(),
                 unreadMissedCount = 0,
@@ -397,98 +400,127 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadMoreHistory() {
-        loadHistory(reset = false)
-    }
-
-    private fun retryHistory() {
-        loadHistory(
-            reset = screenState.accountHistory.isEmpty() || screenState.historyNextBefores.values.none { it > 0L },
-            markRead = true,
+        val window = accountHistoryWindow(
+            loaded = screenState.accountHistory,
+            visibleLimit = screenState.historyVisibleLimit,
+            cursors = screenState.historyNextBefores,
+            unavailableAccounts = screenState.historyUnavailableAccounts,
         )
+        if (!window.hasMore) return
+        loadHistory(reset = false)
     }
 
     private fun loadHistory(reset: Boolean, markRead: Boolean = false) {
         if (!network.available || !screenState.signedIn) return
         val requestAuthGeneration = authGeneration
         val generation: Int
+        val targetVisibleLimit: Int
         if (reset) {
             if (screenState.historyLoading) return
             historyLoadGeneration++
             generation = historyLoadGeneration
+            targetVisibleLimit = HISTORY_PAGE_SIZE
             screenState = screenState.copy(historyLoading = true, historyErrorMessage = null)
         } else {
-            if (screenState.historyNextBefores.values.none { it > 0 } || screenState.historyLoading || screenState.historyLoadingMore) return
+            if (screenState.historyLoading || screenState.historyLoadingMore) return
             generation = historyLoadGeneration
+            targetVisibleLimit = screenState.historyVisibleLimit + HISTORY_PAGE_SIZE
             screenState = screenState.copy(historyLoadingMore = true, historyErrorMessage = null)
         }
         val accounts = repository.accounts()
+        if (accounts.isEmpty()) {
+            screenState = screenState.copy(historyLoading = false, historyLoadingMore = false)
+            return
+        }
         val accountIdsSnapshot = accounts.map { it.id }
         val requestedCursors = screenState.historyNextBefores.toMap()
         val cachedHistory = screenState.accountHistory.groupBy { it.accountId }
+        val unavailableSnapshot = screenState.historyUnavailableAccounts
+        val requestAccounts = accounts.filter { account ->
+            reset || (account.id !in unavailableSnapshot && (requestedCursors[account.id] ?: 0L) > 0L)
+        }
+        if (!reset && requestAccounts.isEmpty()) {
+            screenState = screenState.copy(
+                historyVisibleLimit = targetVisibleLimit,
+                historyLoadingMore = false,
+            )
+            return
+        }
         val notifier = IncomingCallNotifier(this).also { it.syncMissedAccounts(accountIdsSnapshot) }
-        val badgeRefreshes = accountIdsSnapshot.associateWith { notifier.beginAccountMissedCountRefresh(it) }
-        Thread {
-            val pages = accountIdsSnapshot.mapNotNull { accountId ->
-                val before = if (reset) 0 else requestedCursors[accountId] ?: 0
-                if (!reset && before == 0L) null else runCatching {
-                    repository.loadCallHistory(accountId, before = before,
-                        expectedSession = accounts.firstOrNull { it.id == accountId }?.session)
+        val badgeRefreshes = requestAccounts.associate { account ->
+            account.id to notifier.beginAccountMissedCountRefresh(account.id)
+        }
+        val requests = requestAccounts.associateWith { account ->
+            CompletableFuture.supplyAsync {
+                val before = if (reset) 0L else requestedCursors[account.id] ?: 0L
+                runCatching {
+                    repository.loadCallHistory(
+                        account.id,
+                        before = before,
+                        expectedSession = account.session,
+                    )
                 }.getOrNull()
             }
-            if (pages.isEmpty()) {
-                runOnUiThread {
-                    if (generation == historyLoadGeneration) {
-                        screenState = screenState.copy(
-                            historyLoaded = true,
-                            historyLoading = false,
-                            historyLoadingMore = false,
-                            historyErrorMessage = "Не удалось загрузить историю. Проверьте соединение.",
-                        )
-                        finishHistoryRefresh()
-                    }
+        }
+        CompletableFuture.allOf(*requests.values.toTypedArray()).whenComplete { _, _ ->
+            val pages = requests.values.mapNotNull { request ->
+                runCatching { request.getNow(null) }.getOrNull()
+            }
+            runOnUiThread {
+                val activeRecords = repository.accounts()
+                val active = activeRecords.associate { it.id to it.session }
+                if (!screenState.signedIn || generation != historyLoadGeneration ||
+                    !isCurrentSessionRequest(requestAuthGeneration, authGeneration)
+                ) return@runOnUiThread
+                val activeOrder = activeRecords.filter { record ->
+                    accounts.any { it.id == record.id && it.session.sameIdentity(record.session) }
+                }.map { it.id }
+                val activePages = pages.filter { page ->
+                    val activeSession = active[page.accountId]
+                    page.accountId in activeOrder && page.session?.sameIdentity(activeSession) == true
                 }
-            } else {
-                runOnUiThread {
-                    val activeRecords = repository.accounts()
-                    val active = activeRecords.associate { it.id to it.session }
-                    if (!screenState.signedIn || generation != historyLoadGeneration ||
-                        !isCurrentSessionRequest(requestAuthGeneration, authGeneration)) return@runOnUiThread
-                    val activeOrder = activeRecords.filter { record ->
-                        accounts.any { it.id == record.id && it.session.sameIdentity(record.session) }
-                    }.map { it.id }
-                    val activePages = pages.filter { page ->
-                        val activeSession = active[page.accountId]
-                        page.accountId in activeOrder && page.session?.sameIdentity(activeSession) == true
-                    }
-                    val reduced = org.tinitalk.ui.reduceAccountHistory(
-                        activeOrder, cachedHistory, requestedCursors, activePages, append = !reset,
+                val requestedActiveIds = requestAccounts.filter { requested ->
+                    active[requested.id]?.sameIdentity(requested.session) == true
+                }.map { it.id }.toSet()
+                val successfulIds = activePages.map { it.accountId }.toSet()
+                val unavailable = (
+                    (if (reset) emptySet() else unavailableSnapshot) +
+                        (requestedActiveIds - successfulIds) - successfulIds
+                    ).intersect(activeOrder.toSet())
+                val reduced = org.tinitalk.ui.reduceAccountHistory(
+                    activeOrder, cachedHistory, requestedCursors, activePages, append = !reset,
+                )
+                val combined = reduced.items
+                screenState = screenState.copy(
+                    accountHistory = combined,
+                    historyLoaded = true,
+                    historyLoading = false,
+                    historyLoadingMore = false,
+                    historyNextBefores = reduced.cursors,
+                    historyVisibleLimit = targetVisibleLimit,
+                    historyUnavailableAccounts = unavailable,
+                    historyErrorMessage = if (combined.isEmpty() && unavailable.isNotEmpty()) {
+                        "Не удалось загрузить историю со всех серверов"
+                    } else {
+                        null
+                    },
+                )
+                notifier.syncMissedAccounts(activeOrder)
+                activePages.forEach { page ->
+                    val session = page.session ?: return@forEach
+                    applyUnreadMissedState(
+                        page.accountId,
+                        page.unread,
+                        badgeRefreshes[page.accountId],
+                        CallSessionBinding.from(session),
                     )
-                    val combined = reduced.items
-                    screenState = screenState.copy(
-                        accountHistory = combined,
-                        historyLoaded = true,
-                        historyLoading = false,
-                        historyLoadingMore = false,
-                        historyNextBefores = reduced.cursors,
-                        historyErrorMessage = null,
-                    )
-                    notifier.syncMissedAccounts(activeOrder)
-                    activePages.forEach { page ->
-                        val session = page.session ?: return@forEach
-                        applyUnreadMissedState(
-                            page.accountId,
-                            page.unread,
-                            badgeRefreshes[page.accountId],
-                            CallSessionBinding.from(session),
-                        )
-                    }
-                    finishHistoryRefresh()
-                    if (reset && shouldMarkHistoryRead(markRead, mainScreenResumed, historyVisible)) {
-                        markActiveHistoryPages(activePages)
-                    }
+                }
+                finishHistoryRefresh()
+                if (reset && shouldMarkHistoryRead(markRead, mainScreenResumed, historyVisible)) {
+                    markActiveHistoryPages(activePages)
                 }
             }
-        }.start()
+        }
     }
 
     private fun showContactHistory(key: AccountPeerKey) {
@@ -865,6 +897,7 @@ class MainActivity : ComponentActivity() {
         screenState = screenState.copy(
             accountContacts = screenState.accountContacts.filterNot { it.accountId == accountId },
             historyNextBefores = screenState.historyNextBefores - accountId,
+            historyUnavailableAccounts = screenState.historyUnavailableAccounts - accountId,
             accountHistory = screenState.accountHistory.filterNot { it.accountId == accountId },
             unreadByAccount = screenState.unreadByAccount - accountId,
             latestUnreadMissedByAccountContact = screenState.latestUnreadMissedByAccountContact.filterKeys { it.accountId != accountId },

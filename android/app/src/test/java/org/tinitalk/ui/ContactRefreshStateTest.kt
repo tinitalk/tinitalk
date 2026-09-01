@@ -68,6 +68,32 @@ class ContactRefreshStateTest {
     }
 
     @Test
+    fun historyWindowHidesBufferedRowsAndIgnoresUnavailableCursor() {
+        val available = AccountId("available")
+        val unavailable = AccountId("unavailable")
+        val loaded = (100L downTo 50L).map { id ->
+            AccountHistory(available, history(id, "sam", id))
+        }
+
+        val buffered = accountHistoryWindow(
+            loaded = loaded,
+            visibleLimit = 50,
+            cursors = mapOf(unavailable to 7L),
+            unavailableAccounts = setOf(unavailable),
+        )
+        val fullyVisible = accountHistoryWindow(
+            loaded = loaded.take(50),
+            visibleLimit = 50,
+            cursors = mapOf(unavailable to 7L),
+            unavailableAccounts = setOf(unavailable),
+        )
+
+        assertEquals(50, buffered.items.size)
+        assertTrue(buffered.hasMore)
+        assertFalse(fullyVisible.hasMore)
+    }
+
+    @Test
     fun accountMergeKeepsEqualLoginsAndUnreadMarkersDistinct() {
         val first = AccountId("first")
         val second = AccountId("second")

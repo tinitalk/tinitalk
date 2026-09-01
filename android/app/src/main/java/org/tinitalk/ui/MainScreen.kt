@@ -112,6 +112,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+internal const val HISTORY_PAGE_SIZE = 50
+
 internal enum class ServerCheckIndicator {
     Checking,
     Available,
@@ -162,6 +164,8 @@ data class MainScreenState(
     val historyLoading: Boolean = false,
     val historyLoadingMore: Boolean = false,
     val historyNextBefores: Map<AccountId, Long> = emptyMap(),
+    val historyVisibleLimit: Int = HISTORY_PAGE_SIZE,
+    val historyUnavailableAccounts: Set<AccountId> = emptySet(),
     val historyErrorMessage: String? = null,
     val contactHistory: ContactHistoryState = ContactHistoryState(),
     val unreadMissedCount: Int = 0,
@@ -282,6 +286,23 @@ internal data class AccountHistoryReduction(
     val cursors: Map<AccountId, Long>,
 )
 
+internal data class AccountHistoryWindow(
+    val items: List<AccountHistory>,
+    val hasMore: Boolean,
+)
+
+internal fun accountHistoryWindow(
+    loaded: List<AccountHistory>,
+    visibleLimit: Int,
+    cursors: Map<AccountId, Long>,
+    unavailableAccounts: Set<AccountId>,
+): AccountHistoryWindow = AccountHistoryWindow(
+    items = loaded.take(visibleLimit),
+    hasMore = loaded.size > visibleLimit || cursors.any { (accountId, cursor) ->
+        cursor > 0L && accountId !in unavailableAccounts
+    },
+)
+
 internal fun aggregateUnreadMissed(
     unreadByAccount: Map<AccountId, CallUnreadState>,
 ): AccountUnreadPresentation = AccountUnreadPresentation(
@@ -312,7 +333,6 @@ fun MainScreen(
     onContactsRefreshMessageHandled: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
-    onRetryHistory: () -> Unit,
     onContactHistoryVisible: (AccountPeerKey) -> Unit,
     onContactHistoryHidden: () -> Unit,
     onLoadMoreContactHistory: () -> Unit,
@@ -382,7 +402,6 @@ fun MainScreen(
                     onContactsRefreshMessageHandled = onContactsRefreshMessageHandled,
                     onHistoryVisible = onHistoryVisible,
                     onLoadMoreHistory = onLoadMoreHistory,
-                    onRetryHistory = onRetryHistory,
                     onContactHistoryVisible = onContactHistoryVisible,
                     onContactHistoryHidden = onContactHistoryHidden,
                     onLoadMoreContactHistory = onLoadMoreContactHistory,
@@ -619,7 +638,6 @@ private fun HomeScreen(
     onContactsRefreshMessageHandled: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
-    onRetryHistory: () -> Unit,
     onContactHistoryVisible: (AccountPeerKey) -> Unit,
     onContactHistoryHidden: () -> Unit,
     onLoadMoreContactHistory: () -> Unit,
@@ -638,6 +656,16 @@ private fun HomeScreen(
     }
     val visibleContacts = state.accountContacts
     val selectedAccountContact = visibleContacts.firstOrNull { it.peerKey == selectedContactKey }
+    val historyWindow = accountHistoryWindow(
+        loaded = state.accountHistory,
+        visibleLimit = state.historyVisibleLimit,
+        cursors = state.historyNextBefores,
+        unavailableAccounts = state.historyUnavailableAccounts,
+    )
+    val unavailableHistoryServers = state.accounts
+        .filter { it.id in state.historyUnavailableAccounts }
+        .map { serverAddress(it.serverUrl) }
+        .distinct()
 
     BackHandler(
         enabled = shouldReturnToContactsOnBack(
@@ -696,16 +724,17 @@ private fun HomeScreen(
                             )
                         } else {
                             HistoryScreen(
-                                items = state.accountHistory.map(AccountHistory::item),
-                                itemKeys = state.accountHistory.map { accountScopedKey(it.accountId, it.id.toString()) },
+                                items = historyWindow.items.map(AccountHistory::item),
+                                itemKeys = historyWindow.items.map { accountScopedKey(it.accountId, it.id.toString()) },
                                 internetAvailable = state.networkAvailable,
                                 loaded = state.historyLoaded,
                                 loading = state.historyLoading,
                                 loadingMore = state.historyLoadingMore,
-                                nextBefore = state.historyNextBefores.values.maxOrNull() ?: 0L,
+                                hasMore = historyWindow.hasMore,
                                 errorMessage = state.historyErrorMessage,
+                                unavailableServers = unavailableHistoryServers,
                                 onLoadMore = onLoadMoreHistory,
-                                onRetry = onRetryHistory,
+                                onRefresh = onHistoryVisible,
                             )
                         }
                     }
