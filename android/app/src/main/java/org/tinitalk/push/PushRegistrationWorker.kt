@@ -14,6 +14,7 @@ import org.tinitalk.data.Session
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.UrlConnectionApiClient
+import org.tinitalk.data.normalizeServerUrl
 import org.tinitalk.data.sameIdentity
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -21,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
 internal enum class PushRegistrationAttemptResult {
     SUCCESS,
     RETRY,
+    REFRESH_CONFIG,
 }
 
 internal class PushRegistrationRunner(
@@ -77,10 +79,7 @@ internal class PushRegistrationRunner(
                 removeAccount(session, AuthRemovalReason.SessionReplaced)
                 PushRegistrationAttemptResult.SUCCESS
             }
-            error.code in 400..499 -> {
-                removeAccount(session, AuthRemovalReason.TerminalFailure)
-                PushRegistrationAttemptResult.SUCCESS
-            }
+            error.code == 409 -> PushRegistrationAttemptResult.REFRESH_CONFIG
             else -> PushRegistrationAttemptResult.SUCCESS
         }
     } catch (_: AccountStorageException) {
@@ -91,6 +90,91 @@ internal class PushRegistrationRunner(
         if (authStore.invalidateIfCurrent(accountId, session, reason)) {
             runCatching { onAccountRemoved(accountId) }
         }
+    }
+}
+
+internal class StaleWebPushConfigRefresher(
+    private val accountId: AccountId,
+    private val authStore: AuthStore,
+    private val deviceId: String,
+    private val fetch: (Session) -> WebPushClientConfig,
+    private val subscribe: (AccountId, StoredWebPushConfig) -> WebPushSubscription,
+    private val onStaleSubscription: (AccountId) -> Unit,
+) {
+    fun refresh(expected: Session): Boolean {
+        val remote = fetch(expected)
+        val config = StoredWebPushConfig(
+            serverUrl = normalizeServerUrl(expected.url),
+            vapidPublicKey = remote.vapidPublicKey,
+            configId = remote.configId,
+        )
+        require(config.isValid()) { "invalid WebPush configuration" }
+        if (!authStore.isCurrent(accountId, expected)) return false
+        val subscription = subscribe(accountId, config)
+        val refreshed = expected.copy(configId = config.configId)
+        val committed = try {
+            authStore.activateWebPushRegistrationIfCurrent(
+                accountId,
+                expected,
+                refreshed,
+                config,
+                deviceId,
+                subscription,
+            )
+        } catch (error: Exception) {
+            runCatching { onStaleSubscription(accountId) }
+                .exceptionOrNull()
+                ?.let(error::addSuppressed)
+            throw error
+        }
+        if (!committed) {
+            onStaleSubscription(accountId)
+            return false
+        }
+        return true
+    }
+}
+
+internal fun recoverCurrentWebPushRegistration(
+    accountId: AccountId,
+    authStore: AuthStore,
+    registration: AccountWebPushRegistration,
+) {
+    while (true) {
+        val current = authStore.get(accountId)
+        if (current == null) return
+        val snapshot = authStore.withCurrent(accountId, current.session) {
+            CurrentWebPushConfig(authStore.webPushConfig(accountId))
+        } ?: continue
+        val config = snapshot.value ?: return
+        registration.restore(accountId, config)
+        val unchanged = authStore.withCurrent(accountId, current.session) {
+            authStore.webPushConfig(accountId) == config
+        }
+        if (unchanged == true) return
+    }
+}
+
+private data class CurrentWebPushConfig(val value: StoredWebPushConfig?)
+
+internal fun runPushRegistrationAttempt(
+    attempt: () -> PushRegistrationAttemptResult,
+    refreshConfig: () -> Boolean,
+): PushRegistrationAttemptResult {
+    val first = attempt()
+    if (first != PushRegistrationAttemptResult.REFRESH_CONFIG) return first
+    return try {
+        if (refreshConfig()) attempt() else PushRegistrationAttemptResult.SUCCESS
+    } catch (_: IOException) {
+        PushRegistrationAttemptResult.RETRY
+    } catch (error: ApiException) {
+        if (error.code == 408 || error.code == 429 || error.code in 500..599) {
+            PushRegistrationAttemptResult.RETRY
+        } else {
+            PushRegistrationAttemptResult.SUCCESS
+        }
+    } catch (_: Exception) {
+        PushRegistrationAttemptResult.RETRY
     }
 }
 
@@ -162,9 +246,39 @@ class PushRegistrationWorker(
                 ).putDevice(pending.deviceId, pending.subscription, pending.configId)
             },
         )
-        return when (runner.runAttempt()) {
+        val finalAttempt = try {
+            runPushRegistrationAttempt(
+                attempt = runner::runAttempt,
+                refreshConfig = {
+                    val registration = UnifiedPushAccountRegistration(applicationContext)
+                    StaleWebPushConfigRefresher(
+                        accountId = accountId,
+                        authStore = authStore,
+                        deviceId = deviceId,
+                        fetch = { session ->
+                            UrlConnectionApiClient(
+                                session.url,
+                                session.login,
+                                session.token,
+                                session.sessionId,
+                            ).webPushConfig()
+                        },
+                        subscribe = { id, refreshedConfig ->
+                            registration.subscribe(id, refreshedConfig)
+                        },
+                        onStaleSubscription = { id ->
+                            recoverCurrentWebPushRegistration(id, authStore, registration)
+                        },
+                    ).refresh(account.session)
+                },
+            )
+        } catch (_: Exception) {
+            return Result.retry()
+        }
+        return when (finalAttempt) {
             PushRegistrationAttemptResult.SUCCESS -> Result.success()
             PushRegistrationAttemptResult.RETRY -> Result.retry()
+            PushRegistrationAttemptResult.REFRESH_CONFIG -> Result.retry()
         }
     }
 

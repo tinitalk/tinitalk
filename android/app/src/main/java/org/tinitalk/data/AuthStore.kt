@@ -5,8 +5,10 @@ import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.google.gson.Gson
+import org.tinitalk.push.PendingPushRegistration
 import org.tinitalk.push.PushRegistrationState
 import org.tinitalk.push.StoredWebPushConfig
+import org.tinitalk.push.WebPushSubscription
 import org.tinitalk.push.isBoundTo
 import org.tinitalk.push.isValid
 import java.security.KeyStore
@@ -289,6 +291,41 @@ class AuthStore(
         val replacement = persistedAccount(current.id, session, current).copy(
             webPushConfig = config,
             webPushRegistration = null,
+        )
+        AccountCollectionStorage.write(
+            store,
+            collection.copy(accounts = collection.accounts.map { if (it.id == current.id) replacement else it }),
+        )
+        true
+    }
+
+    fun activateWebPushRegistrationIfCurrent(
+        accountId: AccountId,
+        expected: Session,
+        session: Session,
+        config: StoredWebPushConfig,
+        deviceId: String,
+        subscription: WebPushSubscription,
+    ): Boolean = synchronized(AccountStorageLock) {
+        val collection = ensureMigratedUnlocked()
+        val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
+        if (!current.toSession().sameIdentity(expected) || !collection.canReplace(current.id, session)) {
+            return@synchronized false
+        }
+        require(config.isValid() && config.isBoundTo(session)) { "WebPush configuration does not match session" }
+        require(deviceId.isNotBlank() && subscription.isValid()) { "invalid push registration" }
+        val generation = (current.webPushRegistration?.generation ?: 0) + 1
+        val pending = PendingPushRegistration(
+            serverUrl = normalizeServerUrl(session.url),
+            configId = config.configId,
+            deviceId = deviceId,
+            sessionId = requireNotNull(session.sessionId),
+            subscription = subscription,
+            generation = generation,
+        )
+        val replacement = persistedAccount(current.id, session, current).copy(
+            webPushConfig = config,
+            webPushRegistration = PushRegistrationState(generation, pending),
         )
         AccountCollectionStorage.write(
             store,

@@ -5,7 +5,6 @@ import java.util.concurrent.CopyOnWriteArraySet
 enum class AuthRemovalReason {
     SessionReplaced,
     Unauthorized,
-    TerminalFailure,
 }
 
 data class AuthSessionEvent(
