@@ -44,6 +44,7 @@ import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.CompatibilityProblem
+import org.tinitalk.data.ContactCache
 import org.tinitalk.data.ServerCompatibilityException
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.sameIdentity
@@ -75,6 +76,7 @@ import org.tinitalk.ui.theme.TiniTalkTheme
 import java.net.MalformedURLException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.util.concurrent.CompletableFuture
 
 private const val SessionReplacedMessage = "Вход выполнен на другом устройстве"
 
@@ -90,6 +92,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var repository: ContactRepository
     private lateinit var authStore: AuthStore
+    private lateinit var contactCache: ContactCache
     private lateinit var network: NetworkAvailability
     private var screenState by mutableStateOf(MainScreenState())
     private var callUiState by mutableStateOf(CallUiStateStore.snapshot())
@@ -104,6 +107,7 @@ class MainActivity : ComponentActivity() {
     private var contactHistoryAccountId: AccountId? = null
     private val contactHistoryRefreshGate = HistoryRefreshGate()
     private var authGeneration = 0
+    private var contactsSyncing = false
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread { callUiState = state }
     }
@@ -142,8 +146,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
-        repository = ContactRepository(this, authStore)
+        val localStore = SharedPreferencesKeyValueStore(this)
+        authStore = AuthStore(localStore, AndroidKeystoreTokenCipher())
+        contactCache = ContactCache(localStore)
+        repository = ContactRepository(this, authStore, contactCache)
         network = networkAvailability()
         screenState = screenState.copy(networkAvailable = network.available)
         setContent {
@@ -191,7 +197,6 @@ class MainActivity : ComponentActivity() {
                     onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
                     onContactsVisible = { historyVisible = false },
                     onRefreshContacts = ::refreshContacts,
-                    onLoadMoreContacts = ::loadMoreContacts,
                     onContactsRefreshMessageHandled = ::clearContactsRefreshMessage,
                     onHistoryVisible = ::showHistory,
                     onLoadMoreHistory = ::loadMoreHistory,
@@ -217,51 +222,25 @@ class MainActivity : ComponentActivity() {
         accountAdditionHandoff.observe(accountAdditionObserver)
         network.observe(networkObserver)
         refreshPermissions()
-        if (network.available) {
-            restoreContacts()
-        } else {
-            showOfflineAccounts()
-        }
+        restoreContacts()
     }
 
     private fun restoreContacts() {
-        if (!network.available) {
-            showOfflineAccounts()
+        val accounts = repository.accounts()
+        if (accounts.isEmpty()) {
+            screenState = MainScreenState(
+                restoring = false,
+                permissions = screenState.permissions,
+                networkAvailable = network.available,
+            )
             return
         }
-        val requestAuthGeneration = authGeneration
-        val accounts = repository.accounts()
-        Thread {
-            val restored = accounts.mapNotNull { account ->
-                runCatching { repository.restoreContacts(account.id) }.getOrNull()
-            }
-            runOnUiThread {
-                if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
-                    return@runOnUiThread
-                }
-                val current = repository.accounts()
-                val activeIds = current.filter { record ->
-                    accounts.any { it.id == record.id && it.session.sameIdentity(record.session) }
-                }.map { it.id }
-                val surviving = restored.filter { it.accountId in activeIds }
-                if (restored.isEmpty() && accounts.isEmpty()) {
-                    screenState = MainScreenState(
-                        restoring = false,
-                        permissions = screenState.permissions,
-                        networkAvailable = network.available,
-                    )
-                } else if (surviving.isNotEmpty()) {
-                    showContacts(surviving)
-                } else {
-                    screenState = screenState.copy(
-                        restoring = false, signingIn = false, signedIn = true,
-                        serverUrl = current.aboutServerUrl(),
-                        accounts = current.toAccountSummaries(),
-                        contactsRefreshErrorMessage = "\u0421\u0435\u0440\u0432\u0435\u0440 TiniTalk \u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d",
-                    )
-                }
-            }
-        }.start()
+        showContacts(accounts.map(contactCache::load))
+        if (!network.available) {
+            screenState = screenState.copy(networkAvailable = false)
+            return
+        }
+        refreshContacts(showProgress = false)
     }
 
     private fun loadContacts(url: String, login: String, token: String) {
@@ -291,7 +270,6 @@ class MainActivity : ComponentActivity() {
                                             page.items.map { contact ->
                                                 org.tinitalk.data.AccountContact(account.id, serverUrl, contact)
                                             },
-                                            page.nextCursor,
                                         ),
                                     ),
                                 )
@@ -347,9 +325,6 @@ class MainActivity : ComponentActivity() {
                 ),
                 contactsRefreshing = false,
                 contactsRefreshErrorMessage = null,
-                contactsLoadingMore = false,
-                contactsNextCursors = pages.associate { it.accountId to it.nextCursor },
-                contactsLoadMoreErrorMessage = null,
                 accountHistory = emptyList(),
                 historyLoaded = false,
                 historyLoading = false,
@@ -367,99 +342,49 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun refreshContacts() {
-        if (!network.available || !screenState.signedIn || screenState.contactsRefreshing || screenState.contactsLoadingMore) return
+    private fun refreshContacts(showProgress: Boolean = true) {
+        if (!network.available || !screenState.signedIn || contactsSyncing) return
         val requestAuthGeneration = authGeneration
         val accounts = repository.accounts()
-        val accountIds = accounts.map { it.id }
-        val cachedContacts = screenState.accountContacts.groupBy { it.accountId }
-        val cachedCursors = screenState.contactsNextCursors.toMap()
-        screenState = screenState.copy(
-            contactsRefreshing = true,
-            contactsRefreshErrorMessage = null,
-            contactsLoadMoreErrorMessage = null,
-        )
-        Thread {
-            val pages = accountIds.mapNotNull { accountId ->
-                runCatching { repository.refreshContacts(accountId) }.getOrNull()
+        if (accounts.isEmpty()) return
+        contactsSyncing = true
+        if (showProgress) {
+            screenState = screenState.copy(
+                contactsRefreshing = true,
+                contactsRefreshErrorMessage = null,
+            )
+        }
+        val requests = accounts.map { account ->
+            CompletableFuture.supplyAsync {
+                runCatching { repository.refreshContacts(account.id) }.getOrNull()
             }
+        }
+        CompletableFuture.allOf(*requests.toTypedArray()).whenComplete { _, _ ->
+            val pages = requests.mapNotNull { request -> runCatching { request.getNow(null) }.getOrNull() }
             runOnUiThread {
+                contactsSyncing = false
                 if (!screenState.signedIn || !isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
                     return@runOnUiThread
                 }
-                val activeOrder = repository.accounts().filter { current ->
+                val activeAccounts = repository.accounts().filter { current ->
                     accounts.any { it.id == current.id && it.session.sameIdentity(current.session) }
-                }.map { it.id }
-                val activePages = pages.filter { it.accountId in activeOrder }
-                screenState = if (activePages.isEmpty()) {
-                    screenState.copy(
-                        contactsRefreshing = false,
-                        contactsRefreshErrorMessage = "Не удалось обновить контакты",
-                    )
-                } else {
-                    val reduced = org.tinitalk.ui.reduceAccountContacts(
-                        activeOrder, cachedContacts, cachedCursors, activePages, append = false,
-                    )
-                    val contacts = reduced.first
-                    val cursors = reduced.second
-                    screenState.copy(
-                        accountContacts = contacts,
-                        contactsRefreshing = false,
-                        contactsRefreshErrorMessage = null,
-                        contactsLoadingMore = false,
-                        contactsNextCursors = cursors,
-                        contactsLoadMoreErrorMessage = null,
-                    )
                 }
+                val activeIds = activeAccounts.map { it.id }.toSet()
+                val updated = pages.any { it.accountId in activeIds }
+                screenState = screenState.copy(
+                    accountContacts = org.tinitalk.ui.mergeAccountContacts(
+                        activeAccounts.map { it.id },
+                        activeAccounts.associate { it.id to contactCache.load(it).items },
+                    ),
+                    contactsRefreshing = false,
+                    contactsRefreshErrorMessage = if (showProgress && !updated) {
+                        "Не удалось обновить контакты"
+                    } else {
+                        null
+                    },
+                )
             }
-        }.start()
-    }
-
-    private fun loadMoreContacts() {
-        if (!network.available || !screenState.signedIn || screenState.contactsRefreshing || screenState.contactsLoadingMore) return
-        val cursors = screenState.contactsNextCursors.filterValues { it.isNotEmpty() }
-        if (cursors.isEmpty()) return
-        val requestAuthGeneration = authGeneration
-        val accounts = repository.accounts()
-        val accountIds = accounts.map { it.id }
-        val cachedContacts = screenState.accountContacts.groupBy { it.accountId }
-        val cachedCursors = screenState.contactsNextCursors.toMap()
-        screenState = screenState.copy(
-            contactsLoadingMore = true,
-            contactsLoadMoreErrorMessage = null,
-        )
-        Thread {
-            val pages = cursors.mapNotNull { (accountId, cursor) ->
-                runCatching { repository.refreshContacts(accountId, cursor) }.getOrNull()
-            }
-            runOnUiThread {
-                if (!screenState.signedIn || !isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
-                    return@runOnUiThread
-                }
-                val activeOrder = repository.accounts().filter { current ->
-                    accounts.any { it.id == current.id && it.session.sameIdentity(current.session) }
-                }.map { it.id }
-                val activePages = pages.filter { it.accountId in activeOrder }
-                screenState = if (activePages.isEmpty()) {
-                    screenState.copy(
-                        contactsLoadingMore = false,
-                        contactsLoadMoreErrorMessage = "Не удалось загрузить контакты",
-                    )
-                } else {
-                    val reduced = org.tinitalk.ui.reduceAccountContacts(
-                        activeOrder, cachedContacts, cachedCursors, activePages, append = true,
-                    )
-                    val merged = reduced.first
-                    val next = reduced.second
-                    screenState.copy(
-                        accountContacts = merged,
-                        contactsLoadingMore = false,
-                        contactsNextCursors = next,
-                        contactsLoadMoreErrorMessage = null,
-                    )
-                }
-            }
-        }.start()
+        }
     }
 
     private fun clearContactsRefreshMessage() {
@@ -901,10 +826,6 @@ class MainActivity : ComponentActivity() {
             if (accounts.isEmpty()) resetToLogin() else restoreContacts()
             return
         }
-        val cached = screenState.accountContacts.groupBy { it.accountId }
-        val reduced = org.tinitalk.ui.reduceAccountContacts(
-            accounts.map { it.id }, cached, screenState.contactsNextCursors, listOf(completion.contacts), append = false,
-        )
         screenState = screenState.copy(
             signedIn = true,
             accountPage = AccountPage.Main,
@@ -912,8 +833,10 @@ class MainActivity : ComponentActivity() {
             addAccountErrorMessage = null,
             serverUrl = accounts.aboutServerUrl(),
             accounts = accounts.toAccountSummaries(),
-            accountContacts = reduced.first,
-            contactsNextCursors = reduced.second,
+            accountContacts = org.tinitalk.ui.mergeAccountContacts(
+                accounts.map { it.id },
+                accounts.associate { it.id to contactCache.load(it).items },
+            ),
         )
         IncomingCallNotifier(this).syncMissedAccounts(accounts.map { it.id })
         refreshMissedCount()
@@ -941,7 +864,6 @@ class MainActivity : ComponentActivity() {
         }
         screenState = screenState.copy(
             accountContacts = screenState.accountContacts.filterNot { it.accountId == accountId },
-            contactsNextCursors = screenState.contactsNextCursors - accountId,
             historyNextBefores = screenState.historyNextBefores - accountId,
             accountHistory = screenState.accountHistory.filterNot { it.accountId == accountId },
             unreadByAccount = screenState.unreadByAccount - accountId,
@@ -988,8 +910,6 @@ class MainActivity : ComponentActivity() {
         screenState = screenState.copy(
             contactsRefreshing = false,
             contactsRefreshErrorMessage = null,
-            contactsLoadingMore = false,
-            contactsLoadMoreErrorMessage = null,
             historyLoading = false,
             historyLoadingMore = false,
             historyErrorMessage = null,
@@ -1204,7 +1124,7 @@ class MainActivity : ComponentActivity() {
             restoreContacts()
             return
         }
-        refreshContacts()
+        refreshContacts(showProgress = false)
         when {
             contactHistoryLogin != null -> loadContactHistory(contactHistoryLogin.orEmpty(), reset = true)
             historyVisible -> loadHistory(reset = true)
@@ -1279,11 +1199,10 @@ internal fun markEachAccountHistoryPage(
 
 private fun MainScreenState.withContactUpdates(updates: Map<org.tinitalk.data.AccountPeerKey, Contact>): MainScreenState {
     if (updates.isEmpty()) return this
-    val sortedAccountContacts = accountContacts.map { accountContact ->
-        updates[accountContact.peerKey]?.let { accountContact.copy(contact = it) } ?: accountContact
-    }.sortedWith(
-        compareBy<org.tinitalk.data.AccountContact, String>(String.CASE_INSENSITIVE_ORDER) { it.displayName.trim() }
-            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.login },
+    val sortedAccountContacts = org.tinitalk.ui.sortAccountContacts(
+        accountContacts.map { accountContact ->
+            updates[accountContact.peerKey]?.let { accountContact.copy(contact = it) } ?: accountContact
+        },
     )
     val updatedHistory = accountHistory.map { history ->
         updates[org.tinitalk.data.AccountPeerKey(history.accountId, history.peerLogin)]

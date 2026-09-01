@@ -15,6 +15,7 @@ import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthSessionEvent
 import org.tinitalk.data.AuthSessionEvents
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.ContactCache
 import org.tinitalk.data.Session
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.network.NetworkAvailability
@@ -98,6 +99,7 @@ class TinitalkApplication : Application() {
 }
 
 internal fun cleanupWebPushAccount(context: Context, accountId: AccountId, session: Session? = null) {
+    runCatching { ContactCache(SharedPreferencesKeyValueStore(context)).remove(accountId) }
     runCatching { UnifiedPushAccountRegistration(context).unsubscribe(accountId) }
     runCatching { PushRegistrationScheduler(context).cancel(accountId) }
     runCatching { IncomingCallNotifier(context).removeAccountMissedCount(accountId) }

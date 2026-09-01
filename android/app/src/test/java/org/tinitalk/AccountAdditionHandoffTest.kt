@@ -13,7 +13,7 @@ class AccountAdditionHandoffTest {
             accountId = AccountId("account-b"),
             sessionId = "session-b",
             configId = "config-b",
-            contacts = AccountContactPage(AccountId("account-b"), emptyList(), ""),
+            contacts = AccountContactPage(AccountId("account-b"), emptyList()),
         )
         val failure = AccountAdditionOutcome.Failed("Неверный логин или токен")
         var previousActivitySignals = 0

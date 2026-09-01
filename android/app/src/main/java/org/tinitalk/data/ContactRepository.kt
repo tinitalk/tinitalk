@@ -50,6 +50,7 @@ class ContactRepository internal constructor(
     private val authStore: AuthStore,
     private val webPushRegistration: AccountWebPushRegistration? = null,
     private val onAccountRemoved: (AccountId, Session) -> Unit = { _, _ -> },
+    private val contactCache: ContactCache? = null,
     private val apiFactory: (url: String, login: String, token: String, sessionId: String?) -> HouseholdApi =
         { url, login, token, sessionId -> UrlConnectionApiClient(url, login, token, sessionId) },
 ) {
@@ -62,13 +63,19 @@ class ContactRepository internal constructor(
         authStore,
         null,
         { _, _ -> },
+        null,
         { url, login, token, _ -> apiFactory(url, login, token) },
     )
 
-    constructor(context: Context, authStore: AuthStore) : this(
+    internal constructor(
+        context: Context,
+        authStore: AuthStore,
+        contactCache: ContactCache = ContactCache(SharedPreferencesKeyValueStore(context)),
+    ) : this(
         authStore,
         UnifiedPushAccountRegistration(context),
         { accountId, session -> cleanupWebPushAccount(context, accountId, session) },
+        contactCache,
     )
 
     fun checkServer(url: String): ServerCheckResult {
@@ -147,8 +154,9 @@ class ContactRepository internal constructor(
             persisted = true
             api = api(session)
             val profile = api.me()
-            val contacts = api.contactsPage().withoutUser(profile.login)
+            val contacts = api.allContacts(profile.login)
             runCatching { authStore.saveIfCurrent(accountId, session, session, profile.displayName) }
+            contactCache?.replace(contacts.boundTo(accountId, session.url))
             contacts
         } catch (e: ApiException) {
             handleUnauthorized(e, session)
@@ -188,10 +196,12 @@ class ContactRepository internal constructor(
             )
             val claimedApi = api(session)
             val profile = claimedApi.me()
-            val contacts = claimedApi.contactsPage().withoutUser(profile.login)
+            val contacts = claimedApi.allContacts(profile.login)
             val account = authStore.add(accountId, session, config, profile.displayName)
             committed = true
-            return AddedAccount(account, contacts.boundTo(accountId, session.url))
+            val bound = contacts.boundTo(accountId, session.url)
+            contactCache?.replace(bound)
+            return AddedAccount(account, bound)
         } finally {
             if (!committed) runCatching { registration.unsubscribe(accountId) }
         }
@@ -206,35 +216,13 @@ class ContactRepository internal constructor(
         }
     }
 
-    fun restoreContacts(accountId: AccountId): AccountContactPage? {
+    fun refreshContacts(accountId: AccountId): AccountContactPage? {
         val account = authStore.get(accountId) ?: return null
-        val storedSession = restorableSession(accountId) ?: return null
-        var session = storedSession
-        val api = api(session)
         return try {
-            val info = api.requireWebPushServer(account.session.url)
-            session = session.copy(features = info.features)
-            val profile = api.me()
-            val contacts = api.contactsPage().withoutUser(profile.login)
-            if (authStore.saveIfCurrent(accountId, storedSession, session, profile.displayName)) {
-                contacts.boundTo(account.id, session.url)
-            } else {
-                null
+            val page = api(account.session).allContacts(account.session.login)
+            if (!authStore.isCurrent(account.id, account.session)) null else {
+                page.boundTo(account.id, account.session.url).also { contactCache?.replace(it) }
             }
-        } catch (e: ApiException) {
-            if (!authStore.isCurrent(accountId, storedSession)) return null
-            handleUnauthorized(e, accountId, session)
-            throw e
-        }
-    }
-
-    fun refreshContacts(accountId: AccountId, cursor: String = ""): AccountContactPage? {
-        val account = authStore.get(accountId) ?: return null
-        return try {
-            val page = api(account.session)
-                .contactsPage(cursor = cursor)
-                .withoutUser(account.session.login)
-            if (!authStore.isCurrent(account.id, account.session)) null else page.boundTo(account.id, account.session.url)
         } catch (e: ApiException) {
             if (!authStore.isCurrent(account.id, account.session)) return null
             handleUnauthorized(e, account.id, account.session)
@@ -246,7 +234,11 @@ class ContactRepository internal constructor(
         val account = authStore.get(accountId) ?: return null
         return try {
             val contact = api(account.session).updateContactName(login, customName)
-            if (!authStore.isCurrent(account.id, account.session)) null else AccountContact(account.id, account.session.url, contact)
+            if (!authStore.isCurrent(account.id, account.session)) null else {
+                AccountContact(account.id, account.session.url, contact).also {
+                    contactCache?.update(account, it)
+                }
+            }
         } catch (e: ApiException) {
             if (!authStore.isCurrent(account.id, account.session)) return null
             handleUnauthorized(e, account.id, account.session)
@@ -296,6 +288,7 @@ class ContactRepository internal constructor(
     fun removeAccount(accountId: AccountId): Boolean {
         val account = authStore.get(accountId) ?: return false
         if (!authStore.removeIfCurrent(accountId, account.session)) return false
+        contactCache?.remove(accountId)
         onAccountRemoved(accountId, account.session)
         return true
     }
@@ -316,17 +309,30 @@ class ContactRepository internal constructor(
             AuthRemovalReason.Unauthorized
         }
         val removed = authStore.invalidateIfCurrent(accountId, session, reason)
-        if (removed) onAccountRemoved(accountId, session)
+        if (removed) {
+            contactCache?.remove(accountId)
+            onAccountRemoved(accountId, session)
+        }
     }
 }
 
 private fun ContactPage.withoutUser(login: String): ContactPage =
     copy(items = items.filterNot { it.login == login })
 
+private fun HouseholdApi.allContacts(login: String): ContactPage {
+    val contacts = mutableListOf<Contact>()
+    var cursor = ""
+    do {
+        val page = contactsPage(limit = 100, cursor = cursor).withoutUser(login)
+        contacts += page.items
+        cursor = page.nextCursor
+    } while (cursor.isNotEmpty())
+    return ContactPage(contacts.distinctBy(Contact::login), "")
+}
+
 private fun ContactPage.boundTo(accountId: AccountId, serverUrl: String): AccountContactPage = AccountContactPage(
     accountId = accountId,
     items = items.map { contact -> AccountContact(accountId, serverUrl, contact) },
-    nextCursor = nextCursor,
 )
 
 private fun CallHistoryPage.boundTo(accountId: AccountId, session: Session? = null): AccountCallHistoryPage = AccountCallHistoryPage(

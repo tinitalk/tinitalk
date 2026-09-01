@@ -59,7 +59,6 @@ class AppMenuTest {
                         onOpenCall = {},
                         onContactsVisible = {},
                         onRefreshContacts = {},
-                        onLoadMoreContacts = {},
                         onContactsRefreshMessageHandled = {},
                         onHistoryVisible = {},
                         onLoadMoreHistory = {},

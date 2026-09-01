@@ -3,7 +3,6 @@ package org.tinitalk.ui
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.AccountContact
-import org.tinitalk.data.AccountContactPage
 import org.tinitalk.data.AccountCallHistoryPage
 import org.tinitalk.data.AccountHistory
 import org.tinitalk.data.AccountId
@@ -69,16 +68,6 @@ class ContactRefreshStateTest {
     }
 
     @Test
-    fun contactReducerFiltersRemovedAccountAndRejectsUnrequestedPage() {
-        val a = AccountId("a")
-        val b = AccountId("b")
-        val pageB = AccountContactPage(b, listOf(AccountContact(b, "https://b", Contact("sam", "B"))), "")
-        val result = reduceAccountContacts(listOf(a), emptyMap(), emptyMap(), listOf(pageB), append = false)
-        assertTrue(result.first.isEmpty())
-        assertTrue(result.second.isEmpty())
-    }
-
-    @Test
     fun accountMergeKeepsEqualLoginsAndUnreadMarkersDistinct() {
         val first = AccountId("first")
         val second = AccountId("second")
@@ -86,8 +75,8 @@ class ContactRefreshStateTest {
         val merged = mergeAccountContacts(
             listOf(first, second),
             mapOf(
-                first to listOf(AccountContact(first, "https://first.example", Contact("sam", "First Sam"))),
-                second to listOf(AccountContact(second, "https://second.example", Contact("sam", "Second Sam"))),
+                first to listOf(AccountContact(first, "https://first.example", Contact("sam", "Zed"))),
+                second to listOf(AccountContact(second, "https://second.example", Contact("sam", "Anna"))),
             ),
         )
         val unread = aggregateUnreadMissed(
@@ -97,29 +86,12 @@ class ContactRefreshStateTest {
             ),
         )
 
-        assertEquals(listOf("First Sam", "Second Sam"), merged.map { it.displayName })
+        assertEquals(listOf("Anna", "Zed"), merged.map { it.displayName })
         assertEquals(
             mapOf(AccountPeerKey(first, "sam") to 10L, AccountPeerKey(second, "sam") to 20L),
             unread.latestByContact,
         )
     }
-    @Test
-    fun requestsNextContactPageFiveItemsBeforeEnd() {
-        assertFalse(shouldLoadMoreContacts(index = 14, itemCount = 20, nextCursor = "next", loading = false, hasError = false))
-        assertTrue(shouldLoadMoreContacts(index = 15, itemCount = 20, nextCursor = "next", loading = false, hasError = false))
-        assertFalse(shouldLoadMoreContacts(index = 15, itemCount = 20, nextCursor = "next", loading = false, hasError = true))
-        assertFalse(
-            shouldLoadMoreContacts(
-                index = 15,
-                itemCount = 20,
-                nextCursor = "next",
-                loading = false,
-                hasError = false,
-                internetAvailable = false,
-            ),
-        )
-    }
-
     @Test
     fun offlineStartupKeepsStoredSessionWithoutPretendingContactsLoaded() {
         val state = MainScreenState(restoring = true, networkAvailable = true)

@@ -65,7 +65,6 @@ data class AccountHistoryKey(val accountId: AccountId, val id: Long)
 data class AccountContactPage(
     val accountId: AccountId,
     val items: List<AccountContact>,
-    val nextCursor: String,
 )
 private data class ContactWire(
     val login: String,

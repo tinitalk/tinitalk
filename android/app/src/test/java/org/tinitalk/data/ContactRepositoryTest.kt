@@ -15,17 +15,31 @@ class ContactRepositoryTest {
     fun firstLoginClaimsSessionWithWebPushBeforeSavingAccount() {
         val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { AccountId("account-a") }
         val registration = RecordingWebPushRegistration()
-        val api = RecordingApi("alice", "config-a")
-        val repository = ContactRepository(auth, registration, apiFactory = { _, _, _, _ -> api })
+        val cache = ContactCache(MemoryKeyValueStore())
+        val api = RecordingApi(
+            "alice",
+            "config-a",
+            contactPages = mapOf(
+                "" to ContactPage(listOf(Contact("bob", "Bob")), "second"),
+                "second" to ContactPage(listOf(Contact("carol", "Carol")), ""),
+            ),
+        )
+        val repository = ContactRepository(
+            auth,
+            registration,
+            contactCache = cache,
+            apiFactory = { _, _, _, _ -> api },
+        )
 
         val contacts = repository.signIn("https://a.example/", "alice", "token-a", "phone")
 
-        assertEquals(listOf("bob"), contacts.items.map { it.login })
+        assertEquals(listOf("bob", "carol"), contacts.items.map { it.login })
         assertEquals(listOf(AccountId("account-a")), registration.subscribed)
         assertEquals(subscription, api.claimedSubscription)
         assertEquals("phone", api.claimedDeviceId)
         assertEquals("session-alice", auth.list().single().session.sessionId)
         assertEquals("https://a.example", auth.webPushConfig(AccountId("account-a"))?.serverUrl)
+        assertEquals(listOf("bob", "carol"), cache.load(auth.list().single()).items.map { it.login })
     }
 
     @Test
@@ -43,12 +57,27 @@ class ContactRepositoryTest {
         val firstId = auth.newAccountId()
         auth.add(firstId, firstSession, storedConfig(firstSession), "Alice")
         val registration = RecordingWebPushRegistration()
-        val api = RecordingApi("bob", "config-b")
-        val repository = ContactRepository(auth, registration, apiFactory = { _, _, _, _ -> api })
+        val cache = ContactCache(MemoryKeyValueStore())
+        val api = RecordingApi(
+            "bob",
+            "config-b",
+            contactPages = mapOf(
+                "" to ContactPage(listOf(Contact("alice", "Alice")), "second"),
+                "second" to ContactPage(listOf(Contact("carol", "Carol")), ""),
+            ),
+        )
+        val repository = ContactRepository(
+            auth,
+            registration,
+            contactCache = cache,
+            apiFactory = { _, _, _, _ -> api },
+        )
 
         val added = repository.addAccount("https://b.example", "bob", "token-b", "phone")
 
         assertEquals(listOf(firstId, added.account.id), auth.list().map { it.id })
+        assertEquals(listOf("alice", "carol"), added.contacts.items.map { it.login })
+        assertEquals(listOf("alice", "carol"), cache.load(added.account).items.map { it.login })
         assertEquals(listOf(added.account.id), registration.subscribed)
         assertEquals("https://b.example", auth.webPushConfig(added.account.id)?.serverUrl)
     }
@@ -67,6 +96,120 @@ class ContactRepositoryTest {
             repository.addAccount("https://b.example", "bob", "token-b", "phone")
         }
         assertTrue(registration.subscribed.isEmpty())
+    }
+
+    @Test
+    fun refreshingAccountLoadsEveryContactPage() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val cacheStore = MemoryKeyValueStore()
+        val cache = ContactCache(cacheStore)
+        val session = Session(
+            "https://a.example",
+            "alice",
+            "token-a",
+            setOf("webpush_v1"),
+            "session-a",
+            "config-a",
+        )
+        val accountId = auth.newAccountId()
+        auth.add(accountId, session, storedConfig(session), "Alice")
+        val api = RecordingApi(
+            "alice",
+            "config-a",
+            contactPages = mapOf(
+                "" to ContactPage(listOf(Contact("bob", "Bob")), "second"),
+                "second" to ContactPage(listOf(Contact("carol", "Carol")), ""),
+            ),
+        )
+        val repository = ContactRepository(auth, contactCache = cache, apiFactory = { _, _, _, _ -> api })
+
+        val restored = requireNotNull(repository.refreshContacts(accountId))
+
+        assertEquals(listOf("bob", "carol"), restored.items.map { it.login })
+        assertEquals(
+            listOf("bob", "carol"),
+            ContactCache(cacheStore).load(requireNotNull(auth.get(accountId))).items.map { it.login },
+        )
+    }
+
+    @Test
+    fun failedContactSyncKeepsPreviousCompleteCache() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session(
+            "https://a.example",
+            "alice",
+            "token-a",
+            setOf("webpush_v1"),
+            "session-a",
+            "config-a",
+        )
+        val accountId = auth.newAccountId()
+        val account = auth.add(accountId, session, storedConfig(session), "Alice")
+        val cache = ContactCache(MemoryKeyValueStore()).apply {
+            replace(
+                AccountContactPage(
+                    accountId,
+                    listOf(AccountContact(accountId, session.url, Contact("old", "Old"))),
+                ),
+            )
+        }
+        val api = RecordingApi(
+            "alice",
+            "config-a",
+            contactPages = mapOf(
+                "" to ContactPage(listOf(Contact("new", "New")), "second"),
+            ),
+            failedCursor = "second",
+        )
+        val repository = ContactRepository(auth, contactCache = cache, apiFactory = { _, _, _, _ -> api })
+
+        assertThrows(IllegalStateException::class.java) { repository.refreshContacts(accountId) }
+
+        assertEquals(listOf("old"), cache.load(account).items.map { it.login })
+    }
+
+    @Test
+    fun renamingContactUpdatesCachedSnapshot() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session("https://a.example", "alice", "token-a")
+        val account = auth.upsert(session)
+        val cache = ContactCache(MemoryKeyValueStore()).apply {
+            replace(
+                AccountContactPage(
+                    account.id,
+                    listOf(AccountContact(account.id, session.url, Contact("bob", "Bob"))),
+                ),
+            )
+        }
+        val repository = ContactRepository(
+            auth,
+            contactCache = cache,
+            apiFactory = { _, _, _, _ -> RecordingApi("alice", "config-a") },
+        )
+
+        repository.updateContactName(account.id, "bob", "Bobby")
+
+        assertEquals(listOf("Bobby"), cache.load(account).items.map { it.displayName })
+    }
+
+    @Test
+    fun removingAccountDeletesItsCachedContacts() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session("https://a.example", "alice", "token-a")
+        val account = auth.upsert(session)
+        val cache = ContactCache(MemoryKeyValueStore()).apply {
+            replace(
+                AccountContactPage(
+                    account.id,
+                    listOf(AccountContact(account.id, session.url, Contact("bob", "Bob"))),
+                ),
+            )
+        }
+        val repository = ContactRepository(auth, contactCache = cache)
+
+        repository.removeAccount(account.id)
+
+        assertTrue(cache.load(account).items.isEmpty())
     }
 }
 
@@ -91,6 +234,8 @@ private class RecordingApi(
     private val login: String,
     private val configId: String,
     private val features: Set<String> = setOf("webpush_v1"),
+    private val contactPages: Map<String, ContactPage>? = null,
+    private val failedCursor: String? = null,
 ) : HouseholdApi {
     var claimedDeviceId: String? = null
     var claimedSubscription: WebPushSubscription? = null
@@ -101,10 +246,13 @@ private class RecordingApi(
         configId,
     )
     override fun me() = Profile(login, login.replaceFirstChar(Char::uppercase))
-    override fun contactsPage(limit: Int, cursor: String) = ContactPage(
-        listOf(Contact(login, login), Contact("bob", "Bob")),
-        "",
-    )
+    override fun contactsPage(limit: Int, cursor: String): ContactPage {
+        if (cursor == failedCursor) error("page failed")
+        return contactPages?.getValue(cursor) ?: ContactPage(
+            listOf(Contact(login, login), Contact("bob", "Bob")),
+            "",
+        )
+    }
     override fun claimSession(deviceId: String, subscription: WebPushSubscription, configId: String): String {
         claimedDeviceId = deviceId
         claimedSubscription = subscription

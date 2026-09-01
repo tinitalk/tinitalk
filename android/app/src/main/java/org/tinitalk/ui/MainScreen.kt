@@ -25,7 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -89,7 +89,6 @@ import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.data.AccountContact
-import org.tinitalk.data.AccountContactPage
 import org.tinitalk.data.AccountCallHistoryPage
 import org.tinitalk.data.AccountHistory
 import org.tinitalk.data.AccountId
@@ -106,6 +105,8 @@ import org.tinitalk.ui.theme.BrandBackground
 import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
 import org.tinitalk.ui.theme.CallRejectRed
+import java.text.Collator
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -154,11 +155,8 @@ data class MainScreenState(
     val signedIn: Boolean = false,
     val serverUrl: String = "",
     val accountContacts: List<AccountContact> = emptyList(),
-    val contactsNextCursors: Map<AccountId, String> = emptyMap(),
     val contactsRefreshing: Boolean = false,
     val contactsRefreshErrorMessage: String? = null,
-    val contactsLoadingMore: Boolean = false,
-    val contactsLoadMoreErrorMessage: String? = null,
     val accountHistory: List<AccountHistory> = emptyList(),
     val historyLoaded: Boolean = false,
     val historyLoading: Boolean = false,
@@ -203,7 +201,6 @@ fun MainScreenState.withOfflineSession(serverUrl: String?, signedIn: Boolean = s
     signedIn = signedIn,
     serverUrl = serverUrl.orEmpty(),
     contactsRefreshing = false,
-    contactsLoadingMore = false,
     historyLoading = false,
     historyLoadingMore = false,
     contactHistory = contactHistory.copy(loading = false, loadingMore = false),
@@ -220,31 +217,25 @@ internal data class AccountUnreadPresentation(
 internal fun mergeAccountContacts(
     accountOrder: List<AccountId>,
     contactsByAccount: Map<AccountId, List<AccountContact>>,
-): List<AccountContact> = accountOrder.flatMap { accountId -> contactsByAccount[accountId].orEmpty() }
+): List<AccountContact> = sortAccountContacts(
+    accountOrder.flatMap { accountId -> contactsByAccount[accountId].orEmpty() },
+)
+
+internal fun sortAccountContacts(contacts: List<AccountContact>): List<AccountContact> {
+    val names = Collator.getInstance(Locale.forLanguageTag("ru")).apply { strength = Collator.PRIMARY }
+    return contacts.sortedWith(Comparator { first, second ->
+        names.compare(first.displayName.trim(), second.displayName.trim())
+            .takeIf { it != 0 }
+            ?: names.compare(first.login, second.login).takeIf { it != 0 }
+            ?: first.serverUrl.compareTo(second.serverUrl)
+                .takeIf { it != 0 }
+            ?: first.accountId.value.compareTo(second.accountId.value)
+    })
+}
 
 /** Stable Compose identity; length prefixes avoid delimiter and concatenation collisions. */
 internal fun accountScopedKey(accountId: AccountId, value: String): String =
     "${accountId.value.length}:${accountId.value}${value.length}:$value"
-
-/** Applies only pages requested from still-active accounts; failures deliberately retain cache/cursor. */
-internal fun reduceAccountContacts(
-    accountOrder: List<AccountId>,
-    cached: Map<AccountId, List<AccountContact>>,
-    cursors: Map<AccountId, String>,
-    pages: List<AccountContactPage>,
-    append: Boolean,
-): Pair<List<AccountContact>, Map<AccountId, String>> {
-    val allowed = accountOrder.toSet()
-    val contacts = cached.filterKeys(allowed::contains).toMutableMap()
-    val next = cursors.filterKeys(allowed::contains).toMutableMap()
-    pages.filter { it.accountId in allowed }.forEach { page ->
-        contacts[page.accountId] = if (append) {
-            (contacts[page.accountId].orEmpty() + page.items).distinctBy { it.peerKey }
-        } else page.items
-        next[page.accountId] = page.nextCursor
-    }
-    return mergeAccountContacts(accountOrder, contacts) to next
-}
 
 /** Same contract as contacts, with account-bound history IDs kept distinct across servers. */
 internal fun reduceAccountHistory(
@@ -304,7 +295,6 @@ fun MainScreen(
     onOpenCall: () -> Unit,
     onContactsVisible: () -> Unit,
     onRefreshContacts: () -> Unit,
-    onLoadMoreContacts: () -> Unit,
     onContactsRefreshMessageHandled: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
@@ -376,7 +366,6 @@ fun MainScreen(
                     onOpenCall = onOpenCall,
                     onContactsVisible = onContactsVisible,
                     onRefreshContacts = onRefreshContacts,
-                    onLoadMoreContacts = onLoadMoreContacts,
                     onContactsRefreshMessageHandled = onContactsRefreshMessageHandled,
                     onHistoryVisible = onHistoryVisible,
                     onLoadMoreHistory = onLoadMoreHistory,
@@ -614,7 +603,6 @@ private fun HomeScreen(
     onOpenCall: () -> Unit,
     onContactsVisible: () -> Unit,
     onRefreshContacts: () -> Unit,
-    onLoadMoreContacts: () -> Unit,
     onContactsRefreshMessageHandled: () -> Unit,
     onHistoryVisible: () -> Unit,
     onLoadMoreHistory: () -> Unit,
@@ -688,11 +676,7 @@ private fun HomeScreen(
                                 internetAvailable = state.networkAvailable,
                                 listState = contactsListState,
                                 refreshing = state.contactsRefreshing,
-                                loadingMore = state.contactsLoadingMore,
-                                nextCursor = state.contactsNextCursors.values.firstOrNull { it.isNotEmpty() }.orEmpty(),
-                                loadMoreErrorMessage = state.contactsLoadMoreErrorMessage,
                                 onRefresh = onRefreshContacts,
-                                onLoadMore = onLoadMoreContacts,
                                 onContactSelected = {
                                     selectedContactAccountId = it.accountId.value
                                     selectedContactLogin = it.login
@@ -802,11 +786,7 @@ private fun ContactsPage(
     internetAvailable: Boolean,
     listState: LazyListState,
     refreshing: Boolean,
-    loadingMore: Boolean,
-    nextCursor: String,
-    loadMoreErrorMessage: String?,
     onRefresh: () -> Unit,
-    onLoadMore: () -> Unit,
     onContactSelected: (AccountContact) -> Unit,
 ) {
     PullToRefreshBox(
@@ -846,59 +826,17 @@ private fun ContactsPage(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                itemsIndexed(contacts, key = { _, contact -> accountScopedKey(contact.accountId, contact.login) }) { index, contact ->
+                items(contacts, key = { contact -> accountScopedKey(contact.accountId, contact.login) }) { contact ->
                     ContactRow(
                         contact.contact,
                         serverHostname = if (showServer) serverHostname(contact.serverUrl) else null,
                         latestUnreadMissedAt = latestUnreadMissedByContact[contact.peerKey],
                     ) { onContactSelected(contact) }
-                    if (shouldLoadMoreContacts(
-                            index = index,
-                            itemCount = contacts.size,
-                            nextCursor = nextCursor,
-                            loading = loadingMore || refreshing,
-                            hasError = loadMoreErrorMessage != null,
-                            internetAvailable = internetAvailable,
-                        )
-                    ) {
-                        LaunchedEffect(nextCursor) { onLoadMore() }
-                    }
-                }
-                if (loadMoreErrorMessage != null) {
-                    item(key = "contacts-load-error") {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Text(
-                                loadMoreErrorMessage,
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            TextButton(onClick = onLoadMore, enabled = internetAvailable) { Text("Повторить") }
-                        }
-                    }
-                }
-                if (loadingMore) {
-                    item(key = "contacts-loading-more") {
-                        Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 2.dp)
-                        }
-                    }
                 }
             }
         }
     }
 }
-
-fun shouldLoadMoreContacts(
-    index: Int,
-    itemCount: Int,
-    nextCursor: String,
-    loading: Boolean,
-    hasError: Boolean,
-    internetAvailable: Boolean = true,
-): Boolean = internetAvailable && nextCursor.isNotEmpty() && !loading && !hasError && index == maxOf(0, itemCount - 5)
 
 @Composable
 private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
