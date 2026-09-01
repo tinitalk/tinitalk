@@ -1,5 +1,5 @@
 [versions]
-agp = "8.13.1"
+agp = "9.1.1"
 kotlin = "2.2.20"
 coreKtx = "1.17.0"
 activity = "1.10.1"
@@ -12,14 +12,13 @@ androidxTest = "1.7.0"
 webrtc = "144.7559.12"
 coreTelecom = "1.0.1"
 coroutines = "1.8.1"
-composeBom = "2026.06.00"
+composeBom = "2026.08.00"
 work = "2.11.2"
 unifiedPush = "3.3.5"
 embeddedFcmDistributor = "3.1.0"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 
 [libraries]

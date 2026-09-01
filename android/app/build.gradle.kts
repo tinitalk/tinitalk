@@ -2,7 +2,6 @@ import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
 }
 
@@ -33,7 +32,7 @@ val commitHash = runCatching {
 
 android {
     namespace = "org.tinitalk"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.tinitalk"
