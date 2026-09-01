@@ -390,13 +390,15 @@ class IncomingCallNotifier(private val context: Context) {
         immediate: Boolean = false,
     ): AccountMissedBadgeUpdate {
         val store = AccountMissedBadgeStore(context.getSharedPreferences("tinitalk", Context.MODE_PRIVATE))
+        val latestUnread = unread.unreadMissed.firstOrNull()
         val publish: (Int) -> Unit = { count ->
             publishMissedCount(
-                count,
-                latest,
-                unread.unreadMissed.firstOrNull()?.peerLogin,
-                accountId,
-                redialBinding,
+                count = count,
+                latest = latest,
+                latestUnreadLogin = latestUnread?.peerLogin,
+                latestUnreadName = latestUnread?.peerName,
+                accountId = accountId,
+                redialBinding = redialBinding,
             )
         }
         return if (immediate) {
@@ -426,6 +428,7 @@ class IncomingCallNotifier(private val context: Context) {
         count: Int,
         latest: IncomingInvite?,
         latestUnreadLogin: String? = null,
+        latestUnreadName: String? = null,
         accountId: AccountId? = latest?.accountId,
         redialBinding: CallSessionBinding? = latest?.sessionBinding,
     ) {
@@ -438,6 +441,9 @@ class IncomingCallNotifier(private val context: Context) {
         val redialLogin = latestUnreadLogin?.takeIf(String::isNotBlank)
             ?: latest?.callerLogin?.takeIf(String::isNotBlank)
         val matchingLatest = latest?.takeIf { it.callerLogin == redialLogin }
+        val redialName = latestUnreadName?.takeIf(String::isNotBlank)
+            ?: matchingLatest?.caller?.takeIf(String::isNotBlank)
+            ?: redialLogin
         val openApp = PendingIntent.getActivity(
             context,
             0,
@@ -455,8 +461,9 @@ class IncomingCallNotifier(private val context: Context) {
             .setSmallIcon(R.drawable.ic_call_missed)
             .setContentTitle(if (count == 1) "Пропущенный звонок" else "Пропущенные звонки")
             .setContentText(
-                matchingLatest?.caller?.takeIf { count == 1 && it.isNotBlank() }
-                    ?: "$count ${missedCallsWord(count)}",
+                redialName?.let { name ->
+                    if (count == 1) name else "$count ${callsWord(count)} · $name"
+                } ?: "$count ${missedCallsWord(count)}",
             )
             .setCategory(Notification.CATEGORY_MISSED_CALL)
             .setContentIntent(openApp)
@@ -485,7 +492,7 @@ class IncomingCallNotifier(private val context: Context) {
                     CallActivity.redialIntent(
                         context,
                         peer,
-                        matchingLatest?.caller?.ifBlank { login } ?: login,
+                        redialName ?: login,
                         binding,
                     ),
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -573,6 +580,16 @@ class IncomingCallNotifier(private val context: Context) {
             1 -> "пропущенный вызов"
             2, 3, 4 -> "пропущенных вызова"
             else -> "пропущенных вызовов"
+        }
+    }
+
+    private fun callsWord(count: Int): String {
+        val lastTwo = count % 100
+        if (lastTwo in 11..14) return "звонков"
+        return when (count % 10) {
+            1 -> "звонок"
+            2, 3, 4 -> "звонка"
+            else -> "звонков"
         }
     }
 

@@ -44,6 +44,7 @@ type CallHistoryItem struct {
 
 type UnreadMissedContact struct {
 	PeerLogin string
+	PeerName  string
 	StartedAt time.Time
 }
 
@@ -471,14 +472,16 @@ func unreadMissedState(queryer callHistoryQueryer, userID int64) (CallUnreadStat
 		return state, err
 	}
 	rows, err := queryer.Query(`
-		SELECT caller.login, MAX(history.started_at)
+		SELECT caller.login, COALESCE(personal.custom_name, caller.display_name), MAX(history.started_at)
 		FROM call_history_unread unread
 		JOIN call_history history ON history.id = unread.call_history_id
 		JOIN users caller ON caller.id = history.caller_id
+		LEFT JOIN user_contacts personal
+			ON personal.owner_user_id = ? AND personal.contact_user_id = caller.id
 		WHERE unread.user_id = ?
-		GROUP BY caller.id, caller.login
+		GROUP BY caller.id, caller.login, personal.custom_name, caller.display_name
 		ORDER BY MAX(history.id) DESC
-	`, userID)
+	`, userID, userID)
 	if err != nil {
 		return state, err
 	}
@@ -486,7 +489,7 @@ func unreadMissedState(queryer callHistoryQueryer, userID int64) (CallUnreadStat
 	for rows.Next() {
 		var contact UnreadMissedContact
 		var startedAt int64
-		if err := rows.Scan(&contact.PeerLogin, &startedAt); err != nil {
+		if err := rows.Scan(&contact.PeerLogin, &contact.PeerName, &startedAt); err != nil {
 			return state, err
 		}
 		contact.StartedAt = time.Unix(startedAt, 0).UTC()

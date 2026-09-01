@@ -93,6 +93,7 @@ data class CallHistoryItem(
 data class UnreadMissedContact(
     @SerializedName("peer_login") val peerLogin: String,
     @SerializedName("started_at") val startedAt: Long,
+    @SerializedName("peer_name") val peerName: String? = null,
 )
 data class CallUnreadState(
     @SerializedName("unread_missed_count") val unreadMissedCount: Int,

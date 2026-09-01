@@ -29,6 +29,7 @@ type callHistoryResponse struct {
 
 type unreadMissedContact struct {
 	PeerLogin string `json:"peer_login"`
+	PeerName  string `json:"peer_name"`
 	StartedAt int64  `json:"started_at"`
 }
 
@@ -130,6 +131,7 @@ func unreadMissedJSON(items []state.UnreadMissedContact) []unreadMissedContact {
 	for _, item := range items {
 		result = append(result, unreadMissedContact{
 			PeerLogin: item.PeerLogin,
+			PeerName:  item.PeerName,
 			StartedAt: item.StartedAt.Unix(),
 		})
 	}

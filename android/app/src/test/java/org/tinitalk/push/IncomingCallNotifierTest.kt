@@ -91,7 +91,7 @@ class IncomingCallNotifierTest {
     }
 
     @Test
-    fun historyBackedCurrentSessionOffersPinnedRedial() {
+    fun historyBackedCurrentSessionNamesPinnedRedialTarget() {
         val context = RuntimeEnvironment.getApplication()
         val notifier = IncomingCallNotifier(context)
         val binding = CallSessionBinding("https://a.example", "alice", "session-a", "config-a")
@@ -99,7 +99,7 @@ class IncomingCallNotifierTest {
 
         notifier.updateAccountMissedState(
             accountId,
-            CallUnreadState(1, listOf(UnreadMissedContact("anna", 200))),
+            CallUnreadState(1, listOf(UnreadMissedContact("anna", 200, "Анна"))),
             notifier.beginAccountMissedCountRefresh(accountId),
             redialBinding = binding,
             immediate = true,
@@ -111,10 +111,25 @@ class IncomingCallNotifierTest {
             .notification
         val redialIntent = Shadows.shadowOf(notification.actions.single().actionIntent).savedIntent
 
+        assertEquals("Анна", notification.extras.getCharSequence(Notification.EXTRA_TEXT))
         assertEquals("anna", redialIntent.getStringExtra("outgoing_login"))
+        assertEquals("Анна", redialIntent.getStringExtra("outgoing_name"))
         assertEquals(binding.serverUrl, redialIntent.getStringExtra("redial_server_url"))
         assertEquals(binding.sessionId, redialIntent.getStringExtra("redial_session_id"))
         assertTrue(redialIntent.data.toString().contains("session-a"))
+
+        notifier.updateAccountMissedState(
+            accountId,
+            CallUnreadState(3, listOf(UnreadMissedContact("anna", 200, "Анна"))),
+            notifier.beginAccountMissedCountRefresh(accountId),
+            redialBinding = binding,
+            immediate = true,
+        )
+        val multiple = context.getSystemService(NotificationManager::class.java)
+            .activeNotifications
+            .single { it.notification.category == Notification.CATEGORY_MISSED_CALL }
+            .notification
+        assertEquals("3 звонка · Анна", multiple.extras.getCharSequence(Notification.EXTRA_TEXT))
     }
 
     @Test

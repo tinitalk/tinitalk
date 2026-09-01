@@ -247,7 +247,7 @@ class ApiClientTest {
                   "next_before":5,
                   "latest_id":7,
                   "unread_missed_count":1,
-                  "unread_missed":[{"peer_login":"alice","started_at":1787740200}]
+                  "unread_missed":[{"peer_login":"alice","started_at":1787740200,"peer_name":"Alice"}]
                 }
                 """.trimIndent(),
             ),
@@ -264,7 +264,7 @@ class ApiClientTest {
             assertEquals(5, page.nextBefore)
             assertEquals(7, page.latestId)
             assertEquals(1, page.unreadMissedCount)
-            assertEquals(listOf(UnreadMissedContact("alice", 1787740200)), page.unreadMissed)
+            assertEquals(listOf(UnreadMissedContact("alice", 1787740200, "Alice")), page.unreadMissed)
             val request = server.takeRequest()
             assertEquals("/api/calls?limit=50&before=0&peer=alice", request.path)
             assertEquals("Basic Ym9iOnRva2Vu", request.getHeader("Authorization"))
