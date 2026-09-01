@@ -45,101 +45,115 @@ func TestOpenReopensWithRequiredPragmasAndStableFiles(t *testing.T) {
 	}
 }
 
-func TestMigrationFromVersionSixDropsFCMRegistrations(t *testing.T) {
+func TestOpenRejectsLegacySchemaWithoutModifyingIt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
-	legacy, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, migration := range schemaMigrations[:6] {
-		for _, statement := range migration {
-			if _, err := legacy.Exec(statement); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if _, err := legacy.Exec(`
-		INSERT INTO users(id, login, display_name) VALUES(11, 'alice', 'Alice');
-		INSERT INTO devices(id, user_id, device_id, fcm_token) VALUES(101, 11, 'alice-phone', 'alice-token');
-		PRAGMA user_version = 6;
-	`); err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.Close(); err != nil {
-		t.Fatal(err)
-	}
-
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	check, err := db.Check()
+	if _, err := db.sql.Exec("PRAGMA user_version = 8"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(path); err == nil || err.Error() != "database schema 8 is unsupported; expected 9" {
+		t.Fatalf("Open legacy schema error = %v", err)
+	}
+	legacy, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.UserVersion != 9 {
-		t.Fatalf("schema version = %d, want 9", check.UserVersion)
-	}
-	targets, err := db.PushTargetsForUser("alice")
-	if err != nil {
+	defer legacy.Close()
+	var version int
+	if err := legacy.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if len(targets) != 0 {
-		t.Fatalf("legacy FCM registrations survived migration: %+v", targets)
+	if version != 8 {
+		t.Fatalf("schema version after rejected open = %d, want 8", version)
+	}
+	var journalMode string
+	if err := legacy.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatal(err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("journal mode after rejected open = %q, want wal", journalMode)
 	}
 }
 
-func TestVersionNineMigrationKeepsOnlyWebPushRegistrations(t *testing.T) {
+func TestMigrateSchemaAppliesPendingScriptsInOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
-	legacy, err := sql.Open("sqlite", path)
+	sqlDB, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, migration := range schemaMigrations[:8] {
-		for _, statement := range migration {
-			if _, err := legacy.Exec(statement); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if _, err := legacy.Exec(`
-		INSERT INTO users(id, login, display_name) VALUES(1, 'alice', 'Alice');
-		INSERT INTO devices(user_id, device_id, push_kind, push_value, config_id) VALUES
-			(1, 'token-phone', 'token', 'legacy-token', NULL),
-			(1, 'fid-phone', 'fid', 'legacy-fid', 'firebase-config'),
-			(1, 'webpush-phone', 'webpush', '{"endpoint":"https://push.example/subscription"}', 'sha256:webpush');
-		INSERT INTO secrets(key, value) VALUES('fcm_service_account', 'legacy-service-account');
-		INSERT INTO settings(key, value) VALUES('firebase_android_config', 'legacy-android-config');
-		PRAGMA user_version = 8;
-	`); err != nil {
+	defer sqlDB.Close()
+	if _, err := sqlDB.Exec("PRAGMA user_version = 9"); err != nil {
 		t.Fatal(err)
 	}
-	if err := legacy.Close(); err != nil {
+	db := &DB{sql: sqlDB}
+	migrations := []string{
+		`CREATE TABLE migration_probe(value TEXT NOT NULL);`,
+		`INSERT INTO migration_probe(value) VALUES('applied in order');`,
+	}
+
+	if err := db.migrateSchema(9, 9, migrations); err != nil {
 		t.Fatal(err)
 	}
 
-	db, err := Open(path)
+	var version int
+	if err := sqlDB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 11 {
+		t.Fatalf("schema version = %d, want 11", version)
+	}
+	var value string
+	if err := sqlDB.QueryRow("SELECT value FROM migration_probe").Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != "applied in order" {
+		t.Fatalf("migration probe = %q, want applied in order", value)
+	}
+}
+
+func TestMigrateSchemaRollsBackEntireChainOnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	sqlDB, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	targets, err := db.PushTargetsForUser("alice")
-	if err != nil {
+	defer sqlDB.Close()
+	if _, err := sqlDB.Exec("PRAGMA user_version = 9"); err != nil {
 		t.Fatal(err)
 	}
-	want := PushTarget{Subscription: `{"endpoint":"https://push.example/subscription"}`, ConfigID: "sha256:webpush"}
-	if len(targets) != 1 || targets[0].DeviceID != "webpush-phone" || targets[0].PushTarget != want {
-		t.Fatalf("push targets after migration = %+v, want only WebPush target %+v", targets, want)
+	db := &DB{sql: sqlDB}
+	migrations := []string{
+		`CREATE TABLE migration_probe(value TEXT NOT NULL);`,
+		`INSERT INTO missing_table(value) VALUES('fail');`,
 	}
-	for table, key := range map[string]string{"secrets": "fcm_service_account", "settings": "firebase_android_config"} {
-		var count int
-		if err := db.sql.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE key = ?", key).Scan(&count); err != nil {
-			t.Fatal(err)
-		}
-		if count != 0 {
-			t.Fatalf("legacy key %s remains in %s", key, table)
-		}
+
+	if err := db.migrateSchema(9, 9, migrations); err == nil {
+		t.Fatal("migrateSchema error = nil, want failure")
+	}
+
+	var version int
+	if err := sqlDB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 9 {
+		t.Fatalf("schema version after failed migration = %d, want 9", version)
+	}
+	var tables int
+	if err := sqlDB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'migration_probe'").Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 0 {
+		t.Fatalf("migration_probe tables after failed migration = %d, want 0", tables)
 	}
 }
 

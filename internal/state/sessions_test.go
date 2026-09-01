@@ -1,55 +1,9 @@
 package state
 
 import (
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 )
-
-func TestMigrationLeavesExistingAccountWithoutLegacyPushOrSession(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
-	legacy, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, migration := range schemaMigrations[:5] {
-		for _, statement := range migration {
-			if _, err := legacy.Exec(statement); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if _, err := legacy.Exec(`
-		INSERT INTO users(login, display_name) VALUES('alice', 'Alice');
-		INSERT INTO devices(user_id, device_id, fcm_token) VALUES(1, 'old-phone', 'old-fcm');
-		PRAGMA user_version = 5;
-	`); err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	check, err := db.Check()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if check.UserVersion != 9 {
-		t.Fatalf("schema version = %d, want 9", check.UserVersion)
-	}
-	if _, managed, err := db.CurrentSession("alice"); err != nil || managed {
-		t.Fatalf("migrated session managed = %v, error %v, want no session", managed, err)
-	}
-	targets, err := db.PushTargetsForUser("alice")
-	if err != nil || len(targets) != 0 {
-		t.Fatalf("migrated targets = %+v, error %v, want none", targets, err)
-	}
-}
 
 func TestClaimSessionAtomicallyReplacesPriorSessionAndDevices(t *testing.T) {
 	db := testStateDB(t)

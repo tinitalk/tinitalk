@@ -14,8 +14,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 9
-
 type DB struct {
 	sql *sql.DB
 }
@@ -30,11 +28,11 @@ func Open(path string) (*DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	wrapped := &DB{sql: db}
-	if err := wrapped.configure(); err != nil {
+	if err := wrapped.initializeSchema(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := wrapped.migrate(); err != nil {
+	if err := wrapped.configure(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -121,6 +119,6 @@ func OpenDir(dataDir string) (*DB, error) {
 	return Open(path)
 }
 
-func newerSchemaError(version int) error {
-	return fmt.Errorf("database schema %d is newer than supported %d", version, schemaVersion)
+func unsupportedSchemaError(version int) error {
+	return fmt.Errorf("database schema %d is unsupported; expected %d", version, currentSchemaVersion())
 }
