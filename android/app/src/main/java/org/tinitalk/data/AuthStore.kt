@@ -80,7 +80,6 @@ internal data class PersistedAccount(
 )
 
 internal const val AccountCollectionKey = "accounts_v1"
-private val LegacyAccountKeys = arrayOf("accounts_migrated_v1", "url", "login", "token", "iv", "features", "session_id", "config_id")
 internal const val AccountCollectionVersion = 1
 internal val AccountStorageLock = Any()
 
@@ -134,7 +133,7 @@ class AuthStore(
 ) {
     fun save(session: Session) {
         synchronized(AccountStorageLock) {
-            val collection = ensureMigratedUnlocked()
+            val collection = readCollectionUnlocked()
             val first = collection.accounts.firstOrNull()
             if (first == null) {
                 upsertUnlocked(collection, session)
@@ -147,26 +146,26 @@ class AuthStore(
     }
 
     fun load(): Session? = synchronized(AccountStorageLock) {
-        ensureMigratedUnlocked().accounts.firstOrNull()?.toSession()
+        readCollectionUnlocked().accounts.firstOrNull()?.toSession()
     }
 
     fun loadBoundTo(config: StoredWebPushConfig?): Session? = synchronized(AccountStorageLock) {
-        ensureMigratedUnlocked().accounts.firstOrNull()?.toSession()?.takeIf { session -> session.isBoundTo(config) }
+        readCollectionUnlocked().accounts.firstOrNull()?.toSession()?.takeIf { session -> session.isBoundTo(config) }
     }
 
     fun clear() = synchronized(AccountStorageLock) {
-        val collection = ensureMigratedUnlocked()
+        val collection = readCollectionUnlocked()
         collection.accounts.firstOrNull()?.let { removeUnlocked(collection, it.id) }
         AuthSessionEvents.clear()
     }
 
     fun clearIfCurrent(session: Session): Boolean = synchronized(AccountStorageLock) {
-        val first = ensureMigratedUnlocked().accounts.firstOrNull() ?: return@synchronized false
+        val first = readCollectionUnlocked().accounts.firstOrNull() ?: return@synchronized false
         removeIfCurrentUnlocked(first.id, session)
     }
 
     fun saveIfCurrent(expected: Session?, session: Session): Boolean = synchronized(AccountStorageLock) {
-        val collection = ensureMigratedUnlocked()
+        val collection = readCollectionUnlocked()
         val first = collection.accounts.firstOrNull()
         if (!first?.toSession().sameIdentity(expected)) return@synchronized false
         if (first != null && !collection.canReplace(first.id, session)) return@synchronized false
@@ -176,7 +175,7 @@ class AuthStore(
     }
 
     fun invalidateIfCurrent(session: Session): Boolean = synchronized(AccountStorageLock) {
-        val first = ensureMigratedUnlocked().accounts.firstOrNull() ?: return@synchronized false
+        val first = readCollectionUnlocked().accounts.firstOrNull() ?: return@synchronized false
         val current = first.toSession()
         if (!removeIfCurrentUnlocked(first.id, session)) return@synchronized false
         AuthSessionEvents.publish(AuthSessionEvent(current))
@@ -184,7 +183,7 @@ class AuthStore(
     }
 
     fun updateFeatures(url: String, features: Set<String>) = synchronized(AccountStorageLock) {
-        val collection = ensureMigratedUnlocked()
+        val collection = readCollectionUnlocked()
         val normalizedUrl = normalizeServerUrl(url)
         val accounts = collection.accounts.map { account ->
             if (normalizeServerUrl(account.url) == normalizedUrl && account.features != features) {
@@ -199,35 +198,35 @@ class AuthStore(
     }
 
     fun list(): List<AccountRecord> = synchronized(AccountStorageLock) {
-        ensureMigratedUnlocked().accounts.map { AccountRecord(AccountId(it.id), it.toSession(), it.displayName) }
+        readCollectionUnlocked().accounts.map { AccountRecord(AccountId(it.id), it.toSession(), it.displayName) }
     }
 
     fun get(accountId: AccountId): AccountRecord? = synchronized(AccountStorageLock) {
-        ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }
+        readCollectionUnlocked().accounts.firstOrNull { it.id == accountId.value }
             ?.let { AccountRecord(accountId, it.toSession(), it.displayName) }
     }
 
     fun webPushConfig(accountId: AccountId): StoredWebPushConfig? = synchronized(AccountStorageLock) {
-        ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }?.webPushConfig
+        readCollectionUnlocked().accounts.firstOrNull { it.id == accountId.value }?.webPushConfig
     }
 
     fun isCurrent(accountId: AccountId, session: Session): Boolean = synchronized(AccountStorageLock) {
-        ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }
+        readCollectionUnlocked().accounts.firstOrNull { it.id == accountId.value }
             ?.toSession()
             .sameIdentity(session)
     }
 
     fun <T> withCurrent(accountId: AccountId, session: Session, block: () -> T): T? = synchronized(AccountStorageLock) {
-        val current = ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }?.toSession()
+        val current = readCollectionUnlocked().accounts.firstOrNull { it.id == accountId.value }?.toSession()
         if (!current.sameIdentity(session)) null else block()
     }
 
     fun upsert(session: Session): AccountRecord = synchronized(AccountStorageLock) {
-        upsertUnlocked(ensureMigratedUnlocked(), session)
+        upsertUnlocked(readCollectionUnlocked(), session)
     }
 
     fun newAccountId(): AccountId = synchronized(AccountStorageLock) {
-        generateAccountId(ensureMigratedUnlocked())
+        generateAccountId(readCollectionUnlocked())
     }
 
     fun add(
@@ -236,7 +235,7 @@ class AuthStore(
         webPushConfig: StoredWebPushConfig,
         displayName: String,
     ): AccountRecord = synchronized(AccountStorageLock) {
-        val collection = ensureMigratedUnlocked()
+        val collection = readCollectionUnlocked()
         require(session.sessionId?.isNotBlank() == true) { "session ID is required" }
         require(session.configId?.isNotBlank() == true) { "config ID is required" }
         require(webPushConfig.isValid() && session.isBoundTo(webPushConfig)) { "WebPush configuration does not match session" }
@@ -251,12 +250,12 @@ class AuthStore(
     }
 
     fun remove(accountId: AccountId): Boolean = synchronized(AccountStorageLock) {
-        removeUnlocked(ensureMigratedUnlocked(), accountId.value)
+        removeUnlocked(readCollectionUnlocked(), accountId.value)
     }
 
     fun saveIfCurrent(accountId: AccountId, expected: Session, session: Session): Boolean =
         synchronized(AccountStorageLock) {
-            val collection = ensureMigratedUnlocked()
+            val collection = readCollectionUnlocked()
             val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
             if (!current.toSession().sameIdentity(expected)) return@synchronized false
             if (!collection.canReplace(current.id, session)) return@synchronized false
@@ -266,7 +265,7 @@ class AuthStore(
 
     fun saveIfCurrent(accountId: AccountId, expected: Session, session: Session, displayName: String?): Boolean =
         synchronized(AccountStorageLock) {
-            val collection = ensureMigratedUnlocked()
+            val collection = readCollectionUnlocked()
             val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
             if (!current.toSession().sameIdentity(expected) || !collection.canReplace(current.id, session)) return@synchronized false
             val replacement = persistedAccount(current.id, session, current)
@@ -284,7 +283,7 @@ class AuthStore(
         session: Session,
         config: StoredWebPushConfig,
     ): Boolean = synchronized(AccountStorageLock) {
-        val collection = ensureMigratedUnlocked()
+        val collection = readCollectionUnlocked()
         val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
         if (!current.toSession().sameIdentity(expected) || !collection.canReplace(current.id, session)) {
             return@synchronized false
@@ -309,7 +308,7 @@ class AuthStore(
         deviceId: String,
         subscription: WebPushSubscription,
     ): Boolean = synchronized(AccountStorageLock) {
-        val collection = ensureMigratedUnlocked()
+        val collection = readCollectionUnlocked()
         val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
         if (!current.toSession().sameIdentity(expected) || !collection.canReplace(current.id, session)) {
             return@synchronized false
@@ -337,7 +336,7 @@ class AuthStore(
     }
 
     fun removeIfCurrent(accountId: AccountId, session: Session): Boolean = synchronized(AccountStorageLock) {
-        ensureMigratedUnlocked()
+        readCollectionUnlocked()
         removeIfCurrentUnlocked(accountId.value, session)
     }
 
@@ -346,7 +345,7 @@ class AuthStore(
         session: Session,
         reason: AuthRemovalReason = AuthRemovalReason.SessionReplaced,
     ): Boolean = synchronized(AccountStorageLock) {
-        val current = ensureMigratedUnlocked().accounts.firstOrNull { it.id == accountId.value }
+        val current = readCollectionUnlocked().accounts.firstOrNull { it.id == accountId.value }
             ?.toSession()
             ?: return@synchronized false
         if (!removeIfCurrentUnlocked(accountId.value, session)) return@synchronized false
@@ -354,12 +353,7 @@ class AuthStore(
         true
     }
 
-    private fun ensureMigratedUnlocked(): PersistedAccountCollection {
-        if (LegacyAccountKeys.any { store.get(it) != null }) {
-            store.remove(*LegacyAccountKeys)
-        }
-        return AccountCollectionStorage.read(store)
-    }
+    private fun readCollectionUnlocked(): PersistedAccountCollection = AccountCollectionStorage.read(store)
 
     private fun persistedAccount(id: String, session: Session, previous: PersistedAccount? = null): PersistedAccount {
         val encrypted = cipher.encrypt(session.token)

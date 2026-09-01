@@ -9,7 +9,7 @@ import org.junit.Test
 
 class AuthStoreTest {
     @Test
-    fun versionPointNineDoesNotImportLegacySingleAccount() {
+    fun versionPointNineIgnoresLegacySingleAccountWithoutDeletingIt() {
         val persistence = MemoryKeyValueStore()
         val encrypted = PrefixTokenCipher().encrypt("legacy-token")
         persistence.put("url", "https://old.example")
@@ -20,7 +20,7 @@ class AuthStoreTest {
         val accounts = AuthStore(persistence, PrefixTokenCipher()).list()
 
         assertTrue(accounts.isEmpty())
-        assertNull(persistence.get("token"))
+        assertEquals(encrypted.value, persistence.get("token"))
     }
 
     @Test
