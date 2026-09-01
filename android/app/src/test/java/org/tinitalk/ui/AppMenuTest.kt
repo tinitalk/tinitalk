@@ -43,7 +43,6 @@ class AppMenuTest {
                         contactNameUpdate = ContactNameUpdateState(),
                         ongoingCall = null,
                         loginResetKey = 0,
-                        defaultServerUrl = "https://talk.example.com",
                         onSignIn = { _, _, _ -> },
                         onCheckServer = { ServerCheckResult.Available },
                         onCheckServerDetails = {
@@ -115,10 +114,10 @@ class AppMenuTest {
         composeRule.waitUntil(timeoutMillis = 5_000) {
             composeRule.onAllNodesWithText("Сервер TiniTalk доступен").fetchSemanticsNodes().size == 2
         }
-        composeRule.onNodeWithText("API 3 · Коммит 11111111").assertIsDisplayed()
-        composeRule.onNodeWithText("API 7 · Коммит 77777777").assertIsDisplayed()
+        composeRule.onNodeWithText("API v3 (11111111)").assertIsDisplayed()
+        composeRule.onNodeWithText("API v7 (77777777)").assertIsDisplayed()
         composeRule.onAllNodesWithText("Сервер TiniTalk доступен").assertCountEquals(2)
-        composeRule.onAllNodesWithContentDescription("Сервер TiniTalk доступен").assertCountEquals(2)
+        composeRule.onAllNodesWithContentDescription("Сервер TiniTalk доступен").assertCountEquals(0)
         composeRule.onAllNodesWithContentDescription("Выйти").assertCountEquals(2)
         composeRule.onAllNodesWithText("Выйти").assertCountEquals(0)
 
@@ -136,6 +135,7 @@ class AppMenuTest {
             shouldShowServerSubtitles(listOf("https://a.example", "https://b.example")),
         )
         assertEquals("talk.example", serverHostname("https://talk.example/path"))
+        assertEquals("talk.example/path", serverAddress("https://talk.example/path"))
         assertEquals("not a uri", serverHostname("not a uri"))
         assertEquals("https://same.example", configuredAboutServerUrl(listOf("https://same.example/", " https://same.example ")))
         assertEquals("", configuredAboutServerUrl(listOf("https://a.example", "https://b.example")))

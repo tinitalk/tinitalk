@@ -31,7 +31,7 @@ class ContactRepositoryTest {
             apiFactory = { _, _, _, _ -> api },
         )
 
-        val contacts = repository.signIn("https://a.example/", "alice", "token-a", "phone")
+        val contacts = repository.signIn("a.example/", "alice", "token-a", "phone")
 
         assertEquals(listOf("bob", "carol"), contacts.items.map { it.login })
         assertEquals(listOf(AccountId("account-a")), registration.subscribed)
@@ -73,7 +73,7 @@ class ContactRepositoryTest {
             apiFactory = { _, _, _, _ -> api },
         )
 
-        val added = repository.addAccount("https://b.example", "bob", "token-b", "phone")
+        val added = repository.addAccount("b.example", "bob", "token-b", "phone")
 
         assertEquals(listOf(firstId, added.account.id), auth.list().map { it.id })
         assertEquals(listOf("alice", "carol"), added.contacts.items.map { it.login })

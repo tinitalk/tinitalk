@@ -1,5 +1,6 @@
 package org.tinitalk.ui
 
+import android.content.ClipboardManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
@@ -26,12 +27,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -51,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
 import org.tinitalk.data.ServerCheckResult
+import org.tinitalk.data.httpsServerUrl
 import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
 import kotlinx.coroutines.Dispatchers
@@ -61,7 +65,6 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalLayoutApi::class)
 internal fun AddAccountScreen(
     resetKey: Int,
-    defaultServerUrl: String,
     loading: Boolean,
     errorMessage: String?,
     internetAvailable: Boolean,
@@ -75,21 +78,27 @@ internal fun AddAccountScreen(
         Box(
             modifier = Modifier.fillMaxSize().background(
                 Brush.verticalGradient(listOf(Color(0xFF111D30), MaterialTheme.colorScheme.background)),
-            ).statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = if (keyboardVisible) 12.dp else 28.dp),
+            ).statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()),
         ) {
             Column(Modifier.fillMaxWidth()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().height(64.dp),
+                    modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onBack, enabled = !loading) {
-                        Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "Назад")
+                    CompositionLocalProvider(LocalRippleConfiguration provides null) {
+                        IconButton(onClick = onBack, enabled = !loading) {
+                            Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "Назад")
+                        }
                     }
-                    Text("Добавить аккаунт", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Добавить аккаунт", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
-                Spacer(Modifier.height(20.dp))
-                AccountCredentialsForm(resetKey, defaultServerUrl, true, loading, errorMessage, internetAvailable, "Добавить", keyboardVisible, onAdd, onCheckServer)
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                        .padding(bottom = if (keyboardVisible) 12.dp else 28.dp),
+                ) {
+                    Spacer(Modifier.height(20.dp))
+                    AccountCredentialsForm(resetKey, loading, errorMessage, internetAvailable, "Добавить", keyboardVisible, onAdd, onCheckServer)
+                }
             }
         }
     }
@@ -98,8 +107,6 @@ internal fun AddAccountScreen(
 @Composable
 internal fun AccountCredentialsForm(
     resetKey: Int,
-    defaultServerUrl: String,
-    serverInitiallyExpanded: Boolean,
     loading: Boolean,
     errorMessage: String?,
     internetAvailable: Boolean,
@@ -110,40 +117,126 @@ internal fun AccountCredentialsForm(
 ) {
     var login by rememberSaveable(resetKey) { mutableStateOf("") }
     var token by rememberSaveable(resetKey) { mutableStateOf("") }
-    var url by rememberSaveable(resetKey, defaultServerUrl) { mutableStateOf(defaultServerUrl) }
-    var serverExpanded by rememberSaveable(resetKey, serverInitiallyExpanded) { mutableStateOf(serverInitiallyExpanded) }
+    var url by rememberSaveable(resetKey) { mutableStateOf("") }
     var serverCheckResult by remember(resetKey) { mutableStateOf<ServerCheckResult?>(null) }
     var checkingServer by remember(resetKey) { mutableStateOf(false) }
-    val serverReady = url.trim().matches(Regex("https?://.+", RegexOption.IGNORE_CASE))
+    val context = LocalContext.current
+    val clipboardManager = remember(context) { context.getSystemService(ClipboardManager::class.java) }
+    val clipboardText: () -> String? = {
+        clipboardManager.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.coerceToText(context)
+            ?.toString()
+    }
+    val setLogin: (String, Boolean) -> Unit = { value, pasted ->
+        val pastedAccount = splitAccountAddress(value).takeIf { pasted }
+        if (pastedAccount != null) {
+            login = pastedAccount.first
+            url = pastedAccount.second
+            checkingServer = true
+            serverCheckResult = null
+        } else {
+            login = value
+        }
+    }
+    val paste: ((String) -> Unit) -> Unit = { fallback ->
+        clipboardText()?.let { value ->
+            val credentials = splitCredentials(value)
+            if (credentials != null) {
+                login = credentials.first
+                token = credentials.second
+                url = credentials.third
+                checkingServer = true
+                serverCheckResult = null
+            } else {
+                fallback(value)
+            }
+        }
+    }
+    val normalizedUrl = httpsServerUrl(url)
+    val serverReady = normalizedUrl != null
     val presentation = serverCheckPresentation(serverReady, checkingServer, serverCheckResult, internetAvailable)
     val canSubmit = internetAvailable && !loading && serverReady && login.isNotBlank() && token.isNotBlank()
-    val submit = { if (canSubmit) onSubmit(url, login, token) }
-    LaunchedEffect(serverExpanded, url, internetAvailable) {
-        if (!serverExpanded) return@LaunchedEffect
+    val submit: () -> Unit = {
+        normalizedUrl?.let { if (canSubmit) onSubmit(it, login, token) }
+    }
+    LaunchedEffect(url, internetAvailable) {
         if (!internetAvailable) { checkingServer = false; serverCheckResult = null; return@LaunchedEffect }
         if (!serverReady) { checkingServer = false; serverCheckResult = ServerCheckResult.Unavailable; return@LaunchedEffect }
         checkingServer = true
         serverCheckResult = null
         delay(500)
-        serverCheckResult = withContext(Dispatchers.IO) { onCheckServer(url) }
+        serverCheckResult = withContext(Dispatchers.IO) { onCheckServer(checkNotNull(normalizedUrl)) }
         checkingServer = false
     }
-    OutlinedTextField(login, { login = it }, Modifier.fillMaxWidth(), label = { Text("Логин") }, singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next))
-    Spacer(Modifier.height(12.dp))
-    OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("Токен") }, singleLine = true, enabled = !loading, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { submit() }))
-    Spacer(Modifier.height(4.dp))
-    TextButton(onClick = { if (!serverExpanded) serverCheckResult = null; serverExpanded = !serverExpanded }, enabled = !loading) { Text(if (serverExpanded) "Скрыть настройки сервера" else "Настройки сервера") }
-    if (serverExpanded) OutlinedTextField(
-        url, { url = it; checkingServer = true; serverCheckResult = null }, Modifier.fillMaxWidth(), label = { Text("Адрес сервера") }, placeholder = { Text("https://talk.example.com") },
-        supportingText = { Text(presentation.message, color = when (presentation.indicator) { ServerCheckIndicator.Available -> CallAnswerGreen; ServerCheckIndicator.Incompatible -> BrandGold; else -> MaterialTheme.colorScheme.onSurfaceVariant }) },
-        trailingIcon = { when (presentation.indicator) {
-            ServerCheckIndicator.Checking -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            ServerCheckIndicator.Available -> Icon(painterResource(R.drawable.ic_server_available), "Сервер доступен", tint = CallAnswerGreen)
-            ServerCheckIndicator.Unavailable -> Icon(painterResource(R.drawable.ic_server_unavailable), "Сервер недоступен", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            ServerCheckIndicator.Incompatible -> Icon(painterResource(R.drawable.ic_server_incompatible), "Несовместимая версия", tint = BrandGold)
-        } }, singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { submit() }),
+    OutlinedTextField(
+        login,
+        { value ->
+            val pasted =
+                value.length - login.length > 1 &&
+                '@' in value &&
+                clipboardText() == value
+            setLogin(value, pasted)
+        },
+        Modifier.fillMaxWidth(),
+        label = { Text("Логин") },
+        trailingIcon = if (login.isEmpty()) {
+            {
+                PasteButton(enabled = !loading) {
+                    paste { setLogin(it, true) }
+                }
+            }
+        } else {
+            null
+        },
+        singleLine = true,
+        enabled = !loading,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
     )
-    if (!serverReady && !serverExpanded) Text("Укажите адрес сервера в настройках", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(12.dp))
+    OutlinedTextField(
+        token,
+        { token = it },
+        Modifier.fillMaxWidth(),
+        label = { Text("Токен") },
+        trailingIcon = if (token.isEmpty()) {
+            { PasteButton(enabled = !loading) { paste { token = it } } }
+        } else {
+            null
+        },
+        singleLine = true,
+        enabled = !loading,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { submit() }),
+    )
+    Spacer(Modifier.height(12.dp))
+    OutlinedTextField(
+        url,
+        { url = it; checkingServer = true; serverCheckResult = null },
+        Modifier.fillMaxWidth(),
+        label = { Text("Адрес сервера") }, placeholder = { Text("talk.example.com") },
+        supportingText = { Text(presentation.message, color = when (presentation.indicator) { ServerCheckIndicator.Available -> CallAnswerGreen; ServerCheckIndicator.Incompatible -> BrandGold; else -> MaterialTheme.colorScheme.onSurfaceVariant }) },
+        trailingIcon = {
+            if (url.isEmpty()) {
+                PasteButton(enabled = !loading) {
+                    paste {
+                        url = it
+                        checkingServer = true
+                        serverCheckResult = null
+                    }
+                }
+            } else {
+                when (presentation.indicator) {
+                    ServerCheckIndicator.Checking -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    ServerCheckIndicator.Available -> Icon(painterResource(R.drawable.ic_server_available), "Сервер доступен", tint = CallAnswerGreen)
+                    ServerCheckIndicator.Unavailable -> Icon(painterResource(R.drawable.ic_server_unavailable), "Сервер недоступен", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    ServerCheckIndicator.Incompatible -> Icon(painterResource(R.drawable.ic_server_incompatible), "Несовместимая версия", tint = BrandGold)
+                }
+            }
+        }, singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { submit() }),
+    )
     errorMessage?.let {
         Spacer(Modifier.height(14.dp))
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.errorContainer) { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium) }
@@ -151,5 +244,51 @@ internal fun AccountCredentialsForm(
     Spacer(Modifier.height(if (compactSpacing) 12.dp else 20.dp))
     Button(onClick = submit, enabled = canSubmit, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp)) {
         if (loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else Text(submitLabel, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun PasteButton(enabled: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, enabled = enabled) {
+        Icon(
+            painterResource(R.drawable.ic_paste),
+            contentDescription = "Вставить",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun splitAccountAddress(value: String): Pair<String, String>? {
+    val trimmed = value.trim()
+    val separator = trimmed.indexOf('@')
+    if (separator <= 0 || separator != trimmed.lastIndexOf('@') || separator == trimmed.lastIndex) return null
+    val login = trimmed.substring(0, separator)
+    val server = trimmed.substring(separator + 1)
+    if (login.any(Char::isWhitespace) || server.any(Char::isWhitespace)) return null
+    return login to server
+}
+
+private fun splitCredentials(value: String): Triple<String, String, String>? {
+    val lines = value.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
+    return when (lines.size) {
+        3 -> {
+            val login = lines[0]
+            val token = lines[1]
+            val server = lines[2]
+            if (
+                '@' in login ||
+                login.any(Char::isWhitespace) ||
+                server.any(Char::isWhitespace) ||
+                httpsServerUrl(server) == null
+            ) {
+                null
+            } else {
+                Triple(login, token, server)
+            }
+        }
+        2 -> splitAccountAddress(lines[0])?.let { (login, server) ->
+            Triple(login, lines[1], server)
+        }
+        else -> null
     }
 }

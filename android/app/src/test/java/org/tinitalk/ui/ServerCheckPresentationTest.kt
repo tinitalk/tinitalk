@@ -9,7 +9,7 @@ class ServerCheckPresentationTest {
     fun presentsServerHealthWithDistinctIndicatorsAndMessages() {
         val cases = listOf(
             serverCheckPresentation(false, false, null) to
-                ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Введите полный адрес сервера"),
+                ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Введите адрес сервера"),
             serverCheckPresentation(true, false, null) to
                 ServerCheckPresentation(ServerCheckIndicator.Checking, "Проверяем подключение…"),
             serverCheckPresentation(true, true, null) to

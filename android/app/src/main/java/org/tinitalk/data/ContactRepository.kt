@@ -84,7 +84,7 @@ class ContactRepository internal constructor(
 
     fun checkServerDetails(url: String): ServerCheckDetails {
         return try {
-            val normalizedUrl = url.trim().trimEnd('/')
+            val normalizedUrl = httpsServerUrl(url) ?: return ServerCheckDetails(ServerCheckResult.Unavailable)
             val info = apiFactory(normalizedUrl, "", "", null).serverInfo()
             val problem = info.compatibilityProblem()
                 ?: CompatibilityProblem.ServerOutdated.takeIf { WEBPUSH_FEATURE !in info.features }
@@ -110,7 +110,7 @@ class ContactRepository internal constructor(
     }
 
     fun checkAddAccountServer(url: String): ServerCheckResult = try {
-        val normalizedUrl = normalizeServerUrl(url)
+        val normalizedUrl = checkNotNull(httpsServerUrl(url))
         apiFactory(normalizedUrl, "", "", null).requireWebPushServer(normalizedUrl)
         ServerCheckResult.Available
     } catch (error: ServerCompatibilityException) {
@@ -127,7 +127,7 @@ class ContactRepository internal constructor(
     fun signIn(url: String, login: String, token: String, deviceId: String = ""): ContactPage {
         val previous = authStore.load()
         val accountId = authStore.list().firstOrNull()?.id ?: authStore.newAccountId()
-        var session = Session(normalizeServerUrl(url), login.trim(), token.trim())
+        var session = Session(requireNotNull(httpsServerUrl(url)), login.trim(), token.trim())
         var api = api(session)
         var subscribed = false
         var persisted = false
@@ -176,7 +176,7 @@ class ContactRepository internal constructor(
     fun addAccount(url: String, login: String, token: String, deviceId: String): AddedAccount {
         val existing = authStore.list()
         require(existing.isNotEmpty()) { "addAccount requires an existing account" }
-        val candidate = Session(normalizeServerUrl(url), login.trim(), token.trim())
+        val candidate = Session(requireNotNull(httpsServerUrl(url)), login.trim(), token.trim())
         if (existing.any {
             normalizeServerUrl(it.session.url) == candidate.url && it.session.login.trim() == candidate.login
         }) throw DuplicateAccountException()

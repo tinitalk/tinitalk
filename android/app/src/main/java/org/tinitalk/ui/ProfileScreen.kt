@@ -23,11 +23,13 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,8 +39,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import org.tinitalk.R
 import org.tinitalk.data.AccountId
@@ -66,8 +71,10 @@ internal fun ProfileScreen(
                 modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onBack) {
-                    Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "Назад")
+                CompositionLocalProvider(LocalRippleConfiguration provides null) {
+                    IconButton(onClick = onBack) {
+                        Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "Назад")
+                    }
                 }
                 Text("Профиль", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
@@ -162,59 +169,83 @@ private fun ProfileAccountCard(
                     )
                 }
             }
-            Text(account.login, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    account.serverUrl,
+                    buildAnnotatedString {
+                        withStyle(
+                            SpanStyle(
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                        ) {
+                            append(account.login)
+                        }
+                        withStyle(
+                            SpanStyle(
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                fontWeight = FontWeight.Light,
+                            ),
+                        ) {
+                            append("@")
+                            append(serverAddress(account.serverUrl))
+                        }
+                    },
                     modifier = Modifier.weight(1f),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.size(8.dp))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
                 when (presentation.indicator) {
                     ServerCheckIndicator.Checking -> CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                    )
-                    ServerCheckIndicator.Available -> Icon(
-                        painterResource(R.drawable.ic_server_available),
-                        contentDescription = presentation.message,
-                        modifier = Modifier.size(20.dp),
-                        tint = statusColor,
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 1.5.dp,
                     )
                     ServerCheckIndicator.Unavailable -> Icon(
                         painterResource(R.drawable.ic_server_unavailable),
                         contentDescription = presentation.message,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(16.dp),
                         tint = statusColor,
                     )
                     ServerCheckIndicator.Incompatible -> Icon(
                         painterResource(R.drawable.ic_server_incompatible),
                         contentDescription = presentation.message,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(16.dp),
                         tint = statusColor,
+                    )
+                    ServerCheckIndicator.Available -> Unit
+                }
+                if (presentation.indicator != ServerCheckIndicator.Available) {
+                    Spacer(Modifier.size(6.dp))
+                }
+                Text(
+                    presentation.message,
+                    modifier = Modifier.weight(1f),
+                    color = statusColor,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val apiVersion = details?.apiVersion
+                val commit = details?.commit
+                if (apiVersion != null && !commit.isNullOrBlank()) {
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        "API v$apiVersion ($commit)",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Light,
+                        maxLines = 1,
                     )
                 }
             }
-            Text(
-                "API ${details?.apiVersion ?: "—"} · Коммит ${details?.commit ?: "—"}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                presentation.message,
-                modifier = Modifier.padding(top = 4.dp),
-                color = statusColor,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
     }
 }

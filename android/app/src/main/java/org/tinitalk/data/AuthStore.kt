@@ -182,11 +182,16 @@ class AuthStore(
 
     fun updateFeatures(url: String, features: Set<String>) = synchronized(AccountStorageLock) {
         val collection = ensureMigratedUnlocked()
-        val first = collection.accounts.firstOrNull() ?: return@synchronized
-        val session = first.toSession()
-        if (session.url == url) {
-            val replacement = session.copy(features = features)
-            replaceUnlocked(collection, first.id, replacement)
+        val normalizedUrl = normalizeServerUrl(url)
+        val accounts = collection.accounts.map { account ->
+            if (normalizeServerUrl(account.url) == normalizedUrl && account.features != features) {
+                account.copy(features = features)
+            } else {
+                account
+            }
+        }
+        if (accounts != collection.accounts) {
+            AccountCollectionStorage.write(store, collection.copy(accounts = accounts))
         }
     }
 
@@ -442,6 +447,16 @@ private fun Session.isBoundTo(config: StoredWebPushConfig?): Boolean =
         configId == config.configId
 
 internal fun normalizeServerUrl(url: String): String = url.trim().trimEnd('/')
+
+internal fun httpsServerUrl(url: String): String? {
+    val value = url.trim()
+    val address = when {
+        value.startsWith("https://", ignoreCase = true) -> value.substring("https://".length)
+        "://" in value -> return null
+        else -> value
+    }.trimEnd('/')
+    return address.takeIf(String::isNotBlank)?.let { "https://$it" }
+}
 
 internal class SharedPreferencesKeyValueStore(context: Context) : KeyValueStore {
     private val prefs: SharedPreferences = context.getSharedPreferences("auth", Context.MODE_PRIVATE)

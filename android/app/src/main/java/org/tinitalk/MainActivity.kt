@@ -47,6 +47,7 @@ import org.tinitalk.data.CompatibilityProblem
 import org.tinitalk.data.ContactCache
 import org.tinitalk.data.ServerCompatibilityException
 import org.tinitalk.data.SessionReplacedReason
+import org.tinitalk.data.httpsServerUrl
 import org.tinitalk.data.sameIdentity
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.network.NetworkAvailability
@@ -177,7 +178,6 @@ class MainActivity : ComponentActivity() {
                         it.phase != CallPhase.Idle && it.phase != CallPhase.Ended
                     },
                     loginResetKey = loginResetKey,
-                    defaultServerUrl = BuildConfig.SERVER_URL,
                     onSignIn = ::loadContacts,
                     onCheckServer = repository::checkServer,
                     onCheckServerDetails = repository::checkServerDetails,
@@ -252,7 +252,7 @@ class MainActivity : ComponentActivity() {
         authGeneration++
         val requestAuthGeneration = authGeneration
         screenState = screenState.copy(signingIn = true, errorMessage = null)
-        val serverUrl = url.trim().trimEnd('/')
+        val serverUrl = checkNotNull(httpsServerUrl(url))
         val deviceId = DeviceIdentity.id(this)
         Thread {
             runCatching { repository.signIn(url, login, token, deviceId) }

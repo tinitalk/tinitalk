@@ -132,7 +132,7 @@ internal fun serverCheckPresentation(
 ): ServerCheckPresentation = when {
     !internetAvailable ->
         ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Нет подключения к интернету")
-    !serverReady -> ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Введите полный адрес сервера")
+    !serverReady -> ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Введите адрес сервера")
     checking -> ServerCheckPresentation(ServerCheckIndicator.Checking, "Проверяем подключение…")
     result == null -> ServerCheckPresentation(ServerCheckIndicator.Checking, "Проверяем подключение…")
     result == ServerCheckResult.Available ->
@@ -194,6 +194,9 @@ internal fun configuredAboutServerUrl(serverUrls: List<String>): String =
 internal fun serverHostname(serverUrl: String): String =
     runCatching { URI(normalizeServerUrl(serverUrl)).host }.getOrNull()?.takeIf(String::isNotBlank)
         ?: normalizeServerUrl(serverUrl)
+
+internal fun serverAddress(serverUrl: String): String =
+    normalizeServerUrl(serverUrl).replaceFirst(Regex("^https://", RegexOption.IGNORE_CASE), "")
 
 fun MainScreenState.withOfflineSession(serverUrl: String?, signedIn: Boolean = serverUrl != null): MainScreenState = copy(
     restoring = false,
@@ -281,7 +284,6 @@ fun MainScreen(
     contactNameUpdate: ContactNameUpdateState,
     ongoingCall: CallUiState?,
     loginResetKey: Int,
-    defaultServerUrl: String,
     onSignIn: (url: String, login: String, token: String) -> Unit,
     onCheckServer: (url: String) -> ServerCheckResult,
     onCheckServerDetails: (url: String) -> ServerCheckDetails,
@@ -322,7 +324,6 @@ fun MainScreen(
                 state.restoring -> LoadingScreen()
                 !state.signedIn -> LoginScreen(
                     resetKey = loginResetKey,
-                    defaultServerUrl = defaultServerUrl,
                     loading = state.signingIn,
                     errorMessage = state.errorMessage,
                     internetAvailable = state.networkAvailable,
@@ -339,7 +340,6 @@ fun MainScreen(
                 )
                 state.accountPage == AccountPage.AddAccount -> AddAccountScreen(
                     resetKey = loginResetKey,
-                    defaultServerUrl = defaultServerUrl,
                     loading = state.addingAccount,
                     errorMessage = state.addAccountErrorMessage,
                     internetAvailable = state.networkAvailable,
@@ -457,7 +457,6 @@ private fun LoadingScreen() {
 @OptIn(ExperimentalLayoutApi::class)
 private fun LoginScreen(
     resetKey: Int,
-    defaultServerUrl: String,
     loading: Boolean,
     errorMessage: String?,
     internetAvailable: Boolean,
@@ -484,7 +483,7 @@ private fun LoginScreen(
                 }
                 Spacer(Modifier.height(if (sharedKeyboardVisible) 16.dp else 28.dp))
                 AccountCredentialsForm(
-                    resetKey, defaultServerUrl, false, loading, errorMessage, internetAvailable, "Войти", sharedKeyboardVisible,
+                    resetKey, loading, errorMessage, internetAvailable, "Войти", sharedKeyboardVisible,
                     onSignIn, onCheckServer,
                 )
                 Spacer(Modifier.height(6.dp))
