@@ -177,9 +177,7 @@ class ContactRepository internal constructor(
         val existing = authStore.list()
         require(existing.isNotEmpty()) { "addAccount requires an existing account" }
         val candidate = Session(requireNotNull(httpsServerUrl(url)), login.trim(), token.trim())
-        if (existing.any {
-            normalizeServerUrl(it.session.url).equals(candidate.url, ignoreCase = true)
-        }) throw DuplicateAccountException()
+        if (existing.any { sameServerUrl(it.session.url, candidate.url) }) throw DuplicateAccountException()
         require(deviceId.isNotBlank()) { "device_id is required for push activation" }
         val registration = checkNotNull(webPushRegistration) { "push activation is unavailable" }
         val api = api(candidate)

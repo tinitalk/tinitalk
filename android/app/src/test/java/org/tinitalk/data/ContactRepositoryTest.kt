@@ -96,7 +96,7 @@ class ContactRepositoryTest {
         )
 
         assertThrows(DuplicateAccountException::class.java) {
-            repository.addAccount("A.EXAMPLE/", "anna", "token-b", "phone")
+            repository.addAccount("HTTPS://A.EXAMPLE:443/", "anna", "token-b", "phone")
         }
 
         assertTrue(registration.subscribed.isEmpty())

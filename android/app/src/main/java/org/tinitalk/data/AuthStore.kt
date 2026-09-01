@@ -11,7 +11,9 @@ import org.tinitalk.push.StoredWebPushConfig
 import org.tinitalk.push.WebPushSubscription
 import org.tinitalk.push.isBoundTo
 import org.tinitalk.push.isValid
+import java.net.URL
 import java.security.KeyStore
+import java.util.Locale
 import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -239,7 +241,7 @@ class AuthStore(
         require(session.configId?.isNotBlank() == true) { "config ID is required" }
         require(webPushConfig.isValid() && session.isBoundTo(webPushConfig)) { "WebPush configuration does not match session" }
         require(collection.accounts.none { it.id == accountId.value }) { "duplicate account ID" }
-        require(collection.accounts.none { it.hasSemanticIdentity(session) }) { "duplicate account identity" }
+        require(collection.accounts.none { sameServerUrl(it.url, session.url) }) { "duplicate server" }
         val persisted = persistedAccount(accountId.value, session).copy(
             webPushConfig = webPushConfig,
             displayName = displayName.trim().takeIf(String::isNotEmpty),
@@ -422,7 +424,7 @@ class AuthStore(
     )
 
     private fun PersistedAccount.hasSemanticIdentity(session: Session): Boolean =
-        normalizeServerUrl(url) == normalizeServerUrl(session.url) &&
+        sameServerUrl(url, session.url) &&
             login.trim() == session.login.trim()
 
     private fun PersistedAccountCollection.canReplace(id: String, session: Session): Boolean =
@@ -452,7 +454,29 @@ private fun Session.isBoundTo(config: StoredWebPushConfig?): Boolean =
         normalizeServerUrl(url) == normalizeServerUrl(config.serverUrl) &&
         configId == config.configId
 
-internal fun normalizeServerUrl(url: String): String = url.trim().trimEnd('/')
+internal fun normalizeServerUrl(url: String): String {
+    val value = url.trim().trimEnd('/')
+    val parsed = runCatching { URL(value) }.getOrNull() ?: return value
+    if (!parsed.protocol.equals("https", ignoreCase = true)) return value
+    val host = parsed.host
+        ?.removePrefix("[")
+        ?.removeSuffix("]")
+        ?.lowercase(Locale.ROOT)
+        ?.takeIf(String::isNotBlank)
+        ?: return value
+    return buildString {
+        append("https://")
+        parsed.userInfo?.let { append(it).append('@') }
+        if (':' in host) append('[').append(host).append(']') else append(host)
+        if (parsed.port != -1 && parsed.port != 443) append(':').append(parsed.port)
+        append(parsed.path.orEmpty().trimEnd('/'))
+        parsed.query?.let { append('?').append(it) }
+        parsed.ref?.let { append('#').append(it) }
+    }
+}
+
+internal fun sameServerUrl(first: String, second: String): Boolean =
+    normalizeServerUrl(first) == normalizeServerUrl(second)
 
 internal fun httpsServerUrl(url: String): String? {
     val value = url.trim()
@@ -461,7 +485,7 @@ internal fun httpsServerUrl(url: String): String? {
         "://" in value -> return null
         else -> value
     }.trimEnd('/')
-    return address.takeIf(String::isNotBlank)?.let { "https://$it" }
+    return address.takeIf(String::isNotBlank)?.let { normalizeServerUrl("https://$it") }
 }
 
 internal class SharedPreferencesKeyValueStore(context: Context) : KeyValueStore {

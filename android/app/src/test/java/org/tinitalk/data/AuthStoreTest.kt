@@ -3,6 +3,7 @@ package org.tinitalk.data
 import org.tinitalk.push.StoredWebPushConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -26,8 +27,26 @@ class AuthStoreTest {
     fun acceptsServerAddressesWithoutHttpsPrefix() {
         assertEquals("https://talk.example.com", httpsServerUrl(" talk.example.com/ "))
         assertEquals("https://talk.example.com", httpsServerUrl("https://talk.example.com/"))
+        assertEquals("https://talk.example.com", httpsServerUrl("HTTPS://TALK.EXAMPLE.COM:443/"))
+        assertEquals("https://talk.example.com:8443", httpsServerUrl("TALK.EXAMPLE.COM:8443/"))
+        assertEquals("https://talk_server.example.com", httpsServerUrl("HTTPS://TALK_SERVER.EXAMPLE.COM:443/"))
         assertNull(httpsServerUrl("https://"))
         assertNull(httpsServerUrl("http://talk.example.com"))
+    }
+
+    @Test
+    fun rejectsAnotherAccountOnTheSameCanonicalServer() {
+        val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
+        val first = session("https://a.example", "alice", "session-a", "config-a")
+        val duplicate = session("https://A.EXAMPLE:443/", "anna", "session-b", "config-b")
+        store.add(store.newAccountId(), first, config(first), "Alice")
+
+        assertThrows(IllegalArgumentException::class.java) {
+            store.add(store.newAccountId(), duplicate, config(duplicate), "Anna")
+        }
+
+        assertEquals(listOf("alice"), store.list().map { it.session.login })
     }
 
     @Test
@@ -73,14 +92,13 @@ class AuthStoreTest {
     }
 
     @Test
-    fun updatesEveryAccountOnMatchingServerWithoutReencryptingTokens() {
+    fun updatesMatchingServerWithoutReencryptingTokens() {
         val persistence = CountingKeyValueStore()
         val cipher = CountingTokenCipher()
-        val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b"), AccountId("account-c")))
+        val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
         val store = AuthStore(persistence, cipher) { ids.removeFirst() }
         store.add(store.newAccountId(), session("https://a.example", "alice", "session-a", "config-a"), config(session("https://a.example", "alice", "session-a", "config-a")), "Alice")
-        store.add(store.newAccountId(), session("https://a.example", "anna", "session-b", "config-a"), config(session("https://a.example", "anna", "session-b", "config-a")), "Anna")
-        store.add(store.newAccountId(), session("https://b.example", "bob", "session-c", "config-b"), config(session("https://b.example", "bob", "session-c", "config-b")), "Bob")
+        store.add(store.newAccountId(), session("https://b.example", "bob", "session-b", "config-b"), config(session("https://b.example", "bob", "session-b", "config-b")), "Bob")
         val before = AccountCollectionStorage.read(persistence).accounts.associate { it.id to it.token }
         persistence.resetWrites()
         cipher.reset()
@@ -89,8 +107,7 @@ class AuthStoreTest {
 
         val accounts = AccountCollectionStorage.read(persistence).accounts
         assertEquals(setOf("webpush_v1", "multi_account_v1"), accounts.single { it.id == "account-a" }.features)
-        assertEquals(setOf("webpush_v1", "multi_account_v1"), accounts.single { it.id == "account-b" }.features)
-        assertEquals(setOf("webpush_v1"), accounts.single { it.id == "account-c" }.features)
+        assertEquals(setOf("webpush_v1"), accounts.single { it.id == "account-b" }.features)
         assertEquals(before, accounts.associate { it.id to it.token })
         assertEquals(1, persistence.writes)
         assertEquals(0, cipher.encryptions)
