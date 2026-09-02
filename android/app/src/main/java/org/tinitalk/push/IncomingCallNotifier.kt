@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.media.AudioAttributes
 import android.media.Ringtone
@@ -26,12 +27,14 @@ import org.tinitalk.call.CallSnapshot
 import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.AccountCallOwner
 import org.tinitalk.call.CallSessionBinding
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.UnreadMissedContact
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.AccountRecord
 import org.tinitalk.data.Session
+import org.tinitalk.contactPhotoNotificationLoader
 import org.tinitalk.telecom.IncomingCallController
 import java.time.Instant
 import java.time.Duration
@@ -297,31 +300,40 @@ private object IncomingRingtone {
     }
 }
 
-class IncomingCallNotifier(private val context: Context) {
+class IncomingCallNotifier(
+    private val context: Context,
+    photoLoader: ContactPhotoNotificationLoader? = null,
+) {
+    private val photoLoader: ContactPhotoNotificationLoader by lazy {
+        photoLoader ?: contactPhotoNotificationLoader(context)
+    }
+
     fun show(invite: IncomingInvite) {
         val mode = currentIncomingCallPresentation(context, appVisible = false)
-        buildIncomingNotification(invite, mode) { notification ->
+        buildIncomingNotification(invite, mode, incomingPhotoAddress(invite)?.let(photoLoader::peek)) { notification ->
             context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
         }
     }
 
     internal fun buildIncomingNotification(invite: IncomingInvite): Notification? =
-        buildIncomingNotification(invite, currentIncomingCallPresentation(context)) {}
+        buildIncomingNotification(invite, currentIncomingCallPresentation(context), null) {}
 
     internal fun buildIncomingNotification(
         invite: IncomingInvite,
         mode: IncomingCallPresentationMode,
-    ): Notification? = buildIncomingNotification(invite, mode) {}
+        bitmap: Bitmap? = null,
+    ): Notification? = buildIncomingNotification(invite, mode, bitmap) {}
 
     internal fun presentIncoming(
         invite: IncomingInvite,
         mode: IncomingCallPresentationMode,
         publish: (Notification) -> Unit,
-    ): Boolean = buildIncomingNotification(invite, mode, publish) != null
+    ): Boolean = buildIncomingNotification(invite, mode, incomingPhotoAddress(invite)?.let(photoLoader::peek), publish) != null
 
     private fun buildIncomingNotification(
         invite: IncomingInvite,
         mode: IncomingCallPresentationMode,
+        bitmap: Bitmap?,
         publish: (Notification) -> Unit,
     ): Notification? {
         ensureChannel(mode)
@@ -329,18 +341,47 @@ class IncomingCallNotifier(private val context: Context) {
         var notification: Notification? = null
         val presented = controller.presentSavedIncoming(context, invite) {
             IncomingVibration.start(context, invite)
-            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                Notification.Builder(
-                    context,
-                    if (mode == IncomingCallPresentationMode.InApp) InAppChannelId else ChannelId,
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                Notification.Builder(context)
-            }
             val answer = controller.activityIntent(context, IncomingCallController.ActionAnswer, invite)
             val reject = controller.actionIntent(context, IncomingCallController.ActionReject, invite)
             val fullScreen = controller.activityIntent(context, IncomingCallController.ActionIncoming, invite)
+            val builder = incomingNotificationBuilder(invite, mode, answer, reject, fullScreen, bitmap)
+            notification = builder.build()
+            publish(requireNotNull(notification))
+            enqueueIncomingPhotoRefresh(invite, mode, answer, reject, fullScreen, bitmap)
+        }
+        return notification.takeIf { presented }
+    }
+
+    private fun incomingNotificationBuilder(
+        invite: IncomingInvite,
+        mode: IncomingCallPresentationMode,
+        answer: PendingIntent,
+        reject: PendingIntent,
+        fullScreen: PendingIntent,
+        bitmap: Bitmap?,
+    ): Notification.Builder {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(
+                context,
+                if (mode == IncomingCallPresentationMode.InApp) InAppChannelId else ChannelId,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+        bitmap?.let(builder::setLargeIcon)
+        val personBuilder = if (Build.VERSION.SDK_INT >= 28) {
+            Person.Builder()
+                .setName(invite.caller.ifEmpty { "TiniTalk" })
+                .setImportant(true)
+                .also { person ->
+                    if (Build.VERSION.SDK_INT >= 31) {
+                        bitmap?.let { person.setIcon(Icon.createWithBitmap(it)) }
+                    }
+                }
+        } else {
+            null
+        }
             @Suppress("DEPRECATION")
             builder
                 .setSmallIcon(R.drawable.ic_call_ringing)
@@ -366,7 +407,7 @@ class IncomingCallNotifier(private val context: Context) {
             if (Build.VERSION.SDK_INT >= 31) {
                 builder.setStyle(
                     Notification.CallStyle.forIncomingCall(
-                        Person.Builder().setName(invite.caller.ifEmpty { "TiniTalk" }).setImportant(true).build(),
+                        requireNotNull(personBuilder).build(),
                         reject,
                         answer,
                     ),
@@ -388,10 +429,29 @@ class IncomingCallNotifier(private val context: Context) {
                         ).build(),
                     )
             }
-            notification = builder.build()
-            publish(requireNotNull(notification))
+        return builder
+    }
+
+    private fun enqueueIncomingPhotoRefresh(
+        invite: IncomingInvite,
+        mode: IncomingCallPresentationMode,
+        answer: PendingIntent,
+        reject: PendingIntent,
+        fullScreen: PendingIntent,
+        initialBitmap: Bitmap?,
+    ) {
+        val address = incomingPhotoAddress(invite) ?: return
+        if (initialBitmap != null) return
+        val revision = photoLoader.revision
+        val requestKey = invite.owner.localId()
+        photoLoader.load(address, requestKey, revision) { loadedKey, capturedRevision, bitmap ->
+            if (loadedKey != requestKey || bitmap == null) return@load
+            if (capturedRevision != photoLoader.revision) return@load
+            val current = IncomingCallController().load(context)?.invite ?: return@load
+            if (current.owner != invite.owner || !current.expiresAt.isAfter(Instant.now())) return@load
+            val notification = incomingNotificationBuilder(current, mode, answer, reject, fullScreen, bitmap).build()
+            context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
         }
-        return notification.takeIf { presented }
     }
 
     /** Hydrates only the compact persisted count map; contacts/history remain in memory. */
@@ -566,6 +626,10 @@ class IncomingCallNotifier(private val context: Context) {
             }
         manager.notify(MissedNotificationId, builder.build())
     }
+
+    private fun incomingPhotoAddress(invite: IncomingInvite): ContactAddress? =
+        invite.callerLogin?.takeIf(String::isNotBlank)
+            ?.let { login -> ContactAddress.of(invite.sessionBinding.serverUrl, login) }
 
     fun cancel() {
         dismissNotification()

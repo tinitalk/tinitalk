@@ -3,6 +3,7 @@ package org.tinitalk.push
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.Person
+import android.graphics.Bitmap
 import org.tinitalk.CallActivity
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.AccountId
@@ -257,6 +258,26 @@ class IncomingCallNotifierTest {
 
         assertEquals("Alice", caller?.name)
         assertEquals("Входящий звонок", notification.extras.getCharSequence(Notification.EXTRA_TEXT))
+        incoming.finishTerminalPresentation(context, invite.owner) {}
+    }
+
+    @Test
+    fun incomingNotificationUsesPhotoForCallPersonAndLargeIcon() {
+        val context = RuntimeEnvironment.getApplication()
+        val invite = invite("call-photo").copy(callerLogin = "alice")
+        val incoming = IncomingCallController()
+        incoming.admitIncoming(context, invite)
+        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+
+        val notification = IncomingCallNotifier(context).buildIncomingNotification(
+            invite,
+            IncomingCallPresentationMode.FullScreen,
+            bitmap,
+        )!!
+        val caller = notification.extras.getParcelable(Notification.EXTRA_CALL_PERSON, Person::class.java)
+
+        assertNotNull(caller?.icon)
+        assertNotNull(notification.getLargeIcon())
         incoming.finishTerminalPresentation(context, invite.owner) {}
     }
 

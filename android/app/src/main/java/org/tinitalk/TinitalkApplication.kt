@@ -27,6 +27,7 @@ import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingCallPresentationMode
 import org.tinitalk.push.IncomingRingingAcknowledger
+import org.tinitalk.push.ContactPhotoNotificationLoader
 import org.tinitalk.push.PushRegistrationScheduler
 import org.tinitalk.push.UnifiedPushAccountRegistration
 import org.tinitalk.push.currentIncomingCallPresentation
@@ -35,6 +36,7 @@ import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.TelecomCallController
+import java.util.concurrent.Executors
 
 class TinitalkApplication : Application() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -42,6 +44,8 @@ class TinitalkApplication : Application() {
     lateinit var contactPhotoStore: ContactPhotoStore
         private set
     lateinit var contactPhotoProcessor: ContactPhotoProcessor
+        private set
+    lateinit var contactPhotoNotificationLoader: ContactPhotoNotificationLoader
         private set
     lateinit var networkAvailability: NetworkAvailability
         private set
@@ -64,6 +68,12 @@ class TinitalkApplication : Application() {
             },
         )
         contactPhotoProcessor = ContactPhotoProcessor(this)
+        contactPhotoNotificationLoader = ContactPhotoNotificationLoader(
+            contactPhotoStore,
+            Executors.newSingleThreadExecutor { task ->
+                Thread(task, "tinitalk-contact-photo-notification").apply { isDaemon = true }
+            },
+        )
         Thread({
             contactPhotoStore.purgeTrash()
             contactPhotoProcessor.purgeDrafts()
@@ -119,6 +129,9 @@ class TinitalkApplication : Application() {
 
 internal fun contactPhotoStore(context: Context): ContactPhotoStore =
     (context.applicationContext as TinitalkApplication).contactPhotoStore
+
+internal fun contactPhotoNotificationLoader(context: Context): ContactPhotoNotificationLoader =
+    (context.applicationContext as TinitalkApplication).contactPhotoNotificationLoader
 
 internal fun cleanupWebPushAccount(context: Context, accountId: AccountId, session: Session? = null) {
     runCatching { ContactCache(SharedPreferencesKeyValueStore(context)).remove(accountId) }

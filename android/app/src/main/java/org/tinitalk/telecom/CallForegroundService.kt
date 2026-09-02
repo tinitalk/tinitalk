@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -22,6 +23,7 @@ import androidx.core.content.ContextCompat
 import org.tinitalk.BuildConfig
 import org.tinitalk.CallActivity
 import org.tinitalk.R
+import org.tinitalk.contactPhotoNotificationLoader
 import org.tinitalk.call.CallCoordinator
 import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.AccountCallOwner
@@ -59,6 +61,13 @@ import org.tinitalk.media.CameraMediaCallbacks
 import org.tinitalk.media.CallMediaDispatcher
 import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.IncomingCallNotifier
+import org.tinitalk.push.ContactPhotoNotificationLoader
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -166,6 +175,8 @@ class CallForegroundService : Service() {
     private var outgoingPeer: CallPeer? = null
     private var callNetworkLock: CallNetworkLock? = null
     private var networkObserver: DefaultNetworkObserver? = null
+    private val photoLoader: ContactPhotoNotificationLoader by lazy { contactPhotoNotificationLoader(this) }
+    private var contactPhotoRevisionJob: Job? = null
     private val foregroundLock = Any()
     private lateinit var callTones: CallToneController
     private val connectionHealthClassifier = ConnectionHealthClassifier()
@@ -240,6 +251,11 @@ class CallForegroundService : Service() {
         ensureChannel()
         callTones = CallToneController(handler)
         CallUiStateStore.observe(callUiObserver)
+        contactPhotoRevisionJob = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+            photoLoader.revisions.drop(1).collect {
+                handler.post { refreshNotificationAfterPhotoRevision() }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -340,6 +356,8 @@ class CallForegroundService : Service() {
         val owned = ownedLease != null && GlobalCallAdmission.owns(ownedLease)
         finishing = true
         runtimeGeneration++
+        contactPhotoRevisionJob?.cancel()
+        contactPhotoRevisionJob = null
         CallUiStateStore.removeObserver(callUiObserver)
         callTones.close()
         terminalSignalGate.close()
@@ -1090,7 +1108,10 @@ class CallForegroundService : Service() {
         stopSelf()
     }
 
-    private fun notification(state: CallUiState): Notification {
+    private fun notification(state: CallUiState, bitmap: Bitmap? = state.peer?.contactAddress?.let(photoLoader::peek)): Notification {
+        state.peer?.contactAddress?.let { address ->
+            if (bitmap == null) enqueueNotificationPhotoRefresh(state, address)
+        }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, ChannelId)
         } else {
@@ -1112,6 +1133,7 @@ class CallForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val peerName = state.peer?.displayName?.takeIf(String::isNotBlank) ?: "TiniTalk"
+        bitmap?.let(builder::setLargeIcon)
         val status = when (state.phase) {
             CallPhase.Ringing -> if (state.direction == CallDirection.Outgoing) "Ждём ответа…" else "Входящий звонок"
             CallPhase.Connecting -> "Пробуем связаться…"
@@ -1134,9 +1156,11 @@ class CallForegroundService : Service() {
                 .setShowWhen(true)
         } ?: builder.setShowWhen(false)
         if (Build.VERSION.SDK_INT >= 31) {
+            val personBuilder = Person.Builder().setName(peerName).setImportant(true)
+            bitmap?.let { personBuilder.setIcon(android.graphics.drawable.Icon.createWithBitmap(it)) }
             builder.setStyle(
                 Notification.CallStyle.forOngoingCall(
-                    Person.Builder().setName(peerName).setImportant(true).build(),
+                    personBuilder.build(),
                     hangUp,
                 ),
             )
@@ -1145,6 +1169,29 @@ class CallForegroundService : Service() {
             builder.addAction(Notification.Action.Builder(R.drawable.ic_call, "Завершить", hangUp).build())
         }
         return builder.build()
+    }
+
+    private fun enqueueNotificationPhotoRefresh(state: CallUiState, address: ContactAddress) {
+        val key = state.callKey ?: return
+        val requestKey = key.localId()
+        val revision = photoLoader.revision
+        photoLoader.load(address, requestKey, revision) { loadedKey, capturedRevision, bitmap ->
+            if (loadedKey != requestKey || bitmap == null) return@load
+            handler.post {
+                val current = CallUiStateStore.snapshot()
+                if (current.callKey != key || current.peer?.contactAddress != address) return@post
+                if (capturedRevision != photoLoader.revision) return@post
+                if (current.phase == CallPhase.Idle || callResourcesReleased || finishing) return@post
+                getSystemService(NotificationManager::class.java).notify(NotificationId, notification(current, bitmap))
+            }
+        }
+    }
+
+    private fun refreshNotificationAfterPhotoRevision() {
+        val current = CallUiStateStore.snapshot()
+        if (finishing || callResourcesReleased || current.callKey != callOwner?.key || current.phase == CallPhase.Idle) return
+        if (current.peer?.contactAddress == null) return
+        getSystemService(NotificationManager::class.java).notify(NotificationId, notification(current, null))
     }
 
     private fun terminalNotification(): Notification {
