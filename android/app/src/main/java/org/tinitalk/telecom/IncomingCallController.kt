@@ -14,8 +14,10 @@ import org.tinitalk.call.CallAdmissionAttempt
 import org.tinitalk.call.CallAdmissionGateway
 import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.call.GlobalCallAdmission
+import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallServiceState
+import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.data.AccountId
 import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
@@ -64,6 +66,7 @@ class IncomingCallController internal constructor(
             if (pending.invite.owner != owner) return@synchronized false
             prefs(context).edit().clear().apply()
             admission.releaseStaged(owner)
+            clearIncomingRingingUi(owner)
             true
         }
     }
@@ -102,6 +105,7 @@ class IncomingCallController internal constructor(
                 prefs(context).edit().clear().apply()
                 if (releaseReserved) admission.releaseStaged(pendingCall.invite.owner)
             }
+            clearIncomingRingingUi(owner)
             true
         }
         if (shouldCancel) cancelPresentation()
@@ -122,6 +126,7 @@ class IncomingCallController internal constructor(
                     rememberTerminal(context, pending.invite.owner)
                     prefs(context).edit().clear().apply()
                     admission.releaseStaged(pending.invite.owner)
+                    clearIncomingRingingUi(pending.invite.owner)
                 }
             }
             return@synchronized null
@@ -135,6 +140,7 @@ class IncomingCallController internal constructor(
                 is CallAdmissionAttempt.Busy -> {
                     rememberTerminal(context, pending.invite.owner)
                     prefs(context).edit().clear().apply()
+                    clearIncomingRingingUi(pending.invite.owner)
                     null
                 }
             }
@@ -163,6 +169,7 @@ class IncomingCallController internal constructor(
                     restored?.takeIf { it.invite.owner == invite.owner }?.let { pending ->
                         prefs(context).edit().clear().apply()
                         admission.releaseStaged(pending.invite.owner)
+                        clearIncomingRingingUi(pending.invite.owner)
                     }
                     return@admission IncomingAdmissionResult.Busy
                 }
@@ -212,6 +219,7 @@ class IncomingCallController internal constructor(
             rememberTerminal(context, owner)
             prefs(context).edit().clear().apply()
             admission.releaseStaged(pending.invite.owner)
+            clearIncomingRingingUi(owner)
             true
         }
         if (expired) cancelPresentation()
@@ -255,6 +263,7 @@ class IncomingCallController internal constructor(
             rememberTerminal(context, pending.invite.owner)
             prefs(context).edit().clear().apply()
             admission.releaseStaged(pending.invite.owner)
+            clearIncomingRingingUi(pending.invite.owner)
             pending.invite.key
         } ?: return@synchronized null
         IncomingCallForegroundService.stop(context)
@@ -286,6 +295,7 @@ class IncomingCallController internal constructor(
                         (currentOwner?.key == owner.key && currentOwner != owner)
                 if (conflictsWithReplacement) return@synchronized false
                 rememberTerminal(context, owner)
+                clearIncomingRingingUi(owner)
                 true
             }
         }
@@ -325,6 +335,17 @@ class IncomingCallController internal constructor(
         val pruned = BusyCallTombstones.prune(stored, nowMillis)
         if (pruned != stored) prefs.edit().putStringSet(BusyEntries, pruned).apply()
         BusyCallTombstones.contains(pruned, owner, nowMillis)
+    }
+
+    private fun clearIncomingRingingUi(owner: AccountCallOwner) {
+        val state = CallUiStateStore.snapshot()
+        if (
+            state.callKey == owner.key &&
+            state.direction == CallDirection.Incoming &&
+            state.phase == CallPhase.Ringing
+        ) {
+            CallUiStateStore.reset(owner.key)
+        }
     }
 
     fun load(context: Context): PendingIncomingCall? {

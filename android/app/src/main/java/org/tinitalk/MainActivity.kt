@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.call.CallServiceState
@@ -1042,6 +1043,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         mainScreenResumed = true
+        cleanupStaleIncomingPresentation()
         consumeAccountAdditionIfResumed()
         refreshPermissions()
         when {
@@ -1054,6 +1056,21 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         mainScreenResumed = false
         super.onPause()
+    }
+
+    private fun cleanupStaleIncomingPresentation() {
+        val pendingIncoming = IncomingCallController().load(this)
+        val serviceCall = CallServiceState.snapshot()
+        if (
+            pendingIncoming == null &&
+            (serviceCall.phase == CallPhase.Idle || serviceCall.phase == CallPhase.Ended)
+        ) {
+            IncomingCallNotifier(this).cancel()
+            val uiCall = CallUiStateStore.snapshot()
+            if (uiCall.direction == CallDirection.Incoming && uiCall.phase == CallPhase.Ringing) {
+                uiCall.callKey?.let(CallUiStateStore::reset) ?: CallUiStateStore.reset()
+            }
+        }
     }
 
     private fun refreshMissedCount() {
