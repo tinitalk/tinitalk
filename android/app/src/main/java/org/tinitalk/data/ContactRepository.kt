@@ -333,9 +333,9 @@ private fun ContactPage.boundTo(accountId: AccountId, serverUrl: String): Accoun
     items = items.map { contact -> AccountContact(accountId, serverUrl, contact) },
 )
 
-private fun CallHistoryPage.boundTo(accountId: AccountId, session: Session? = null): AccountCallHistoryPage = AccountCallHistoryPage(
+private fun CallHistoryPage.boundTo(accountId: AccountId, session: Session): AccountCallHistoryPage = AccountCallHistoryPage(
     accountId = accountId,
-    items = items.map { item -> AccountHistory(accountId, item) },
+    items = items.map { item -> AccountHistory(accountId, normalizeServerUrl(session.url), item) },
     nextBefore = nextBefore,
     latestId = latestId,
     unread = CallUnreadState(unreadMissedCount, unreadMissed),

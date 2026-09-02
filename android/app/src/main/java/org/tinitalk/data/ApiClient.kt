@@ -110,6 +110,7 @@ data class CallHistoryPage(
 
 data class AccountHistory(
     val accountId: AccountId,
+    val serverUrl: String,
     val item: CallHistoryItem,
 ) {
     val id: Long get() = item.id
@@ -120,6 +121,7 @@ data class AccountHistory(
     val reached: Boolean get() = item.reached
     val startedAt: Long get() = item.startedAt
     val durationSeconds: Long get() = item.durationSeconds
+    val address: ContactAddress get() = ContactAddress.of(serverUrl, peerLogin)
     val key: AccountHistoryKey get() = AccountHistoryKey(accountId, id)
 }
 

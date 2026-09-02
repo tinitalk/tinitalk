@@ -50,7 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
+import org.tinitalk.data.AccountHistory
 import org.tinitalk.data.CallHistoryItem
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
 import org.tinitalk.ui.theme.CallRejectRed
@@ -63,7 +65,7 @@ internal fun shouldScrollToNewest(previousFirstKey: String?, currentFirstKey: St
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
-    items: List<CallHistoryItem>,
+    items: List<AccountHistory>,
     itemKeys: List<String> = items.map { item -> item.id.toString() },
     internetAvailable: Boolean = true,
     loaded: Boolean,
@@ -112,7 +114,8 @@ fun HistoryScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    itemsIndexed(items, key = { index, item -> itemKeys.getOrNull(index) ?: item.id }) { index, item ->
+                    itemsIndexed(items, key = { index, accountHistory -> itemKeys.getOrNull(index) ?: accountHistory.id }) { index, accountHistory ->
+                        val item = accountHistory.item
                         Column {
                             val day = historyDayLabel(item.startedAt, now, zone)
                             if (index == 0 || day != historyDayLabel(items[index - 1].startedAt, now, zone)) {
@@ -124,7 +127,7 @@ fun HistoryScreen(
                                     color = MaterialTheme.colorScheme.primary,
                                 )
                             }
-                            HistoryRow(item)
+                            HistoryRow(item, contactAddress = accountHistory.address)
                             if (shouldLoadMoreHistory(
                                     index = index,
                                     itemCount = items.size,
@@ -232,7 +235,11 @@ private fun HistoryUnavailableDialog(servers: List<String>, onDismiss: () -> Uni
 }
 
 @Composable
-internal fun HistoryRow(item: CallHistoryItem, showPeer: Boolean = true) {
+internal fun HistoryRow(
+    item: CallHistoryItem,
+    showPeer: Boolean = true,
+    contactAddress: ContactAddress? = null,
+) {
     val name = contactDisplayName(item.peerName)
     val direction = if (item.direction == "incoming") "Входящий" else "Исходящий"
     val missed = isMissedIncoming(item)
@@ -260,21 +267,13 @@ internal fun HistoryRow(item: CallHistoryItem, showPeer: Boolean = true) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (showPeer) {
-                Surface(
-                    modifier = Modifier.size(50.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    border = BorderStroke(1.dp, BrandGold.copy(alpha = 0.28f)),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            contactInitial(name, item.peerLogin),
-                            color = Color(0xFFF6E8C0),
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
+                ContactAvatar(
+                    address = contactAddress,
+                    displayName = name,
+                    fallbackLogin = item.peerLogin,
+                    size = 50.dp,
+                    borderWidth = 1.dp,
+                )
                 Spacer(Modifier.width(14.dp))
             }
             Column(modifier = Modifier.weight(1f)) {

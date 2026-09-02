@@ -768,7 +768,7 @@ private fun HomeScreen(
                             )
                         } else {
                             HistoryScreen(
-                                items = historyWindow.items.map(AccountHistory::item),
+                                items = historyWindow.items,
                                 itemKeys = historyWindow.items.map { accountScopedKey(it.accountId, it.id.toString()) },
                                 internetAvailable = state.networkAvailable,
                                 loaded = state.historyLoaded,

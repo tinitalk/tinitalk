@@ -52,9 +52,9 @@ class ContactRefreshStateTest {
     fun historyReducerKeepsFailedAccountCacheCursorAndEqualIdsDistinct() {
         val a = AccountId("a")
         val b = AccountId("b")
-        val oldB = AccountHistory(b, history(7, "sam", 1))
+        val oldB = AccountHistory(b, "https://b.example", history(7, "sam", 1))
         val pageA = AccountCallHistoryPage(
-            a, listOf(AccountHistory(a, history(7, "sam", 2))), 3, 7,
+            a, listOf(AccountHistory(a, "https://a.example", history(7, "sam", 2))), 3, 7,
             CallUnreadState(1, listOf(UnreadMissedContact("sam", 2))),
         )
 
@@ -72,7 +72,7 @@ class ContactRefreshStateTest {
         val available = AccountId("available")
         val unavailable = AccountId("unavailable")
         val loaded = (100L downTo 50L).map { id ->
-            AccountHistory(available, history(id, "sam", id))
+            AccountHistory(available, "https://available.example", history(id, "sam", id))
         }
 
         val buffered = accountHistoryWindow(
