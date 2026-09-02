@@ -111,6 +111,23 @@ class ContactPhotoProcessorTest {
     }
 
     @Test
+    fun renderUsesLongestAxisForCropPositionSoPreviewAndSavedAvatarStayAligned() {
+        val source = temp.newFile("source.png").apply { writeBytes(pngBytes(bottomRightMarker())) }
+        val draft = processor().importDraft(Uri.fromFile(source)).valueOrThrow()
+
+        val rendered = processor().render(
+            draft,
+            NormalizedCropSquare(
+                left = 115f / 160f,
+                top = 45f / 160f,
+                size = 45f / 160f,
+            ),
+        ).valueOrThrow()
+
+        assertEquals(Color.YELLOW, rendered.getPixel(256, 256))
+    }
+
+    @Test
     fun animatedInputUsesStaticFirstFrame() {
         val source = temp.newFile("static.gif").apply { writeBytes(minimalGifBytes()) }
 
@@ -166,6 +183,16 @@ class ContactPhotoProcessorTest {
             for (x in 0 until width) {
                 for (y in 0 until height) {
                     setPixel(x, y, if (x < width / 2) Color.RED else Color.BLUE)
+                }
+            }
+        }
+
+    private fun bottomRightMarker(): Bitmap =
+        Bitmap.createBitmap(160, 90, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.BLACK)
+            for (x in 115 until width) {
+                for (y in 60 until height) {
+                    setPixel(x, y, Color.YELLOW)
                 }
             }
         }

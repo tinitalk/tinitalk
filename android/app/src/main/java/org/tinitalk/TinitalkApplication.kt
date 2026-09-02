@@ -18,10 +18,12 @@ import org.tinitalk.data.AuthSessionEvent
 import org.tinitalk.data.AuthSessionEvents
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.ContactCache
+import org.tinitalk.data.ContactPhotoAccountLifecycle
 import org.tinitalk.data.ContactPhotoProcessor
 import org.tinitalk.data.ContactPhotoStore
 import org.tinitalk.data.Session
 import org.tinitalk.data.SharedPreferencesKeyValueStore
+import org.tinitalk.data.normalizeServerUrl
 import org.tinitalk.network.NetworkAvailability
 import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
@@ -46,6 +48,8 @@ class TinitalkApplication : Application() {
     lateinit var contactPhotoProcessor: ContactPhotoProcessor
         private set
     lateinit var contactPhotoNotificationLoader: ContactPhotoNotificationLoader
+        private set
+    lateinit var contactPhotoAccountLifecycle: ContactPhotoAccountLifecycle
         private set
     lateinit var networkAvailability: NetworkAvailability
         private set
@@ -74,11 +78,15 @@ class TinitalkApplication : Application() {
                 Thread(task, "tinitalk-contact-photo-notification").apply { isDaemon = true }
             },
         )
+        authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+        contactPhotoAccountLifecycle = ContactPhotoAccountLifecycle(contactPhotoStore) { serverUrl ->
+            authStore.list().any { account -> normalizeServerUrl(account.session.url) == normalizeServerUrl(serverUrl) }
+        }
+        authStore.list().forEach { account -> contactPhotoAccountLifecycle.activateServer(account.session.url) }
         Thread({
             contactPhotoStore.purgeTrash()
             contactPhotoProcessor.purgeDrafts()
         }, "tinitalk-contact-photo-trash").start()
-        authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         restoreIncomingCall()
         IncomingCallNotifier(this).syncMissedAccounts(authStore.list().map { it.id })
 
@@ -132,6 +140,9 @@ internal fun contactPhotoStore(context: Context): ContactPhotoStore =
 
 internal fun contactPhotoNotificationLoader(context: Context): ContactPhotoNotificationLoader =
     (context.applicationContext as TinitalkApplication).contactPhotoNotificationLoader
+
+internal fun contactPhotoAccountLifecycle(context: Context): ContactPhotoAccountLifecycle =
+    (context.applicationContext as TinitalkApplication).contactPhotoAccountLifecycle
 
 internal fun cleanupWebPushAccount(context: Context, accountId: AccountId, session: Session? = null) {
     runCatching { ContactCache(SharedPreferencesKeyValueStore(context)).remove(accountId) }

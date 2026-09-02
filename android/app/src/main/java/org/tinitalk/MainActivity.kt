@@ -30,6 +30,7 @@ import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
+import org.tinitalk.contactPhotoAccountLifecycle
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.ApiException
 import org.tinitalk.data.AccountContactPage
@@ -125,6 +126,8 @@ class MainActivity : ComponentActivity() {
     private val contactHistoryRefreshGate = HistoryRefreshGate()
     private var authGeneration = 0
     private var contactsSyncing = false
+    @Volatile
+    private var accountRemovalInProgress = false
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread { callUiState = state }
     }
@@ -166,7 +169,12 @@ class MainActivity : ComponentActivity() {
         val localStore = SharedPreferencesKeyValueStore(this)
         authStore = AuthStore(localStore, AndroidKeystoreTokenCipher())
         contactCache = ContactCache(localStore)
-        repository = ContactRepository(this, authStore, contactCache)
+        repository = ContactRepository(
+            this,
+            authStore,
+            contactCache,
+            onExplicitAccountRemoved = ::cleanupContactPhotosAfterExplicitAccountRemoval,
+        )
         network = networkAvailability()
         contactPhotoEditorViewModel.configure(
             processor = (application as TinitalkApplication).contactPhotoProcessor,
@@ -311,6 +319,7 @@ class MainActivity : ComponentActivity() {
         Thread {
             runCatching { repository.signIn(url, login, token, deviceId) }
                 .onSuccess { page ->
+                    contactPhotoAccountLifecycle(this).activateServer(serverUrl)
                     runOnUiThread {
                         if (isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
                             val account = repository.accounts().singleOrNull {
@@ -845,12 +854,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun addAccount(url: String, login: String, token: String) {
-        if (!network.available || screenState.addingAccount) return
+        if (!network.available || screenState.addingAccount || accountRemovalInProgress) return
         screenState = screenState.copy(addingAccount = true, addAccountErrorMessage = null)
         val deviceId = DeviceIdentity.id(this)
         Thread {
             runCatching { repository.addAccount(url, login, token, deviceId) }
                 .onSuccess { added ->
+                    contactPhotoAccountLifecycle(this).activateServer(added.account.session.url)
                     accountAdditionHandoff.publish(
                         AccountAdditionOutcome.Added(
                             accountId = added.account.id,
@@ -934,16 +944,36 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun removeAccount(accountId: AccountId) {
-        if (!repository.removeAccount(accountId)) {
-            screenState = screenState.copy(accounts = repository.accounts().toAccountSummaries())
-            return
+        if (accountRemovalInProgress || screenState.addingAccount) return
+        accountRemovalInProgress = true
+        Thread {
+            val removed = repository.removeAccount(accountId)
+            val remaining = repository.accounts()
+            runOnUiThread {
+                accountRemovalInProgress = false
+                if (!removed) {
+                    screenState = screenState.copy(accounts = remaining.toAccountSummaries())
+                    return@runOnUiThread
+                }
+                if (remaining.isEmpty()) {
+                    resetToLogin()
+                    return@runOnUiThread
+                }
+                pruneRemovedAccount(accountId, remaining)
+            }
+        }.start()
+    }
+
+    private fun cleanupContactPhotosAfterExplicitAccountRemoval(accountId: AccountId, session: org.tinitalk.data.Session) {
+        val invalidated = CompletableFuture<Unit>()
+        mainHandler.post {
+            contactPhotoEditorViewModel.state.target
+                ?.takeIf { target -> target.accountId == accountId }
+                ?.let(contactPhotoEditorViewModel::onTargetHidden)
+            invalidated.complete(Unit)
         }
-        val remaining = repository.accounts()
-        if (remaining.isEmpty()) {
-            resetToLogin()
-            return
-        }
-        pruneRemovedAccount(accountId, remaining)
+        invalidated.join()
+        contactPhotoAccountLifecycle(this).removeServerAfterExplicitLogout(session.url)
     }
 
     private fun pruneRemovedAccount(accountId: AccountId, remaining: List<org.tinitalk.data.AccountRecord>) {

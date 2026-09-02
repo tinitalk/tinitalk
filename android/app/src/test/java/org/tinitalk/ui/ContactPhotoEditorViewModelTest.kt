@@ -2,6 +2,8 @@ package org.tinitalk.ui
 
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntSize
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.ContactPhotoDraft
@@ -124,6 +126,98 @@ class ContactPhotoEditorViewModelTest {
         }
     }
 
+    @Test
+    fun cropMathStartsWithCoverScaleSoNonSquareImagesFillCropArea() {
+        val landscape = normalizedCropForViewport(
+            imageWidth = 1600,
+            imageHeight = 900,
+            transform = defaultCropTransform(Bitmap.createBitmap(1600, 900, Bitmap.Config.ARGB_8888)),
+        )
+        val portrait = normalizedCropForViewport(
+            imageWidth = 900,
+            imageHeight = 1600,
+            transform = defaultCropTransform(Bitmap.createBitmap(900, 1600, Bitmap.Config.ARGB_8888)),
+        )
+
+        assertEquals(900f / 1600f, landscape.size, 0.001f)
+        assertEquals(900f / 1600f, portrait.size, 0.001f)
+        assertEquals(0f, landscape.top, 0.001f)
+        assertEquals(0f, portrait.left, 0.001f)
+    }
+
+    @Test
+    fun cropMathAllowsZoomedLandscapeToPanAllTheWayToTopEdge() {
+        val viewport = IntSize(280, 280)
+        val topCrop = normalizedCropForViewport(
+            imageWidth = 1600,
+            imageHeight = 900,
+            transform = clampCropTransform(
+                imageWidth = 1600,
+                imageHeight = 900,
+                transform = CropTransform(scale = 3f, offsetX = 0f, offsetY = 10_000f),
+                viewport = viewport,
+            ),
+            viewport = viewport,
+        )
+
+        assertEquals(0f, topCrop.top, 0.001f)
+        assertTrue(topCrop.size < 900f / 1600f)
+    }
+
+    @Test
+    fun cropPanClampUsesMeasuredViewportPixelsNotDpFallback() {
+        val mdpi = clampCropTransform(
+            imageWidth = 1600,
+            imageHeight = 900,
+            transform = CropTransform(scale = 3f, offsetX = 10_000f, offsetY = 10_000f),
+            viewport = IntSize(280, 280),
+        )
+        val xxhdpi = clampCropTransform(
+            imageWidth = 1600,
+            imageHeight = 900,
+            transform = CropTransform(scale = 3f, offsetX = 10_000f, offsetY = 10_000f),
+            viewport = IntSize(840, 840),
+        )
+
+        assertEquals(mdpi.offsetX * 3f, xxhdpi.offsetX, 0.001f)
+        assertEquals(mdpi.offsetY * 3f, xxhdpi.offsetY, 0.001f)
+    }
+
+    @Test
+    fun cropMathAllowsStrongZoomEvenWhenSavedAvatarWillUpscale() {
+        val clamped = clampCropTransform(
+            imageWidth = 1600,
+            imageHeight = 900,
+            transform = CropTransform(scale = 12f, offsetX = 0f, offsetY = 0f),
+        )
+        val crop = normalizedCropForViewport(1600, 900, clamped)
+
+        assertEquals(12f, clamped.scale, 0.001f)
+        assertTrue(crop.size < 0.1f)
+    }
+
+    @Test
+    fun pinchZoomKeepsImagePointUnderGestureCentroidStable() {
+        val viewport = IntSize(840, 840)
+        val centroid = Offset(630f, 420f)
+        val before = CropTransform(scale = 3f, offsetX = 0f, offsetY = 0f)
+        val beforeRect = cropRectForViewport(1600, 900, before, viewport)
+
+        val after = applyCropGesture(
+            imageWidth = 1600,
+            imageHeight = 900,
+            transform = before,
+            centroid = centroid,
+            pan = Offset.Zero,
+            zoom = 1.5f,
+            viewport = viewport,
+        )
+        val afterRect = cropRectForViewport(1600, 900, after, viewport)
+
+        assertEquals(sourceX(beforeRect, centroid, viewport), sourceX(afterRect, centroid, viewport), 0.001f)
+        assertEquals(sourceY(beforeRect, centroid, viewport), sourceY(afterRect, centroid, viewport), 0.001f)
+    }
+
     private fun editor(fake: FakeDeps): ContactPhotoEditorViewModel =
         ContactPhotoEditorViewModel(
             worker = ContactPhotoWorker { it() },
@@ -132,6 +226,12 @@ class ContactPhotoEditorViewModelTest {
             configureForTest(fake.dependencies())
             onTargetVisible(target)
         }
+
+    private fun sourceX(rect: CropSourceRect, point: Offset, viewport: IntSize): Float =
+        rect.left + rect.size * (point.x / viewport.width)
+
+    private fun sourceY(rect: CropSourceRect, point: Offset, viewport: IntSize): Float =
+        rect.top + rect.size * (point.y / viewport.height)
 
     private class FakeDeps(var hasPhoto: Boolean = false) {
         var current = true

@@ -3,11 +3,15 @@ package org.tinitalk.ui
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactAddress
@@ -60,11 +64,16 @@ class ContactScreenPhotoTest {
             )
         }
 
-        composeRule.onNode(hasContentDescription("Изменить фото контакта Алексей")).assertExists().performClick()
+        composeRule.onNode(hasContentDescription("Действия контакта Алексей")).assertExists().performClick()
+        composeRule.onNodeWithText("Переименовать").assertExists()
+        composeRule.onNodeWithTag("contact-menu-rename").assertHeightIsAtLeast(72.dp).assertWidthIsAtLeast(260.dp)
+        composeRule.onNodeWithTag("contact-menu-photo").assertHeightIsAtLeast(72.dp).assertWidthIsAtLeast(260.dp)
+        composeRule.onNodeWithText("Изменить фото").assertExists().performClick()
         composeRule.onNodeWithText("Выбрать из галереи").assertExists().performClick()
         assertEquals(ContactPhotoSource.Gallery, selectedSource)
 
-        composeRule.onNode(hasContentDescription("Изменить фото контакта Алексей")).performClick()
+        composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
+        composeRule.onNodeWithText("Изменить фото").assertExists().performClick()
         composeRule.onNodeWithText("Удалить фото").assertExists().performClick()
         assertEquals(true, removeCalled)
         composeRule.onNode(hasText("Фото хранится только на этом устройстве")).assertDoesNotExist()
@@ -91,8 +100,40 @@ class ContactScreenPhotoTest {
             )
         }
 
-        composeRule.onNode(hasContentDescription("Изменить фото контакта Алексей")).performClick()
+        composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
+        composeRule.onNodeWithText("Изменить фото").assertExists().performClick()
         composeRule.onNodeWithText("Удалить фото").assertDoesNotExist()
+    }
+
+    @Test
+    fun contactActionsMenuOwnsRenameAndInlinePencilIsGone() {
+        var renameHandled = 0
+        render {
+            ContactScreen(
+                contact = contact,
+                contactAddress = address,
+                photoTarget = target,
+                photoState = ContactPhotoEditorState(target = target, hasPhoto = false),
+                nameUpdate = ContactNameUpdateState(),
+                history = ContactHistoryState(),
+                ongoingCall = null,
+                onBack = {},
+                onCall = {},
+                onOpenCall = {},
+                onRename = {},
+                onRenameHandled = { renameHandled++ },
+                onLoadMoreHistory = {},
+                onRetryHistory = {},
+            )
+        }
+
+        composeRule.onNode(hasContentDescription("Имя контакта: Алексей. Нажмите, чтобы изменить")).assertDoesNotExist()
+        composeRule.onNode(hasContentDescription("Имя контакта: Алексей")).assertExists()
+        composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
+        composeRule.onNodeWithText("Переименовать").assertExists().performClick()
+
+        composeRule.onNodeWithText("Изменить имя").assertExists()
+        assertEquals(1, renameHandled)
     }
 
     @Test

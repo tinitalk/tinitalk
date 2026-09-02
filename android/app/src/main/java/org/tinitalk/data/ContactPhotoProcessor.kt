@@ -11,6 +11,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.util.UUID
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 internal const val ContactPhotoMaxBytes = 25L * 1024L * 1024L
 internal const val ContactPhotoMaxSidePixels = 20_000
@@ -89,10 +90,11 @@ class ContactPhotoProcessor(context: Context) {
         try {
             val bitmap = decodeOriented(draft.sourceFile, Int.MAX_VALUE)
                 ?: return ContactPhotoResult.Failure(ContactPhotoFailure.CannotOpen)
-            val left = (bitmap.width * crop.left).toInt().coerceIn(0, bitmap.width - 1)
-            val top = (bitmap.height * crop.top).toInt().coerceIn(0, bitmap.height - 1)
-            val size = (max(bitmap.width, bitmap.height) * crop.size).toInt()
-                .coerceIn(1, minOf(bitmap.width - left, bitmap.height - top))
+            val longest = max(bitmap.width, bitmap.height)
+            val size = (longest * crop.size).roundToInt()
+                .coerceIn(1, minOf(bitmap.width, bitmap.height))
+            val left = (longest * crop.left).roundToInt().coerceIn(0, bitmap.width - size)
+            val top = (longest * crop.top).roundToInt().coerceIn(0, bitmap.height - size)
             val cropped = Bitmap.createBitmap(bitmap, left, top, size, size)
             val scaled = Bitmap.createScaledBitmap(cropped, ContactPhotoOutputPixels, ContactPhotoOutputPixels, true)
             if (cropped !== scaled) cropped.recycle()

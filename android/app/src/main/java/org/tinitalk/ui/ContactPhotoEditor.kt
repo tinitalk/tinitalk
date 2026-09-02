@@ -2,7 +2,7 @@ package org.tinitalk.ui
 
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,17 +38,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import org.tinitalk.data.NormalizedCropSquare
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,8 +106,15 @@ fun ContactPhotoCropOverlay(
     onDone: (NormalizedCropSquare) -> Unit,
 ) {
     val draft = state.draft ?: return
-    var transform by remember(draft.id) { mutableStateOf(defaultCropTransform(draft.preview)) }
-    val crop = normalizedCropForViewport(draft.preview.width, draft.preview.height, transform)
+    var cropViewport by remember(draft.id) { mutableStateOf(DefaultCropViewport) }
+    var transform by remember(draft.id) { mutableStateOf(defaultCropTransform(draft.preview, cropViewport)) }
+    val visibleTransform = clampCropTransform(draft.preview.width, draft.preview.height, transform, cropViewport)
+    val crop = normalizedCropForViewport(draft.preview.width, draft.preview.height, visibleTransform, cropViewport)
+    val previewBitmap = remember(draft.id) { draft.preview.asImageBitmap() }
+
+    LaunchedEffect(draft.id, cropViewport) {
+        transform = clampCropTransform(draft.preview.width, draft.preview.height, transform, cropViewport)
+    }
 
     BackHandler(enabled = true, onBack = onCancel)
     Surface(
@@ -126,34 +137,48 @@ fun ContactPhotoCropOverlay(
                 Box(
                     modifier = Modifier
                         .size(280.dp)
+                        .onSizeChanged { size ->
+                            if (size.width > 0 && size.height > 0) cropViewport = size
+                        }
                         .clip(CircleShape)
                         .background(Color.Black)
-                        .pointerInput(draft.id) {
-                            detectTransformGestures { _, pan, zoom, _ ->
-                                transform = clampCropTransform(
-                                    transform.copy(
-                                        offsetX = transform.offsetX + pan.x,
-                                        offsetY = transform.offsetY + pan.y,
-                                        scale = transform.scale * zoom,
-                                    ),
+                        .pointerInput(draft.id, cropViewport) {
+                            detectTransformGestures { centroid, pan, zoom, _ ->
+                                transform = applyCropGesture(
+                                    draft.preview.width,
+                                    draft.preview.height,
+                                    transform,
+                                    centroid,
+                                    pan,
+                                    zoom,
+                                    cropViewport,
                                 )
                             }
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Image(
-                        bitmap = draft.preview.asImageBitmap(),
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
+                    Canvas(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                scaleX = transform.scale
-                                scaleY = transform.scale
-                                translationX = transform.offsetX
-                                translationY = transform.offsetY
-                            },
-                    )
+                            .fillMaxSize(),
+                    ) {
+                        val source = cropRectForViewport(
+                            imageWidth = draft.preview.width,
+                            imageHeight = draft.preview.height,
+                            transform = visibleTransform,
+                            viewport = cropViewport,
+                        )
+                        val srcLeft = source.left.roundToInt().coerceIn(0, draft.preview.width - 1)
+                        val srcTop = source.top.roundToInt().coerceIn(0, draft.preview.height - 1)
+                        val srcSize = source.size.roundToInt()
+                            .coerceIn(1, min(draft.preview.width - srcLeft, draft.preview.height - srcTop))
+                        drawImage(
+                            image = previewBitmap,
+                            srcOffset = IntOffset(srcLeft, srcTop),
+                            srcSize = IntSize(srcSize, srcSize),
+                            dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                            filterQuality = FilterQuality.High,
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -196,36 +221,107 @@ data class CropTransform(
     val offsetY: Float,
 )
 
-fun defaultCropTransform(bitmap: Bitmap): CropTransform =
-    CropTransform(scale = if (bitmap.width == bitmap.height) 1f else 1.15f, offsetX = 0f, offsetY = 0f)
+data class CropSourceRect(
+    val left: Float,
+    val top: Float,
+    val size: Float,
+)
 
-fun clampCropTransform(transform: CropTransform): CropTransform =
-    transform.copy(
-        scale = transform.scale.coerceIn(1f, 4f),
-        offsetX = transform.offsetX.coerceIn(-220f, 220f),
-        offsetY = transform.offsetY.coerceIn(-220f, 220f),
+private val DefaultCropViewport = IntSize(280, 280)
+private const val MaxCropScale = 12f
+
+fun defaultCropTransform(bitmap: Bitmap, viewport: IntSize = DefaultCropViewport): CropTransform =
+    CropTransform(scale = minCropScale(bitmap.width, bitmap.height, viewport), offsetX = 0f, offsetY = 0f)
+
+fun clampCropTransform(
+    imageWidth: Int,
+    imageHeight: Int,
+    transform: CropTransform,
+    viewport: IntSize = DefaultCropViewport,
+): CropTransform {
+    val minScale = minCropScale(imageWidth, imageHeight, viewport)
+    val scale = transform.scale.coerceIn(minScale, max(MaxCropScale, minScale))
+    val baseScale = fitScale(imageWidth, imageHeight, viewport)
+    val displayedWidth = imageWidth * baseScale * scale
+    val displayedHeight = imageHeight * baseScale * scale
+    val maxOffsetX = ((displayedWidth - viewport.width) / 2f).coerceAtLeast(0f)
+    val maxOffsetY = ((displayedHeight - viewport.height) / 2f).coerceAtLeast(0f)
+    return CropTransform(
+        scale = scale,
+        offsetX = transform.offsetX.coerceIn(-maxOffsetX, maxOffsetX),
+        offsetY = transform.offsetY.coerceIn(-maxOffsetY, maxOffsetY),
     )
+}
+
+fun applyCropGesture(
+    imageWidth: Int,
+    imageHeight: Int,
+    transform: CropTransform,
+    centroid: Offset,
+    pan: Offset,
+    zoom: Float,
+    viewport: IntSize = DefaultCropViewport,
+): CropTransform {
+    val current = clampCropTransform(imageWidth, imageHeight, transform, viewport)
+    val nextScale = current.scale * zoom
+    val scaleChange = nextScale / current.scale
+    val centroidFromCenter = Offset(
+        centroid.x - viewport.width / 2f,
+        centroid.y - viewport.height / 2f,
+    )
+    val zoomedOffsetX = centroidFromCenter.x - (centroidFromCenter.x - current.offsetX) * scaleChange
+    val zoomedOffsetY = centroidFromCenter.y - (centroidFromCenter.y - current.offsetY) * scaleChange
+    return clampCropTransform(
+        imageWidth,
+        imageHeight,
+        CropTransform(
+            scale = nextScale,
+            offsetX = zoomedOffsetX + pan.x,
+            offsetY = zoomedOffsetY + pan.y,
+        ),
+        viewport,
+    )
+}
 
 fun normalizedCropForViewport(
     imageWidth: Int,
     imageHeight: Int,
     transform: CropTransform,
-    viewport: IntSize = IntSize(280, 280),
+    viewport: IntSize = DefaultCropViewport,
 ): NormalizedCropSquare {
-    val scale = transform.scale.coerceIn(1f, 4f)
+    val rect = cropRectForViewport(imageWidth, imageHeight, transform, viewport)
     val longest = max(imageWidth, imageHeight).toFloat()
-    val baseScale = min(viewport.width / imageWidth.toFloat(), viewport.height / imageHeight.toFloat())
+    return NormalizedCropSquare(
+        left = (rect.left / longest).coerceIn(0f, ((imageWidth - rect.size) / longest).coerceAtLeast(0f)),
+        top = (rect.top / longest).coerceIn(0f, ((imageHeight - rect.size) / longest).coerceAtLeast(0f)),
+        size = (rect.size / longest).coerceIn(0.001f, 1f),
+    )
+}
+
+fun cropRectForViewport(
+    imageWidth: Int,
+    imageHeight: Int,
+    transform: CropTransform,
+    viewport: IntSize = DefaultCropViewport,
+): CropSourceRect {
+    val clamped = clampCropTransform(imageWidth, imageHeight, transform, viewport)
+    val scale = clamped.scale
+    val baseScale = fitScale(imageWidth, imageHeight, viewport)
     val visibleWidth = viewport.width / (baseScale * scale)
     val visibleHeight = viewport.height / (baseScale * scale)
     val cropSizePixels = min(min(visibleWidth, visibleHeight), min(imageWidth, imageHeight).toFloat())
     val centeredLeft = (imageWidth - cropSizePixels) / 2f
     val centeredTop = (imageHeight - cropSizePixels) / 2f
-    val left = (centeredLeft - transform.offsetX / (baseScale * scale)).coerceIn(0f, imageWidth - cropSizePixels)
-    val top = (centeredTop - transform.offsetY / (baseScale * scale)).coerceIn(0f, imageHeight - cropSizePixels)
-    val size = (cropSizePixels / longest).coerceIn(0.001f, 1f)
-    return NormalizedCropSquare(
-        left = (left / imageWidth).coerceIn(0f, 1f - size),
-        top = (top / imageHeight).coerceIn(0f, 1f - size),
-        size = size,
-    )
+    val left = (centeredLeft - clamped.offsetX / (baseScale * scale)).coerceIn(0f, imageWidth - cropSizePixels)
+    val top = (centeredTop - clamped.offsetY / (baseScale * scale)).coerceIn(0f, imageHeight - cropSizePixels)
+    return CropSourceRect(left, top, cropSizePixels)
+}
+
+private fun fitScale(imageWidth: Int, imageHeight: Int, viewport: IntSize): Float =
+    min(viewport.width / imageWidth.toFloat(), viewport.height / imageHeight.toFloat())
+
+private fun minCropScale(imageWidth: Int, imageHeight: Int, viewport: IntSize): Float {
+    val fit = fitScale(imageWidth, imageHeight, viewport)
+    val cover = max(viewport.width / imageWidth.toFloat(), viewport.height / imageHeight.toFloat())
+    return (cover / fit).coerceAtLeast(1f)
 }
