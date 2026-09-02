@@ -4,9 +4,11 @@ import android.app.Activity
 import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.LruCache
 import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.call.GlobalCallAdmission
 import org.tinitalk.call.resolvePinnedCallSession
@@ -16,6 +18,7 @@ import org.tinitalk.data.AuthSessionEvent
 import org.tinitalk.data.AuthSessionEvents
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.ContactCache
+import org.tinitalk.data.ContactPhotoStore
 import org.tinitalk.data.Session
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.network.NetworkAvailability
@@ -35,6 +38,8 @@ import org.tinitalk.telecom.TelecomCallController
 class TinitalkApplication : Application() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var authStore: AuthStore
+    lateinit var contactPhotoStore: ContactPhotoStore
+        private set
     lateinit var networkAvailability: NetworkAvailability
         private set
     private val authSessionObserver: (AuthSessionEvent) -> Unit = {
@@ -49,6 +54,15 @@ class TinitalkApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        contactPhotoStore = ContactPhotoStore(
+            filesDir.resolve("contact_photos"),
+            object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
+                override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+            },
+        )
+        Thread({
+            contactPhotoStore.purgeTrash()
+        }, "tinitalk-contact-photo-trash").start()
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         restoreIncomingCall()
         IncomingCallNotifier(this).syncMissedAccounts(authStore.list().map { it.id })
@@ -97,6 +111,9 @@ class TinitalkApplication : Application() {
         CallForegroundService.accountRemoved(this, accountId, binding)
     }
 }
+
+internal fun contactPhotoStore(context: Context): ContactPhotoStore =
+    (context.applicationContext as TinitalkApplication).contactPhotoStore
 
 internal fun cleanupWebPushAccount(context: Context, accountId: AccountId, session: Session? = null) {
     runCatching { ContactCache(SharedPreferencesKeyValueStore(context)).remove(accountId) }

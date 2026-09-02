@@ -56,6 +56,7 @@ data class AccountContact(
     val defaultDisplayName: String get() = contact.defaultDisplayName
     val customName: String? get() = contact.customName
     val peerKey: AccountPeerKey get() = AccountPeerKey(accountId, login)
+    val address: ContactAddress get() = ContactAddress.of(serverUrl, login)
 }
 
 data class AccountPeerKey(val accountId: AccountId, val login: String)
