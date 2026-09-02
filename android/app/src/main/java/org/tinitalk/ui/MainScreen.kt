@@ -1048,27 +1048,33 @@ private fun ContactRow(
 ) {
     val name = contactDisplayName(contact.displayName)
     val missedSubtitle = latestUnreadMissedAt?.let(::missedContactSubtitle)
+    val rowHeight = 82.dp
+    val avatarInset = 4.dp
+    val avatarSize = rowHeight - avatarInset * 2
     Surface(
         onClick = { onOpen(contact) },
         modifier = Modifier.fillMaxWidth().semantics {
             contentDescription = listOfNotNull("Открыть контакт: $name", serverHostname, missedSubtitle).joinToString(". ")
         },
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(rowHeight / 2),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.78f)),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 82.dp).padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(rowHeight)
+                .padding(start = avatarInset, top = avatarInset, end = 14.dp, bottom = avatarInset),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ContactAvatar(
                 address = contact.address,
                 displayName = name,
                 fallbackLogin = contact.login,
-                size = 52.dp,
+                size = avatarSize,
                 borderWidth = 1.dp,
             )
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     name,
