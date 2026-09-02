@@ -18,6 +18,7 @@ import org.tinitalk.data.AuthSessionEvent
 import org.tinitalk.data.AuthSessionEvents
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.ContactCache
+import org.tinitalk.data.ContactPhotoProcessor
 import org.tinitalk.data.ContactPhotoStore
 import org.tinitalk.data.Session
 import org.tinitalk.data.SharedPreferencesKeyValueStore
@@ -40,6 +41,8 @@ class TinitalkApplication : Application() {
     private lateinit var authStore: AuthStore
     lateinit var contactPhotoStore: ContactPhotoStore
         private set
+    lateinit var contactPhotoProcessor: ContactPhotoProcessor
+        private set
     lateinit var networkAvailability: NetworkAvailability
         private set
     private val authSessionObserver: (AuthSessionEvent) -> Unit = {
@@ -60,8 +63,10 @@ class TinitalkApplication : Application() {
                 override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
             },
         )
+        contactPhotoProcessor = ContactPhotoProcessor(this)
         Thread({
             contactPhotoStore.purgeTrash()
+            contactPhotoProcessor.purgeDrafts()
         }, "tinitalk-contact-photo-trash").start()
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         restoreIncomingCall()
