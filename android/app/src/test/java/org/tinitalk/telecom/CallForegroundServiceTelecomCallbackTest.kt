@@ -14,8 +14,11 @@ import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallSnapshot
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.SignalClient
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.data.AccountId
+import org.tinitalk.push.IncomingInvite
+import java.time.Instant
 import kotlin.jvm.functions.Function0
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -29,6 +32,54 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class CallForegroundServiceTelecomCallbackTest {
+    @Test
+    fun answeringIncomingCallKeepsPeerAddressAfterPresentationCleanup() {
+        CallUiStateStore.reset()
+        val controller = Robolectric.buildService(CallForegroundService::class.java).create()
+        val service = controller.get()
+        val accountId = AccountId("account-a")
+        val binding = CallSessionBinding("https://a.example", "alice", "session-a", "config-a")
+        val invite = IncomingInvite(
+            accountId = accountId,
+            sessionBinding = binding,
+            callId = "incoming-call",
+            caller = "Bob",
+            expiresAt = Instant.parse("2099-01-01T00:00:00Z"),
+            callerLogin = "bob",
+        )
+        val expectedAddress = ContactAddress.of(binding.serverUrl, "bob")
+        val expectedPeer = CallPeer("Bob", "bob", expectedAddress)
+        val attempt = GlobalCallAdmission.stage(invite.owner)
+        assertTrue(attempt is CallAdmissionAttempt.Acquired)
+        val lease = requireNotNull(GlobalCallAdmission.take(invite.owner))
+        val coordinator = CallCoordinator("alice", NoopSignalClient(), accountId = accountId)
+        val incomingController = IncomingCallController()
+        incomingController.save(service, invite)
+        service.setPrivateField("coordinator", coordinator)
+        service.setPrivateField("telecomCallKey", invite.key)
+        service.setPrivateField("callOwner", invite.owner)
+        service.setPrivateField("admissionLease", lease)
+        val answerIntent = Shadows.shadowOf(
+            incomingController.activityIntent(service, IncomingCallController.ActionAnswer, invite),
+        ).savedIntent
+            .setClass(service, CallForegroundService::class.java)
+            .setAction(CallForegroundService.ActionAnswer)
+
+        try {
+            service.onStartCommand(answerIntent, 0, 1)
+
+            val state = CallUiStateStore.snapshot()
+            assertEquals(CallPhase.Active, state.phase)
+            assertEquals(invite.key, state.callKey)
+            assertEquals(CallDirection.Incoming, state.direction)
+            assertEquals(expectedPeer, state.peer)
+        } finally {
+            controller.destroy()
+            GlobalCallAdmission.release(lease)
+            CallUiStateStore.reset()
+        }
+    }
+
     @Test
     fun acceptsLocalTelecomCallbackAfterCrossedCallAdoptsCanonicalId() {
         val controller = Robolectric.buildService(CallForegroundService::class.java).create()

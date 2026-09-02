@@ -706,6 +706,7 @@ class CallForegroundService : Service() {
         val invite = IncomingCallController.inviteFrom(intent)
         var endReason: CallEndReason? = null
         var awaitingTerminalSignal = false
+        var acceptedIncomingOwner: AccountCallOwner? = null
         fun terminalSettlement(): () -> Unit {
             awaitingTerminalSignal = true
             val expectedGeneration = runtimeGeneration
@@ -770,9 +771,7 @@ class CallForegroundService : Service() {
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
                 if (call.snapshot().phase == CallPhase.Active) dispatchMedia { it.setActive(true) }
-                IncomingCallController().finishTerminalPresentation(this, invite.owner) {
-                    IncomingCallNotifier(this).cancel()
-                }
+                acceptedIncomingOwner = invite.owner
             }
             ActionReject -> {
                 invite ?: return
@@ -905,6 +904,11 @@ class CallForegroundService : Service() {
             }
         }
         publish(endReason)
+        acceptedIncomingOwner?.let { owner ->
+            IncomingCallController().finishTerminalPresentation(this, owner) {
+                IncomingCallNotifier(this).cancel()
+            }
+        }
         if (call.snapshot().phase == CallPhase.Ended) {
             if (awaitingTerminalSignal) releaseCallResources() else finishCallUnlessAwaitingTerminalSignal()
         }
