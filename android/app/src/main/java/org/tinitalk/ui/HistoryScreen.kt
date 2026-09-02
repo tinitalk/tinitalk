@@ -2,6 +2,7 @@ package org.tinitalk.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
 import org.tinitalk.data.AccountHistory
+import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.ui.theme.BrandGold
@@ -76,6 +78,7 @@ fun HistoryScreen(
     unavailableServers: List<String> = emptyList(),
     onLoadMore: () -> Unit,
     onRefresh: () -> Unit,
+    onContactSelected: (AccountPeerKey) -> Unit,
 ) {
     val now = Instant.now()
     val zone = ZoneId.systemDefault()
@@ -127,7 +130,13 @@ fun HistoryScreen(
                                     color = MaterialTheme.colorScheme.primary,
                                 )
                             }
-                            HistoryRow(item, contactAddress = accountHistory.address)
+                            HistoryRow(
+                                item = item,
+                                contactAddress = accountHistory.address,
+                                onClick = {
+                                    onContactSelected(AccountPeerKey(accountHistory.accountId, item.peerLogin))
+                                },
+                            )
                             if (shouldLoadMoreHistory(
                                     index = index,
                                     itemCount = items.size,
@@ -239,6 +248,7 @@ internal fun HistoryRow(
     item: CallHistoryItem,
     showPeer: Boolean = true,
     contactAddress: ContactAddress? = null,
+    onClick: (() -> Unit)? = null,
 ) {
     val name = contactDisplayName(item.peerName)
     val direction = if (item.direction == "incoming") "Входящий" else "Исходящий"
@@ -249,13 +259,19 @@ internal fun HistoryRow(
         successful -> CallAnswerGreen
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val shape = RoundedCornerShape(22.dp)
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .semantics {
                 contentDescription = "${if (showPeer) name else direction}, ${historyStatus(item)}, ${historyTime(item.startedAt)}"
-            },
-        shape = RoundedCornerShape(22.dp),
+            }
+            .then(
+                if (onClick == null) Modifier else Modifier
+                    .clip(shape)
+                    .clickable(onClickLabel = "Открыть контакт", onClick = onClick),
+            ),
+        shape = shape,
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f)),
     ) {

@@ -804,6 +804,17 @@ private fun HomeScreen(
                                 unavailableServers = unavailableHistoryServers,
                                 onLoadMore = onLoadMoreHistory,
                                 onRefresh = onHistoryVisible,
+                                onContactSelected = { peer ->
+                                    val contact = visibleContacts.firstOrNull { it.peerKey == peer }
+                                    if (contact == null) {
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("Контакт больше недоступен")
+                                        }
+                                    } else {
+                                        selectedContactAccountId = contact.accountId.value
+                                        selectedContactLogin = contact.login
+                                    }
+                                },
                             )
                         }
                     }
