@@ -13,6 +13,7 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
@@ -49,6 +50,7 @@ import org.tinitalk.data.ContactCache
 import org.tinitalk.data.ServerCompatibilityException
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.httpsServerUrl
+import org.tinitalk.data.normalizeServerUrl
 import org.tinitalk.data.sameIdentity
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.network.NetworkAvailability
@@ -65,6 +67,9 @@ import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.AccountPage
 import org.tinitalk.ui.AccountSummary
 import org.tinitalk.ui.ContactNameViewModel
+import org.tinitalk.ui.ContactPhotoEditTarget
+import org.tinitalk.ui.ContactPhotoEditorViewModel
+import org.tinitalk.ui.ContactPhotoSource
 import org.tinitalk.ui.ContactHistoryState
 import org.tinitalk.ui.HistoryRefreshGate
 import org.tinitalk.ui.HISTORY_PAGE_SIZE
@@ -88,12 +93,19 @@ private const val SessionReplacedMessage = "Вход выполнен на др�
 class MainActivity : ComponentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val contactNameViewModel by viewModels<ContactNameViewModel>()
+    private val contactPhotoEditorViewModel by viewModels<ContactPhotoEditorViewModel>()
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { refreshPermissions() }
     private val microphonePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { refreshPermissions() }
+    private val contactPhotoGalleryLauncher = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> contactPhotoEditorViewModel.onPickerResult(uri) }
+    private val contactPhotoFilesLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> contactPhotoEditorViewModel.onPickerResult(uri) }
 
     private lateinit var repository: ContactRepository
     private lateinit var authStore: AuthStore
@@ -156,6 +168,11 @@ class MainActivity : ComponentActivity() {
         contactCache = ContactCache(localStore)
         repository = ContactRepository(this, authStore, contactCache)
         network = networkAvailability()
+        contactPhotoEditorViewModel.configure(
+            processor = (application as TinitalkApplication).contactPhotoProcessor,
+            store = (application as TinitalkApplication).contactPhotoStore,
+            isTargetCurrent = ::isContactPhotoTargetCurrent,
+        )
         screenState = screenState.copy(networkAvailable = network.available)
         setContent {
             TiniTalkTheme(darkTheme = true) {
@@ -209,6 +226,14 @@ class MainActivity : ComponentActivity() {
                         onContactHistoryHidden = ::hideContactHistory,
                         onLoadMoreContactHistory = ::loadMoreContactHistory,
                         onRetryContactHistory = ::retryContactHistory,
+                        contactPhotoEditorState = contactPhotoEditorViewModel.state,
+                        onContactPhotoTargetVisible = contactPhotoEditorViewModel::onTargetVisible,
+                        onContactPhotoTargetHidden = contactPhotoEditorViewModel::onTargetHidden,
+                        onChooseContactPhoto = ::chooseContactPhoto,
+                        onRemoveContactPhoto = { target -> contactPhotoEditorViewModel.remove(target) },
+                        onCancelContactPhotoCrop = contactPhotoEditorViewModel::cancelCrop,
+                        onConfirmContactPhotoCrop = { crop -> contactPhotoEditorViewModel.save(crop) },
+                        onContactPhotoMessageShown = contactPhotoEditorViewModel::onMessageShown,
                         onOpenProfile = { screenState = screenState.copy(accountPage = AccountPage.Profile) },
                         onCloseProfile = { screenState = screenState.copy(accountPage = AccountPage.Main) },
                         onOpenAddAccount = {
@@ -232,6 +257,26 @@ class MainActivity : ComponentActivity() {
         network.observe(networkObserver)
         refreshPermissions()
         restoreContacts()
+    }
+
+    private fun chooseContactPhoto(target: ContactPhotoEditTarget, source: ContactPhotoSource) {
+        if (!contactPhotoEditorViewModel.beginPicking(target, source)) return
+        when (source) {
+            ContactPhotoSource.Gallery -> contactPhotoGalleryLauncher.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            )
+            ContactPhotoSource.Files -> contactPhotoFilesLauncher.launch(arrayOf("image/*"))
+        }
+    }
+
+    private fun isContactPhotoTargetCurrent(target: ContactPhotoEditTarget): Boolean {
+        val account = authStore.get(target.accountId) ?: return false
+        if (normalizeServerUrl(account.session.url) != target.address.serverUrl) return false
+        return screenState.accountContacts.any { contact ->
+            contact.accountId == target.accountId &&
+                contact.login == target.address.login &&
+                contact.address == target.address
+        }
     }
 
     private fun restoreContacts() {

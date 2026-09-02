@@ -69,6 +69,8 @@ import java.time.ZoneId
 fun ContactScreen(
     contact: Contact,
     contactAddress: ContactAddress,
+    photoTarget: ContactPhotoEditTarget? = null,
+    photoState: ContactPhotoEditorState = ContactPhotoEditorState(),
     identityKey: String = contact.login,
     accountServerUrl: String? = null,
     internetAvailable: Boolean = true,
@@ -82,8 +84,11 @@ fun ContactScreen(
     onRenameHandled: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
+    onChoosePhotoSource: (ContactPhotoEditTarget, ContactPhotoSource) -> Unit = { _, _ -> },
+    onRemovePhoto: (ContactPhotoEditTarget) -> Unit = {},
 ) {
     var renameVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
+    var photoActionsVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     val name = contactDisplayName(contact.displayName)
     val action = contactCallAction(contact.login, ongoingCall, internetAvailable)
     val relevantUpdate = nameUpdate.takeIf { it.login == contact.login }
@@ -155,6 +160,37 @@ fun ContactScreen(
                                 borderWidth = 2.dp,
                                 shadowElevation = 8.dp,
                             )
+                            photoTarget?.let { target ->
+                                Spacer(Modifier.height(10.dp))
+                                TextButton(
+                                    onClick = { photoActionsVisible = true },
+                                    enabled = !photoState.busy,
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Изменить фото контакта $name"
+                                    },
+                                ) {
+                                    Text("Изменить фото")
+                                }
+                                if (photoActionsVisible) {
+                                    ContactPhotoActionSheet(
+                                        hasPhoto = photoState.hasPhoto,
+                                        busy = photoState.busy,
+                                        onGallery = {
+                                            photoActionsVisible = false
+                                            onChoosePhotoSource(target, ContactPhotoSource.Gallery)
+                                        },
+                                        onFiles = {
+                                            photoActionsVisible = false
+                                            onChoosePhotoSource(target, ContactPhotoSource.Files)
+                                        },
+                                        onRemove = {
+                                            photoActionsVisible = false
+                                            onRemovePhoto(target)
+                                        },
+                                        onDismiss = { photoActionsVisible = false },
+                                    )
+                                }
+                            }
                             Spacer(Modifier.height(22.dp))
                             Surface(
                                 onClick = {

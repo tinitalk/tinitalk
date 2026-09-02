@@ -60,6 +60,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -98,6 +99,7 @@ import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.Contact
+import org.tinitalk.data.NormalizedCropSquare
 import org.tinitalk.data.ServerCheckDetails
 import org.tinitalk.data.ServerCheckResult
 import org.tinitalk.permissions.AppPermissionsState
@@ -337,6 +339,14 @@ fun MainScreen(
     onContactHistoryHidden: () -> Unit,
     onLoadMoreContactHistory: () -> Unit,
     onRetryContactHistory: () -> Unit,
+    contactPhotoEditorState: ContactPhotoEditorState = ContactPhotoEditorState(),
+    onContactPhotoTargetVisible: (ContactPhotoEditTarget) -> Unit = {},
+    onContactPhotoTargetHidden: (ContactPhotoEditTarget) -> Unit = {},
+    onChooseContactPhoto: (ContactPhotoEditTarget, ContactPhotoSource) -> Unit = { _, _ -> },
+    onRemoveContactPhoto: (ContactPhotoEditTarget) -> Unit = {},
+    onCancelContactPhotoCrop: () -> Unit = {},
+    onConfirmContactPhotoCrop: (NormalizedCropSquare) -> Unit = {},
+    onContactPhotoMessageShown: () -> Unit = {},
     onOpenProfile: () -> Unit,
     onCloseProfile: () -> Unit,
     onOpenAddAccount: () -> Unit,
@@ -406,6 +416,14 @@ fun MainScreen(
                     onContactHistoryHidden = onContactHistoryHidden,
                     onLoadMoreContactHistory = onLoadMoreContactHistory,
                     onRetryContactHistory = onRetryContactHistory,
+                    contactPhotoEditorState = contactPhotoEditorState,
+                    onContactPhotoTargetVisible = onContactPhotoTargetVisible,
+                    onContactPhotoTargetHidden = onContactPhotoTargetHidden,
+                    onChooseContactPhoto = onChooseContactPhoto,
+                    onRemoveContactPhoto = onRemoveContactPhoto,
+                    onCancelContactPhotoCrop = onCancelContactPhotoCrop,
+                    onConfirmContactPhotoCrop = onConfirmContactPhotoCrop,
+                    onContactPhotoMessageShown = onContactPhotoMessageShown,
                     onAbout = { aboutVisible = true },
                     onOpenProfile = onOpenProfile,
                 )
@@ -642,6 +660,14 @@ private fun HomeScreen(
     onContactHistoryHidden: () -> Unit,
     onLoadMoreContactHistory: () -> Unit,
     onRetryContactHistory: () -> Unit,
+    contactPhotoEditorState: ContactPhotoEditorState,
+    onContactPhotoTargetVisible: (ContactPhotoEditTarget) -> Unit,
+    onContactPhotoTargetHidden: (ContactPhotoEditTarget) -> Unit,
+    onChooseContactPhoto: (ContactPhotoEditTarget, ContactPhotoSource) -> Unit,
+    onRemoveContactPhoto: (ContactPhotoEditTarget) -> Unit,
+    onCancelContactPhotoCrop: () -> Unit,
+    onConfirmContactPhotoCrop: (NormalizedCropSquare) -> Unit,
+    onContactPhotoMessageShown: () -> Unit,
     onAbout: () -> Unit,
     onOpenProfile: () -> Unit,
 ) {
@@ -656,6 +682,14 @@ private fun HomeScreen(
     }
     val visibleContacts = state.accountContacts
     val selectedAccountContact = visibleContacts.firstOrNull { it.peerKey == selectedContactKey }
+    val selectedPhotoTarget = selectedAccountContact?.let { contact ->
+        ContactPhotoEditTarget(
+            accountId = contact.accountId,
+            address = contact.address,
+            displayName = contactDisplayName(contact.contact.displayName),
+        )
+    }
+    val photoRevision by LocalContactPhotoReader.current.revision.collectAsState()
     val historyWindow = accountHistoryWindow(
         loaded = state.accountHistory,
         visibleLimit = state.historyVisibleLimit,
@@ -673,6 +707,7 @@ private fun HomeScreen(
             contactOpen = selectedContactKey != null,
         ),
     ) {
+        selectedPhotoTarget?.let(onContactPhotoTargetHidden)
         scope.launch { pagerState.animateScrollToPage(0) }
     }
 
@@ -694,6 +729,15 @@ private fun HomeScreen(
         state.contactsRefreshErrorMessage?.let { message ->
             scope.launch { snackbarHostState.showSnackbar(message) }
             onContactsRefreshMessageHandled()
+        }
+    }
+    LaunchedEffect(selectedPhotoTarget, photoRevision) {
+        selectedPhotoTarget?.let(onContactPhotoTargetVisible)
+    }
+    LaunchedEffect(contactPhotoEditorState.message) {
+        contactPhotoEditorState.message?.let { message ->
+            scope.launch { snackbarHostState.showSnackbar(message) }
+            onContactPhotoMessageShown()
         }
     }
     Box(modifier = Modifier.fillMaxSize()) {
@@ -807,6 +851,7 @@ private fun HomeScreen(
                 history = state.contactHistory,
                 ongoingCall = ongoingCall,
                 onBack = {
+                    selectedPhotoTarget?.let(onContactPhotoTargetHidden)
                     selectedContactAccountId = null
                     selectedContactLogin = null
                 },
@@ -816,6 +861,21 @@ private fun HomeScreen(
                 onRenameHandled = onRenameHandled,
                 onLoadMoreHistory = onLoadMoreContactHistory,
                 onRetryHistory = onRetryContactHistory,
+                photoTarget = selectedPhotoTarget,
+                photoState = contactPhotoEditorState.takeIf { it.target == selectedPhotoTarget }
+                    ?: ContactPhotoEditorState(target = selectedPhotoTarget),
+                onChoosePhotoSource = onChooseContactPhoto,
+                onRemovePhoto = onRemoveContactPhoto,
+            )
+        }
+        if (
+            contactPhotoEditorState.phase == ContactPhotoEditorPhase.Cropping ||
+            contactPhotoEditorState.phase == ContactPhotoEditorPhase.Saving
+        ) {
+            ContactPhotoCropOverlay(
+                state = contactPhotoEditorState,
+                onCancel = onCancelContactPhotoCrop,
+                onDone = onConfirmContactPhotoCrop,
             )
         }
         SnackbarHost(

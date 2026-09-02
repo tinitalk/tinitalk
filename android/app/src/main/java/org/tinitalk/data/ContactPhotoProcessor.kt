@@ -91,7 +91,7 @@ class ContactPhotoProcessor(context: Context) {
                 ?: return ContactPhotoResult.Failure(ContactPhotoFailure.CannotOpen)
             val left = (bitmap.width * crop.left).toInt().coerceIn(0, bitmap.width - 1)
             val top = (bitmap.height * crop.top).toInt().coerceIn(0, bitmap.height - 1)
-            val size = (minOf(bitmap.width, bitmap.height) * crop.size).toInt()
+            val size = (max(bitmap.width, bitmap.height) * crop.size).toInt()
                 .coerceIn(1, minOf(bitmap.width - left, bitmap.height - top))
             val cropped = Bitmap.createBitmap(bitmap, left, top, size, size)
             val scaled = Bitmap.createScaledBitmap(cropped, ContactPhotoOutputPixels, ContactPhotoOutputPixels, true)
