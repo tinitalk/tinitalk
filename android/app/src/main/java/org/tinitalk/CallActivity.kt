@@ -20,6 +20,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -55,9 +56,12 @@ import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.AccountUnreadState
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.CallHistoryEvents
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.ContactRepository
+import org.tinitalk.data.normalizeServerUrl
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.Session
+import org.tinitalk.ui.LocalContactPhotoReader
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import org.tinitalk.push.acknowledgeLatestMissedCall
@@ -98,6 +102,7 @@ class CallActivity : ComponentActivity() {
     private var outgoingCallKey: AccountCallKey? = null
     private var outgoingLogin by mutableStateOf<String?>(null)
     private var outgoingName by mutableStateOf<String?>(null)
+    private var outgoingContactAddress by mutableStateOf<ContactAddress?>(null)
     private var pendingOutgoingStart = false
     private val networkObserver: (Boolean) -> Unit = { available ->
         handler.post {
@@ -224,6 +229,7 @@ class CallActivity : ComponentActivity() {
 
         setContent {
             TiniTalkTheme(darkTheme = true) {
+                CompositionLocalProvider(LocalContactPhotoReader provides (application as TinitalkApplication).contactPhotoStore) {
                 SideEffect {
                     WindowCompat.getInsetsController(window, window.decorView).apply {
                         isAppearanceLightStatusBars = false
@@ -240,11 +246,20 @@ class CallActivity : ComponentActivity() {
                 val durationText = rememberDurationText(visibleState)
                 val visibleVideoState = videoState.takeIf { it.callKey == visibleState.callKey }
                     ?: CallVideoState()
+                val contactAddress = visibleState.peer?.contactAddress
+                val fallbackLogin = visibleState.peer?.login ?: peerName
 
                 when {
-                    visibleState.phase == CallPhase.Ended -> EndedCallScreen(peerName, visibleState.endReason)
+                    visibleState.phase == CallPhase.Ended -> EndedCallScreen(
+                        peerName,
+                        visibleState.endReason,
+                        contactAddress,
+                        fallbackLogin,
+                    )
                     visibleState.phase == CallPhase.Active -> ActiveCallScreen(
                         peerName = peerName,
+                        contactAddress = contactAddress,
+                        fallbackLogin = fallbackLogin,
                         durationText = durationText,
                         muted = visibleState.muted,
                         connectionHealth = visibleState.connectionHealth,
@@ -274,6 +289,8 @@ class CallActivity : ComponentActivity() {
                             IncomingCallScreen(
                                 callId = invite.callId,
                                 caller = peerName,
+                                contactAddress = contactAddress,
+                                fallbackLogin = fallbackLogin,
                                 onAnswer = { answer(invite) },
                                 onReject = { reject(invite) },
                             )
@@ -282,6 +299,8 @@ class CallActivity : ComponentActivity() {
                     visibleState.phase == CallPhase.Ringing || visibleState.phase == CallPhase.Connecting -> {
                         OutgoingCallScreen(
                             callee = peerName,
+                            contactAddress = contactAddress,
+                            fallbackLogin = fallbackLogin,
                             status = if (visibleState.phase == CallPhase.Ringing) "Ждём ответа…" else "Пробуем связаться…",
                             muted = visibleState.muted,
                             currentEndpoint = visibleState.currentAudioEndpoint,
@@ -310,6 +329,7 @@ class CallActivity : ComponentActivity() {
                         }
                         else -> Unit
                     }
+                }
                 }
             }
         }
@@ -398,6 +418,7 @@ class CallActivity : ComponentActivity() {
             outgoingCallKey = null
             outgoingLogin = null
             outgoingName = null
+            outgoingContactAddress = null
             pendingOutgoingStart = false
             if (answerClaim == IncomingAnswerClaim.Claimed) answer(invite)
             return true
@@ -412,6 +433,7 @@ class CallActivity : ComponentActivity() {
         var key = AccountCallKey(accountId, intentCallId)
         val redial = intent.action == ActionRedial
         if (redial) intent.action = null
+        var contactAddress = outgoingContactAddressFrom(intent, login)
         val servicePhase = CallServiceState.snapshot().phase
         var existingCall = false
         var redialStart: OutgoingCallStartResult? = null
@@ -420,6 +442,7 @@ class CallActivity : ComponentActivity() {
                 finish()
                 return false
             }
+            contactAddress = ContactAddress.of(binding.serverUrl, login)
             val authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
             val accepted = executePinnedRedial(
                 authStore,
@@ -449,6 +472,7 @@ class CallActivity : ComponentActivity() {
             outgoingCallKey = null
             outgoingLogin = null
             outgoingName = null
+            outgoingContactAddress = null
             pendingOutgoingStart = false
             return true
         }
@@ -456,6 +480,7 @@ class CallActivity : ComponentActivity() {
         outgoingCallKey = key
         outgoingLogin = login
         outgoingName = intent.getStringExtra(ExtraOutgoingName).orEmpty().ifBlank { login }
+        outgoingContactAddress = contactAddress
         incomingInvite = null
         pendingOutgoingStart = true
         if (redial) {
@@ -543,7 +568,11 @@ class CallActivity : ComponentActivity() {
             return CallUiState(
                 accountId = invite.accountId,
                 callId = invite.callId,
-                peer = CallPeer(invite.caller.ifBlank { "TiniTalk" }, invite.callerLogin),
+                peer = CallPeer(
+                    invite.caller.ifBlank { "TiniTalk" },
+                    invite.callerLogin,
+                    invite.callerLogin?.let { ContactAddress.of(invite.sessionBinding.serverUrl, it) },
+                ),
                 direction = CallDirection.Incoming,
                 phase = CallPhase.Ringing,
             )
@@ -555,7 +584,7 @@ class CallActivity : ComponentActivity() {
             return CallUiState(
                 accountId = key.accountId,
                 callId = key.callId,
-                peer = CallPeer(outgoingName.orEmpty().ifBlank { login }, login),
+                peer = CallPeer(outgoingName.orEmpty().ifBlank { login }, login, outgoingContactAddress),
                 direction = CallDirection.Outgoing,
                 phase = CallPhase.Connecting,
             )
@@ -683,6 +712,7 @@ class CallActivity : ComponentActivity() {
         private const val ExtraOutgoingName = "outgoing_name"
         private const val ExtraOutgoingAccountId = "outgoing_account_id"
         private const val ExtraOutgoingCallId = "outgoing_call_id"
+        private const val ExtraOutgoingServerUrl = "outgoing_server_url"
         private const val ExtraRedialServerUrl = "redial_server_url"
         private const val ExtraRedialSessionLogin = "redial_session_login"
         private const val ExtraRedialSessionId = "redial_session_id"
@@ -698,6 +728,7 @@ class CallActivity : ComponentActivity() {
         fun outgoingIntent(
             context: Context,
             peer: AccountPeerKey,
+            contactAddress: ContactAddress,
             displayName: String,
             callKey: AccountCallKey,
         ): Intent =
@@ -706,6 +737,7 @@ class CallActivity : ComponentActivity() {
                 .putExtra(ExtraOutgoingAccountId, peer.accountId.value)
                 .putExtra(ExtraOutgoingCallId, callKey.callId)
                 .putExtra(ExtraOutgoingLogin, peer.login)
+                .putExtra(ExtraOutgoingServerUrl, contactAddress.serverUrl)
                 .putExtra(ExtraOutgoingName, displayName)
 
         fun ongoingIntent(context: Context): Intent =
@@ -723,6 +755,7 @@ class CallActivity : ComponentActivity() {
             return outgoingIntent(
                 context,
                 peer,
+                ContactAddress.of(binding.serverUrl, peer.login),
                 displayName,
                 callKey,
             )
@@ -746,6 +779,11 @@ class CallActivity : ComponentActivity() {
                 intent.getStringExtra(ExtraRedialConfigId),
             )
         }
+
+        private fun outgoingContactAddressFrom(intent: Intent, login: String): ContactAddress? =
+            intent.getStringExtra(ExtraOutgoingServerUrl)
+                ?.takeIf(String::isNotBlank)
+                ?.let { serverUrl -> ContactAddress.of(normalizeServerUrl(serverUrl), login) }
     }
 }
 

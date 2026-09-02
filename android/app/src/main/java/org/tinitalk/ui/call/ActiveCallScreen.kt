@@ -74,9 +74,10 @@ import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CameraFacing
 import org.tinitalk.call.ConnectionHealth
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.telecom.AudioEndpoint
-import org.tinitalk.ui.contactInitial
+import org.tinitalk.ui.ContactAvatar
 import org.tinitalk.ui.theme.CallBackgroundBottom
 import org.tinitalk.ui.theme.CallBackgroundTop
 import org.tinitalk.ui.theme.CallRejectRed
@@ -87,6 +88,8 @@ import kotlin.math.roundToInt
 @Composable
 fun ActiveCallScreen(
     peerName: String,
+    contactAddress: ContactAddress? = null,
+    fallbackLogin: String = peerName,
     durationText: String,
     muted: Boolean,
     connectionHealth: ConnectionHealth,
@@ -131,6 +134,8 @@ fun ActiveCallScreen(
     if (videoMode) {
         VideoActiveCallScreen(
             peerName = peerName,
+            contactAddress = contactAddress,
+            fallbackLogin = fallbackLogin,
             durationText = durationText,
             status = status,
             statusColor = statusColor,
@@ -149,6 +154,8 @@ fun ActiveCallScreen(
     } else {
         AudioActiveCallScreen(
             peerName = peerName,
+            contactAddress = contactAddress,
+            fallbackLogin = fallbackLogin,
             durationText = durationText,
             status = status,
             statusColor = statusColor,
@@ -177,6 +184,8 @@ fun ActiveCallScreen(
 @Composable
 private fun AudioActiveCallScreen(
     peerName: String,
+    contactAddress: ContactAddress?,
+    fallbackLogin: String,
     durationText: String,
     status: String,
     statusColor: Color,
@@ -202,6 +211,8 @@ private fun AudioActiveCallScreen(
         if (layout.scrollable) {
             ConstrainedAudioActiveCallScreen(
                 peerName = peerName,
+                contactAddress = contactAddress,
+                fallbackLogin = fallbackLogin,
                 durationText = durationText,
                 status = status,
                 statusColor = statusColor,
@@ -220,6 +231,8 @@ private fun AudioActiveCallScreen(
         } else {
             RegularAudioActiveCallScreen(
                 peerName = peerName,
+                contactAddress = contactAddress,
+                fallbackLogin = fallbackLogin,
                 durationText = durationText,
                 status = status,
                 statusColor = statusColor,
@@ -242,6 +255,8 @@ private fun AudioActiveCallScreen(
 @Composable
 private fun RegularAudioActiveCallScreen(
     peerName: String,
+    contactAddress: ContactAddress?,
+    fallbackLogin: String,
     durationText: String,
     status: String,
     statusColor: Color,
@@ -260,6 +275,8 @@ private fun RegularAudioActiveCallScreen(
     CallScreenSurface(
         status = status,
         peerName = peerName,
+        contactAddress = contactAddress,
+        fallbackLogin = fallbackLogin,
         detail = durationText,
         statusColor = statusColor,
     ) {
@@ -289,6 +306,8 @@ private fun RegularAudioActiveCallScreen(
 @Composable
 private fun ConstrainedAudioActiveCallScreen(
     peerName: String,
+    contactAddress: ContactAddress?,
+    fallbackLogin: String,
     durationText: String,
     status: String,
     statusColor: Color,
@@ -309,7 +328,7 @@ private fun ConstrainedAudioActiveCallScreen(
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(CallBackgroundTop, CallBackgroundBottom))),
     ) {
-        VideoFallbackContent(peerName)
+        VideoFallbackContent(peerName, contactAddress, fallbackLogin)
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -375,6 +394,8 @@ private fun ConstrainedAudioActiveCallScreen(
 @Composable
 private fun VideoActiveCallScreen(
     peerName: String,
+    contactAddress: ContactAddress?,
+    fallbackLogin: String,
     durationText: String,
     status: String,
     statusColor: Color,
@@ -483,7 +504,7 @@ private fun VideoActiveCallScreen(
             )
         }
         if (!presentation.remoteVideoVisible) {
-            VideoFallbackContent(peerName)
+            VideoFallbackContent(peerName, contactAddress, fallbackLogin)
         }
 
         if (controlsMayAutoHide) {
@@ -757,22 +778,19 @@ private const val SelfPreviewCornerKey = "self_preview_corner"
 private val SelfPreviewEdgeSpacing = 12.dp
 
 @Composable
-private fun VideoFallbackContent(peerName: String) {
+private fun VideoFallbackContent(
+    peerName: String,
+    contactAddress: ContactAddress? = null,
+    fallbackLogin: String = peerName,
+) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Box(
-            modifier = Modifier
-                .size(120.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.13f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = contactInitial(peerName, peerName),
-                color = Color.White,
-                fontSize = 44.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+        ContactAvatar(
+            address = contactAddress,
+            displayName = peerName,
+            fallbackLogin = fallbackLogin,
+            size = 120.dp,
+            borderWidth = 0.dp,
+        )
     }
 }
 
@@ -1093,8 +1111,18 @@ private fun audioEndpointIcon(endpoint: AudioEndpoint?): Int = when (endpoint?.t
 }
 
 @Composable
-fun EndedCallScreen(peerName: String, reason: CallEndReason?) {
-    CallScreenSurface(status = if (reason == CallEndReason.Busy) "Занято" else "Звонок завершён", peerName = peerName) {
+fun EndedCallScreen(
+    peerName: String,
+    reason: CallEndReason?,
+    contactAddress: ContactAddress? = null,
+    fallbackLogin: String = peerName,
+) {
+    CallScreenSurface(
+        status = if (reason == CallEndReason.Busy) "Занято" else "Звонок завершён",
+        peerName = peerName,
+        contactAddress = contactAddress,
+        fallbackLogin = fallbackLogin,
+    ) {
         Spacer(Modifier.height(18.dp))
     }
 }

@@ -344,7 +344,13 @@ class MainActivity : ComponentActivity() {
         }
         when (val start = CallForegroundService.tryStartOutgoing(this, accountContact.peerKey, contact.displayName)) {
             is OutgoingCallStartResult.Started -> startActivity(
-                CallActivity.outgoingIntent(this, accountContact.peerKey, contact.displayName, start.key),
+                CallActivity.outgoingIntent(
+                    this,
+                    accountContact.peerKey,
+                    accountContact.address,
+                    contact.displayName,
+                    start.key,
+                ),
             )
             is OutgoingCallStartResult.Busy -> {
                 val pending = IncomingCallController().load(this)?.invite

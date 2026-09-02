@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.ui.theme.CallAnswerGreen
 import org.tinitalk.ui.theme.CallRejectRed
 
@@ -22,6 +23,8 @@ import org.tinitalk.ui.theme.CallRejectRed
 fun IncomingCallScreen(
     callId: String,
     caller: String,
+    contactAddress: ContactAddress? = null,
+    fallbackLogin: String = caller,
     onAnswer: () -> Unit,
     onReject: () -> Unit,
 ) {
@@ -33,7 +36,12 @@ fun IncomingCallScreen(
         action()
     }
 
-    CallScreenSurface(status = "Входящий звонок", peerName = caller) {
+    CallScreenSurface(
+        status = "Входящий звонок",
+        peerName = caller,
+        contactAddress = contactAddress,
+        fallbackLogin = fallbackLogin,
+    ) {
         Text(
             text = "Сдвиньте нужную кнопку вверх",
             color = Color.White.copy(alpha = 0.66f),

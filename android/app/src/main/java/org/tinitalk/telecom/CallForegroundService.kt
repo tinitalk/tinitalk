@@ -44,6 +44,7 @@ import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountPeerKey
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
@@ -707,7 +708,11 @@ class CallForegroundService : Service() {
                 call.startCall(callee, requestOwner.key.callId)
                 call.snapshot().callId?.let { callId ->
                     val key = AccountCallKey(requestOwner.key.accountId, callId)
-                    val peer = CallPeer(displayName = displayName, login = callee)
+                    val peer = CallPeer(
+                        displayName = displayName,
+                        login = callee,
+                        contactAddress = ContactAddress.of(requestOwner.sessionBinding.serverUrl, callee),
+                    )
                     telecomCallKey = key
                     outgoingPeer = peer
                     CallUiStateStore.begin(
@@ -732,7 +737,13 @@ class CallForegroundService : Service() {
                 connectionHealthClassifier.reset()
                 CallUiStateStore.begin(
                     invite.key,
-                    CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }, login = invite.callerLogin),
+                    CallPeer(
+                        displayName = invite.caller.ifEmpty { "TiniTalk" },
+                        login = invite.callerLogin,
+                        contactAddress = invite.callerLogin?.let {
+                            ContactAddress.of(invite.sessionBinding.serverUrl, it)
+                        },
+                    ),
                     CallDirection.Incoming,
                     CallPhase.Ringing,
                 )
@@ -751,7 +762,13 @@ class CallForegroundService : Service() {
                 telecomCallKey = invite.key
                 CallUiStateStore.begin(
                     invite.key,
-                    CallPeer(displayName = invite.caller.ifEmpty { "TiniTalk" }, login = invite.callerLogin),
+                    CallPeer(
+                        displayName = invite.caller.ifEmpty { "TiniTalk" },
+                        login = invite.callerLogin,
+                        contactAddress = invite.callerLogin?.let {
+                            ContactAddress.of(invite.sessionBinding.serverUrl, it)
+                        },
+                    ),
                     CallDirection.Incoming,
                     CallPhase.Ringing,
                 )

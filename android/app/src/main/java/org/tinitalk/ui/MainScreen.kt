@@ -972,17 +972,13 @@ private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier.size(44.dp).clip(CircleShape).background(CallAnswerGreen),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_call),
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(23.dp),
-                )
-            }
+            ContactAvatar(
+                address = state.peer?.contactAddress,
+                displayName = state.peer?.displayName?.ifBlank { "TiniTalk" } ?: "TiniTalk",
+                fallbackLogin = state.peer?.login ?: state.peer?.displayName ?: "TiniTalk",
+                size = 44.dp,
+                borderWidth = 0.dp,
+            )
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(

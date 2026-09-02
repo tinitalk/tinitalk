@@ -38,7 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
-import org.tinitalk.ui.contactInitial
+import org.tinitalk.data.ContactAddress
+import org.tinitalk.ui.ContactAvatar
 import org.tinitalk.ui.theme.CallBackgroundBottom
 import org.tinitalk.ui.theme.CallBackgroundTop
 
@@ -46,6 +47,8 @@ import org.tinitalk.ui.theme.CallBackgroundTop
 internal fun CallScreenSurface(
     status: String,
     peerName: String,
+    contactAddress: ContactAddress? = null,
+    fallbackLogin: String = peerName,
     detail: String? = null,
     statusColor: Color = Color.White.copy(alpha = 0.76f),
     pulsingAvatar: Boolean = false,
@@ -95,16 +98,14 @@ internal fun CallScreenSurface(
             Box(
                 modifier = Modifier
                     .size(avatarSize)
-                    .graphicsLayer(scaleX = avatarScale, scaleY = avatarScale)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.13f)),
-                contentAlignment = Alignment.Center,
+                    .graphicsLayer(scaleX = avatarScale, scaleY = avatarScale),
             ) {
-                Text(
-                    text = contactInitial(peerName, peerName),
-                    color = Color.White,
-                    fontSize = if (compact) 34.sp else 44.sp,
-                    fontWeight = FontWeight.Bold,
+                ContactAvatar(
+                    address = contactAddress,
+                    displayName = peerName,
+                    fallbackLogin = fallbackLogin,
+                    size = avatarSize,
+                    borderWidth = 0.dp,
                 )
             }
             Spacer(Modifier.height(if (compact) 12.dp else 20.dp))
