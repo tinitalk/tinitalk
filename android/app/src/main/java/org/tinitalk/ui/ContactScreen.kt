@@ -58,24 +58,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
 import org.tinitalk.call.CallUiState
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.Contact
 import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
 import java.time.Instant
 import java.time.ZoneId
 
-private val contactAvatarColors = listOf(
-    Color(0xFF394A67),
-    Color(0xFF514464),
-    Color(0xFF30514D),
-    Color(0xFF60443B),
-    Color(0xFF4E5337),
-    Color(0xFF593F4C),
-)
-
 @Composable
 fun ContactScreen(
     contact: Contact,
+    contactAddress: ContactAddress,
     identityKey: String = contact.login,
     accountServerUrl: String? = null,
     internetAvailable: Boolean = true,
@@ -154,7 +147,14 @@ fun ContactScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            ContactAvatar(contact, name, 104.dp)
+                            ContactAvatar(
+                                address = contactAddress,
+                                displayName = name,
+                                fallbackLogin = contact.login,
+                                size = 104.dp,
+                                borderWidth = 2.dp,
+                                shadowElevation = 8.dp,
+                            )
                             Spacer(Modifier.height(22.dp))
                             Surface(
                                 onClick = {
@@ -387,27 +387,6 @@ private fun ContactHistoryMessage(
                 Spacer(Modifier.height(8.dp))
                 TextButton(onClick = onAction) { Text(action) }
             }
-        }
-    }
-}
-
-@Composable
-private fun ContactAvatar(contact: Contact, name: String, size: androidx.compose.ui.unit.Dp) {
-    val color = contactAvatarColors[contactColorIndex(contact.login, contactAvatarColors.size)]
-    Surface(
-        modifier = Modifier.size(size),
-        shape = CircleShape,
-        color = color,
-        border = BorderStroke(2.dp, BrandGold.copy(alpha = 0.42f)),
-        shadowElevation = 8.dp,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                contactInitial(name, contact.login),
-                color = Color(0xFFF6E8C0),
-                fontSize = 40.sp,
-                fontWeight = FontWeight.Bold,
-            )
         }
     }
 }

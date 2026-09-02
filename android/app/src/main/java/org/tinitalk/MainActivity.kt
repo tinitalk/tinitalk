@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -67,6 +68,7 @@ import org.tinitalk.ui.ContactNameViewModel
 import org.tinitalk.ui.ContactHistoryState
 import org.tinitalk.ui.HistoryRefreshGate
 import org.tinitalk.ui.HISTORY_PAGE_SIZE
+import org.tinitalk.ui.LocalContactPhotoReader
 import org.tinitalk.ui.accountHistoryWindow
 import org.tinitalk.ui.isHistoryVisibleToUser
 import org.tinitalk.ui.shouldMarkHistoryRead
@@ -157,63 +159,69 @@ class MainActivity : ComponentActivity() {
         screenState = screenState.copy(networkAvailable = network.available)
         setContent {
             TiniTalkTheme(darkTheme = true) {
-                val contactNameUpdate = contactNameViewModel.state
-                val visibleScreenState = screenState.withContactUpdates(contactNameViewModel.updatedContacts)
-                LaunchedEffect(contactNameUpdate.authExpired) {
-                    if (contactNameUpdate.authExpired) {
-                        contactNameViewModel.reset()
-                        if (authStore.list().isEmpty()) {
-                            showError(ApiException(401, "unauthorized", contactNameUpdate.authReason))
+                CompositionLocalProvider(LocalContactPhotoReader provides (application as TinitalkApplication).contactPhotoStore) {
+                    val contactNameUpdate = contactNameViewModel.state
+                    val visibleScreenState = screenState.withContactUpdates(contactNameViewModel.updatedContacts)
+                    LaunchedEffect(contactNameUpdate.authExpired) {
+                        if (contactNameUpdate.authExpired) {
+                            contactNameViewModel.reset()
+                            if (authStore.list().isEmpty()) {
+                                showError(ApiException(401, "unauthorized", contactNameUpdate.authReason))
+                            }
                         }
                     }
-                }
-                SideEffect {
-                    WindowCompat.getInsetsController(window, window.decorView).apply {
-                        isAppearanceLightStatusBars = false
-                        isAppearanceLightNavigationBars = false
-                    }
-                }
-                MainScreen(
-                    state = visibleScreenState,
-                    contactNameUpdate = contactNameUpdate,
-                    ongoingCall = callUiState.takeIf {
-                        it.phase != CallPhase.Idle && it.phase != CallPhase.Ended
-                    },
-                    loginResetKey = loginResetKey,
-                    onSignIn = ::loadContacts,
-                    onCheckServer = repository::checkServer,
-                    onCheckServerDetails = repository::checkServerDetails,
-                    onRequestNotifications = ::requestNotificationPermission,
-                    onRequestMicrophone = ::requestMicrophonePermission,
-                    onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
-                    onRefreshPermissions = ::refreshPermissions,
-                    onCall = ::startCall,
-                    onRenameContact = { key, customName ->
-                        if (network.available) {
-                            contactNameViewModel.rename(repository, key, customName)
-                        } else {
-                            showNoInternetMessage()
+                    SideEffect {
+                        WindowCompat.getInsetsController(window, window.decorView).apply {
+                            isAppearanceLightStatusBars = false
+                            isAppearanceLightNavigationBars = false
                         }
-                    },
-                    onRenameHandled = contactNameViewModel::clearResult,
-                    onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
-                    onContactsVisible = { historyVisible = false },
-                    onRefreshContacts = ::refreshContacts,
-                    onContactsRefreshMessageHandled = ::clearContactsRefreshMessage,
-                    onHistoryVisible = ::showHistory,
-                    onLoadMoreHistory = ::loadMoreHistory,
-                    onContactHistoryVisible = ::showContactHistory,
-                    onContactHistoryHidden = ::hideContactHistory,
-                    onLoadMoreContactHistory = ::loadMoreContactHistory,
-                    onRetryContactHistory = ::retryContactHistory,
-                    onOpenProfile = { screenState = screenState.copy(accountPage = AccountPage.Profile) },
-                    onCloseProfile = { screenState = screenState.copy(accountPage = AccountPage.Main) },
-                    onOpenAddAccount = { screenState = screenState.copy(accountPage = AccountPage.AddAccount, addAccountErrorMessage = null) },
-                    onCloseAddAccount = { if (!screenState.addingAccount) screenState = screenState.copy(accountPage = AccountPage.Profile) },
-                    onAddAccount = ::addAccount,
-                    onRemoveAccount = ::removeAccount,
-                    onCheckAddAccountServer = repository::checkAddAccountServer,
-                )
+                    }
+                    MainScreen(
+                        state = visibleScreenState,
+                        contactNameUpdate = contactNameUpdate,
+                        ongoingCall = callUiState.takeIf {
+                            it.phase != CallPhase.Idle && it.phase != CallPhase.Ended
+                        },
+                        loginResetKey = loginResetKey,
+                        onSignIn = ::loadContacts,
+                        onCheckServer = repository::checkServer,
+                        onCheckServerDetails = repository::checkServerDetails,
+                        onRequestNotifications = ::requestNotificationPermission,
+                        onRequestMicrophone = ::requestMicrophonePermission,
+                        onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
+                        onRefreshPermissions = ::refreshPermissions,
+                        onCall = ::startCall,
+                        onRenameContact = { key, customName ->
+                            if (network.available) {
+                                contactNameViewModel.rename(repository, key, customName)
+                            } else {
+                                showNoInternetMessage()
+                            }
+                        },
+                        onRenameHandled = contactNameViewModel::clearResult,
+                        onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
+                        onContactsVisible = { historyVisible = false },
+                        onRefreshContacts = ::refreshContacts,
+                        onContactsRefreshMessageHandled = ::clearContactsRefreshMessage,
+                        onHistoryVisible = ::showHistory,
+                        onLoadMoreHistory = ::loadMoreHistory,
+                        onContactHistoryVisible = ::showContactHistory,
+                        onContactHistoryHidden = ::hideContactHistory,
+                        onLoadMoreContactHistory = ::loadMoreContactHistory,
+                        onRetryContactHistory = ::retryContactHistory,
+                        onOpenProfile = { screenState = screenState.copy(accountPage = AccountPage.Profile) },
+                        onCloseProfile = { screenState = screenState.copy(accountPage = AccountPage.Main) },
+                        onOpenAddAccount = {
+                            screenState = screenState.copy(accountPage = AccountPage.AddAccount, addAccountErrorMessage = null)
+                        },
+                        onCloseAddAccount = {
+                            if (!screenState.addingAccount) screenState = screenState.copy(accountPage = AccountPage.Profile)
+                        },
+                        onAddAccount = ::addAccount,
+                        onRemoveAccount = ::removeAccount,
+                        onCheckAddAccountServer = repository::checkAddAccountServer,
+                    )
+                }
             }
         }
         CallUiStateStore.observe(callUiObserver)

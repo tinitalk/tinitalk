@@ -793,6 +793,7 @@ private fun HomeScreen(
         selectedAccountContact?.let { contact ->
             ContactScreen(
                 contact = contact.contact,
+                contactAddress = contact.address,
                 identityKey = accountScopedKey(contact.accountId, contact.login),
                 accountServerUrl = contact.serverUrl.takeIf {
                     state.accounts
@@ -875,7 +876,7 @@ private fun ContactsPage(
             ) {
                 items(contacts, key = { contact -> accountScopedKey(contact.accountId, contact.login) }) { contact ->
                     ContactRow(
-                        contact.contact,
+                        contact,
                         serverHostname = if (contact.peerKey in contactsWithServerSubtitle) {
                             serverHostname(contact.serverUrl)
                         } else {
@@ -948,18 +949,13 @@ private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
 
 @Composable
 private fun ContactRow(
-    contact: Contact,
+    contact: AccountContact,
     serverHostname: String?,
     latestUnreadMissedAt: Long?,
-    onOpen: (Contact) -> Unit,
+    onOpen: (AccountContact) -> Unit,
 ) {
-    val avatarColors = listOf(
-        Color(0xFF394A67), Color(0xFF514464), Color(0xFF30514D),
-        Color(0xFF60443B), Color(0xFF4E5337), Color(0xFF593F4C),
-    )
     val name = contactDisplayName(contact.displayName)
     val missedSubtitle = latestUnreadMissedAt?.let(::missedContactSubtitle)
-    val avatarColor = avatarColors[contactColorIndex(contact.login, avatarColors.size)]
     Surface(
         onClick = { onOpen(contact) },
         modifier = Modifier.fillMaxWidth().semantics {
@@ -973,21 +969,13 @@ private fun ContactRow(
             modifier = Modifier.fillMaxWidth().heightIn(min = 82.dp).padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                modifier = Modifier.size(52.dp),
-                shape = CircleShape,
-                color = avatarColor,
-                border = BorderStroke(1.dp, BrandGold.copy(alpha = 0.22f)),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        contactInitial(name, ""),
-                        color = Color(0xFFF6E8C0),
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
+            ContactAvatar(
+                address = contact.address,
+                displayName = name,
+                fallbackLogin = contact.login,
+                size = 52.dp,
+                borderWidth = 1.dp,
+            )
             Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
