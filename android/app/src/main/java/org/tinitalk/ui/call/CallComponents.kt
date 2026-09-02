@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -38,21 +39,32 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
-import org.tinitalk.ui.contactInitial
+import org.tinitalk.data.ContactAddress
+import org.tinitalk.ui.ContactAvatar
 import org.tinitalk.ui.theme.CallBackgroundBottom
 import org.tinitalk.ui.theme.CallBackgroundTop
+
+internal fun prominentCallAvatarSize(fontScale: Float): Dp =
+    if (fontScale >= 1.5f) 168.dp else 224.dp
 
 @Composable
 internal fun CallScreenSurface(
     status: String,
     peerName: String,
+    contactAddress: ContactAddress? = null,
+    fallbackLogin: String = peerName,
     detail: String? = null,
     statusColor: Color = Color.White.copy(alpha = 0.76f),
     pulsingAvatar: Boolean = false,
+    prominentAvatar: Boolean = false,
     footer: @Composable ColumnScope.() -> Unit,
 ) {
     val compact = LocalDensity.current.fontScale >= 1.5f
-    val avatarSize = if (compact) 88.dp else 120.dp
+    val avatarSize = if (prominentAvatar) {
+        prominentCallAvatarSize(LocalDensity.current.fontScale)
+    } else {
+        if (compact) 88.dp else 120.dp
+    }
     val verticalPadding = if (compact) 12.dp else 24.dp
     val headerSpacing = if (compact) 12.dp else 28.dp
     val transition = rememberInfiniteTransition(label = "callerPulse")
@@ -95,16 +107,15 @@ internal fun CallScreenSurface(
             Box(
                 modifier = Modifier
                     .size(avatarSize)
-                    .graphicsLayer(scaleX = avatarScale, scaleY = avatarScale)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.13f)),
-                contentAlignment = Alignment.Center,
+                    .testTag("call-peer-avatar")
+                    .graphicsLayer(scaleX = avatarScale, scaleY = avatarScale),
             ) {
-                Text(
-                    text = contactInitial(peerName, peerName),
-                    color = Color.White,
-                    fontSize = if (compact) 34.sp else 44.sp,
-                    fontWeight = FontWeight.Bold,
+                ContactAvatar(
+                    address = contactAddress,
+                    displayName = peerName,
+                    fallbackLogin = fallbackLogin,
+                    size = avatarSize,
+                    borderWidth = 0.dp,
                 )
             }
             Spacer(Modifier.height(if (compact) 12.dp else 20.dp))

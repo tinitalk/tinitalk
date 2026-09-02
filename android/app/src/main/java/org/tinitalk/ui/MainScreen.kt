@@ -83,6 +83,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.BuildConfig
+import org.tinitalk.ContactOpenRequest
 import org.tinitalk.R
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
@@ -98,6 +99,7 @@ import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.Contact
+import org.tinitalk.data.NormalizedCropSquare
 import org.tinitalk.data.ServerCheckDetails
 import org.tinitalk.data.ServerCheckResult
 import org.tinitalk.permissions.AppPermissionsState
@@ -317,6 +319,8 @@ fun MainScreen(
     contactNameUpdate: ContactNameUpdateState,
     ongoingCall: CallUiState?,
     loginResetKey: Int,
+    contactOpenRequest: ContactOpenRequest? = null,
+    onContactOpenRequestHandled: (ContactOpenRequest) -> Unit = {},
     onSignIn: (url: String, login: String, token: String) -> Unit,
     onCheckServer: (url: String) -> ServerCheckResult,
     onCheckServerDetails: (url: String) -> ServerCheckDetails,
@@ -337,6 +341,14 @@ fun MainScreen(
     onContactHistoryHidden: () -> Unit,
     onLoadMoreContactHistory: () -> Unit,
     onRetryContactHistory: () -> Unit,
+    contactPhotoEditorState: ContactPhotoEditorState = ContactPhotoEditorState(),
+    onContactPhotoTargetVisible: (ContactPhotoEditTarget) -> Unit = {},
+    onContactPhotoTargetHidden: (ContactPhotoEditTarget) -> Unit = {},
+    onChooseContactPhoto: (ContactPhotoEditTarget, ContactPhotoSource) -> Unit = { _, _ -> },
+    onRemoveContactPhoto: (ContactPhotoEditTarget) -> Unit = {},
+    onCancelContactPhotoCrop: () -> Unit = {},
+    onConfirmContactPhotoCrop: (NormalizedCropSquare) -> Unit = {},
+    onContactPhotoMessageShown: () -> Unit = {},
     onOpenProfile: () -> Unit,
     onCloseProfile: () -> Unit,
     onOpenAddAccount: () -> Unit,
@@ -346,6 +358,9 @@ fun MainScreen(
     onCheckAddAccountServer: (String) -> ServerCheckResult = onCheckServer,
 ) {
     var aboutVisible by rememberSaveable(state.signedIn) { mutableStateOf(false) }
+    LaunchedEffect(contactOpenRequest) {
+        if (contactOpenRequest != null) aboutVisible = false
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
@@ -391,6 +406,8 @@ fun MainScreen(
                 )
                 else -> HomeScreen(
                     state = state,
+                    contactOpenRequest = contactOpenRequest,
+                    onContactOpenRequestHandled = onContactOpenRequestHandled,
                     contactNameUpdate = contactNameUpdate,
                     ongoingCall = ongoingCall,
                     onCall = onCall,
@@ -406,6 +423,14 @@ fun MainScreen(
                     onContactHistoryHidden = onContactHistoryHidden,
                     onLoadMoreContactHistory = onLoadMoreContactHistory,
                     onRetryContactHistory = onRetryContactHistory,
+                    contactPhotoEditorState = contactPhotoEditorState,
+                    onContactPhotoTargetVisible = onContactPhotoTargetVisible,
+                    onContactPhotoTargetHidden = onContactPhotoTargetHidden,
+                    onChooseContactPhoto = onChooseContactPhoto,
+                    onRemoveContactPhoto = onRemoveContactPhoto,
+                    onCancelContactPhotoCrop = onCancelContactPhotoCrop,
+                    onConfirmContactPhotoCrop = onConfirmContactPhotoCrop,
+                    onContactPhotoMessageShown = onContactPhotoMessageShown,
                     onAbout = { aboutVisible = true },
                     onOpenProfile = onOpenProfile,
                 )
@@ -627,6 +652,8 @@ private fun PermissionItem(
 @Composable
 private fun HomeScreen(
     state: MainScreenState,
+    contactOpenRequest: ContactOpenRequest?,
+    onContactOpenRequestHandled: (ContactOpenRequest) -> Unit,
     contactNameUpdate: ContactNameUpdateState,
     ongoingCall: CallUiState?,
     onCall: (AccountContact) -> Unit,
@@ -642,6 +669,14 @@ private fun HomeScreen(
     onContactHistoryHidden: () -> Unit,
     onLoadMoreContactHistory: () -> Unit,
     onRetryContactHistory: () -> Unit,
+    contactPhotoEditorState: ContactPhotoEditorState,
+    onContactPhotoTargetVisible: (ContactPhotoEditTarget) -> Unit,
+    onContactPhotoTargetHidden: (ContactPhotoEditTarget) -> Unit,
+    onChooseContactPhoto: (ContactPhotoEditTarget, ContactPhotoSource) -> Unit,
+    onRemoveContactPhoto: (ContactPhotoEditTarget) -> Unit,
+    onCancelContactPhotoCrop: () -> Unit,
+    onConfirmContactPhotoCrop: (NormalizedCropSquare) -> Unit,
+    onContactPhotoMessageShown: () -> Unit,
     onAbout: () -> Unit,
     onOpenProfile: () -> Unit,
 ) {
@@ -656,6 +691,13 @@ private fun HomeScreen(
     }
     val visibleContacts = state.accountContacts
     val selectedAccountContact = visibleContacts.firstOrNull { it.peerKey == selectedContactKey }
+    val selectedPhotoTarget = selectedAccountContact?.let { contact ->
+        ContactPhotoEditTarget(
+            accountId = contact.accountId,
+            address = contact.address,
+            displayName = contactDisplayName(contact.contact.displayName),
+        )
+    }
     val historyWindow = accountHistoryWindow(
         loaded = state.accountHistory,
         visibleLimit = state.historyVisibleLimit,
@@ -667,12 +709,30 @@ private fun HomeScreen(
         .map { serverAddress(it.serverUrl) }
         .distinct()
 
+    LaunchedEffect(contactOpenRequest, visibleContacts, state.accounts) {
+        val request = contactOpenRequest ?: return@LaunchedEffect
+        if (state.accounts.none { it.id == request.peer.accountId }) {
+            onContactOpenRequestHandled(request)
+            return@LaunchedEffect
+        }
+        val requestedContact = visibleContacts.firstOrNull { it.peerKey == request.peer }
+            ?: return@LaunchedEffect
+        selectedPhotoTarget
+            ?.takeIf { selectedContactKey != request.peer }
+            ?.let(onContactPhotoTargetHidden)
+        pagerState.scrollToPage(0)
+        selectedContactAccountId = requestedContact.accountId.value
+        selectedContactLogin = requestedContact.login
+        onContactOpenRequestHandled(request)
+    }
+
     BackHandler(
         enabled = shouldReturnToContactsOnBack(
             currentPage = pagerState.currentPage,
             contactOpen = selectedContactKey != null,
         ),
     ) {
+        selectedPhotoTarget?.let(onContactPhotoTargetHidden)
         scope.launch { pagerState.animateScrollToPage(0) }
     }
 
@@ -694,6 +754,15 @@ private fun HomeScreen(
         state.contactsRefreshErrorMessage?.let { message ->
             scope.launch { snackbarHostState.showSnackbar(message) }
             onContactsRefreshMessageHandled()
+        }
+    }
+    LaunchedEffect(selectedPhotoTarget) {
+        selectedPhotoTarget?.let(onContactPhotoTargetVisible)
+    }
+    LaunchedEffect(contactPhotoEditorState.message) {
+        contactPhotoEditorState.message?.let { message ->
+            scope.launch { snackbarHostState.showSnackbar(message) }
+            onContactPhotoMessageShown()
         }
     }
     Box(modifier = Modifier.fillMaxSize()) {
@@ -724,7 +793,7 @@ private fun HomeScreen(
                             )
                         } else {
                             HistoryScreen(
-                                items = historyWindow.items.map(AccountHistory::item),
+                                items = historyWindow.items,
                                 itemKeys = historyWindow.items.map { accountScopedKey(it.accountId, it.id.toString()) },
                                 internetAvailable = state.networkAvailable,
                                 loaded = state.historyLoaded,
@@ -735,6 +804,17 @@ private fun HomeScreen(
                                 unavailableServers = unavailableHistoryServers,
                                 onLoadMore = onLoadMoreHistory,
                                 onRefresh = onHistoryVisible,
+                                onContactSelected = { peer ->
+                                    val contact = visibleContacts.firstOrNull { it.peerKey == peer }
+                                    if (contact == null) {
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("Контакт больше недоступен")
+                                        }
+                                    } else {
+                                        selectedContactAccountId = contact.accountId.value
+                                        selectedContactLogin = contact.login
+                                    }
+                                },
                             )
                         }
                     }
@@ -793,6 +873,7 @@ private fun HomeScreen(
         selectedAccountContact?.let { contact ->
             ContactScreen(
                 contact = contact.contact,
+                contactAddress = contact.address,
                 identityKey = accountScopedKey(contact.accountId, contact.login),
                 accountServerUrl = contact.serverUrl.takeIf {
                     state.accounts
@@ -806,6 +887,7 @@ private fun HomeScreen(
                 history = state.contactHistory,
                 ongoingCall = ongoingCall,
                 onBack = {
+                    selectedPhotoTarget?.let(onContactPhotoTargetHidden)
                     selectedContactAccountId = null
                     selectedContactLogin = null
                 },
@@ -815,6 +897,21 @@ private fun HomeScreen(
                 onRenameHandled = onRenameHandled,
                 onLoadMoreHistory = onLoadMoreContactHistory,
                 onRetryHistory = onRetryContactHistory,
+                photoTarget = selectedPhotoTarget,
+                photoState = contactPhotoEditorState.takeIf { it.target == selectedPhotoTarget }
+                    ?: ContactPhotoEditorState(target = selectedPhotoTarget),
+                onChoosePhotoSource = onChooseContactPhoto,
+                onRemovePhoto = onRemoveContactPhoto,
+            )
+        }
+        if (
+            contactPhotoEditorState.phase == ContactPhotoEditorPhase.Cropping ||
+            contactPhotoEditorState.phase == ContactPhotoEditorPhase.Saving
+        ) {
+            ContactPhotoCropOverlay(
+                state = contactPhotoEditorState,
+                onCancel = onCancelContactPhotoCrop,
+                onDone = onConfirmContactPhotoCrop,
             )
         }
         SnackbarHost(
@@ -875,7 +972,7 @@ private fun ContactsPage(
             ) {
                 items(contacts, key = { contact -> accountScopedKey(contact.accountId, contact.login) }) { contact ->
                     ContactRow(
-                        contact.contact,
+                        contact,
                         serverHostname = if (contact.peerKey in contactsWithServerSubtitle) {
                             serverHostname(contact.serverUrl)
                         } else {
@@ -911,17 +1008,13 @@ private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier.size(44.dp).clip(CircleShape).background(CallAnswerGreen),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_call),
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(23.dp),
-                )
-            }
+            ContactAvatar(
+                address = state.peer?.contactAddress,
+                displayName = state.peer?.displayName?.ifBlank { "TiniTalk" } ?: "TiniTalk",
+                fallbackLogin = state.peer?.login ?: state.peer?.displayName ?: "TiniTalk",
+                size = 44.dp,
+                borderWidth = 0.dp,
+            )
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -948,47 +1041,40 @@ private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
 
 @Composable
 private fun ContactRow(
-    contact: Contact,
+    contact: AccountContact,
     serverHostname: String?,
     latestUnreadMissedAt: Long?,
-    onOpen: (Contact) -> Unit,
+    onOpen: (AccountContact) -> Unit,
 ) {
-    val avatarColors = listOf(
-        Color(0xFF394A67), Color(0xFF514464), Color(0xFF30514D),
-        Color(0xFF60443B), Color(0xFF4E5337), Color(0xFF593F4C),
-    )
     val name = contactDisplayName(contact.displayName)
     val missedSubtitle = latestUnreadMissedAt?.let(::missedContactSubtitle)
-    val avatarColor = avatarColors[contactColorIndex(contact.login, avatarColors.size)]
+    val rowHeight = 82.dp
+    val avatarInset = 4.dp
+    val avatarSize = rowHeight - avatarInset * 2
     Surface(
         onClick = { onOpen(contact) },
         modifier = Modifier.fillMaxWidth().semantics {
             contentDescription = listOfNotNull("Открыть контакт: $name", serverHostname, missedSubtitle).joinToString(". ")
         },
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(rowHeight / 2),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.78f)),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 82.dp).padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(rowHeight)
+                .padding(start = avatarInset, top = avatarInset, end = 14.dp, bottom = avatarInset),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                modifier = Modifier.size(52.dp),
-                shape = CircleShape,
-                color = avatarColor,
-                border = BorderStroke(1.dp, BrandGold.copy(alpha = 0.22f)),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        contactInitial(name, ""),
-                        color = Color(0xFFF6E8C0),
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-            Spacer(Modifier.width(16.dp))
+            ContactAvatar(
+                address = contact.address,
+                displayName = name,
+                fallbackLogin = contact.login,
+                size = avatarSize,
+                borderWidth = 1.dp,
+            )
+            Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     name,

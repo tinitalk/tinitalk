@@ -96,7 +96,7 @@ class IncomingCallForegroundService : Service() {
         stopTask?.let(handler::removeCallbacks)
         stopTask = null
         ringingAcknowledger.close()
-        detachForeground()
+        detachForeground(removeNotification = shouldRemoveForegroundNotification())
         presentedOwner = null
         super.onDestroy()
     }
@@ -128,15 +128,24 @@ class IncomingCallForegroundService : Service() {
     private fun stopPresentation(startId: Int, expectedOwner: AccountCallOwner? = null) {
         if (expectedOwner != null && presentedOwner != null && presentedOwner != expectedOwner) return
         val stopsCurrentForeground = expectedOwner != null && presentedOwner == expectedOwner
+        val removeNotification = shouldRemoveForegroundNotification()
         if (presentedOwner == expectedOwner) presentedOwner = null
-        detachForeground()
+        detachForeground(removeNotification)
         if (stopsCurrentForeground) stopSelf() else stopSelfResult(startId)
     }
 
-    private fun detachForeground() {
-        // Terminal paths cancel the scoped notification themselves. Detaching first also keeps a
-        // newer fallback notification with the shared ID alive while this service is stopping.
-        if (foreground) stopForeground(STOP_FOREGROUND_DETACH)
+    private fun shouldRemoveForegroundNotification(): Boolean {
+        val owner = presentedOwner
+        val incoming = IncomingCallController()
+        val pendingInvite = incoming.load(this)?.invite
+        val terminal = owner?.let { incoming.isTerminal(this, it) } == true
+        return shouldRemoveIncomingForegroundNotification(owner, pendingInvite, terminal, Instant.now())
+    }
+
+    private fun detachForeground(removeNotification: Boolean) {
+        if (foreground) {
+            stopForeground(if (removeNotification) STOP_FOREGROUND_REMOVE else STOP_FOREGROUND_DETACH)
+        }
         foreground = false
     }
 
@@ -154,6 +163,17 @@ class IncomingCallForegroundService : Service() {
             context.stopService(Intent(context, IncomingCallForegroundService::class.java))
         }
     }
+}
+
+internal fun shouldRemoveIncomingForegroundNotification(
+    presentedOwner: AccountCallOwner?,
+    pendingInvite: IncomingInvite?,
+    terminal: Boolean,
+    now: Instant = Instant.now(),
+): Boolean {
+    if (presentedOwner == null || terminal) return true
+    if (pendingInvite?.owner != presentedOwner) return true
+    return !pendingInvite.expiresAt.isAfter(now)
 }
 
 internal fun scheduleIncomingExpiry(context: Context, invite: IncomingInvite) {

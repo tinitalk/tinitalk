@@ -3,13 +3,18 @@ package org.tinitalk.telecom
 import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.CallAdmission
 import org.tinitalk.call.CallAdmissionHandoff
+import org.tinitalk.call.CallDirection
+import org.tinitalk.call.CallPeer
+import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSessionBinding
+import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.data.AccountId
 import org.tinitalk.push.IncomingInvite
 import java.time.Instant
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotEquals
@@ -24,6 +29,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class AccountIncomingRoutingTest {
+    @After
+    fun resetCallUiState() {
+        CallUiStateStore.reset()
+    }
+
     @Test
     fun accountAndSessionBindingSurvivePersistenceAndNotificationActionIntent() {
         val context = RuntimeEnvironment.getApplication()
@@ -101,6 +111,45 @@ class AccountIncomingRoutingTest {
         )
 
         controller.finishTerminalPresentation(context, inviteB.owner) {}
+    }
+
+    @Test
+    fun expiringPendingIncomingClearsRingingUiState() {
+        val context = RuntimeEnvironment.getApplication()
+        val controller = IncomingCallController(admission = CallAdmissionHandoff(CallAdmission()))
+        val invite = invite("account-a", "call-a", expiresAt = Instant.parse("2026-08-31T10:00:01Z"))
+        assertEquals(
+            IncomingAdmissionResult.Admitted,
+            controller.admitIncoming(context, invite, now = Instant.parse("2026-08-31T10:00:00Z")),
+        )
+        CallUiStateStore.begin(
+            invite.key,
+            CallPeer("Alice", "alice"),
+            CallDirection.Incoming,
+            CallPhase.Ringing,
+        )
+
+        assertTrue(controller.expirePending(context, invite.owner, now = Instant.parse("2026-08-31T10:00:02Z")))
+
+        assertEquals(CallPhase.Idle, CallUiStateStore.snapshot().phase)
+    }
+
+    @Test
+    fun terminalPresentationDoesNotClearAcceptedActiveCallUiState() {
+        val context = RuntimeEnvironment.getApplication()
+        val controller = IncomingCallController(admission = CallAdmissionHandoff(CallAdmission()))
+        val invite = invite("account-a", "call-a")
+        assertEquals(IncomingAdmissionResult.Admitted, controller.admitIncoming(context, invite))
+        CallUiStateStore.begin(
+            invite.key,
+            CallPeer("Alice", "alice"),
+            CallDirection.Incoming,
+            CallPhase.Active,
+        )
+
+        assertTrue(controller.finishTerminalPresentation(context, invite.owner) {})
+
+        assertEquals(CallPhase.Active, CallUiStateStore.snapshot().phase)
     }
 
     @Test

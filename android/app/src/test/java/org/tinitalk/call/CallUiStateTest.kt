@@ -2,6 +2,7 @@ package org.tinitalk.call
 
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.data.AccountId
+import org.tinitalk.data.ContactAddress
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -54,15 +55,43 @@ class CallUiStateTest {
 
     @Test
     fun cancelledOutgoingCallIsNotTurnedBackIntoConnecting() {
+        val address = ContactAddress.of("https://example.com", "bob")
         val ended = CallUiState(
             callId = "call-1",
-            peer = CallPeer("Bob", "bob"),
+            peer = CallPeer("Bob", "bob", address),
             direction = CallDirection.Outgoing,
             phase = CallPhase.Ended,
             endReason = CallEndReason.Cancelled,
         )
 
-        assertEquals(CallPhase.Ended, outgoingVisibleState(ended, "bob", "Bob").phase)
+        val visible = outgoingVisibleState(ended, "bob", "Bob", address)
+
+        assertEquals(CallPhase.Ended, visible.phase)
+        assertEquals(address, visible.peer?.contactAddress)
+    }
+
+    @Test
+    fun outgoingVisibleStateCarriesProvidedContactAddress() {
+        val address = ContactAddress.of("https://calls.example", "bob")
+
+        val visible = outgoingVisibleState(CallUiState(), "bob", "Bob", address)
+
+        assertEquals(address, visible.peer?.contactAddress)
+    }
+
+    @Test
+    fun callPeerDoesNotInferAddressFromDisplayName() {
+        val peer = CallPeer(displayName = "Grandma")
+
+        assertNull(peer.contactAddress)
+    }
+
+    @Test
+    fun callPeerAddressSeparatesSameLoginOnDifferentServers() {
+        val first = CallPeer("Alex", "alex", ContactAddress.of("https://one.example", "alex"))
+        val second = CallPeer("Alex", "alex", ContactAddress.of("https://two.example", "alex"))
+
+        assertFalse(first.contactAddress == second.contactAddress)
     }
 
     @Test

@@ -56,6 +56,7 @@ data class AccountContact(
     val defaultDisplayName: String get() = contact.defaultDisplayName
     val customName: String? get() = contact.customName
     val peerKey: AccountPeerKey get() = AccountPeerKey(accountId, login)
+    val address: ContactAddress get() = ContactAddress.of(serverUrl, login)
 }
 
 data class AccountPeerKey(val accountId: AccountId, val login: String)
@@ -94,7 +95,11 @@ data class UnreadMissedContact(
     @SerializedName("peer_login") val peerLogin: String,
     @SerializedName("started_at") val startedAt: Long,
     @SerializedName("peer_name") val peerName: String? = null,
-)
+    @SerializedName("missed_count") val missedCount: Int? = null,
+) {
+    fun normalized(): UnreadMissedContact =
+        if (missedCount == null || missedCount > 0) this else copy(missedCount = null)
+}
 data class CallUnreadState(
     @SerializedName("unread_missed_count") val unreadMissedCount: Int,
     @SerializedName("unread_missed") val unreadMissed: List<UnreadMissedContact>,
@@ -109,6 +114,7 @@ data class CallHistoryPage(
 
 data class AccountHistory(
     val accountId: AccountId,
+    val serverUrl: String,
     val item: CallHistoryItem,
 ) {
     val id: Long get() = item.id
@@ -119,6 +125,7 @@ data class AccountHistory(
     val reached: Boolean get() = item.reached
     val startedAt: Long get() = item.startedAt
     val durationSeconds: Long get() = item.durationSeconds
+    val address: ContactAddress get() = ContactAddress.of(serverUrl, peerLogin)
     val key: AccountHistoryKey get() = AccountHistoryKey(accountId, id)
 }
 
@@ -149,14 +156,17 @@ private data class CallHistoryPageWire(
         nextBefore,
         latestId,
         unreadMissedCount,
-        unreadMissed.orEmpty(),
+        unreadMissed.orEmpty().map(UnreadMissedContact::normalized),
     )
 }
 private data class CallHistoryReadResult(
     @SerializedName("unread_missed_count") val unreadMissedCount: Int,
     @SerializedName("unread_missed") val unreadMissed: List<UnreadMissedContact>?,
 ) {
-    fun toCallUnreadState() = CallUnreadState(unreadMissedCount, unreadMissed.orEmpty())
+    fun toCallUnreadState() = CallUnreadState(
+        unreadMissedCount,
+        unreadMissed.orEmpty().map(UnreadMissedContact::normalized),
+    )
 }
 
 private data class SessionClaimWire(@SerializedName("session_id") val sessionId: String)

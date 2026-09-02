@@ -2,6 +2,7 @@ package org.tinitalk.call
 
 import android.os.SystemClock
 import org.tinitalk.data.AccountId
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.telecom.AudioEndpoint
 import org.tinitalk.telecom.AudioEndpointState
@@ -35,6 +36,7 @@ enum class CallEndReason {
 data class CallPeer(
     val displayName: String,
     val login: String? = null,
+    val contactAddress: ContactAddress? = null,
 )
 
 data class CallUiState(
@@ -106,11 +108,16 @@ fun formatCallDuration(durationMillis: Long): String {
     }
 }
 
-internal fun outgoingVisibleState(state: CallUiState, login: String, displayName: String): CallUiState {
+internal fun outgoingVisibleState(
+    state: CallUiState,
+    login: String,
+    displayName: String,
+    contactAddress: ContactAddress? = null,
+): CallUiState {
     val belongsToCurrentCall = state.direction == CallDirection.Outgoing && state.peer?.login == login
     if (state.phase != CallPhase.Idle && belongsToCurrentCall) return state
     return CallUiState(
-        peer = CallPeer(displayName.ifBlank { login }, login),
+        peer = CallPeer(displayName.ifBlank { login }, login, contactAddress),
         direction = CallDirection.Outgoing,
         phase = CallPhase.Connecting,
     )

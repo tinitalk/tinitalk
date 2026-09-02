@@ -6,6 +6,7 @@ import org.tinitalk.push.WebPushClientConfig
 import org.tinitalk.push.WebPushKeys
 import org.tinitalk.push.WebPushSubscription
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -247,6 +248,59 @@ class ContactRepositoryTest {
 
         assertTrue(cache.load(account).items.isEmpty())
     }
+
+    @Test
+    fun explicitRemoveAccountInvokesCommonAndExplicitCallbacksOnce() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session("https://a.example", "alice", "token-a")
+        val account = auth.upsert(session)
+        val common = mutableListOf<Pair<AccountId, Session>>()
+        val explicit = mutableListOf<Pair<AccountId, Session>>()
+        val repository = ContactRepository(
+            authStore = auth,
+            onAccountRemoved = { accountId, removedSession -> common += accountId to removedSession },
+            onExplicitAccountRemoved = { accountId, removedSession -> explicit += accountId to removedSession },
+        )
+
+        assertTrue(repository.removeAccount(account.id))
+
+        assertEquals(listOf(account.id to session), common)
+        assertEquals(listOf(account.id to session), explicit)
+    }
+
+    @Test
+    fun staleRemoveAccountDoesNotInvokeExplicitCallback() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val repository = ContactRepository(
+            authStore = auth,
+            onExplicitAccountRemoved = { _, _ -> error("stale account must not trigger explicit cleanup") },
+        )
+
+        assertFalse(repository.removeAccount(AccountId("missing")))
+    }
+
+    @Test
+    fun unauthorizedRemovalInvokesCommonCallbackButNotExplicitCallback() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session("https://a.example", "alice", "token-a")
+        val account = auth.upsert(session)
+        val common = mutableListOf<Pair<AccountId, Session>>()
+        val explicit = mutableListOf<Pair<AccountId, Session>>()
+        val repository = ContactRepository(
+            authStore = auth,
+            onAccountRemoved = { accountId, removedSession -> common += accountId to removedSession },
+            onExplicitAccountRemoved = { accountId, removedSession -> explicit += accountId to removedSession },
+            apiFactory = { _, _, _, _ -> RecordingApi("alice", "config-a", failContactsWith = ApiException(401, "unauthorized")) },
+        )
+
+        assertThrows(ApiException::class.java) {
+            repository.refreshContacts(account.id)
+        }
+
+        assertEquals(listOf(account.id to session), common)
+        assertTrue(explicit.isEmpty())
+        assertTrue(auth.list().isEmpty())
+    }
 }
 
 private val subscription = WebPushSubscription(
@@ -273,6 +327,7 @@ private class RecordingApi(
     private val features: Set<String> = setOf("webpush_v1"),
     private val contactPages: Map<String, ContactPage>? = null,
     private val failedCursor: String? = null,
+    private val failContactsWith: RuntimeException? = null,
 ) : HouseholdApi {
     var claimedDeviceId: String? = null
     var claimedSubscription: WebPushSubscription? = null
@@ -284,6 +339,7 @@ private class RecordingApi(
     )
     override fun me() = Profile(login, login.replaceFirstChar(Char::uppercase))
     override fun contactsPage(limit: Int, cursor: String): ContactPage {
+        failContactsWith?.let { throw it }
         if (cursor == failedCursor) error("page failed")
         return contactPages?.getValue(cursor) ?: ContactPage(
             listOf(Contact(login, login), Contact("bob", "Bob")),

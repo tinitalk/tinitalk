@@ -26,6 +26,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalRippleConfiguration
@@ -45,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -58,24 +61,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
 import org.tinitalk.call.CallUiState
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.Contact
-import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
 import java.time.Instant
 import java.time.ZoneId
 
-private val contactAvatarColors = listOf(
-    Color(0xFF394A67),
-    Color(0xFF514464),
-    Color(0xFF30514D),
-    Color(0xFF60443B),
-    Color(0xFF4E5337),
-    Color(0xFF593F4C),
-)
-
 @Composable
 fun ContactScreen(
     contact: Contact,
+    contactAddress: ContactAddress,
+    photoTarget: ContactPhotoEditTarget? = null,
+    photoState: ContactPhotoEditorState = ContactPhotoEditorState(),
     identityKey: String = contact.login,
     accountServerUrl: String? = null,
     internetAvailable: Boolean = true,
@@ -89,8 +86,12 @@ fun ContactScreen(
     onRenameHandled: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
+    onChoosePhotoSource: (ContactPhotoEditTarget, ContactPhotoSource) -> Unit = { _, _ -> },
+    onRemovePhoto: (ContactPhotoEditTarget) -> Unit = {},
 ) {
     var renameVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
+    var photoActionsVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
+    var contactMenuVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     val name = contactDisplayName(contact.displayName)
     val action = contactCallAction(contact.login, ongoingCall, internetAvailable)
     val relevantUpdate = nameUpdate.takeIf { it.login == contact.login }
@@ -139,7 +140,76 @@ fun ContactScreen(
                         }
                     }
                     Spacer(Modifier.width(4.dp))
-                    Text("Контакт", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Контакт",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Box {
+                        IconButton(
+                            onClick = { contactMenuVisible = true },
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_more_vert),
+                                contentDescription = "Действия контакта $name",
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = contactMenuVisible,
+                            onDismissRequest = { contactMenuVisible = false },
+                            modifier = Modifier.widthIn(min = 260.dp),
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Переименовать",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_edit),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                },
+                                enabled = internetAvailable,
+                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-rename"),
+                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                                onClick = {
+                                    contactMenuVisible = false
+                                    onRenameHandled()
+                                    renameVisible = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Изменить фото",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_photo_camera),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                },
+                                enabled = photoTarget != null && !photoState.busy,
+                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-photo"),
+                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                                onClick = {
+                                    contactMenuVisible = false
+                                    photoActionsVisible = true
+                                },
+                            )
+                        }
+                    }
                 }
 
                 LazyColumn(
@@ -154,20 +224,45 @@ fun ContactScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            ContactAvatar(contact, name, 104.dp)
+                            ContactAvatar(
+                                address = contactAddress,
+                                displayName = name,
+                                fallbackLogin = contact.login,
+                                size = 208.dp,
+                                modifier = Modifier.testTag("contact-profile-avatar"),
+                                borderWidth = 2.dp,
+                                shadowElevation = 8.dp,
+                                showRefreshProgress = true,
+                            )
+                            photoTarget?.let { target ->
+                                if (photoActionsVisible) {
+                                    ContactPhotoActionSheet(
+                                        hasPhoto = photoState.hasPhoto,
+                                        busy = photoState.busy,
+                                        onGallery = {
+                                            photoActionsVisible = false
+                                            onChoosePhotoSource(target, ContactPhotoSource.Gallery)
+                                        },
+                                        onFiles = {
+                                            photoActionsVisible = false
+                                            onChoosePhotoSource(target, ContactPhotoSource.Files)
+                                        },
+                                        onRemove = {
+                                            photoActionsVisible = false
+                                            onRemovePhoto(target)
+                                        },
+                                        onDismiss = { photoActionsVisible = false },
+                                    )
+                                }
+                            }
                             Spacer(Modifier.height(22.dp))
                             Surface(
-                                onClick = {
-                                    onRenameHandled()
-                                    renameVisible = true
-                                },
-                                enabled = internetAvailable,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .widthIn(max = 420.dp)
                                     .heightIn(min = 56.dp)
                                     .semantics {
-                                        contentDescription = "Имя контакта: $name. Нажмите, чтобы изменить"
+                                        contentDescription = "Имя контакта: $name"
                                     },
                                 shape = RoundedCornerShape(18.dp),
                                 color = Color.Transparent,
@@ -177,7 +272,6 @@ fun ContactScreen(
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Spacer(Modifier.width(32.dp))
                                     Text(
                                         text = name,
                                         modifier = Modifier.weight(1f, fill = false),
@@ -187,13 +281,6 @@ fun ContactScreen(
                                         textAlign = TextAlign.Center,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Spacer(Modifier.width(10.dp))
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_edit),
-                                        contentDescription = null,
-                                        tint = BrandGold,
-                                        modifier = Modifier.size(22.dp),
                                     )
                                 }
                             }
@@ -387,27 +474,6 @@ private fun ContactHistoryMessage(
                 Spacer(Modifier.height(8.dp))
                 TextButton(onClick = onAction) { Text(action) }
             }
-        }
-    }
-}
-
-@Composable
-private fun ContactAvatar(contact: Contact, name: String, size: androidx.compose.ui.unit.Dp) {
-    val color = contactAvatarColors[contactColorIndex(contact.login, contactAvatarColors.size)]
-    Surface(
-        modifier = Modifier.size(size),
-        shape = CircleShape,
-        color = color,
-        border = BorderStroke(2.dp, BrandGold.copy(alpha = 0.42f)),
-        shadowElevation = 8.dp,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                contactInitial(name, contact.login),
-                color = Color(0xFFF6E8C0),
-                fontSize = 40.sp,
-                fontWeight = FontWeight.Bold,
-            )
         }
     }
 }

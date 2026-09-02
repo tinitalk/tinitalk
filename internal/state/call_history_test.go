@@ -340,15 +340,16 @@ func TestCallHistoryIncludesLatestUnreadMissedForEachContact(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []UnreadMissedContact{
-		{PeerLogin: "alice", StartedAt: started.Add(2 * time.Hour)},
-		{PeerLogin: "carol", StartedAt: started.Add(time.Hour)},
+		{PeerLogin: "alice", StartedAt: started.Add(2 * time.Hour), MissedCount: 2},
+		{PeerLogin: "carol", StartedAt: started.Add(time.Hour), MissedCount: 1},
 	}
 	if len(page.LatestUnreadMissed) != len(want) {
 		t.Fatalf("latest unread missed = %+v, want %+v", page.LatestUnreadMissed, want)
 	}
 	for i := range want {
 		if page.LatestUnreadMissed[i].PeerLogin != want[i].PeerLogin ||
-			!page.LatestUnreadMissed[i].StartedAt.Equal(want[i].StartedAt) {
+			!page.LatestUnreadMissed[i].StartedAt.Equal(want[i].StartedAt) ||
+			page.LatestUnreadMissed[i].MissedCount != want[i].MissedCount {
 			t.Fatalf("latest unread missed = %+v, want %+v", page.LatestUnreadMissed, want)
 		}
 	}

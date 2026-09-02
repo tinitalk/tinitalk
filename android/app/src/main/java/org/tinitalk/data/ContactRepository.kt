@@ -50,6 +50,7 @@ class ContactRepository internal constructor(
     private val authStore: AuthStore,
     private val webPushRegistration: AccountWebPushRegistration? = null,
     private val onAccountRemoved: (AccountId, Session) -> Unit = { _, _ -> },
+    private val onExplicitAccountRemoved: (AccountId, Session) -> Unit = { _, _ -> },
     private val contactCache: ContactCache? = null,
     private val apiFactory: (url: String, login: String, token: String, sessionId: String?) -> HouseholdApi =
         { url, login, token, sessionId -> UrlConnectionApiClient(url, login, token, sessionId) },
@@ -63,6 +64,7 @@ class ContactRepository internal constructor(
         authStore,
         null,
         { _, _ -> },
+        { _, _ -> },
         null,
         { url, login, token, _ -> apiFactory(url, login, token) },
     )
@@ -71,11 +73,13 @@ class ContactRepository internal constructor(
         context: Context,
         authStore: AuthStore,
         contactCache: ContactCache = ContactCache(SharedPreferencesKeyValueStore(context)),
+        onExplicitAccountRemoved: (AccountId, Session) -> Unit = { _, _ -> },
     ) : this(
-        authStore,
-        UnifiedPushAccountRegistration(context),
-        { accountId, session -> cleanupWebPushAccount(context, accountId, session) },
-        contactCache,
+        authStore = authStore,
+        webPushRegistration = UnifiedPushAccountRegistration(context),
+        onAccountRemoved = { accountId, session -> cleanupWebPushAccount(context, accountId, session) },
+        onExplicitAccountRemoved = onExplicitAccountRemoved,
+        contactCache = contactCache,
     )
 
     fun checkServer(url: String): ServerCheckResult {
@@ -288,6 +292,7 @@ class ContactRepository internal constructor(
         if (!authStore.removeIfCurrent(accountId, account.session)) return false
         contactCache?.remove(accountId)
         onAccountRemoved(accountId, account.session)
+        onExplicitAccountRemoved(accountId, account.session)
         return true
     }
 
@@ -333,9 +338,9 @@ private fun ContactPage.boundTo(accountId: AccountId, serverUrl: String): Accoun
     items = items.map { contact -> AccountContact(accountId, serverUrl, contact) },
 )
 
-private fun CallHistoryPage.boundTo(accountId: AccountId, session: Session? = null): AccountCallHistoryPage = AccountCallHistoryPage(
+private fun CallHistoryPage.boundTo(accountId: AccountId, session: Session): AccountCallHistoryPage = AccountCallHistoryPage(
     accountId = accountId,
-    items = items.map { item -> AccountHistory(accountId, item) },
+    items = items.map { item -> AccountHistory(accountId, normalizeServerUrl(session.url), item) },
     nextBefore = nextBefore,
     latestId = latestId,
     unread = CallUnreadState(unreadMissedCount, unreadMissed),

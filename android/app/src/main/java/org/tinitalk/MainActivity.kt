@@ -13,9 +13,11 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -23,11 +25,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.CallUiStateStore
+import org.tinitalk.contactPhotoAccountLifecycle
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.ApiException
 import org.tinitalk.data.AccountContactPage
@@ -48,6 +52,7 @@ import org.tinitalk.data.ContactCache
 import org.tinitalk.data.ServerCompatibilityException
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.httpsServerUrl
+import org.tinitalk.data.normalizeServerUrl
 import org.tinitalk.data.sameIdentity
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.network.NetworkAvailability
@@ -64,9 +69,13 @@ import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.AccountPage
 import org.tinitalk.ui.AccountSummary
 import org.tinitalk.ui.ContactNameViewModel
+import org.tinitalk.ui.ContactPhotoEditTarget
+import org.tinitalk.ui.ContactPhotoEditorViewModel
+import org.tinitalk.ui.ContactPhotoSource
 import org.tinitalk.ui.ContactHistoryState
 import org.tinitalk.ui.HistoryRefreshGate
 import org.tinitalk.ui.HISTORY_PAGE_SIZE
+import org.tinitalk.ui.LocalContactPhotoReader
 import org.tinitalk.ui.accountHistoryWindow
 import org.tinitalk.ui.isHistoryVisibleToUser
 import org.tinitalk.ui.shouldMarkHistoryRead
@@ -86,12 +95,19 @@ private const val SessionReplacedMessage = "Вход выполнен на др�
 class MainActivity : ComponentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val contactNameViewModel by viewModels<ContactNameViewModel>()
+    private val contactPhotoEditorViewModel by viewModels<ContactPhotoEditorViewModel>()
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { refreshPermissions() }
     private val microphonePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { refreshPermissions() }
+    private val contactPhotoGalleryLauncher = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> contactPhotoEditorViewModel.onPickerResult(uri) }
+    private val contactPhotoFilesLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> contactPhotoEditorViewModel.onPickerResult(uri) }
 
     private lateinit var repository: ContactRepository
     private lateinit var authStore: AuthStore
@@ -109,8 +125,12 @@ class MainActivity : ComponentActivity() {
     private var contactHistoryLogin: String? = null
     private var contactHistoryAccountId: AccountId? = null
     private val contactHistoryRefreshGate = HistoryRefreshGate()
+    private var nextContactOpenRequestId = 0L
+    private var contactOpenRequest by mutableStateOf<ContactOpenRequest?>(null)
     private var authGeneration = 0
     private var contactsSyncing = false
+    @Volatile
+    private var accountRemovalInProgress = false
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread { callUiState = state }
     }
@@ -152,68 +172,95 @@ class MainActivity : ComponentActivity() {
         val localStore = SharedPreferencesKeyValueStore(this)
         authStore = AuthStore(localStore, AndroidKeystoreTokenCipher())
         contactCache = ContactCache(localStore)
-        repository = ContactRepository(this, authStore, contactCache)
+        repository = ContactRepository(
+            this,
+            authStore,
+            contactCache,
+            onExplicitAccountRemoved = ::cleanupContactPhotosAfterExplicitAccountRemoval,
+        )
         network = networkAvailability()
+        contactPhotoEditorViewModel.configure(
+            processor = (application as TinitalkApplication).contactPhotoProcessor,
+            store = (application as TinitalkApplication).contactPhotoStore,
+            isTargetCurrent = ::isContactPhotoTargetCurrent,
+        )
+        applyNavigationIntent(intent)
         screenState = screenState.copy(networkAvailable = network.available)
         setContent {
             TiniTalkTheme(darkTheme = true) {
-                val contactNameUpdate = contactNameViewModel.state
-                val visibleScreenState = screenState.withContactUpdates(contactNameViewModel.updatedContacts)
-                LaunchedEffect(contactNameUpdate.authExpired) {
-                    if (contactNameUpdate.authExpired) {
-                        contactNameViewModel.reset()
-                        if (authStore.list().isEmpty()) {
-                            showError(ApiException(401, "unauthorized", contactNameUpdate.authReason))
+                CompositionLocalProvider(LocalContactPhotoReader provides (application as TinitalkApplication).contactPhotoStore) {
+                    val contactNameUpdate = contactNameViewModel.state
+                    val visibleScreenState = screenState.withContactUpdates(contactNameViewModel.updatedContacts)
+                    LaunchedEffect(contactNameUpdate.authExpired) {
+                        if (contactNameUpdate.authExpired) {
+                            contactNameViewModel.reset()
+                            if (authStore.list().isEmpty()) {
+                                showError(ApiException(401, "unauthorized", contactNameUpdate.authReason))
+                            }
                         }
                     }
-                }
-                SideEffect {
-                    WindowCompat.getInsetsController(window, window.decorView).apply {
-                        isAppearanceLightStatusBars = false
-                        isAppearanceLightNavigationBars = false
-                    }
-                }
-                MainScreen(
-                    state = visibleScreenState,
-                    contactNameUpdate = contactNameUpdate,
-                    ongoingCall = callUiState.takeIf {
-                        it.phase != CallPhase.Idle && it.phase != CallPhase.Ended
-                    },
-                    loginResetKey = loginResetKey,
-                    onSignIn = ::loadContacts,
-                    onCheckServer = repository::checkServer,
-                    onCheckServerDetails = repository::checkServerDetails,
-                    onRequestNotifications = ::requestNotificationPermission,
-                    onRequestMicrophone = ::requestMicrophonePermission,
-                    onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
-                    onRefreshPermissions = ::refreshPermissions,
-                    onCall = ::startCall,
-                    onRenameContact = { key, customName ->
-                        if (network.available) {
-                            contactNameViewModel.rename(repository, key, customName)
-                        } else {
-                            showNoInternetMessage()
+                    SideEffect {
+                        WindowCompat.getInsetsController(window, window.decorView).apply {
+                            isAppearanceLightStatusBars = false
+                            isAppearanceLightNavigationBars = false
                         }
-                    },
-                    onRenameHandled = contactNameViewModel::clearResult,
-                    onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
-                    onContactsVisible = { historyVisible = false },
-                    onRefreshContacts = ::refreshContacts,
-                    onContactsRefreshMessageHandled = ::clearContactsRefreshMessage,
-                    onHistoryVisible = ::showHistory,
-                    onLoadMoreHistory = ::loadMoreHistory,
-                    onContactHistoryVisible = ::showContactHistory,
-                    onContactHistoryHidden = ::hideContactHistory,
-                    onLoadMoreContactHistory = ::loadMoreContactHistory,
-                    onRetryContactHistory = ::retryContactHistory,
-                    onOpenProfile = { screenState = screenState.copy(accountPage = AccountPage.Profile) },
-                    onCloseProfile = { screenState = screenState.copy(accountPage = AccountPage.Main) },
-                    onOpenAddAccount = { screenState = screenState.copy(accountPage = AccountPage.AddAccount, addAccountErrorMessage = null) },
-                    onCloseAddAccount = { if (!screenState.addingAccount) screenState = screenState.copy(accountPage = AccountPage.Profile) },
-                    onAddAccount = ::addAccount,
-                    onRemoveAccount = ::removeAccount,
-                    onCheckAddAccountServer = repository::checkAddAccountServer,
-                )
+                    }
+                    MainScreen(
+                        state = visibleScreenState,
+                        contactNameUpdate = contactNameUpdate,
+                        ongoingCall = callUiState.takeIf {
+                            it.phase != CallPhase.Idle && it.phase != CallPhase.Ended
+                        },
+                        loginResetKey = loginResetKey,
+                        contactOpenRequest = contactOpenRequest,
+                        onContactOpenRequestHandled = ::consumeContactOpenRequest,
+                        onSignIn = ::loadContacts,
+                        onCheckServer = repository::checkServer,
+                        onCheckServerDetails = repository::checkServerDetails,
+                        onRequestNotifications = ::requestNotificationPermission,
+                        onRequestMicrophone = ::requestMicrophonePermission,
+                        onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
+                        onRefreshPermissions = ::refreshPermissions,
+                        onCall = ::startCall,
+                        onRenameContact = { key, customName ->
+                            if (network.available) {
+                                contactNameViewModel.rename(repository, key, customName)
+                            } else {
+                                showNoInternetMessage()
+                            }
+                        },
+                        onRenameHandled = contactNameViewModel::clearResult,
+                        onOpenCall = { startActivity(CallActivity.ongoingIntent(this)) },
+                        onContactsVisible = { historyVisible = false },
+                        onRefreshContacts = ::refreshContacts,
+                        onContactsRefreshMessageHandled = ::clearContactsRefreshMessage,
+                        onHistoryVisible = ::showHistory,
+                        onLoadMoreHistory = ::loadMoreHistory,
+                        onContactHistoryVisible = ::showContactHistory,
+                        onContactHistoryHidden = ::hideContactHistory,
+                        onLoadMoreContactHistory = ::loadMoreContactHistory,
+                        onRetryContactHistory = ::retryContactHistory,
+                        contactPhotoEditorState = contactPhotoEditorViewModel.state,
+                        onContactPhotoTargetVisible = contactPhotoEditorViewModel::onTargetVisible,
+                        onContactPhotoTargetHidden = contactPhotoEditorViewModel::onTargetHidden,
+                        onChooseContactPhoto = ::chooseContactPhoto,
+                        onRemoveContactPhoto = { target -> contactPhotoEditorViewModel.remove(target) },
+                        onCancelContactPhotoCrop = contactPhotoEditorViewModel::cancelCrop,
+                        onConfirmContactPhotoCrop = { crop -> contactPhotoEditorViewModel.save(crop) },
+                        onContactPhotoMessageShown = contactPhotoEditorViewModel::onMessageShown,
+                        onOpenProfile = { screenState = screenState.copy(accountPage = AccountPage.Profile) },
+                        onCloseProfile = { screenState = screenState.copy(accountPage = AccountPage.Main) },
+                        onOpenAddAccount = {
+                            screenState = screenState.copy(accountPage = AccountPage.AddAccount, addAccountErrorMessage = null)
+                        },
+                        onCloseAddAccount = {
+                            if (!screenState.addingAccount) screenState = screenState.copy(accountPage = AccountPage.Profile)
+                        },
+                        onAddAccount = ::addAccount,
+                        onRemoveAccount = ::removeAccount,
+                        onCheckAddAccountServer = repository::checkAddAccountServer,
+                    )
+                }
             }
         }
         CallUiStateStore.observe(callUiObserver)
@@ -224,6 +271,50 @@ class MainActivity : ComponentActivity() {
         network.observe(networkObserver)
         refreshPermissions()
         restoreContacts()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        applyNavigationIntent(intent)
+    }
+
+    private fun applyNavigationIntent(intent: Intent?) {
+        val peer = contactPeerFromIntent(intent)
+        if (peer == null) {
+            contactOpenRequest = null
+            return
+        }
+        contactOpenRequest = ContactOpenRequest(++nextContactOpenRequestId, peer)
+        if (screenState.accountPage != AccountPage.Main) {
+            screenState = screenState.copy(accountPage = AccountPage.Main)
+        }
+    }
+
+    private fun consumeContactOpenRequest(request: ContactOpenRequest) {
+        if (contactOpenRequest != request) return
+        contactOpenRequest = null
+        setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_MAIN))
+    }
+
+    private fun chooseContactPhoto(target: ContactPhotoEditTarget, source: ContactPhotoSource) {
+        if (!contactPhotoEditorViewModel.beginPicking(target, source)) return
+        when (source) {
+            ContactPhotoSource.Gallery -> contactPhotoGalleryLauncher.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            )
+            ContactPhotoSource.Files -> contactPhotoFilesLauncher.launch(arrayOf("image/*"))
+        }
+    }
+
+    private fun isContactPhotoTargetCurrent(target: ContactPhotoEditTarget): Boolean {
+        val account = authStore.get(target.accountId) ?: return false
+        if (normalizeServerUrl(account.session.url) != target.address.serverUrl) return false
+        return screenState.accountContacts.any { contact ->
+            contact.accountId == target.accountId &&
+                contact.login == target.address.login &&
+                contact.address == target.address
+        }
     }
 
     private fun restoreContacts() {
@@ -258,6 +349,7 @@ class MainActivity : ComponentActivity() {
         Thread {
             runCatching { repository.signIn(url, login, token, deviceId) }
                 .onSuccess { page ->
+                    contactPhotoAccountLifecycle(this).activateServer(serverUrl)
                     runOnUiThread {
                         if (isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
                             val account = repository.accounts().singleOrNull {
@@ -291,7 +383,13 @@ class MainActivity : ComponentActivity() {
         }
         when (val start = CallForegroundService.tryStartOutgoing(this, accountContact.peerKey, contact.displayName)) {
             is OutgoingCallStartResult.Started -> startActivity(
-                CallActivity.outgoingIntent(this, accountContact.peerKey, contact.displayName, start.key),
+                CallActivity.outgoingIntent(
+                    this,
+                    accountContact.peerKey,
+                    accountContact.address,
+                    contact.displayName,
+                    start.key,
+                ),
             )
             is OutgoingCallStartResult.Busy -> {
                 val pending = IncomingCallController().load(this)?.invite
@@ -786,12 +884,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun addAccount(url: String, login: String, token: String) {
-        if (!network.available || screenState.addingAccount) return
+        if (!network.available || screenState.addingAccount || accountRemovalInProgress) return
         screenState = screenState.copy(addingAccount = true, addAccountErrorMessage = null)
         val deviceId = DeviceIdentity.id(this)
         Thread {
             runCatching { repository.addAccount(url, login, token, deviceId) }
                 .onSuccess { added ->
+                    contactPhotoAccountLifecycle(this).activateServer(added.account.session.url)
                     accountAdditionHandoff.publish(
                         AccountAdditionOutcome.Added(
                             accountId = added.account.id,
@@ -875,16 +974,36 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun removeAccount(accountId: AccountId) {
-        if (!repository.removeAccount(accountId)) {
-            screenState = screenState.copy(accounts = repository.accounts().toAccountSummaries())
-            return
+        if (accountRemovalInProgress || screenState.addingAccount) return
+        accountRemovalInProgress = true
+        Thread {
+            val removed = repository.removeAccount(accountId)
+            val remaining = repository.accounts()
+            runOnUiThread {
+                accountRemovalInProgress = false
+                if (!removed) {
+                    screenState = screenState.copy(accounts = remaining.toAccountSummaries())
+                    return@runOnUiThread
+                }
+                if (remaining.isEmpty()) {
+                    resetToLogin()
+                    return@runOnUiThread
+                }
+                pruneRemovedAccount(accountId, remaining)
+            }
+        }.start()
+    }
+
+    private fun cleanupContactPhotosAfterExplicitAccountRemoval(accountId: AccountId, session: org.tinitalk.data.Session) {
+        val invalidated = CompletableFuture<Unit>()
+        mainHandler.post {
+            contactPhotoEditorViewModel.state.target
+                ?.takeIf { target -> target.accountId == accountId }
+                ?.let(contactPhotoEditorViewModel::onTargetHidden)
+            invalidated.complete(Unit)
         }
-        val remaining = repository.accounts()
-        if (remaining.isEmpty()) {
-            resetToLogin()
-            return
-        }
-        pruneRemovedAccount(accountId, remaining)
+        invalidated.join()
+        contactPhotoAccountLifecycle(this).removeServerAfterExplicitLogout(session.url)
     }
 
     private fun pruneRemovedAccount(accountId: AccountId, remaining: List<org.tinitalk.data.AccountRecord>) {
@@ -953,6 +1072,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         mainScreenResumed = true
+        cleanupStaleIncomingPresentation()
         consumeAccountAdditionIfResumed()
         refreshPermissions()
         when {
@@ -965,6 +1085,21 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         mainScreenResumed = false
         super.onPause()
+    }
+
+    private fun cleanupStaleIncomingPresentation() {
+        val pendingIncoming = IncomingCallController().load(this)
+        val serviceCall = CallServiceState.snapshot()
+        if (
+            pendingIncoming == null &&
+            (serviceCall.phase == CallPhase.Idle || serviceCall.phase == CallPhase.Ended)
+        ) {
+            IncomingCallNotifier(this).cancel()
+            val uiCall = CallUiStateStore.snapshot()
+            if (uiCall.direction == CallDirection.Incoming && uiCall.phase == CallPhase.Ringing) {
+                uiCall.callKey?.let(CallUiStateStore::reset) ?: CallUiStateStore.reset()
+            }
+        }
     }
 
     private fun refreshMissedCount() {

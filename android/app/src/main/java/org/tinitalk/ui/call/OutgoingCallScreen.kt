@@ -12,12 +12,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import org.tinitalk.data.ContactAddress
 import org.tinitalk.telecom.AudioEndpoint
 import org.tinitalk.ui.theme.CallRejectRed
 
 @Composable
 fun OutgoingCallScreen(
     callee: String,
+    contactAddress: ContactAddress? = null,
+    fallbackLogin: String = callee,
     status: String = "Звоним…",
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
@@ -28,7 +31,14 @@ fun OutgoingCallScreen(
 ) {
     var routePickerVisible by remember { mutableStateOf(false) }
 
-    CallScreenSurface(status = status, peerName = callee, pulsingAvatar = true) {
+    CallScreenSurface(
+        status = status,
+        peerName = callee,
+        contactAddress = contactAddress,
+        fallbackLogin = fallbackLogin,
+        pulsingAvatar = true,
+        prominentAvatar = true,
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
