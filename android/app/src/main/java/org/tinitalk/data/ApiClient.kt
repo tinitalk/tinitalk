@@ -95,7 +95,11 @@ data class UnreadMissedContact(
     @SerializedName("peer_login") val peerLogin: String,
     @SerializedName("started_at") val startedAt: Long,
     @SerializedName("peer_name") val peerName: String? = null,
-)
+    @SerializedName("missed_count") val missedCount: Int? = null,
+) {
+    fun normalized(): UnreadMissedContact =
+        if (missedCount == null || missedCount > 0) this else copy(missedCount = null)
+}
 data class CallUnreadState(
     @SerializedName("unread_missed_count") val unreadMissedCount: Int,
     @SerializedName("unread_missed") val unreadMissed: List<UnreadMissedContact>,
@@ -152,14 +156,17 @@ private data class CallHistoryPageWire(
         nextBefore,
         latestId,
         unreadMissedCount,
-        unreadMissed.orEmpty(),
+        unreadMissed.orEmpty().map(UnreadMissedContact::normalized),
     )
 }
 private data class CallHistoryReadResult(
     @SerializedName("unread_missed_count") val unreadMissedCount: Int,
     @SerializedName("unread_missed") val unreadMissed: List<UnreadMissedContact>?,
 ) {
-    fun toCallUnreadState() = CallUnreadState(unreadMissedCount, unreadMissed.orEmpty())
+    fun toCallUnreadState() = CallUnreadState(
+        unreadMissedCount,
+        unreadMissed.orEmpty().map(UnreadMissedContact::normalized),
+    )
 }
 
 private data class SessionClaimWire(@SerializedName("session_id") val sessionId: String)

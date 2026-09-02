@@ -16,6 +16,7 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Date(2026, 8, 26, 10, 30, 0, 0, time.UTC)
+	recordMissedHistoryCall(t, db, "call-older", started.Add(-time.Hour))
 	recordMissedHistoryCall(t, db, "call-1", started)
 	server := NewServer(db, Options{AllowInsecureLoopback: true})
 
@@ -38,9 +39,10 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 		LatestID          int64 `json:"latest_id"`
 		UnreadMissedCount int   `json:"unread_missed_count"`
 		UnreadMissed      []struct {
-			PeerLogin string `json:"peer_login"`
-			PeerName  string `json:"peer_name"`
-			StartedAt int64  `json:"started_at"`
+			PeerLogin   string `json:"peer_login"`
+			PeerName    string `json:"peer_name"`
+			StartedAt   int64  `json:"started_at"`
+			MissedCount int    `json:"missed_count"`
 		} `json:"unread_missed"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
@@ -59,10 +61,10 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 	if item.ID == 0 || item.StartedAt != 1787740200 || item.DurationSeconds != 0 {
 		t.Fatalf("history timing = %+v", item)
 	}
-	if page.LatestID != item.ID || page.NextBefore != 0 || page.UnreadMissedCount != 1 {
+	if page.LatestID != item.ID || page.NextBefore != item.ID || page.UnreadMissedCount != 2 {
 		t.Fatalf("history metadata = %+v", page)
 	}
-	if len(page.UnreadMissed) != 1 || page.UnreadMissed[0].PeerLogin != "alice" || page.UnreadMissed[0].PeerName != "Mom" || page.UnreadMissed[0].StartedAt != started.Unix() {
+	if len(page.UnreadMissed) != 1 || page.UnreadMissed[0].PeerLogin != "alice" || page.UnreadMissed[0].PeerName != "Mom" || page.UnreadMissed[0].StartedAt != started.Unix() || page.UnreadMissed[0].MissedCount != 2 {
 		t.Fatalf("unread missed contacts = %+v", page.UnreadMissed)
 	}
 }
@@ -109,6 +111,7 @@ func TestCallHistoryEndpointFiltersAndMarksOneContactRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Date(2026, 8, 26, 10, 30, 0, 0, time.UTC)
+	recordMissedHistoryCallFrom(t, db, "alice-old", "alice", "bob", started.Add(-time.Hour))
 	recordMissedHistoryCallFrom(t, db, "alice-call", "alice", "bob", started)
 	recordMissedHistoryCallFrom(t, db, "carol-call", "carol", "bob", started.Add(time.Hour))
 	server := NewServer(db, Options{AllowInsecureLoopback: true})
@@ -121,7 +124,7 @@ func TestCallHistoryEndpointFiltersAndMarksOneContactRead(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Items) != 1 || page.Items[0].PeerLogin != "alice" || page.UnreadMissedCount != 2 {
+	if len(page.Items) != 2 || page.Items[0].PeerLogin != "alice" || page.UnreadMissedCount != 3 {
 		t.Fatalf("filtered history = %+v", page)
 	}
 
@@ -133,8 +136,9 @@ func TestCallHistoryEndpointFiltersAndMarksOneContactRead(t *testing.T) {
 	var result struct {
 		UnreadMissedCount int `json:"unread_missed_count"`
 		UnreadMissed      []struct {
-			PeerLogin string `json:"peer_login"`
-			StartedAt int64  `json:"started_at"`
+			PeerLogin   string `json:"peer_login"`
+			StartedAt   int64  `json:"started_at"`
+			MissedCount int    `json:"missed_count"`
 		} `json:"unread_missed"`
 	}
 	if err := json.Unmarshal(read.Body.Bytes(), &result); err != nil {
@@ -143,7 +147,7 @@ func TestCallHistoryEndpointFiltersAndMarksOneContactRead(t *testing.T) {
 	if result.UnreadMissedCount != 1 {
 		t.Fatalf("unread after reading alice = %d, want 1", result.UnreadMissedCount)
 	}
-	if len(result.UnreadMissed) != 1 || result.UnreadMissed[0].PeerLogin != "carol" || result.UnreadMissed[0].StartedAt != started.Add(time.Hour).Unix() {
+	if len(result.UnreadMissed) != 1 || result.UnreadMissed[0].PeerLogin != "carol" || result.UnreadMissed[0].StartedAt != started.Add(time.Hour).Unix() || result.UnreadMissed[0].MissedCount != 1 {
 		t.Fatalf("unread contacts after reading alice = %+v", result.UnreadMissed)
 	}
 

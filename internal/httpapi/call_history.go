@@ -28,9 +28,10 @@ type callHistoryResponse struct {
 }
 
 type unreadMissedContact struct {
-	PeerLogin string `json:"peer_login"`
-	PeerName  string `json:"peer_name"`
-	StartedAt int64  `json:"started_at"`
+	PeerLogin   string `json:"peer_login"`
+	PeerName    string `json:"peer_name"`
+	StartedAt   int64  `json:"started_at"`
+	MissedCount int    `json:"missed_count"`
 }
 
 type callUnreadStateResponse struct {
@@ -130,9 +131,10 @@ func unreadMissedJSON(items []state.UnreadMissedContact) []unreadMissedContact {
 	result := make([]unreadMissedContact, 0, len(items))
 	for _, item := range items {
 		result = append(result, unreadMissedContact{
-			PeerLogin: item.PeerLogin,
-			PeerName:  item.PeerName,
-			StartedAt: item.StartedAt.Unix(),
+			PeerLogin:   item.PeerLogin,
+			PeerName:    item.PeerName,
+			StartedAt:   item.StartedAt.Unix(),
+			MissedCount: item.MissedCount,
 		})
 	}
 	return result
