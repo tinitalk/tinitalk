@@ -41,6 +41,7 @@ fun IncomingCallScreen(
         peerName = caller,
         contactAddress = contactAddress,
         fallbackLogin = fallbackLogin,
+        prominentAvatar = true,
     ) {
         Text(
             text = "Сдвиньте нужную кнопку вверх",

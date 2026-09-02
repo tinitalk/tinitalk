@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -43,6 +44,9 @@ import org.tinitalk.ui.ContactAvatar
 import org.tinitalk.ui.theme.CallBackgroundBottom
 import org.tinitalk.ui.theme.CallBackgroundTop
 
+internal fun prominentCallAvatarSize(fontScale: Float): Dp =
+    if (fontScale >= 1.5f) 168.dp else 224.dp
+
 @Composable
 internal fun CallScreenSurface(
     status: String,
@@ -52,10 +56,15 @@ internal fun CallScreenSurface(
     detail: String? = null,
     statusColor: Color = Color.White.copy(alpha = 0.76f),
     pulsingAvatar: Boolean = false,
+    prominentAvatar: Boolean = false,
     footer: @Composable ColumnScope.() -> Unit,
 ) {
     val compact = LocalDensity.current.fontScale >= 1.5f
-    val avatarSize = if (compact) 88.dp else 120.dp
+    val avatarSize = if (prominentAvatar) {
+        prominentCallAvatarSize(LocalDensity.current.fontScale)
+    } else {
+        if (compact) 88.dp else 120.dp
+    }
     val verticalPadding = if (compact) 12.dp else 24.dp
     val headerSpacing = if (compact) 12.dp else 28.dp
     val transition = rememberInfiniteTransition(label = "callerPulse")
@@ -98,6 +107,7 @@ internal fun CallScreenSurface(
             Box(
                 modifier = Modifier
                     .size(avatarSize)
+                    .testTag("call-peer-avatar")
                     .graphicsLayer(scaleX = avatarScale, scaleY = avatarScale),
             ) {
                 ContactAvatar(

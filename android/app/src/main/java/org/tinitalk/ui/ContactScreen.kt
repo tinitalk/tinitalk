@@ -166,7 +166,6 @@ fun ContactScreen(
                                     Text(
                                         "Переименовать",
                                         style = MaterialTheme.typography.titleMedium,
-                                        fontSize = 20.sp,
                                         fontWeight = FontWeight.SemiBold,
                                     )
                                 },
@@ -174,11 +173,11 @@ fun ContactScreen(
                                     Icon(
                                         painter = painterResource(R.drawable.ic_edit),
                                         contentDescription = null,
-                                        modifier = Modifier.size(30.dp),
+                                        modifier = Modifier.size(24.dp),
                                     )
                                 },
                                 enabled = internetAvailable,
-                                modifier = Modifier.heightIn(min = 72.dp).testTag("contact-menu-rename"),
+                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-rename"),
                                 contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
                                 onClick = {
                                     contactMenuVisible = false
@@ -191,7 +190,6 @@ fun ContactScreen(
                                     Text(
                                         "Изменить фото",
                                         style = MaterialTheme.typography.titleMedium,
-                                        fontSize = 20.sp,
                                         fontWeight = FontWeight.SemiBold,
                                     )
                                 },
@@ -199,11 +197,11 @@ fun ContactScreen(
                                     Icon(
                                         painter = painterResource(R.drawable.ic_photo_camera),
                                         contentDescription = null,
-                                        modifier = Modifier.size(30.dp),
+                                        modifier = Modifier.size(24.dp),
                                     )
                                 },
                                 enabled = photoTarget != null && !photoState.busy,
-                                modifier = Modifier.heightIn(min = 72.dp).testTag("contact-menu-photo"),
+                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-photo"),
                                 contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
                                 onClick = {
                                     contactMenuVisible = false
@@ -230,9 +228,11 @@ fun ContactScreen(
                                 address = contactAddress,
                                 displayName = name,
                                 fallbackLogin = contact.login,
-                                size = 104.dp,
+                                size = 208.dp,
+                                modifier = Modifier.testTag("contact-profile-avatar"),
                                 borderWidth = 2.dp,
                                 shadowElevation = 8.dp,
+                                showRefreshProgress = true,
                             )
                             photoTarget?.let { target ->
                                 if (photoActionsVisible) {

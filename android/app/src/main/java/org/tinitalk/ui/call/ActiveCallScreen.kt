@@ -60,6 +60,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -279,6 +280,7 @@ private fun RegularAudioActiveCallScreen(
         fallbackLogin = fallbackLogin,
         detail = durationText,
         statusColor = statusColor,
+        prominentAvatar = true,
     ) {
         Text(
             text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
@@ -323,12 +325,18 @@ private fun ConstrainedAudioActiveCallScreen(
     onCamera: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
+    val avatarSize = prominentCallAvatarSize(LocalDensity.current.fontScale)
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(CallBackgroundTop, CallBackgroundBottom))),
     ) {
-        VideoFallbackContent(peerName, contactAddress, fallbackLogin)
+        VideoFallbackContent(
+            peerName = peerName,
+            contactAddress = contactAddress,
+            fallbackLogin = fallbackLogin,
+            avatarSize = avatarSize,
+        )
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -782,13 +790,15 @@ private fun VideoFallbackContent(
     peerName: String,
     contactAddress: ContactAddress? = null,
     fallbackLogin: String = peerName,
+    avatarSize: Dp = 120.dp,
 ) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         ContactAvatar(
             address = contactAddress,
             displayName = peerName,
             fallbackLogin = fallbackLogin,
-            size = 120.dp,
+            size = avatarSize,
+            modifier = Modifier.testTag("call-peer-avatar"),
             borderWidth = 0.dp,
         )
     }
@@ -1122,6 +1132,7 @@ fun EndedCallScreen(
         peerName = peerName,
         contactAddress = contactAddress,
         fallbackLogin = fallbackLogin,
+        prominentAvatar = true,
     ) {
         Spacer(Modifier.height(18.dp))
     }

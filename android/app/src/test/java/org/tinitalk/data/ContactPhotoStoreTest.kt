@@ -1,11 +1,16 @@
 package org.tinitalk.data
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.util.LruCache
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.OutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -58,6 +63,44 @@ class ContactPhotoStoreTest {
         val loaded = store.loadBitmap(address, 64)
 
         assertEquals(Color.BLUE, loaded!!.getPixel(10, 10))
+    }
+
+    @Test
+    fun decodeThatOverlapsReplacementRetriesAndNeverCachesOldPhoto() {
+        val firstDecodeFinished = CountDownLatch(1)
+        val allowFirstDecodeToFinish = CountDownLatch(1)
+        val decodeCalls = AtomicInteger()
+        val store = newStore(
+            decoder = { file, _ ->
+                BitmapFactory.decodeFile(file.absolutePath).also {
+                    if (decodeCalls.incrementAndGet() == 1) {
+                        firstDecodeFinished.countDown()
+                        check(allowFirstDecodeToFinish.await(5, TimeUnit.SECONDS)) {
+                            "first decode was not released"
+                        }
+                    }
+                }
+            },
+        )
+        store.replace(store.beginReplace(address), solid(Color.RED)).getOrThrow()
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            val loading = executor.submit<Bitmap?> { store.loadBitmap(address, 64) }
+            assertTrue(firstDecodeFinished.await(5, TimeUnit.SECONDS))
+            store.replace(store.beginReplace(address), solid(Color.BLUE)).getOrThrow()
+            allowFirstDecodeToFinish.countDown()
+
+            val loaded = loading.get(5, TimeUnit.SECONDS)
+
+            assertEquals(Color.BLUE, loaded!!.getPixel(loaded.width / 2, loaded.height / 2))
+            val cached = store.peekBitmap(address, 64)
+            assertEquals(Color.BLUE, cached!!.getPixel(cached.width / 2, cached.height / 2))
+            assertTrue(decodeCalls.get() >= 2)
+        } finally {
+            allowFirstDecodeToFinish.countDown()
+            executor.shutdownNow()
+        }
     }
 
     @Test
@@ -177,7 +220,8 @@ class ContactPhotoStoreTest {
 
     private fun newStore(
         encoder: ContactPhotoEncoder = WebpContactPhotoEncoder,
-    ): ContactPhotoStore = ContactPhotoStore(temp.newFolder("photos"), lru(), encoder)
+        decoder: ((File, Int) -> Bitmap?)? = null,
+    ): ContactPhotoStore = ContactPhotoStore(temp.newFolder("photos"), lru(), encoder, decoder)
 
     private fun lru(): LruCache<String, Bitmap> = object : LruCache<String, Bitmap>(1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount

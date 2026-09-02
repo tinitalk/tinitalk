@@ -37,6 +37,7 @@ fun OutgoingCallScreen(
         contactAddress = contactAddress,
         fallbackLogin = fallbackLogin,
         pulsingAvatar = true,
+        prominentAvatar = true,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

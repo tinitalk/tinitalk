@@ -52,6 +52,7 @@ class ContactPhotoStore(
     private val root: File,
     private val bitmapCache: LruCache<String, Bitmap>,
     private val encoder: ContactPhotoEncoder = WebpContactPhotoEncoder,
+    private val decoder: ((File, Int) -> Bitmap?)? = null,
 ) : ContactPhotoReader {
     private val lock = Any()
     private val versionRoot = File(root, "v1")
@@ -80,29 +81,48 @@ class ContactPhotoStore(
 
     override fun loadBitmap(address: ContactAddress, targetPixels: Int): Bitmap? {
         val bucket = bucketFor(targetPixels)
-        val file = synchronized(lock) { fileFor(address).takeIf(File::isFile) } ?: return null
-        val cacheKey = synchronized(lock) { cacheKey(address, file, bucket) }
-        synchronized(lock) {
-            val indexedKey = cacheIndex[cacheIndexKey(address, bucket)]
-            if (indexedKey != null && indexedKey != cacheKey) {
-                bitmapCache.remove(indexedKey)
-                cacheIndex.remove(cacheIndexKey(address, bucket))
+        val indexKey = cacheIndexKey(address, bucket)
+        while (true) {
+            val (file, expectedCacheKey) = synchronized(lock) {
+                val currentFile = fileFor(address).takeIf(File::isFile) ?: return null
+                val currentCacheKey = cacheKey(address, currentFile, bucket)
+                val indexedKey = cacheIndex[indexKey]
+                if (indexedKey != null && indexedKey != currentCacheKey) {
+                    bitmapCache.remove(indexedKey)
+                    cacheIndex.remove(indexKey)
+                }
+                bitmapCache.get(currentCacheKey)?.let { bitmap ->
+                    cacheIndex[indexKey] = currentCacheKey
+                    return bitmap
+                }
+                currentFile to currentCacheKey
             }
-            bitmapCache.get(cacheKey)?.let { bitmap ->
-                cacheIndex[cacheIndexKey(address, bucket)] = cacheKey
-                return bitmap
-            }
-        }
 
-        val decoded = decodeBitmap(file, bucket)
-        synchronized(lock) {
-            if (decoded == null) {
-                cacheIndex.remove(cacheIndexKey(address, bucket))?.let(bitmapCache::remove)
-                return null
+            val customDecoder = decoder
+            val decoded = if (customDecoder == null) {
+                decodeBitmap(file, bucket)
+            } else {
+                customDecoder(file, bucket)
             }
-            bitmapCache.put(cacheKey, decoded)
-            cacheIndex[cacheIndexKey(address, bucket)] = cacheKey
-            return decoded
+
+            var retry = false
+            val stableBitmap = synchronized(lock) {
+                val currentFile = fileFor(address).takeIf(File::isFile)
+                val currentCacheKey = currentFile?.let { cacheKey(address, it, bucket) }
+                if (currentCacheKey != expectedCacheKey) {
+                    retry = true
+                    null
+                } else if (decoded == null) {
+                    cacheIndex.remove(indexKey)?.let(bitmapCache::remove)
+                    null
+                } else {
+                    bitmapCache.put(expectedCacheKey, decoded)
+                    cacheIndex[indexKey] = expectedCacheKey
+                    decoded
+                }
+            }
+            if (!retry) return stableBitmap
+            decoded?.recycle()
         }
     }
 

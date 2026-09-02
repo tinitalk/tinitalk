@@ -60,7 +60,6 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -699,7 +698,6 @@ private fun HomeScreen(
             displayName = contactDisplayName(contact.contact.displayName),
         )
     }
-    val photoRevision by LocalContactPhotoReader.current.revision.collectAsState()
     val historyWindow = accountHistoryWindow(
         loaded = state.accountHistory,
         visibleLimit = state.historyVisibleLimit,
@@ -758,7 +756,7 @@ private fun HomeScreen(
             onContactsRefreshMessageHandled()
         }
     }
-    LaunchedEffect(selectedPhotoTarget, photoRevision) {
+    LaunchedEffect(selectedPhotoTarget) {
         selectedPhotoTarget?.let(onContactPhotoTargetVisible)
     }
     LaunchedEffect(contactPhotoEditorState.message) {

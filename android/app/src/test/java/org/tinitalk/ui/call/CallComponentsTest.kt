@@ -5,10 +5,16 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.ConnectionHealth
@@ -69,6 +75,107 @@ class CallComponentsTest {
         composeRule.waitUntil(timeoutMillis = 5_000) { reader.requested.isNotEmpty() }
         assertEquals(address, reader.requested.first())
         assertEquals(1, composeRule.onAllNodesWithTag("contact-avatar-photo").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun callSurfaceUsesLargePeerAvatarForRingingAndDialingScreens() {
+        render {
+            CallScreenSurface(
+                status = "Звоним…",
+                peerName = "Алексей",
+                prominentAvatar = true,
+            ) {}
+        }
+
+        composeRule.onNodeWithTag("call-peer-avatar")
+            .assertWidthIsEqualTo(224.dp)
+            .assertHeightIsEqualTo(224.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun activeAudioCallUsesTheSameLargeAvatarAsIncomingCall() {
+        render {
+            ActiveCallScreen(
+                peerName = "Алексей",
+                durationText = "00:03",
+                muted = false,
+                connectionHealth = ConnectionHealth.Good,
+                currentEndpoint = null,
+                availableEndpoints = emptyList(),
+                videoState = CallVideoState(allowed = false),
+                onMute = {},
+                onSelectEndpoint = {},
+                onCamera = {},
+                onSwitchCamera = {},
+                onVideoVisibilityChanged = {},
+                onEnd = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("call-peer-avatar")
+            .assertWidthIsEqualTo(224.dp)
+            .assertHeightIsEqualTo(224.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun activeAudioCallUsesTheSameCompactAvatarAsIncomingCall() {
+        render {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.5f)) {
+                ActiveCallScreen(
+                    peerName = "Алексей",
+                    durationText = "00:03",
+                    muted = false,
+                    connectionHealth = ConnectionHealth.Good,
+                    currentEndpoint = null,
+                    availableEndpoints = emptyList(),
+                    videoState = CallVideoState(allowed = false),
+                    onMute = {},
+                    onSelectEndpoint = {},
+                    onCamera = {},
+                    onSwitchCamera = {},
+                    onVideoVisibilityChanged = {},
+                    onEnd = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("call-peer-avatar")
+            .assertWidthIsEqualTo(168.dp)
+            .assertHeightIsEqualTo(168.dp)
+    }
+
+    @Test
+    fun endedCallScreenUsesTheSameCompactAvatarAsRingingScreens() {
+        render {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.5f)) {
+                EndedCallScreen(
+                    peerName = "Алексей",
+                    reason = CallEndReason.RemoteHangup,
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("call-peer-avatar")
+            .assertWidthIsEqualTo(168.dp)
+            .assertHeightIsEqualTo(168.dp)
+    }
+
+    @Test
+    fun endedCallScreenUsesTheSameLargeAvatarAsRingingScreens() {
+        render {
+            EndedCallScreen(
+                peerName = "Алексей",
+                reason = CallEndReason.RemoteHangup,
+            )
+        }
+
+        composeRule.onNodeWithTag("call-peer-avatar")
+            .assertWidthIsEqualTo(224.dp)
+            .assertHeightIsEqualTo(224.dp)
     }
 
     @Test

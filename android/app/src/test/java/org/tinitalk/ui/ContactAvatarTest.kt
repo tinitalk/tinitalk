@@ -4,18 +4,26 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.ContactPhotoReader
 import org.tinitalk.ui.theme.TiniTalkTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,6 +38,38 @@ class ContactAvatarTest {
     val composeRule = createEmptyComposeRule()
 
     private val address = ContactAddress.of("https://example.com", "alex")
+
+    @Test
+    fun initialScalesWithLargeAvatarAndKeepsTheSameVisualRatioAtLargeFontScale() {
+        listOf(44f, 50f, 52f).forEach { avatarSizeDp ->
+            assertEquals(20f, contactAvatarInitialFontSizeSp(avatarSizeDp, 1f), 0.01f)
+        }
+        assertEquals(28.12f, contactAvatarInitialFontSizeSp(74f, 1f), 0.01f)
+        assertEquals(79.04f, contactAvatarInitialFontSizeSp(208f, 1f), 0.01f)
+        assertEquals(85.12f, contactAvatarInitialFontSizeSp(224f, 1f), 0.01f)
+        assertEquals(42.56f, contactAvatarInitialFontSizeSp(168f, 1.5f), 0.01f)
+    }
+
+    @Test
+    fun fallbackActuallyUsesScaledInitialSize() {
+        val layoutResults = mutableListOf<TextLayoutResult>()
+        render(NoPhotoReader) {
+            CompositionLocalProvider(LocalDensity provides Density(density = 1f, fontScale = 1f)) {
+                ContactAvatar(
+                    address = null,
+                    displayName = "A",
+                    fallbackLogin = "alex",
+                    size = 208.dp,
+                )
+            }
+        }
+
+        composeRule.onNode(hasText("A")).performSemanticsAction(SemanticsActions.GetTextLayoutResult) {
+            it(layoutResults)
+        }
+
+        assertEquals(79.04.sp, layoutResults.single().layoutInput.style.fontSize)
+    }
 
     @Test
     fun addressNullShowsInitialFallbackImmediately() {
