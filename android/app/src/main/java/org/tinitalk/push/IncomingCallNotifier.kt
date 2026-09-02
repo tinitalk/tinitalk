@@ -9,19 +9,29 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.drawable.Icon
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import androidx.core.app.Person as CompatPerson
+import androidx.core.content.ContextCompat
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.DrawableCompat
+import androidx.core.graphics.drawable.IconCompat
 import org.tinitalk.CallActivity
 import org.tinitalk.MainActivity
 import org.tinitalk.R
+import org.tinitalk.contactOpenIntent
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSnapshot
 import org.tinitalk.call.AccountCallKey
@@ -36,10 +46,15 @@ import org.tinitalk.data.AccountRecord
 import org.tinitalk.data.Session
 import org.tinitalk.contactPhotoNotificationLoader
 import org.tinitalk.telecom.IncomingCallController
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.Duration
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 import org.json.JSONObject
 
 data class IncomingInvite(
@@ -108,6 +123,8 @@ internal class AccountMissedBadgeCounter(initial: Map<AccountId, Int> = emptyMap
 
     @Synchronized fun snapshot(): Map<AccountId, Int> = counts.toMap()
     @Synchronized fun isCurrentRevision(value: Long): Boolean = revision == value
+    @Synchronized fun currentUpdate(): AccountMissedBadgeUpdate =
+        AccountMissedBadgeUpdate(true, counts.values.sum(), revision)
 }
 
 internal data class AccountMissedBadgeUpdate(val applied: Boolean, val count: Int, val revision: Long)
@@ -118,7 +135,15 @@ internal data class MissedCallTarget(
     val latest: IncomingInvite?,
     val latestUnread: UnreadMissedContact?,
     val redialBinding: CallSessionBinding?,
-)
+    val missedCount: Int?,
+) {
+    val login: String
+        get() = latestUnread?.peerLogin?.takeIf(String::isNotBlank)
+            ?: requireNotNull(latest?.callerLogin?.takeIf(String::isNotBlank))
+    val name: String?
+        get() = latestUnread?.peerName?.takeIf(String::isNotBlank)
+            ?: latest?.caller?.takeIf(String::isNotBlank)
+}
 
 internal class AccountMissedBadgeStore(private val preferences: SharedPreferences) {
     fun load(): Map<AccountId, Int> = runCatching {
@@ -137,39 +162,134 @@ internal class AccountMissedBadgeUpdater(
     private val execute: ((() -> Unit) -> Unit),
 ) {
     private val observers = CopyOnWriteArraySet<(Int) -> Unit>()
-    private val targets = mutableMapOf<AccountId, MissedCallTarget>()
+    private val targets = mutableMapOf<AccountId, MutableMap<String, MissedCallTarget>>()
+    private val pendingReconcileAccounts = linkedSetOf<AccountId>()
 
     fun sync(active: Collection<AccountId>, persisted: Map<AccountId, Int>): Int = synchronized(this) {
+        markInactiveAccountsForReconcile(active, persisted.keys)
         retainActiveTargets(active)
         counter.sync(active, persisted).also(::notifyObservers)
     }
-    fun syncPersisted(active: Collection<AccountId>, load: () -> Map<AccountId, Int>, save: (Map<AccountId, Int>) -> Unit): Int = synchronized(this) {
+    fun syncPersisted(
+        active: Collection<AccountId>,
+        load: () -> Map<AccountId, Int>,
+        save: (Map<AccountId, Int>) -> Unit,
+        publish: ((Int) -> Unit)? = null,
+    ): Int = synchronized(this) {
+        val persisted = load()
+        markInactiveAccountsForReconcile(active, persisted.keys)
         retainActiveTargets(active)
-        counter.sync(active, load()).also { count -> save(counter.snapshot()); notifyObservers(count) }
+        counter.sync(active, persisted).also { count ->
+            save(counter.snapshot())
+            notifyObservers(count)
+            publish?.let { callback ->
+                val update = counter.currentUpdate()
+                execute { publishIfCurrent(update, callback) }
+            }
+        }
     }
     fun beginRefresh(accountId: AccountId): AccountBadgeRefreshId? = counter.beginRefresh(accountId)
     fun observe(observer: (Int) -> Unit) { observers += observer; observer(counter.snapshot().values.sum()) }
     fun removeObserver(observer: (Int) -> Unit) { observers -= observer }
     fun remove(accountId: AccountId, persist: (Map<AccountId, Int>) -> Unit, publish: (Int) -> Unit) = synchronized(this) {
+        pendingReconcileAccounts += accountId
         targets.remove(accountId)
         counter.remove(accountId).also { update -> persist(counter.snapshot()); notifyObservers(update.count); execute { publishIfCurrent(update, publish) } }
     }
-    fun update(accountId: AccountId, refreshId: AccountBadgeRefreshId?, count: Int, persist: (Map<AccountId, Int>) -> Unit, publish: (Int) -> Unit, target: MissedCallTarget? = null): AccountMissedBadgeUpdate = synchronized(this) {
+    fun update(
+        accountId: AccountId,
+        refreshId: AccountBadgeRefreshId?,
+        count: Int,
+        persist: (Map<AccountId, Int>) -> Unit,
+        publish: (Int) -> Unit,
+        newTargets: List<MissedCallTarget> = emptyList(),
+        authoritativeTargets: Boolean = false,
+    ): AccountMissedBadgeUpdate = synchronized(this) {
         counter.update(accountId, refreshId, count).also { update ->
-            if (update.applied) { updateTarget(accountId, count, target); persist(counter.snapshot()); notifyObservers(update.count); execute { publishIfCurrent(update, publish) } }
+            if (update.applied) {
+                pendingReconcileAccounts += accountId
+                updateTargets(accountId, count, newTargets, authoritativeTargets)
+                persist(counter.snapshot())
+                notifyObservers(update.count)
+                execute { publishIfCurrent(update, publish) }
+            }
         }
     }
-    fun updateImmediately(accountId: AccountId, refreshId: AccountBadgeRefreshId?, count: Int, persist: (Map<AccountId, Int>) -> Unit, publish: (Int) -> Unit, target: MissedCallTarget? = null): AccountMissedBadgeUpdate = synchronized(this) {
+    fun updateImmediately(
+        accountId: AccountId,
+        refreshId: AccountBadgeRefreshId?,
+        count: Int,
+        persist: (Map<AccountId, Int>) -> Unit,
+        publish: (Int) -> Unit,
+        newTargets: List<MissedCallTarget> = emptyList(),
+        authoritativeTargets: Boolean = false,
+    ): AccountMissedBadgeUpdate = synchronized(this) {
         counter.update(accountId, refreshId, count).also { update ->
-            if (update.applied) { updateTarget(accountId, count, target); persist(counter.snapshot()); notifyObservers(update.count); publish(update.count) }
+            if (update.applied) {
+                pendingReconcileAccounts += accountId
+                updateTargets(accountId, count, newTargets, authoritativeTargets)
+                persist(counter.snapshot())
+                notifyObservers(update.count)
+                publish(update.count)
+            }
         }
     }
-    private fun updateTarget(accountId: AccountId, count: Int, target: MissedCallTarget?) {
-        if (count <= 0) targets.remove(accountId) else if (target != null) targets[accountId] = target
+    private fun updateTargets(
+        accountId: AccountId,
+        count: Int,
+        newTargets: List<MissedCallTarget>,
+        authoritativeTargets: Boolean,
+    ) {
+        if (count <= 0) {
+            targets.remove(accountId)
+            return
+        }
+        if (authoritativeTargets) {
+            targets[accountId] = newTargets
+                .filter { it.accountId == accountId }
+                .associateByTo(linkedMapOf(), MissedCallTarget::login)
+            return
+        }
+        if (newTargets.isEmpty()) return
+        val accountTargets = targets.getOrPut(accountId, ::linkedMapOf)
+        newTargets.filter { it.accountId == accountId }.forEach { candidate ->
+            val current = accountTargets[candidate.login]
+            if (current == null || candidate.occurredAt >= current.occurredAt) {
+                accountTargets[candidate.login] = candidate.copy(
+                    missedCount = listOfNotNull(candidate.missedCount, current?.missedCount).maxOrNull(),
+                )
+            }
+        }
+    }
+    private fun markInactiveAccountsForReconcile(
+        active: Collection<AccountId>,
+        persistedAccounts: Collection<AccountId>,
+    ) {
+        val allowed = active.toSet()
+        pendingReconcileAccounts += (targets.keys + counter.snapshot().keys + persistedAccounts) - allowed
     }
     private fun retainActiveTargets(active: Collection<AccountId>) = targets.keys.retainAll(active.toSet())
-    fun newestTarget(): MissedCallTarget? = synchronized(this) {
-        targets.values.maxWithOrNull(compareBy<MissedCallTarget> { it.occurredAt }.thenBy { it.accountId.value })
+    fun targetsSnapshot(): List<MissedCallTarget> = synchronized(this) {
+        targets.values.flatMap { it.values }.toList()
+    }
+    fun publishTargetIfCurrent(
+        count: Int,
+        accountId: AccountId,
+        login: String,
+        matches: (MissedCallTarget) -> Boolean,
+        publish: (MissedCallTarget) -> Unit,
+    ): Boolean = synchronized(this) {
+        if (counter.snapshot().values.sum() != count) return@synchronized false
+        val target = targets[accountId]?.get(login) ?: return@synchronized false
+        if (!matches(target)) return@synchronized false
+        publish(target)
+        true
+    }
+    fun pendingReconcileAccounts(): Set<AccountId> = synchronized(this) {
+        pendingReconcileAccounts.toSet()
+    }
+    fun markReconciled(accounts: Set<AccountId>) = synchronized(this) {
+        pendingReconcileAccounts.removeAll(accounts)
     }
     private fun publishIfCurrent(update: AccountMissedBadgeUpdate, publish: (Int) -> Unit) = synchronized(this) {
         if (counter.isCurrentRevision(update.revision)) publish(update.count)
@@ -300,6 +420,55 @@ private object IncomingRingtone {
     }
 }
 
+private const val NotificationPhotoCornerRadiusFraction = 0.24f
+private const val MissedContactPlaceholderPixels = 256
+private const val MissedContactPlaceholderBackground = 0xFF0F172A.toInt()
+private const val MissedContactPlaceholderForeground = 0xFFD4AF37.toInt()
+
+internal fun roundedNotificationPhoto(source: Bitmap): Bitmap {
+    val size = min(source.width, source.height)
+    val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val halfSize = size / 2f
+    val cornerRadius = size * NotificationPhotoCornerRadiusFraction
+    val innerHalfSize = halfSize - cornerRadius
+    val left = (source.width - size) / 2
+    val top = (source.height - size) / 2
+    val row = IntArray(size)
+    for (y in 0 until size) {
+        source.getPixels(row, 0, size, left, top + y, size, 1)
+        for (x in 0 until size) {
+            val dx = (abs(x + 0.5f - halfSize) - innerHalfSize).coerceAtLeast(0f)
+            val dy = (abs(y + 0.5f - halfSize) - innerHalfSize).coerceAtLeast(0f)
+            val coverage = (cornerRadius + 0.5f - sqrt(dx * dx + dy * dy)).coerceIn(0f, 1f)
+            val alpha = Color.alpha(row[x])
+            row[x] = if (coverage <= 0f || alpha == 0) {
+                Color.TRANSPARENT
+            } else {
+                (row[x] and 0x00FFFFFF) or ((alpha * coverage).roundToInt() shl 24)
+            }
+        }
+        output.setPixels(row, 0, size, 0, y, size, 1)
+    }
+    return output
+}
+
+internal fun missedContactPlaceholder(
+    context: Context,
+    size: Int = MissedContactPlaceholderPixels,
+): Bitmap {
+    require(size > 0) { "placeholder size must be positive" }
+    val square = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
+        eraseColor(MissedContactPlaceholderBackground)
+    }
+    val person = DrawableCompat.wrap(
+        checkNotNull(ContextCompat.getDrawable(context, R.drawable.ic_person)),
+    ).mutate()
+    DrawableCompat.setTint(person, MissedContactPlaceholderForeground)
+    person.setBounds(0, 0, size, size)
+    person.draw(Canvas(square))
+    return roundedNotificationPhoto(square).also { square.recycle() }
+}
+
 class IncomingCallNotifier(
     private val context: Context,
     photoLoader: ContactPhotoNotificationLoader? = null,
@@ -307,6 +476,7 @@ class IncomingCallNotifier(
     private val photoLoader: ContactPhotoNotificationLoader by lazy {
         photoLoader ?: contactPhotoNotificationLoader(context)
     }
+    private val missedContactPlaceholder by lazy { missedContactPlaceholder(context) }
 
     fun show(invite: IncomingInvite) {
         val mode = currentIncomingCallPresentation(context, appVisible = false)
@@ -369,14 +539,15 @@ class IncomingCallNotifier(
             @Suppress("DEPRECATION")
             Notification.Builder(context)
         }
-        bitmap?.let(builder::setLargeIcon)
+        val notificationPhoto = bitmap?.let(::roundedNotificationPhoto)
+        notificationPhoto?.let(builder::setLargeIcon)
         val personBuilder = if (Build.VERSION.SDK_INT >= 28) {
             Person.Builder()
                 .setName(invite.caller.ifEmpty { "TiniTalk" })
                 .setImportant(true)
                 .also { person ->
                     if (Build.VERSION.SDK_INT >= 31) {
-                        bitmap?.let { person.setIcon(Icon.createWithBitmap(it)) }
+                        notificationPhoto?.let { person.setIcon(Icon.createWithBitmap(it)) }
                     }
                 }
         } else {
@@ -401,6 +572,7 @@ class IncomingCallNotifier(
                 .setContentIntent(fullScreen)
                 .setOngoing(true)
                 .setTimeoutAfter(Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0))
+                .setBadgeIconType(Notification.BADGE_ICON_NONE)
             if (mode == IncomingCallPresentationMode.FullScreen) {
                 builder.setFullScreenIntent(fullScreen, true)
             }
@@ -457,7 +629,7 @@ class IncomingCallNotifier(
     /** Hydrates only the compact persisted count map; contacts/history remain in memory. */
     internal fun syncMissedAccounts(accounts: Collection<AccountId>) {
         val store = AccountMissedBadgeStore(context.getSharedPreferences("tinitalk", Context.MODE_PRIVATE))
-        AccountMissedBadges.syncPersisted(accounts, store::load, store::save)
+        AccountMissedBadges.syncPersisted(accounts, store::load, store::save, ::publishMissedNotifications)
     }
 
     internal fun beginAccountMissedCountRefresh(accountId: AccountId): AccountBadgeRefreshId? =
@@ -472,15 +644,17 @@ class IncomingCallNotifier(
         immediate: Boolean = false,
     ): AccountMissedBadgeUpdate {
         val store = AccountMissedBadgeStore(context.getSharedPreferences("tinitalk", Context.MODE_PRIVATE))
-        val target = missedCallTarget(accountId, unread, latest, redialBinding)
+        val targets = missedCallTargets(accountId, unread, latest, redialBinding)
+        val publish: (Int) -> Unit = ::publishMissedNotifications
         return if (immediate) {
             AccountMissedBadges.updateImmediately(
                 accountId,
                 refreshId,
                 unread.unreadMissedCount,
                 store::save,
-                ::publishNewestMissedCount,
-                target = target,
+                publish,
+                newTargets = targets,
+                authoritativeTargets = latest == null || unread.unreadMissed.isNotEmpty(),
             )
         } else {
             AccountMissedBadges.update(
@@ -488,15 +662,16 @@ class IncomingCallNotifier(
                 refreshId,
                 unread.unreadMissedCount,
                 store::save,
-                ::publishNewestMissedCount,
-                target = target,
+                publish,
+                newTargets = targets,
+                authoritativeTargets = true,
             )
         }
     }
 
     internal fun removeAccountMissedCount(accountId: AccountId) {
         val store = AccountMissedBadgeStore(context.getSharedPreferences("tinitalk", Context.MODE_PRIVATE))
-        AccountMissedBadges.remove(accountId, store::save, ::publishNewestMissedCount)
+        AccountMissedBadges.remove(accountId, store::save, ::publishMissedNotifications)
     }
 
     /** Aggregate observer for the account-scoped counter; legacy observers must not drive multi-account UI. */
@@ -510,64 +685,96 @@ class IncomingCallNotifier(
         updateAccountMissedState(accountId, CallUnreadState(current.coerceAtLeast(1), emptyList()), refreshId, invite, immediate = true)
     }
 
-    private fun missedCallTarget(
+    private fun missedCallTargets(
         accountId: AccountId,
         unread: CallUnreadState,
         latest: IncomingInvite?,
         redialBinding: CallSessionBinding?,
-    ): MissedCallTarget? {
-        val historyTarget = unread.unreadMissed
+    ): List<MissedCallTarget> {
+        val inviteTarget = latest?.takeIf { invite ->
+            invite.accountId == accountId && !invite.callerLogin.isNullOrBlank()
+        }
+        val historyByLogin = unread.unreadMissed
             .filter { it.peerLogin.isNotBlank() }
-            .maxByOrNull { it.startedAt }
-        val inviteTarget = latest?.takeIf { it.accountId == accountId }
-        return MissedCallTarget(
-            occurredAt = historyTarget?.startedAt
-                ?: inviteTarget?.expiresAt?.minusSeconds(IncomingCallTtlSeconds)?.epochSecond
-                ?: return null,
-            accountId = accountId,
-            latest = inviteTarget,
-            latestUnread = historyTarget,
-            redialBinding = redialBinding,
+            .groupBy(UnreadMissedContact::peerLogin)
+        val historyTargets = historyByLogin
+            .mapNotNull { (_, entries) -> entries.maxByOrNull(UnreadMissedContact::startedAt) }
+            .map { historyTarget ->
+                val knownCount = historyTarget.missedCount?.takeIf { it > 0 }
+                    ?: when {
+                        historyByLogin.size == 1 -> unread.unreadMissedCount.coerceAtLeast(1)
+                        unread.unreadMissedCount == historyByLogin.size -> 1
+                        else -> null
+                    }
+                MissedCallTarget(
+                    occurredAt = historyTarget.startedAt,
+                    accountId = accountId,
+                    latest = inviteTarget?.takeIf { it.callerLogin == historyTarget.peerLogin },
+                    latestUnread = historyTarget,
+                    redialBinding = redialBinding,
+                    missedCount = knownCount,
+                )
+            }
+        if (historyTargets.isNotEmpty()) return historyTargets
+        return listOfNotNull(
+            inviteTarget?.let { invite ->
+                MissedCallTarget(
+                    occurredAt = invite.expiresAt.minusSeconds(IncomingCallTtlSeconds).epochSecond,
+                    accountId = accountId,
+                    latest = invite,
+                    latestUnread = null,
+                    redialBinding = redialBinding,
+                    missedCount = 1,
+                )
+            },
         )
     }
 
-    private fun publishNewestMissedCount(count: Int) {
-        val target = AccountMissedBadges.newestTarget()
-        publishMissedCount(
-            count = count,
-            latest = target?.latest,
-            latestUnreadLogin = target?.latestUnread?.peerLogin,
-            latestUnreadName = target?.latestUnread?.peerName,
-            accountId = target?.accountId,
-            redialBinding = target?.redialBinding,
-        )
-    }
-
-    private fun publishMissedCount(
-        count: Int,
-        latest: IncomingInvite?,
-        latestUnreadLogin: String? = null,
-        latestUnreadName: String? = null,
-        accountId: AccountId? = latest?.accountId,
-        redialBinding: CallSessionBinding? = latest?.sessionBinding,
-    ) {
+    private fun publishMissedNotifications(count: Int) {
         ensureMissedChannel()
         val manager = context.getSystemService(NotificationManager::class.java)
+        val reconcileAccounts = AccountMissedBadges.pendingReconcileAccounts()
         if (count <= 0) {
-            manager.cancel(MissedNotificationId)
+            dismissAllMissedNotifications(manager)
+            AccountMissedBadges.markReconciled(reconcileAccounts)
             return
         }
-        val redialLogin = latestUnreadLogin?.takeIf(String::isNotBlank)
-            ?: latest?.callerLogin?.takeIf(String::isNotBlank)
-        val matchingLatest = latest?.takeIf { it.callerLogin == redialLogin }
-        val redialName = latestUnreadName?.takeIf(String::isNotBlank)
-            ?: matchingLatest?.caller?.takeIf(String::isNotBlank)
-            ?: redialLogin
+        cancelInactiveAccountMissedChildren(manager, AccountMissedBadges.snapshot().keys)
+        val targets = AccountMissedBadges.targetsSnapshot()
+            .sortedWith(compareByDescending<MissedCallTarget> { it.occurredAt }.thenBy { it.login })
+        val desiredAccountTags = targets
+            .groupBy(MissedCallTarget::accountId)
+            .mapValues { (_, accountTargets) -> accountTargets.mapTo(mutableSetOf(), ::missedChildTag) }
+        reconcileAccounts.forEach { accountId ->
+            cancelStaleAccountMissedChildren(manager, accountId, desiredAccountTags[accountId].orEmpty())
+        }
+        targets.forEach { target -> publishMissedChild(manager, count, target) }
+        publishMissedSummary(manager, count, targets)
+        AccountMissedBadges.markReconciled(reconcileAccounts)
+    }
+
+    private fun publishMissedChild(
+        manager: NotificationManager,
+        totalCount: Int,
+        target: MissedCallTarget,
+        photoBitmap: Bitmap? = null,
+        loadPhoto: Boolean = true,
+    ) {
+        val redialLogin = target.login
+        val redialName = target.name ?: redialLogin
+        val photoAddress = missedPhotoAddress(target)
+        val sourcePhoto = photoBitmap ?: photoAddress?.let(photoLoader::peek)
+        val notificationPhoto = sourcePhoto?.let(::roundedNotificationPhoto) ?: missedContactPlaceholder
+        val childTag = missedChildTag(target)
+        val openAppIntent = contactOpenIntent(
+            context,
+            AccountPeerKey(target.accountId, redialLogin),
+            childTag,
+        )
         val openApp = PendingIntent.getActivity(
             context,
-            0,
-            Intent(context, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            MissedChildNotificationId,
+            openAppIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -578,32 +785,27 @@ class IncomingCallNotifier(
         }
         builder
             .setSmallIcon(R.drawable.ic_call_missed)
-            .setContentTitle(if (count == 1) "Пропущенный звонок" else "Пропущенные звонки")
-            .setContentText(
-                redialName?.let { name ->
-                    if (count == 1) name else "$count ${callsWord(count)} · $name"
-                } ?: "$count ${missedCallsWord(count)}",
-            )
+            .setContentTitle(redialName)
+            .setContentText(missedTargetText(target.missedCount))
             .setCategory(Notification.CATEGORY_MISSED_CALL)
             .setContentIntent(openApp)
             .setAutoCancel(false)
             .setOngoing(true)
-            .setNumber(count)
+            .setWhen(target.occurredAt * 1_000L)
+            .setShowWhen(true)
+            .setGroup(MissedNotificationGroupKey)
+            .setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+            .setNumber(target.missedCount ?: 1)
             .setBadgeIconType(Notification.BADGE_ICON_SMALL)
             .setOnlyAlertOnce(true)
-        redialBinding
+        target.redialBinding
             ?.takeIf { !it.sessionId.isNullOrBlank() }
-            ?.takeIf {
-                shouldOfferMissedRedial(
-                    redialLogin,
-                    accountId != null && (latest == null || latest.accountId == accountId),
-                )
-            }
+            ?.takeIf { shouldOfferMissedRedial(redialLogin, true) }
             ?.let { binding ->
-                val id = requireNotNull(accountId)
-                val login = requireNotNull(redialLogin)
+                val id = target.accountId
+                val login = redialLogin
                 val peer = AccountPeerKey(id, login)
-                val redialKey = matchingLatest?.key ?: AccountCallKey(id, "missed:$login")
+                val redialKey = target.latest?.key ?: AccountCallKey(id, "missed:$login")
                 val redialOwner = AccountCallOwner(redialKey, binding)
                 val redial = PendingIntent.getActivity(
                     context,
@@ -619,12 +821,246 @@ class IncomingCallNotifier(
                 builder.addAction(
                     Notification.Action.Builder(
                         Icon.createWithResource(context, R.drawable.ic_call),
-                        if (count == 1) "Перезвонить" else "Перезвонить последнему",
+                        "Перезвонить",
                         redial,
                     ).build(),
                 )
             }
-        manager.notify(MissedNotificationId, builder.build())
+        val usesConversationLayout = applyMissedConversationStyle(
+            builder = builder,
+            target = target,
+            address = photoAddress,
+            callerName = redialName,
+            count = target.missedCount,
+            photo = notificationPhoto,
+            openAppIntent = openAppIntent,
+        )
+        if (!usesConversationLayout) builder.setLargeIcon(notificationPhoto)
+        manager.notify(childTag, MissedChildNotificationId, builder.build())
+        if (loadPhoto && sourcePhoto == null && photoAddress != null) {
+            enqueueMissedPhotoRefresh(totalCount, target, photoAddress)
+        }
+    }
+
+    private fun publishMissedSummary(
+        manager: NotificationManager,
+        count: Int,
+        targets: List<MissedCallTarget>,
+    ) {
+        val contactCount = manager.activeNotifications.count { notification ->
+            notification.id == MissedChildNotificationId &&
+                notification.tag?.startsWith(MissedChildTagPrefix) == true
+        }
+        val displayCount = maxOf(
+            count,
+            contactCount,
+            targets.sumOf { target -> target.missedCount ?: 1 },
+        )
+        val openAppIntent = missedOpenIntent("all")
+        val openApp = PendingIntent.getActivity(
+            context,
+            MissedSummaryNotificationId,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(context, MissedChannelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+        val style = Notification.InboxStyle()
+        targets.take(MaxMissedSummaryLines).forEach { target ->
+            style.addLine(
+                when (val missedCount = target.missedCount) {
+                    null -> "${target.name ?: target.login} — пропущенные звонки"
+                    1 -> target.name ?: target.login
+                    else -> "${target.name ?: target.login} — $missedCount ${callsWord(missedCount)}"
+                },
+            )
+        }
+        builder
+            .setSmallIcon(R.drawable.ic_call_missed)
+            .setContentTitle(if (displayCount == 1) "Пропущенный звонок" else "Пропущенные звонки")
+            .setContentText(
+                if (contactCount > 1) "$displayCount ${missedCallsWord(displayCount)} от $contactCount ${contactsWord(contactCount)}"
+                else "$displayCount ${missedCallsWord(displayCount)}",
+            )
+            .setStyle(style.setSummaryText("$displayCount ${missedCallsWord(displayCount)}"))
+            .setCategory(Notification.CATEGORY_MISSED_CALL)
+            .setContentIntent(openApp)
+            .setAutoCancel(false)
+            .setOngoing(true)
+            .setGroup(MissedNotificationGroupKey)
+            .setGroupSummary(true)
+            .setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+            .setNumber(displayCount)
+            .setBadgeIconType(Notification.BADGE_ICON_SMALL)
+            .setOnlyAlertOnce(true)
+        manager.notify(MissedSummaryNotificationId, builder.build())
+    }
+
+    private fun applyMissedConversationStyle(
+        builder: Notification.Builder,
+        target: MissedCallTarget,
+        address: ContactAddress?,
+        callerName: String,
+        count: Int?,
+        photo: Bitmap,
+        openAppIntent: Intent,
+    ): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+        val shortcutId = missedConversationShortcutId(target, address)
+        val shortcutIcon = IconCompat.createWithBitmap(photo)
+        val shortcutPerson = CompatPerson.Builder()
+            .setName(callerName)
+            .setKey(shortcutId)
+            .setIcon(shortcutIcon)
+            .setImportant(true)
+            .build()
+        val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
+            .setShortLabel(callerName)
+            .setLongLabel(callerName)
+            .setIntent(openAppIntent)
+            .setIcon(shortcutIcon)
+            .setPerson(shortcutPerson)
+            .setIsConversation()
+            .build()
+        val published = runCatching {
+            ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
+        }.getOrDefault(false)
+        if (!published) return false
+
+        val caller = Person.Builder()
+            .setName(callerName)
+            .setKey(shortcutId)
+            .setIcon(Icon.createWithBitmap(photo))
+            .setImportant(true)
+            .build()
+        val self = Person.Builder()
+            .setName("TiniTalk")
+            .setKey("tinitalk-self")
+            .build()
+        val message = missedTargetText(count)
+        builder
+            .setStyle(
+                Notification.MessagingStyle(self)
+                    .setGroupConversation(false)
+                    .addMessage(message, System.currentTimeMillis(), caller),
+            )
+            .setShortcutId(shortcutId)
+            .addPerson(caller)
+        return true
+    }
+
+    private fun missedConversationShortcutId(target: MissedCallTarget, address: ContactAddress?): String {
+        val identity = "${target.accountId.value}\u0000${address?.serverUrl.orEmpty()}\u0000${target.login}"
+        return "missed_${stableMissedDigest(identity)}"
+    }
+
+    private fun enqueueMissedPhotoRefresh(
+        count: Int,
+        target: MissedCallTarget,
+        address: ContactAddress,
+    ) {
+        val revision = photoLoader.revision
+        val requestKey = "${missedChildTag(target)}:${target.occurredAt}:${target.missedCount}"
+        photoLoader.load(address, requestKey, revision) { loadedKey, capturedRevision, bitmap ->
+            if (loadedKey != requestKey || bitmap == null) return@load
+            if (capturedRevision != photoLoader.revision) return@load
+            AccountMissedBadges.publishTargetIfCurrent(
+                count = count,
+                accountId = target.accountId,
+                login = target.login,
+                matches = { currentTarget ->
+                    currentTarget.occurredAt == target.occurredAt &&
+                        currentTarget.missedCount == target.missedCount &&
+                        missedPhotoAddress(currentTarget) == address
+                },
+            ) { currentTarget ->
+                publishMissedChild(
+                    manager = context.getSystemService(NotificationManager::class.java),
+                    totalCount = count,
+                    target = currentTarget,
+                    photoBitmap = bitmap,
+                    loadPhoto = false,
+                )
+            }
+        }
+    }
+
+    private fun missedPhotoAddress(target: MissedCallTarget): ContactAddress? {
+        return missedPhotoAddress(target.login, target.latest, target.redialBinding)
+    }
+
+    private fun missedChildTag(target: MissedCallTarget): String {
+        val address = missedPhotoAddress(target)
+        val contactIdentity = if (address != null) "${address.serverUrl}\u0000${address.login}" else target.login
+        return missedAccountTagPrefix(target.accountId) + stableMissedDigest(contactIdentity)
+    }
+
+    private fun missedAccountTagPrefix(accountId: AccountId): String =
+        "$MissedChildTagPrefix${stableMissedDigest(accountId.value)}:"
+
+    private fun stableMissedDigest(value: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+        return buildString(24) {
+            digest.take(12).forEach { byte ->
+                val unsigned = byte.toInt() and 0xff
+                append("0123456789abcdef"[unsigned ushr 4])
+                append("0123456789abcdef"[unsigned and 0x0f])
+            }
+        }
+    }
+
+    private fun cancelStaleAccountMissedChildren(
+        manager: NotificationManager,
+        accountId: AccountId,
+        desiredTags: Set<String>,
+    ) {
+        val accountPrefix = missedAccountTagPrefix(accountId)
+        manager.activeNotifications
+            .filter { it.id == MissedChildNotificationId && it.tag?.startsWith(accountPrefix) == true }
+            .filterNot { it.tag in desiredTags }
+            .forEach { manager.cancel(it.tag, it.id) }
+    }
+
+    private fun cancelInactiveAccountMissedChildren(
+        manager: NotificationManager,
+        activeAccounts: Collection<AccountId>,
+    ) {
+        val activePrefixes = activeAccounts.mapTo(mutableSetOf(), ::missedAccountTagPrefix)
+        manager.activeNotifications
+            .filter { active ->
+                active.id == MissedChildNotificationId &&
+                    active.tag?.startsWith(MissedChildTagPrefix) == true &&
+                    activePrefixes.none { prefix -> active.tag?.startsWith(prefix) == true }
+            }
+            .forEach { manager.cancel(it.tag, it.id) }
+    }
+
+    private fun dismissAllMissedNotifications(manager: NotificationManager) {
+        manager.activeNotifications
+            .filter { it.id == MissedChildNotificationId && it.tag?.startsWith(MissedChildTagPrefix) == true }
+            .forEach { manager.cancel(it.tag, it.id) }
+        manager.cancel(MissedSummaryNotificationId)
+    }
+
+    private fun missedOpenIntent(target: String): Intent = Intent(context, MainActivity::class.java)
+        .setAction(Intent.ACTION_VIEW)
+        .setData(Uri.parse("tinitalk://missed/$target"))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+
+    private fun missedPhotoAddress(
+        login: String?,
+        latest: IncomingInvite?,
+        redialBinding: CallSessionBinding?,
+    ): ContactAddress? {
+        val normalizedLogin = login?.takeIf(String::isNotBlank) ?: return null
+        val serverUrl = redialBinding?.serverUrl?.takeIf(String::isNotBlank)
+            ?: latest?.sessionBinding?.serverUrl?.takeIf(String::isNotBlank)
+            ?: return null
+        return ContactAddress.of(serverUrl, normalizedLogin)
     }
 
     private fun incomingPhotoAddress(invite: IncomingInvite): ContactAddress? =
@@ -696,6 +1132,12 @@ class IncomingCallNotifier(
         )
     }
 
+    private fun missedTargetText(count: Int?): String = when (count) {
+        null -> "Пропущенные звонки"
+        1 -> "Пропущенный звонок"
+        else -> "$count ${missedCallsWord(count)}"
+    }
+
     private fun missedCallsWord(count: Int): String {
         val lastTwo = count % 100
         if (lastTwo in 11..14) return "пропущенных вызовов"
@@ -716,12 +1158,25 @@ class IncomingCallNotifier(
         }
     }
 
+    private fun contactsWord(count: Int): String {
+        val lastTwo = count % 100
+        if (lastTwo in 11..14) return "контактов"
+        return when (count % 10) {
+            1 -> "контакта"
+            else -> "контактов"
+        }
+    }
+
     companion object {
         private const val ChannelId = "incoming_calls_v2"
         private const val InAppChannelId = "incoming_calls_in_app_v1"
         private const val MissedChannelId = "missed_calls_v2"
+        private const val MissedNotificationGroupKey = "org.tinitalk.MISSED_CALLS"
+        private const val MissedChildTagPrefix = "tt.missed.v2."
         internal const val NotificationId = 11
-        private const val MissedNotificationId = 12
+        private const val MissedSummaryNotificationId = 12
+        private const val MissedChildNotificationId = 13
+        private const val MaxMissedSummaryLines = 5
         private const val IncomingCallTtlSeconds = 30L
     }
 }

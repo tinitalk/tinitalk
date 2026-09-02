@@ -96,4 +96,47 @@ class MissedBadgeCounterTest {
         assertEquals(listOf(3), published)
     }
 
+    @Test
+    fun latestPublishReconcilesEveryAccountWhoseEarlierPublishWasSuppressed() {
+        val a = AccountId("a")
+        val b = AccountId("b")
+        val pending = ArrayDeque<() -> Unit>()
+        val published = mutableListOf<Pair<Int, Set<AccountId>>>()
+        val updater = AccountMissedBadgeUpdater(AccountMissedBadgeCounter()) { pending.addLast(it) }
+        val publish: (Int) -> Unit = { count ->
+            val accounts = updater.pendingReconcileAccounts()
+            published += count to accounts
+            updater.markReconciled(accounts)
+        }
+        updater.sync(listOf(a, b), emptyMap())
+
+        updater.update(a, updater.beginRefresh(a), 2, {}, publish)
+        updater.updateImmediately(b, updater.beginRefresh(b), 1, {}, publish)
+        pending.removeFirst().invoke()
+
+        assertEquals(listOf(3 to setOf(a, b)), published)
+        assertTrue(updater.pendingReconcileAccounts().isEmpty())
+    }
+
+    @Test
+    fun persistedSyncReplacesThePublicationThatItInvalidates() {
+        val account = AccountId("account")
+        val pending = ArrayDeque<() -> Unit>()
+        val published = mutableListOf<Pair<Int, Set<AccountId>>>()
+        val updater = AccountMissedBadgeUpdater(AccountMissedBadgeCounter()) { pending.addLast(it) }
+        val publish: (Int) -> Unit = { count ->
+            val accounts = updater.pendingReconcileAccounts()
+            published += count to accounts
+            updater.markReconciled(accounts)
+        }
+        updater.sync(listOf(account), emptyMap())
+        updater.update(account, updater.beginRefresh(account), 1, {}, publish)
+        updater.syncPersisted(listOf(account), { mapOf(account to 1) }, {}, publish)
+
+        pending.removeFirst().invoke()
+        pending.removeFirst().invoke()
+
+        assertEquals(listOf(1 to setOf(account)), published)
+    }
+
 }

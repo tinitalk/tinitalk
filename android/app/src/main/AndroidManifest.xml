@@ -19,8 +19,8 @@
 
     <application
         android:name=".TinitalkApplication"
-        android:icon="@drawable/ic_launcher_settings_v5"
-        android:roundIcon="@drawable/ic_launcher_settings_v5"
+        android:icon="@mipmap/ic_launcher_system_badge"
+        android:roundIcon="@mipmap/ic_launcher_system_badge"
         android:theme="@style/AppTheme"
         android:label="TiniTalk"
         android:allowBackup="false"

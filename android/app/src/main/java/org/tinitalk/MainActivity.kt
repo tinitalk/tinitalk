@@ -125,6 +125,8 @@ class MainActivity : ComponentActivity() {
     private var contactHistoryLogin: String? = null
     private var contactHistoryAccountId: AccountId? = null
     private val contactHistoryRefreshGate = HistoryRefreshGate()
+    private var nextContactOpenRequestId = 0L
+    private var contactOpenRequest by mutableStateOf<ContactOpenRequest?>(null)
     private var authGeneration = 0
     private var contactsSyncing = false
     @Volatile
@@ -182,6 +184,7 @@ class MainActivity : ComponentActivity() {
             store = (application as TinitalkApplication).contactPhotoStore,
             isTargetCurrent = ::isContactPhotoTargetCurrent,
         )
+        applyNavigationIntent(intent)
         screenState = screenState.copy(networkAvailable = network.available)
         setContent {
             TiniTalkTheme(darkTheme = true) {
@@ -209,6 +212,8 @@ class MainActivity : ComponentActivity() {
                             it.phase != CallPhase.Idle && it.phase != CallPhase.Ended
                         },
                         loginResetKey = loginResetKey,
+                        contactOpenRequest = contactOpenRequest,
+                        onContactOpenRequestHandled = ::consumeContactOpenRequest,
                         onSignIn = ::loadContacts,
                         onCheckServer = repository::checkServer,
                         onCheckServerDetails = repository::checkServerDetails,
@@ -266,6 +271,30 @@ class MainActivity : ComponentActivity() {
         network.observe(networkObserver)
         refreshPermissions()
         restoreContacts()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        applyNavigationIntent(intent)
+    }
+
+    private fun applyNavigationIntent(intent: Intent?) {
+        val peer = contactPeerFromIntent(intent)
+        if (peer == null) {
+            contactOpenRequest = null
+            return
+        }
+        contactOpenRequest = ContactOpenRequest(++nextContactOpenRequestId, peer)
+        if (screenState.accountPage != AccountPage.Main) {
+            screenState = screenState.copy(accountPage = AccountPage.Main)
+        }
+    }
+
+    private fun consumeContactOpenRequest(request: ContactOpenRequest) {
+        if (contactOpenRequest != request) return
+        contactOpenRequest = null
+        setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_MAIN))
     }
 
     private fun chooseContactPhoto(target: ContactPhotoEditTarget, source: ContactPhotoSource) {

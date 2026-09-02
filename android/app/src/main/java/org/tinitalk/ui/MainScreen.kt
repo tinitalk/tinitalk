@@ -84,6 +84,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.BuildConfig
+import org.tinitalk.ContactOpenRequest
 import org.tinitalk.R
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
@@ -319,6 +320,8 @@ fun MainScreen(
     contactNameUpdate: ContactNameUpdateState,
     ongoingCall: CallUiState?,
     loginResetKey: Int,
+    contactOpenRequest: ContactOpenRequest? = null,
+    onContactOpenRequestHandled: (ContactOpenRequest) -> Unit = {},
     onSignIn: (url: String, login: String, token: String) -> Unit,
     onCheckServer: (url: String) -> ServerCheckResult,
     onCheckServerDetails: (url: String) -> ServerCheckDetails,
@@ -356,6 +359,9 @@ fun MainScreen(
     onCheckAddAccountServer: (String) -> ServerCheckResult = onCheckServer,
 ) {
     var aboutVisible by rememberSaveable(state.signedIn) { mutableStateOf(false) }
+    LaunchedEffect(contactOpenRequest) {
+        if (contactOpenRequest != null) aboutVisible = false
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
@@ -401,6 +407,8 @@ fun MainScreen(
                 )
                 else -> HomeScreen(
                     state = state,
+                    contactOpenRequest = contactOpenRequest,
+                    onContactOpenRequestHandled = onContactOpenRequestHandled,
                     contactNameUpdate = contactNameUpdate,
                     ongoingCall = ongoingCall,
                     onCall = onCall,
@@ -645,6 +653,8 @@ private fun PermissionItem(
 @Composable
 private fun HomeScreen(
     state: MainScreenState,
+    contactOpenRequest: ContactOpenRequest?,
+    onContactOpenRequestHandled: (ContactOpenRequest) -> Unit,
     contactNameUpdate: ContactNameUpdateState,
     ongoingCall: CallUiState?,
     onCall: (AccountContact) -> Unit,
@@ -700,6 +710,23 @@ private fun HomeScreen(
         .filter { it.id in state.historyUnavailableAccounts }
         .map { serverAddress(it.serverUrl) }
         .distinct()
+
+    LaunchedEffect(contactOpenRequest, visibleContacts, state.accounts) {
+        val request = contactOpenRequest ?: return@LaunchedEffect
+        if (state.accounts.none { it.id == request.peer.accountId }) {
+            onContactOpenRequestHandled(request)
+            return@LaunchedEffect
+        }
+        val requestedContact = visibleContacts.firstOrNull { it.peerKey == request.peer }
+            ?: return@LaunchedEffect
+        selectedPhotoTarget
+            ?.takeIf { selectedContactKey != request.peer }
+            ?.let(onContactPhotoTargetHidden)
+        pagerState.scrollToPage(0)
+        selectedContactAccountId = requestedContact.accountId.value
+        selectedContactLogin = requestedContact.login
+        onContactOpenRequestHandled(request)
+    }
 
     BackHandler(
         enabled = shouldReturnToContactsOnBack(
