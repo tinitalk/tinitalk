@@ -1,10 +1,8 @@
 GOARCH ?= amd64
 GRADLE_ARGS ?=
 GRADLE_FLAGS ?= --no-daemon
-SERVER_URL ?= https://tinitalk.example.com
-CLIENT_GRADLE_ARGS = -PtinitalkServerUrl=$(SERVER_URL) $(GRADLE_ARGS)
-DEBUG_CLIENT_GRADLE_ARGS = $(CLIENT_GRADLE_ARGS) -PtinitalkAbi=all
-MIN_CLIENT_GRADLE_ARGS = $(CLIENT_GRADLE_ARGS) -PtinitalkAbi=arm64
+DEBUG_CLIENT_GRADLE_ARGS = $(GRADLE_ARGS) -PtinitalkAbi=all
+MIN_CLIENT_GRADLE_ARGS = $(GRADLE_ARGS) -PtinitalkAbi=arm64
 
 .PHONY: server client client-min test check clean
 

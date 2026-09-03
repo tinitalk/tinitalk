@@ -5,11 +5,6 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-val tinitalkServerUrl = providers.gradleProperty("tinitalkServerUrl")
-    .getOrElse("https://tinitalk.example.com")
-    .replace("\\", "\\\\")
-    .replace("\"", "\\\"")
-
 val tinitalkAbi = providers.gradleProperty("tinitalkAbi").getOrElse("all")
 require(tinitalkAbi == "arm64" || tinitalkAbi == "all") {
     "tinitalkAbi must be 'arm64' or 'all'"
@@ -43,7 +38,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
         buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
-        buildConfigField("String", "SERVER_URL", "\"$tinitalkServerUrl\"")
         if (tinitalkAbi == "arm64") {
             ndk {
                 abiFilters += "arm64-v8a"

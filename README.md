@@ -171,17 +171,8 @@ make check
   удаления приложения собирай их на том же компьютере и сохрани
   `%USERPROFILE%\.android\debug.keystore` (на Linux это
   `~/.android/debug.keystore`).
-- По умолчанию экран входа использует `https://tinitalk.example.com`. Другой
-  адрес можно зашить в APK при сборке:
-
-```bash
-make client SERVER_URL=https://talk.example.com
-```
-
-  При прямом запуске Gradle используй
-  `-PtinitalkServerUrl=https://talk.example.com` и `-PtinitalkAbi=arm64` либо
-  `-PtinitalkAbi=all`. Адрес по-прежнему можно изменить вручную в настройках
-  сервера на экране входа.
+- Адрес self-hosted сервера вводится или вставляется на экране входа; в APK
+  адрес по умолчанию не зашивается.
 - Установи `dist/tinitalk-min.apk` на ARM64-телефон либо
   `dist/tinitalk-debug.apk`, если архитектура неизвестна. Открой приложение
   один раз, войди и выдай
