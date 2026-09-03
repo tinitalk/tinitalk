@@ -120,6 +120,39 @@ class CallComponentsTest {
 
     @Test
     @Config(qualifiers = "w411dp-h891dp")
+    fun localOnlyVideoKeepsTheAudioCallIdentityLayout() {
+        render {
+            ActiveCallScreen(
+                peerName = "Алексей",
+                durationText = "00:03",
+                muted = false,
+                connectionHealth = ConnectionHealth.Good,
+                currentEndpoint = null,
+                availableEndpoints = emptyList(),
+                videoState = CallVideoState(
+                    allowed = true,
+                    requested = true,
+                    sending = true,
+                    remoteSending = false,
+                ),
+                onMute = {},
+                onSelectEndpoint = {},
+                onCamera = {},
+                onSwitchCamera = {},
+                onVideoVisibilityChanged = {},
+                onEnd = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("call-peer-avatar")
+            .assertWidthIsEqualTo(224.dp)
+            .assertHeightIsEqualTo(224.dp)
+        composeRule.onNodeWithText("Алексей").assertExists()
+        composeRule.onNodeWithText("00:03").assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
     fun activeAudioCallUsesTheSameCompactAvatarAsIncomingCall() {
         render {
             val density = LocalDensity.current

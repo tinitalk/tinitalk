@@ -512,7 +512,15 @@ private fun VideoActiveCallScreen(
             )
         }
         if (!presentation.remoteVideoVisible) {
-            VideoFallbackContent(peerName, contactAddress, fallbackLogin)
+            CallScreenSurface(
+                status = status,
+                peerName = peerName,
+                contactAddress = contactAddress,
+                fallbackLogin = fallbackLogin,
+                detail = durationText,
+                statusColor = statusColor,
+                prominentAvatar = true,
+            ) {}
         }
 
         if (controlsMayAutoHide) {
@@ -555,7 +563,7 @@ private fun VideoActiveCallScreen(
         }
 
         AnimatedVisibility(
-            visible = controlsVisible,
+            visible = controlsVisible && presentation.remoteVideoVisible,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
@@ -601,8 +609,8 @@ private fun VideoActiveCallScreen(
         if (
             localSource != null &&
             videoState.requested &&
-            topControlsHeight > 0 &&
-            bottomControlsHeight > 0
+            bottomControlsHeight > 0 &&
+            (topControlsHeight > 0 || !presentation.remoteVideoVisible)
         ) {
             val compactPreview = density.fontScale >= 1.3f
             val previewSize = selfPreviewSize(compactPreview)
