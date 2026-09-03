@@ -179,8 +179,15 @@ class WebRtcCallSession private constructor(
         ensureOpen()
         val applied = iceQueue.remove(candidates)
         if (applied.isNotEmpty()) {
-            check(peerConnection.removeIceCandidates(applied.map { it.toWebRtc() }.toTypedArray())) {
-                "failed to remove remote ICE candidates"
+            val matchedCurrentCandidate = peerConnection.removeIceCandidates(
+                applied.map { it.toWebRtc() }.toTypedArray(),
+            )
+            if (!matchedCurrentCandidate) {
+                Log.w(
+                    LogTag,
+                    "remote ICE candidate removal did not match current SDP; continuing " +
+                        "(count=${applied.size})",
+                )
             }
         }
     }

@@ -71,6 +71,41 @@ class WebRtcCallSessionInstrumentedTest {
         }
     }
 
+    @Test
+    fun unknownRemoteIceCandidateRemovalIsIdempotent() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val offerer = WebRtcCallSession.create(context, videoAllowed = false)
+        val answerer = WebRtcCallSession.create(context, videoAllowed = false)
+
+        try {
+            val offer = runBlockingLite { offerer.createOffer() }
+            val answer = runBlockingLite { answerer.acceptOffer(offer) }
+            runBlockingLite { offerer.setAnswer(answer) }
+            val audioMid = requireNotNull(
+                Regex("(?m)^a=mid:([^\\r\\n]+)").find(answer)?.groupValues?.get(1),
+            )
+
+            val unknownCandidate = IceCandidateData(
+                sdpMid = audioMid,
+                sdpMLineIndex = 0,
+                candidate = "candidate:1 1 UDP 2122260223 192.0.2.1 54321 typ host",
+            )
+            runBlockingLite {
+                repeat(2) {
+                    offerer.removeIceCandidates(listOf(unknownCandidate))
+                }
+            }
+
+            val renegotiationOffer = runBlockingLite { offerer.createOffer() }
+            assertTrue(renegotiationOffer.lineSequence().any { it.startsWith("m=audio ") })
+        } finally {
+            runBlockingLite {
+                answerer.close()
+                offerer.close()
+            }
+        }
+    }
+
     private fun videoMediaSectionCount(sdp: String): Int =
         Regex("(?m)^m=video\\s").findAll(sdp).count()
 
