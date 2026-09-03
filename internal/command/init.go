@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -48,8 +49,9 @@ func runInit(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(rest) > 0 {
-		return errors.New("usage: tinitalk init [--data-dir DIR]")
+	webPushContact, err := parseInitWebPushContact(rest)
+	if err != nil {
+		return err
 	}
 	db, err := state.OpenDir(dataDir)
 	if err != nil {
@@ -62,8 +64,30 @@ func runInit(w io.Writer, args []string) error {
 	if _, err := db.EnsureWebPushVAPID(); err != nil {
 		return err
 	}
+	if webPushContact != "" {
+		if err := db.SetSetting(webPushContactSetting, webPushContact); err != nil {
+			return err
+		}
+	}
 	_, _ = fmt.Fprintf(w, "state: %s\n", dataDir)
 	return nil
+}
+
+func parseInitWebPushContact(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	if len(args) == 1 && args[0] == "--webpush-contact" {
+		return "", errors.New("--webpush-contact requires URL")
+	}
+	if len(args) != 2 || args[0] != "--webpush-contact" {
+		return "", errors.New("usage: tinitalk init [--data-dir DIR] [--webpush-contact URL]")
+	}
+	parsed, err := url.Parse(args[1])
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
+		return "", errors.New("--webpush-contact must be an absolute https URL without credentials")
+	}
+	return parsed.String(), nil
 }
 
 func runServe(args []string) error {
@@ -91,13 +115,17 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	webPushContact, err := loadWebPushContact(db)
+	if err != nil {
+		return err
+	}
 	{
 		pushNotifier := notify.NewPushNotifier(
 			notify.DBPushTargetStore{DB: db},
 			notify.HTTPWebPushSender{
 				Client:     &http.Client{Timeout: notify.RequestTimeout},
 				VAPIDKeys:  webPushVAPID.Keys,
-				Subscriber: "https://tinitalk.org",
+				Subscriber: webPushContact,
 			},
 		)
 		notifier = pushNotifier
@@ -169,6 +197,17 @@ func runServe(args []string) error {
 	}
 }
 
+func loadWebPushContact(db *state.DB) (string, error) {
+	contact, err := db.Setting(webPushContactSetting)
+	if err != nil {
+		return "", err
+	}
+	if contact == "" {
+		return defaultWebPushContact, nil
+	}
+	return contact, nil
+}
+
 func turnServerConfig(options serveOptions, tlsConfig *tls.Config, issuer turnserver.CredentialIssuer) turnserver.Config {
 	turnTLSAddr := ""
 	if tlsConfig != nil {
@@ -189,7 +228,11 @@ func turnServerConfig(options serveOptions, tlsConfig *tls.Config, issuer turnse
 	}
 }
 
-const defaultDataDir = "/var/lib/tinitalk"
+const (
+	defaultDataDir        = "/var/lib/tinitalk"
+	defaultWebPushContact = "https://tinitalk.org"
+	webPushContactSetting = "webpush_contact"
+)
 
 func parseDataDir(args []string) (string, []string, error) {
 	dataDir := defaultDataDir
