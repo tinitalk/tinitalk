@@ -151,12 +151,16 @@ func runServe(args []string) error {
 			return errors.New("TURN secret is missing; run tinitalk init")
 		}
 		issuer := turnserver.CredentialIssuer{Secret: secret, TTL: turnserver.DefaultCredentialTTL}
+		turnICEConfig, err := turnICEConfigProvider(options, issuer)
+		if err != nil {
+			return err
+		}
 		turn, err := turnserver.Start(turnServerConfig(options, tlsConfig, issuer))
 		if err != nil {
 			return err
 		}
 		defer turn.Close()
-		iceConfig = turnserver.ICEConfigProvider{PublicHost: options.turnPublicHost, Realm: options.turnPublicHost, Issuer: issuer}
+		iceConfig = turnICEConfig
 	}
 	server := app.NewHTTPServer(db, app.ServerConfig{
 		Addr:                  options.addr,

@@ -6,6 +6,8 @@ import (
 	"net"
 	"strconv"
 	"time"
+
+	"tinitalk/internal/turnserver"
 )
 
 const (
@@ -174,6 +176,36 @@ func parseTURNRelayPort(name, value string) (uint16, error) {
 	port, err := strconv.ParseUint(value, 10, 16)
 	if err != nil || port == 0 || port > maxTURNRelayPort {
 		return 0, fmt.Errorf("%s must be an integer between 1 and %d", name, maxTURNRelayPort)
+	}
+	return uint16(port), nil
+}
+
+func turnICEConfigProvider(options serveOptions, issuer turnserver.CredentialIssuer) (turnserver.ICEConfigProvider, error) {
+	turnPort, err := publicPortFromListenAddr("--turn-addr", options.turnAddr)
+	if err != nil {
+		return turnserver.ICEConfigProvider{}, err
+	}
+	turnTLSPort, err := publicPortFromListenAddr("--turn-tls-addr", options.turnTLSAddr)
+	if err != nil {
+		return turnserver.ICEConfigProvider{}, err
+	}
+	return turnserver.ICEConfigProvider{
+		PublicHost:  options.turnPublicHost,
+		TURNPort:    turnPort,
+		TURNTLSPort: turnTLSPort,
+		Realm:       options.turnPublicHost,
+		Issuer:      issuer,
+	}, nil
+}
+
+func publicPortFromListenAddr(name, addr string) (uint16, error) {
+	_, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, fmt.Errorf("%s must include a port", name)
+	}
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || port == 0 {
+		return 0, fmt.Errorf("%s port must be an integer between 1 and 65535", name)
 	}
 	return uint16(port), nil
 }

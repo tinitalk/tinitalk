@@ -99,9 +99,11 @@ func TestICEConfigPayloadContainsTemporaryTurnCredentials(t *testing.T) {
 		Now:    func() time.Time { return time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC) },
 	}
 	provider := ICEConfigProvider{
-		PublicHost: "calls.example.com",
-		Realm:      "calls.example.com",
-		Issuer:     issuer,
+		PublicHost:  "calls.example.com",
+		TURNPort:    4433,
+		TURNTLSPort: 4434,
+		Realm:       "calls.example.com",
+		Issuer:      issuer,
 	}
 
 	raw := provider.ICEConfig("call-1", "alice")
@@ -122,10 +124,10 @@ func TestICEConfigPayloadContainsTemporaryTurnCredentials(t *testing.T) {
 	}
 	got := payload.Servers[0]
 	wantURLs := []string{
-		"stun:calls.example.com:3478",
-		"turn:calls.example.com:3478?transport=udp",
-		"turn:calls.example.com:3478?transport=tcp",
-		"turns:calls.example.com:5349?transport=tcp",
+		"stun:calls.example.com:4433",
+		"turn:calls.example.com:4433?transport=udp",
+		"turn:calls.example.com:4433?transport=tcp",
+		"turns:calls.example.com:4434?transport=tcp",
 	}
 	if !slices.Equal(got.URLs, wantURLs) {
 		t.Fatalf("urls = %+v", got.URLs)

@@ -2,13 +2,16 @@ package turnserver
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
 type ICEConfigProvider struct {
-	PublicHost string
-	Realm      string
-	Issuer     CredentialIssuer
+	PublicHost  string
+	TURNPort    uint16
+	TURNTLSPort uint16
+	Realm       string
+	Issuer      CredentialIssuer
 }
 
 func (p ICEConfigProvider) ICEConfig(_ string, user string) json.RawMessage {
@@ -40,11 +43,21 @@ func (p ICEConfigProvider) ICEConfig(_ string, user string) json.RawMessage {
 }
 
 func (p ICEConfigProvider) urls() []string {
+	turnPort := p.TURNPort
+	if turnPort == 0 {
+		turnPort = 3478
+	}
+	turnTLSPort := p.TURNTLSPort
+	if turnTLSPort == 0 {
+		turnTLSPort = 5349
+	}
+	turnEndpoint := p.PublicHost + ":" + strconv.Itoa(int(turnPort))
+	turnTLSEndpoint := p.PublicHost + ":" + strconv.Itoa(int(turnTLSPort))
 	urls := []string{
-		"stun:" + p.PublicHost + ":3478",
-		"turn:" + p.PublicHost + ":3478?transport=udp",
-		"turn:" + p.PublicHost + ":3478?transport=tcp",
-		"turns:" + p.PublicHost + ":5349?transport=tcp",
+		"stun:" + turnEndpoint,
+		"turn:" + turnEndpoint + "?transport=udp",
+		"turn:" + turnEndpoint + "?transport=tcp",
+		"turns:" + turnTLSEndpoint + "?transport=tcp",
 	}
 	return urls
 }

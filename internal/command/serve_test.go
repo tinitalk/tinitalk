@@ -128,6 +128,36 @@ func TestTURNServerConfigUsesServeCapacityOptions(t *testing.T) {
 	}
 }
 
+func TestTURNICEConfigProviderUsesServeListenPorts(t *testing.T) {
+	options, err := parseServeOptions(productionServeArgs(
+		"--turn-addr", ":4433",
+		"--turn-tls-addr", "0.0.0.0:4434",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider, err := turnICEConfigProvider(options, turnserver.CredentialIssuer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if provider.TURNPort != 4433 || provider.TURNTLSPort != 4434 {
+		t.Fatalf("ICE TURN ports = %d/%d, want 4433/4434", provider.TURNPort, provider.TURNTLSPort)
+	}
+}
+
+func TestTURNICEConfigProviderRejectsListenAddressWithoutPort(t *testing.T) {
+	options, err := parseServeOptions(productionServeArgs("--turn-addr", "127.0.0.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := turnICEConfigProvider(options, turnserver.CredentialIssuer{}); err == nil {
+		t.Fatal("listen address without port accepted")
+	}
+}
+
 func TestParseServeOptionsRejectsProductionWithoutCertificate(t *testing.T) {
 	if _, err := parseServeOptions([]string{"--addr", ":443"}); err == nil {
 		t.Fatal("missing TLS files accepted")
