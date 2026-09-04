@@ -18,7 +18,7 @@ All signaling messages use one JSON envelope:
 
 Limits:
 
-- message size: 16 KiB;
+- message size: 32 KiB;
 - incoming call wait: 45 seconds;
 - simultaneous WebSocket connections per user: 2;
 - per-call RAM replay buffer: 256 events;
@@ -28,7 +28,7 @@ Limits:
 
 Control events: `call.start`, `call.incoming`, `call.ringing`, `call.accept`, `call.connected`, `call.reject`, `call.cancel`, `call.end`, `call.expire`, `call.resume`.
 
-WebRTC events: `rtc.config`, `rtc.offer`, `rtc.answer`, `rtc.ice`, `rtc.restart`, `rtc.restart.request`.
+WebRTC events: `rtc.config`, `rtc.offer`, `rtc.answer`, `rtc.ice`, `rtc.video`, `rtc.restart`, `rtc.restart.request`.
 
 ## WebSocket connection
 
