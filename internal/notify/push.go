@@ -15,6 +15,7 @@ var ErrTemporaryPushDelivery = errors.New("temporary WebPush delivery failure")
 
 const (
 	RequestTimeout        = 5 * time.Second
+	MaxConcurrentWebPush  = 8
 	callNotificationTTL   = 30 * time.Second
 	missedNotificationTTL = 28 * 24 * time.Hour
 )
@@ -51,6 +52,7 @@ type PushNotifier struct {
 	store       PushTargetStore
 	sender      WebPushSender
 	retryDelays []time.Duration
+	sendSlots   chan struct{}
 }
 
 func NewPushNotifier(store PushTargetStore, sender WebPushSender) *PushNotifier {
@@ -58,6 +60,7 @@ func NewPushNotifier(store PushTargetStore, sender WebPushSender) *PushNotifier 
 		store:       store,
 		sender:      sender,
 		retryDelays: append([]time.Duration(nil), defaultWebPushRetryDelays...),
+		sendSlots:   make(chan struct{}, MaxConcurrentWebPush),
 	}
 }
 
@@ -124,6 +127,9 @@ func (n *PushNotifier) send(callee string, message PushMessage) {
 }
 
 func (n *PushNotifier) sendTarget(target state.PushTarget, message PushMessage) error {
+	n.sendSlots <- struct{}{}
+	defer func() { <-n.sendSlots }()
+
 	if n.sender == nil {
 		return errors.New("WebPush sender is unavailable")
 	}

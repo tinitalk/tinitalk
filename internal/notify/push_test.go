@@ -196,6 +196,57 @@ func TestNotifierSuppressesCallAfterTargetResolutionFailure(t *testing.T) {
 	}
 }
 
+func TestNotifierLimitsConcurrentWebPushTasks(t *testing.T) {
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	sender := &blockingWebPushSender{
+		started: make(chan struct{}, MaxConcurrentWebPush+1),
+		release: release,
+	}
+	notifier := NewPushNotifier(&fakePushTargetStore{}, sender)
+	done := make(chan error, MaxConcurrentWebPush+1)
+	start := make(chan struct{})
+
+	for i := 0; i < MaxConcurrentWebPush+1; i++ {
+		go func() {
+			<-start
+			done <- notifier.sendTarget(notifyTarget("parallel"), PushMessage{})
+		}()
+	}
+	close(start)
+
+	for i := 0; i < MaxConcurrentWebPush; i++ {
+		select {
+		case <-sender.started:
+		case <-time.After(time.Second):
+			t.Fatalf("WebPush task %d did not start", i+1)
+		}
+	}
+	select {
+	case <-sender.started:
+		t.Fatalf("more than %d WebPush tasks started concurrently", MaxConcurrentWebPush)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	released = true
+	for i := 0; i < MaxConcurrentWebPush+1; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("WebPush task %d did not finish", i+1)
+		}
+	}
+}
+
 type fakePushTargetStore struct {
 	targets     []state.Device
 	disabled    state.PushTarget
@@ -219,6 +270,17 @@ type fakeWebPushSender struct {
 	errs     []error
 	last     WebPushRequest
 	requests []WebPushRequest
+}
+
+type blockingWebPushSender struct {
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (s *blockingWebPushSender) Send(WebPushRequest) error {
+	s.started <- struct{}{}
+	<-s.release
+	return nil
 }
 
 func (s *fakeWebPushSender) Send(request WebPushRequest) error {
