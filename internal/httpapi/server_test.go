@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +78,17 @@ func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	want := []string{"video_1to1", "single_device_session", "webpush_v1"}
 	if fmt.Sprint(health.Features) != fmt.Sprint(want) {
 		t.Fatalf("health features = %v, want %v", health.Features, want)
+	}
+}
+
+func TestRejectsOversizedRequestBody(t *testing.T) {
+	db, tokens := testDB(t)
+	server := NewServer(db, Options{AllowInsecureLoopback: true, WebPushConfigID: "sha256:webpush"})
+	body := webPushBody(strings.Repeat("a", maxRequestBodyBytes), "oversized")
+
+	response := request(t, server, http.MethodPost, "/api/session", body, "alice", tokens["alice"])
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("oversized request status = %d, want 400", response.Code)
 	}
 }
 

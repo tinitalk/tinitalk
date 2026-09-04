@@ -42,6 +42,7 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 		}),
 		TLSConfig:         config.TLSConfig,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 }

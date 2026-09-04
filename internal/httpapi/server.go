@@ -47,6 +47,7 @@ var defaultSocketTiming = socketTiming{
 }
 
 const apiVersion = 4
+const maxRequestBodyBytes = 16 * 1024
 
 var serverCommit = "unknown"
 
@@ -68,6 +69,7 @@ func NewServer(db *state.DB, options Options) http.Handler {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	s.mux.ServeHTTP(w, r)
 }
 

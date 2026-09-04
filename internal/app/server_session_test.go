@@ -14,6 +14,13 @@ import (
 
 const testWebPushSubscription = `{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=app-test","keys":{"p256dh":"BEkDdNnpEcD8M4mRGOFJWTDJ4GkDI5Xs3vpIOrAaBZKRCVv6V3sB3CFujTFiD6DHda7W8pCyChJDU205otrbCAw","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`
 
+func TestNewHTTPServerLimitsRequestReadTime(t *testing.T) {
+	server := NewHTTPServer(nil, ServerConfig{})
+	if server.ReadTimeout != 15*time.Second {
+		t.Fatalf("ReadTimeout = %s, want 15s", server.ReadTimeout)
+	}
+}
+
 func TestNewHTTPServerWiresSessionReplacementNotifier(t *testing.T) {
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
