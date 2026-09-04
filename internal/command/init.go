@@ -24,7 +24,7 @@ import (
 
 func run(w io.Writer, args []string) (string, error) {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		text := "usage: tinitalk init|user|serve|doctor|backup\n"
+		text := "usage: tinitalk init|user|serve|doctor|backup|history\n"
 		_, _ = io.WriteString(w, text)
 		return text, nil
 	}
@@ -39,6 +39,8 @@ func run(w io.Writer, args []string) (string, error) {
 		return "", runDoctor(w, args[1:])
 	case "backup":
 		return "", runBackup(w, args[1:])
+	case "history":
+		return "", runHistory(w, args[1:])
 	default:
 		return "", fmt.Errorf("unknown command %q", args[0])
 	}

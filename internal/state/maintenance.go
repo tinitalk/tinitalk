@@ -3,8 +3,10 @@ package state
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type CheckResult struct {
@@ -12,6 +14,24 @@ type CheckResult struct {
 	ForeignKeyOK bool
 	UserVersion  int
 	Pragmas      map[string]string
+}
+
+func (db *DB) PruneCallHistory(before time.Time) (int64, error) {
+	if before.IsZero() {
+		return 0, errors.New("call history cutoff is required")
+	}
+	result, err := db.sql.Exec("DELETE FROM call_history WHERE started_at < ?", before.Unix())
+	if err != nil {
+		return 0, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := db.sql.Exec("VACUUM"); err != nil {
+		return deleted, fmt.Errorf("deleted %d call history records but could not compact database: %w", deleted, err)
+	}
+	return deleted, nil
 }
 
 func (db *DB) Check() (CheckResult, error) {
