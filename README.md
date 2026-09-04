@@ -9,22 +9,82 @@ TiniTalk — self-hosted приложение для аудио- и видеоз
 
 Для сборки TiniTalk-сервера нужны Go 1.26.7 или новее, Git и GNU Make. Для
 сборки Android-приложения дополнительно нужны JDK 17 и Android SDK Platform 37;
-Gradle запускается через wrapper.
+Gradle запускается через wrapper. JDK должен быть настроен через `JAVA_HOME`
+или доступен как команда `java` через `PATH`.
+
+### Dev-сборка
+
+Сервер собирается командой:
 
 ```bash
 make server
+```
+
+Результат: `dist/tinitalk-linux-amd64`.
+
+Для Android доступны две dev-сборки с локальной debug-подписью:
+
+```bash
+make client
 make client-min
 ```
 
-Результаты сборки:
-
-- `dist/tinitalk-linux-amd64` — TiniTalk-сервер;
-- `dist/tinitalk-min.apk` — Android-клиент для ARM64 (поддерживается Android 8.0
-  или новее).
+- `make client` создаёт `dist/tinitalk-debug.apk` для всех поддерживаемых ABI;
+- `make client-min` создаёт уменьшенный `dist/tinitalk-min.apk` только для
+  ARM64 с включёнными R8 и удалением неиспользуемых ресурсов.
 
 APK подписывается локальным debug-ключом: `~/.android/debug.keystore` на Linux
 и `%USERPROFILE%\.android\debug.keystore` на Windows. Этот файл нужно сохранить:
 Android не установит поверх приложения обновление, подписанное другим ключом.
+
+Dev-сборки не требуют release-ключа и не предназначены для публикации.
+
+### Release-сборка
+
+Сервер собирается так же, как для dev-сборки: `make server`.
+
+Release APK подписывается постоянным ключом проекта. Ключ нужно создать один
+раз до первой публикации и затем использовать для всех следующих версий.
+
+Создайте локальный каталог и сгенерируйте хранилище ключа:
+
+```bash
+mkdir android/keystore
+keytool -genkeypair -v -keystore android/keystore/tinitalk-release.jks -alias tinitalk-release -keyalg RSA -keysize 4096 -validity 36500 -dname "CN=TiniTalk, OU=Release Signing, O=TiniTalk Open Source Project"
+```
+
+`keytool` попросит пароль для хранилища ключа.
+
+Создайте файл `android/keystore/release.properties`:
+
+```properties
+storeFile=keystore/tinitalk-release.jks
+storePassword=ПАРОЛЬ
+keyAlias=tinitalk-release
+keyPassword=ПАРОЛЬ
+```
+
+Соберите релиз:
+
+```bash
+make client-release
+```
+
+Команда запускает unit-тесты, проверяет сохранение WebRTC API после R8 и
+создаёт подписанный ARM64 APK. Номер версии автоматически берётся из
+`versionName` в `android/app/build.gradle.kts`:
+
+```text
+dist/tinitalk-v0.10.apk
+```
+
+Каталог `android/keystore` добавлен в `.gitignore`. Файлы
+`tinitalk-release.jks`, `release.properties` и пароли не должны попадать в Git.
+
+После создания ключа обязательно сохраните резервную копию
+`tinitalk-release.jks` и паролей в защищённом месте. Потеря ключа не позволит
+выпускать обновления для уже установленного приложения, а утечка позволит
+постороннему подписывать APK от имени проекта.
 
 ## Настройка и запуск TiniTalk-сервера
 
@@ -316,3 +376,12 @@ sudo install -o tinitalk -g tinitalk -m 0600 \
   /var/lib/tinitalk/state.db
 sudo systemctl start tinitalk
 ```
+
+## Лицензия
+
+TiniTalk — бесплатное программное обеспечение с открытым исходным кодом.
+Лицензия BSD Zero Clause разрешает использовать, копировать, изменять и
+распространять проект, в том числе в коммерческих целях. Программное обеспечение
+предоставляется без гарантий.
+
+Полный текст лицензии: [LICENSE](LICENSE).
