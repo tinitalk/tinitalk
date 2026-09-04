@@ -10,7 +10,7 @@ val tinitalkAbi = providers.gradleProperty("tinitalkAbi").getOrElse("all")
 require(tinitalkAbi == "arm64" || tinitalkAbi == "all") {
     "tinitalkAbi must be 'arm64' or 'all'"
 }
-val tinitalkVersionName = "0.10"
+val tinitalkVersionName = "0.11"
 
 val releaseSigningPropertiesFile = rootProject.file("keystore/release.properties")
 val releaseSigningProperties = Properties().apply {
@@ -47,7 +47,7 @@ android {
         applicationId = "org.tinitalk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
+        versionCode = 15
         versionName = tinitalkVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
