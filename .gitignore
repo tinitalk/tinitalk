@@ -17,6 +17,7 @@
 /android/app/build/
 /android/build/
 /android/app/google-services.json
+/android/keystore/
 
 /bin/
 /tmp/

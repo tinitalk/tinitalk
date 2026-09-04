@@ -1,3 +1,4 @@
+import java.util.Properties
 import java.util.zip.ZipFile
 
 plugins {
@@ -9,6 +10,19 @@ val tinitalkAbi = providers.gradleProperty("tinitalkAbi").getOrElse("all")
 require(tinitalkAbi == "arm64" || tinitalkAbi == "all") {
     "tinitalkAbi must be 'arm64' or 'all'"
 }
+val tinitalkVersionName = "0.10"
+
+val releaseSigningPropertiesFile = rootProject.file("keystore/release.properties")
+val releaseSigningProperties = Properties().apply {
+    if (releaseSigningPropertiesFile.isFile) {
+        releaseSigningPropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun releaseSigningProperty(name: String): String =
+    requireNotNull(releaseSigningProperties.getProperty(name)?.takeIf(String::isNotBlank)) {
+        "Missing '$name' in ${releaseSigningPropertiesFile.path}"
+    }
 
 val repositoryDir = rootDir.parentFile
 val commitHash = runCatching {
@@ -34,7 +48,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 14
-        versionName = "0.10"
+        versionName = tinitalkVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
         buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
@@ -45,15 +59,31 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (releaseSigningPropertiesFile.isFile) {
+                storeFile = rootProject.file(releaseSigningProperty("storeFile"))
+                storePassword = releaseSigningProperty("storePassword")
+                keyAlias = releaseSigningProperty("keyAlias")
+                keyPassword = releaseSigningProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+        create("min") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
         }
     }
 
@@ -69,6 +99,26 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+val validateReleaseSigning by tasks.registering {
+    group = "verification"
+    description = "Checks that the release signing key is configured."
+    doLast {
+        check(releaseSigningPropertiesFile.isFile) {
+            "Release signing is not configured: ${releaseSigningPropertiesFile.path}"
+        }
+        val storeFile = rootProject.file(releaseSigningProperty("storeFile"))
+        check(storeFile.isFile) {
+            "Release keystore does not exist: ${storeFile.path}"
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name != validateReleaseSigning.name && name.contains("Release", ignoreCase = true)) {
+        dependsOn(validateReleaseSigning)
     }
 }
 
@@ -194,15 +244,19 @@ val requiredWebRtcJniStrings = listOf(
     "release",
 )
 
-tasks.register("verifyWebRtcJni") {
+fun registerWebRtcJniVerification(
+    taskName: String,
+    assembleTaskName: String,
+    apkPath: String,
+) = tasks.register(taskName) {
     group = "verification"
     description = "Checks that R8 preserved WebRTC classes and callbacks used from JNI"
-    dependsOn("assembleRelease")
+    dependsOn(assembleTaskName)
 
     doLast {
         val apk = providers.gradleProperty("tinitalkVerifyApk").orNull
             ?.let(::file)
-            ?: layout.buildDirectory.file("outputs/apk/release/app-release.apk").get().asFile
+            ?: layout.buildDirectory.file(apkPath).get().asFile
         check(apk.isFile) { "APK not found: $apk" }
 
         val dexContents = ZipFile(apk).use { archive ->
@@ -224,4 +278,25 @@ tasks.register("verifyWebRtcJni") {
             "R8 removed WebRTC JNI classes or callbacks from ${apk.name}: ${missing.joinToString()}"
         }
     }
+}
+
+val verifyWebRtcJni = registerWebRtcJniVerification(
+    taskName = "verifyWebRtcJni",
+    assembleTaskName = "assembleRelease",
+    apkPath = "outputs/apk/release/app-release.apk",
+)
+
+registerWebRtcJniVerification(
+    taskName = "verifyWebRtcJniMin",
+    assembleTaskName = "assembleMin",
+    apkPath = "outputs/apk/min/app-min.apk",
+)
+
+tasks.register<Copy>("exportReleaseApk") {
+    group = "build"
+    description = "Copies the signed release APK to dist with its version in the filename"
+    dependsOn(verifyWebRtcJni)
+    from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
+    into(repositoryDir.resolve("dist"))
+    rename { "tinitalk-v$tinitalkVersionName.apk" }
 }
