@@ -2,9 +2,31 @@
 /.superpowers/
 /docs/superpowers/
 /.worktrees/
+
+# Local secrets and credentials
+.env*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local databases
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
+
 /dist/
-/state.db
-/state.db-journal
 *.apk
 *.aab
 *.keystore
