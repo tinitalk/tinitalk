@@ -40,20 +40,21 @@ type SessionStore interface {
 }
 
 type Hub struct {
-	mu            sync.Mutex
-	notifier      Notifier
-	iceConfig     ICEConfigProvider
-	history       CallHistoryStore
-	sessionStore  SessionStore
-	clients       map[string]map[*Client]struct{}
-	sessions      map[string]string
-	calls         map[string]*call
-	callAliases   map[string]string
-	activeByUser  map[string]string
-	now           func() time.Time
-	notifications []notification
-	reservedWake  map[string]struct{}
-	notifying     bool
+	mu             sync.Mutex
+	notifier       Notifier
+	iceConfig      ICEConfigProvider
+	history        CallHistoryStore
+	sessionStore   SessionStore
+	clients        map[string]map[*Client]struct{}
+	sessions       map[string]string
+	calls          map[string]*call
+	callAliases    map[string]string
+	activeByUser   map[string]string
+	callStartTimes map[string][]time.Time
+	now            func() time.Time
+	notifications  []notification
+	reservedWake   map[string]struct{}
+	notifying      bool
 }
 
 const notificationQueueLimit = 64
@@ -72,14 +73,15 @@ func NewHub(notifier Notifier) *Hub {
 		notifier = NoopNotifier{}
 	}
 	return &Hub{
-		notifier:     notifier,
-		clients:      map[string]map[*Client]struct{}{},
-		sessions:     map[string]string{},
-		calls:        map[string]*call{},
-		callAliases:  map[string]string{},
-		activeByUser: map[string]string{},
-		reservedWake: map[string]struct{}{},
-		now:          time.Now,
+		notifier:       notifier,
+		clients:        map[string]map[*Client]struct{}{},
+		sessions:       map[string]string{},
+		calls:          map[string]*call{},
+		callAliases:    map[string]string{},
+		activeByUser:   map[string]string{},
+		callStartTimes: map[string][]time.Time{},
+		reservedWake:   map[string]struct{}{},
+		now:            time.Now,
 	}
 }
 
@@ -552,6 +554,9 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 		}
 		return ErrCalleeBusy
 	}
+	if err := h.checkCallStartRate(sender); err != nil {
+		return err
+	}
 	if _, ok := h.activeByUser[payload.CalleeID]; ok {
 		if h.history != nil {
 			if err := h.history.RecordBusyCall(event.CallID, sender, payload.CalleeID, h.now()); err != nil {
@@ -594,6 +599,26 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	delivered := h.next(c, incoming, payload.CalleeID)
 	h.deliver(payload.CalleeID, delivered)
 	h.enqueueNotification(notification{caller: sender, callee: payload.CalleeID, event: delivered})
+	return nil
+}
+
+func (h *Hub) checkCallStartRate(user string) error {
+	now := h.now()
+	starts := h.callStartTimes[user]
+	firstActive := 0
+	for firstActive < len(starts) && now.Sub(starts[firstActive]) >= CallStartWindow {
+		firstActive++
+	}
+	starts = starts[firstActive:]
+	if len(starts) >= MaxCallStartsPerWindow {
+		h.callStartTimes[user] = starts
+		return clientError{
+			message:    "too many new calls",
+			code:       callStartRateLimitCode,
+			retryAfter: CallStartWindow - now.Sub(starts[0]),
+		}
+	}
+	h.callStartTimes[user] = append(starts, now)
 	return nil
 }
 

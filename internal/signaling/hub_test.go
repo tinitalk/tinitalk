@@ -538,6 +538,48 @@ func TestHubCancelsEndsExpiresAndLimitsICE(t *testing.T) {
 	}
 }
 
+func TestHubLimitsNewCallsPerUserToFiveInTenSeconds(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+
+	for i := 0; i < MaxCallStartsPerWindow; i++ {
+		start := event(uuid(1400+i*2), uuid(1401+i*2), "call.start", map[string]any{"callee_id": "bob"})
+		if err := hub.Handle("alice", start); err != nil {
+			t.Fatalf("call %d rejected: %v", i+1, err)
+		}
+		if err := hub.Handle("alice", event(uuid(1500+i), start.CallID, "call.cancel", map[string]any{})); err != nil {
+			t.Fatalf("cancel call %d: %v", i+1, err)
+		}
+	}
+
+	blocked := event(uuid(1600), uuid(1601), "call.start", map[string]any{"callee_id": "bob"})
+	err := hub.Handle("alice", blocked)
+	var rateLimit ClientError
+	if !errors.As(err, &rateLimit) {
+		t.Fatalf("sixth call error = %T %v, want ClientError", err, err)
+	}
+	if rateLimit.Code() != callStartRateLimitCode || rateLimit.RetryAfter() != CallStartWindow {
+		t.Fatalf("sixth call error details = %q/%s", rateLimit.Code(), rateLimit.RetryAfter())
+	}
+	if _, exists := hub.calls[blocked.CallID]; exists {
+		t.Fatal("rate-limited call was created")
+	}
+
+	other := event(uuid(1602), uuid(1603), "call.start", map[string]any{"callee_id": "dave"})
+	if err := hub.Handle("carol", other); err != nil {
+		t.Fatalf("another user's call rejected: %v", err)
+	}
+	if err := hub.Handle("carol", event(uuid(1604), other.CallID, "call.cancel", map[string]any{})); err != nil {
+		t.Fatalf("cancel another user's call: %v", err)
+	}
+
+	now = now.Add(CallStartWindow)
+	if err := hub.Handle("alice", blocked); err != nil {
+		t.Fatalf("call after rate-limit window rejected: %v", err)
+	}
+}
+
 func TestHubAllowsContinualICEGatheringAcrossHandovers(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alice := hub.Connect("alice")

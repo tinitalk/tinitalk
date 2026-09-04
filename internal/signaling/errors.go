@@ -3,6 +3,7 @@ package signaling
 import "time"
 
 const (
+	callStartRateLimitCode         = "call_start_rate_limited"
 	iceRateLimitCode               = "ice_rate_limited"
 	iceRestartRateLimitCode        = "ice_restart_rate_limited"
 	iceRestartRequestRateLimitCode = "ice_restart_request_rate_limited"

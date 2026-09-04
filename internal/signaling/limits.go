@@ -5,6 +5,8 @@ import "time"
 const (
 	ReplayLimit               = 256
 	MaxConnectionsPerUser     = 2
+	MaxCallStartsPerWindow    = 5
+	CallStartWindow           = 10 * time.Second
 	MaxICEPerMinute           = 128
 	RestartMinInterval        = 10 * time.Second
 	RestartRequestMinInterval = 10 * time.Second
