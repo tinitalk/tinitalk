@@ -313,6 +313,42 @@ class ContactRepositoryTest {
     }
 
     @Test
+    fun mutualAddRefreshesAvailabilityAfterAnEarlyPush() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val account = auth.upsert(Session("https://a.example", "alice", "token", setOf("personal_contacts")))
+        val cache = ContactCache(MemoryKeyValueStore())
+        lateinit var repository: ContactRepository
+        var detailRequests = 0
+        val api = object : HouseholdApi by RecordingApi("alice", "config-a") {
+            override fun addContact(login: String, customName: String): Contact {
+                val delayedResponse = Contact(login, customName, canCall = false)
+                // Bob adds Alice while her PUT response is in flight. His push arrives first.
+                cache.replace(cache.load(account))
+                repository.refreshContact(account.id, login, account.session)
+                assertEquals(0, detailRequests)
+                return delayedResponse
+            }
+
+            override fun contact(login: String): Contact {
+                detailRequests++
+                return Contact(login, "Bob", canCall = true)
+            }
+        }
+        repository = ContactRepository(
+            auth,
+            contactCache = cache,
+            apiFactory = { _, _, _, _ -> api },
+            onContactAdded = { current, login -> repository.refreshContact(current.id, login, current.session) },
+        )
+
+        repository.addContact(account.id, "bob", "Папа")
+
+        assertEquals(1, detailRequests)
+        assertTrue(cache.load(account).items.single().canCall)
+        assertEquals("Папа", cache.load(account).items.single().displayName)
+    }
+
+    @Test
     fun delayedContactResponseCannotRestoreDeletedContact() {
         val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         val account = auth.upsert(Session("https://a.example", "alice", "token"))

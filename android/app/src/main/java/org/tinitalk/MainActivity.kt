@@ -510,7 +510,10 @@ class MainActivity : ComponentActivity() {
                 if (!screenState.signedIn || !isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
                     return@runOnUiThread
                 }
-                if (requestContactsGeneration != contactsGeneration) return@runOnUiThread
+                if (requestContactsGeneration != contactsGeneration) {
+                    screenState = screenState.copy(contactsRefreshing = false)
+                    return@runOnUiThread
+                }
                 val activeAccounts = repository.accounts().filter { current ->
                     accounts.any { it.id == current.id && it.session.sameIdentity(current.session) }
                 }

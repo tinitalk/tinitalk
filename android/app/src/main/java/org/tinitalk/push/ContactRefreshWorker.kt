@@ -1,6 +1,7 @@
 package org.tinitalk.push
 
 import android.content.Context
+import android.util.Log
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -27,12 +28,23 @@ private val contactRefreshExecutor = Executors.newFixedThreadPool(2) { task ->
 internal class ContactRefreshScheduler(context: Context) {
     private val app = context.applicationContext
 
-    fun enqueue(account: AccountRecord, login: String) {
+    fun enqueueAfterCallRejection(account: AccountRecord, login: String) {
+        contactRefreshExecutor.execute {
+            runCatching { enqueue(account, login, markUnavailable = true) }
+                .onFailure { Log.w("TiniContacts", "failed to refresh contact after call rejection", it) }
+        }
+    }
+
+    fun enqueue(account: AccountRecord, login: String, markUnavailable: Boolean = false) {
         val auth = AuthStore(SharedPreferencesKeyValueStore(app), AndroidKeystoreTokenCipher())
         val cache = ContactCache(SharedPreferencesKeyValueStore(app))
         auth.withCurrent(account.id, account.session) {
             // Invalidate responses already in flight, including a full-list refresh.
-            cache.replace(cache.load(account))
+            if (markUnavailable) {
+                cache.updateAvailability(account, login, false)
+            } else {
+                cache.replace(cache.load(account))
+            }
         } ?: return
         val input = Data.Builder()
             .putString("account_id", account.id.value)

@@ -1,8 +1,10 @@
 package org.tinitalk.data
 
 import android.content.Context
+import android.util.Log
 import org.tinitalk.cleanupWebPushAccount
 import org.tinitalk.push.AccountWebPushRegistration
+import org.tinitalk.push.ContactRefreshScheduler
 import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.StoredWebPushConfig
 import org.tinitalk.push.UnifiedPushAccountRegistration
@@ -54,6 +56,7 @@ class ContactRepository internal constructor(
     private val onAccountRemoved: (AccountId, Session) -> Unit = { _, _ -> },
     private val onExplicitAccountRemoved: (AccountId, Session) -> Unit = { _, _ -> },
     private val contactCache: ContactCache? = null,
+    private val onContactAdded: (AccountRecord, String) -> Unit = { _, _ -> },
     private val apiFactory: (url: String, login: String, token: String, sessionId: String?) -> HouseholdApi =
         { url, login, token, sessionId -> UrlConnectionApiClient(url, login, token, sessionId) },
 ) {
@@ -63,12 +66,8 @@ class ContactRepository internal constructor(
         authStore: AuthStore,
         apiFactory: (url: String, login: String, token: String) -> HouseholdApi,
     ) : this(
-        authStore,
-        null,
-        { _, _ -> },
-        { _, _ -> },
-        null,
-        { url, login, token, _ -> apiFactory(url, login, token) },
+        authStore = authStore,
+        apiFactory = { url, login, token, _ -> apiFactory(url, login, token) },
     )
 
     internal constructor(
@@ -82,6 +81,10 @@ class ContactRepository internal constructor(
         onAccountRemoved = { accountId, session -> cleanupWebPushAccount(context, accountId, session) },
         onExplicitAccountRemoved = onExplicitAccountRemoved,
         contactCache = contactCache,
+        onContactAdded = { account, login ->
+            runCatching { ContactRefreshScheduler(context.applicationContext).enqueue(account, login) }
+                .onFailure { Log.w("TiniContacts", "failed to schedule added contact refresh", it) }
+        },
     )
 
     fun checkServer(url: String): ServerCheckResult {
@@ -284,11 +287,14 @@ class ContactRepository internal constructor(
             val client = api(account.session)
             requirePersonalContacts(client, account)
             val contact = client.addContact(login.trim(), customName.trim())
-            authStore.withCurrent(account.id, account.session) {
+            val added = authStore.withCurrent(account.id, account.session) {
                 AccountContact(account.id, account.session.url, contact).also {
                     contactCache?.update(account, it)
                 }
-            }
+            } ?: return null
+            // A push may have arrived before the PUT response populated the cache.
+            onContactAdded(account, contact.login)
+            added
         } catch (e: ApiException) {
             if (!authStore.isCurrent(account.id, account.session)) return null
             handleUnauthorized(e, account.id, account.session)

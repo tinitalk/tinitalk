@@ -47,9 +47,9 @@ import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.AccountId
+import org.tinitalk.data.AccountRecord
 import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.ContactAddress
-import org.tinitalk.data.ContactCache
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
@@ -669,26 +669,19 @@ class CallForegroundService : Service() {
                     val activeCallId = current.callId.takeIf { current.phase != CallPhase.Ended }
                     routeMediaCallback { it.onSignalFailure(failure) }
                     val reason = signalingFailureEndReason(failure, activeCallId) ?: return@post
-                    if (reason == CallEndReason.NotInContacts) {
-                        runCatching {
-                            outgoingPeer?.login?.let { login ->
-                                auth.withCurrent(owner.key.accountId, session) {
-                                    auth.get(owner.key.accountId)?.let { account ->
-                                        ContactCache(SharedPreferencesKeyValueStore(this)).updateAvailability(account, login, false)
-                                        ContactRefreshScheduler(this).enqueue(account, login)
-                                    }
-                                }
-                            }
-                        }.onFailure {
-                            Log.w(CallLogTag, "failed to refresh contact after call rejection", it)
-                        }
-                    }
                     newCoordinator.fail()
                     publish(reason)
                     if (reason == CallEndReason.Busy || reason == CallEndReason.NotInContacts) {
                         finishCallAfter(BusyToneDelayMillis)
                     } else {
                         finishCallSoon()
+                    }
+                    if (reason == CallEndReason.NotInContacts) {
+                        outgoingPeer?.login?.let { login ->
+                            ContactRefreshScheduler(this).enqueueAfterCallRejection(
+                                AccountRecord(owner.key.accountId, session), login,
+                            )
+                        }
                     }
                 }
             },
