@@ -27,7 +27,10 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSessionBinding
@@ -66,6 +69,7 @@ import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.AccountBadgeRefreshId
 import org.tinitalk.telecom.IncomingCallController
+import org.tinitalk.shortcuts.ContactShortcuts
 import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.AccountPage
@@ -119,6 +123,8 @@ class MainActivity : ComponentActivity() {
     private var callUiState by mutableStateOf(CallUiStateStore.snapshot())
     private var callLaunchError by mutableStateOf<CallLaunchError?>(null)
     private var launchingCall = false
+    private var pinningShortcut = false
+    private val contactShortcuts by lazy { ContactShortcuts(this, (application as TinitalkApplication).contactPhotoStore) }
     private var loginResetKey by mutableIntStateOf(0)
     @Volatile
     private var mainScreenResumed = false
@@ -230,6 +236,7 @@ class MainActivity : ComponentActivity() {
                         onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
                         onRefreshPermissions = ::refreshPermissions,
                         onCall = ::startCall,
+                        onPinContact = ::pinContact,
                         onRenameContact = { key, customName ->
                             if (network.available) {
                                 contactNameViewModel.rename(repository, key, customName)
@@ -430,6 +437,29 @@ class MainActivity : ComponentActivity() {
                 callLaunchError = launchContactCall(accountContact.peerKey)
             } finally {
                 launchingCall = false
+            }
+        }
+    }
+
+    private fun pinContact(contact: AccountContact) {
+        if (pinningShortcut) return
+        if (!contactShortcuts.isSupported()) {
+            Toast.makeText(this, "Этот главный экран не поддерживает добавление ярлыков", Toast.LENGTH_LONG).show()
+            return
+        }
+        pinningShortcut = true
+        lifecycleScope.launch {
+            try {
+                val prepared = withContext(Dispatchers.IO) {
+                    runCatching { resolveContactCallTarget(authStore, contactCache, contact.peerKey)?.contact?.let(contactShortcuts::create) }
+                }
+                if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
+                val shortcut = prepared.getOrNull()
+                if (shortcut == null || !runCatching { contactShortcuts.requestPin(shortcut) }.getOrDefault(false)) {
+                    Toast.makeText(this@MainActivity, "Не удалось добавить ярлык. Проверьте контакт и попробуйте ещё раз.", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                pinningShortcut = false
             }
         }
     }

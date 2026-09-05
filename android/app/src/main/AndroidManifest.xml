@@ -38,6 +38,12 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".shortcuts.ShortcutCallActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:taskAffinity="" />
+        <activity
             android:name=".CallActivity"
             android:excludeFromRecents="true"
             android:exported="false"

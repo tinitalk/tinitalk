@@ -93,6 +93,7 @@ fun ContactScreen(
     removeErrorMessage: String? = null,
     onRemoveContact: () -> Unit = {},
     onRemoveContactDismissed: () -> Unit = {},
+    onPinContact: () -> Unit = {},
 ) {
     var renameVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var photoActionsVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
@@ -221,6 +222,25 @@ fun ContactScreen(
                                 onClick = {
                                     contactMenuVisible = false
                                     photoActionsVisible = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "На главный экран",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(painterResource(R.drawable.ic_add_to_home), contentDescription = null, modifier = Modifier.size(24.dp))
+                                },
+                                enabled = !removing,
+                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-shortcut"),
+                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                                onClick = {
+                                    contactMenuVisible = false
+                                    onPinContact()
                                 },
                             )
                             DropdownMenuItem(

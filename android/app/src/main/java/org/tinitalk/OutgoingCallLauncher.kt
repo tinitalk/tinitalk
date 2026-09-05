@@ -48,10 +48,13 @@ internal fun resolveContactCallTarget(
 /** A user action in a resumed activity; no network refresh is needed before dialing. */
 internal suspend fun ComponentActivity.launchContactCall(peer: AccountPeerKey): CallLaunchError? {
     val store = SharedPreferencesKeyValueStore(this)
-    val target = withContext(Dispatchers.IO) {
-        resolveContactCallTarget(AuthStore(store, AndroidKeystoreTokenCipher()), ContactCache(store), peer)
+    val result = withContext(Dispatchers.IO) {
+        runCatching { resolveContactCallTarget(AuthStore(store, AndroidKeystoreTokenCipher()), ContactCache(store), peer) }
     }
     if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return null
+    val target = result.getOrElse {
+        return CallLaunchError("Не удалось открыть контакт", "Откройте TiniTalk и проверьте подключённую учётную запись.")
+    }
     val current = CallServiceState.snapshot()
     if (current.phase != CallPhase.Idle && current.phase != CallPhase.Ended) {
         startActivity(CallActivity.ongoingIntent(this))
