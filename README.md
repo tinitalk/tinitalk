@@ -313,6 +313,9 @@ sudo -u tinitalk tinitalk user enable LOGIN
 sudo -u tinitalk tinitalk user delete LOGIN
 ```
 
+`DISPLAY NAME` — внутреннее имя пользователя только для администратора.
+Оно не передаётся через пользовательский API и не используется в телефонных книгах.
+
 `add` и `rotate-token` показывают новый token только один раз. `rotate-token`
 сбрасывает регистрации устройств и push-подписки.
 
