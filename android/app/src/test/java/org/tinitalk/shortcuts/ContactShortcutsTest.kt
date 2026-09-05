@@ -11,6 +11,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.shadow.api.Shadow
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implements
 import org.robolectric.annotation.Implementation
@@ -33,6 +34,47 @@ import org.tinitalk.data.Session
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = android.app.Application::class, shadows = [ShortcutEnabledStateShadow::class])
 class ContactShortcutsTest {
+    @Test
+    fun pinStateComesFromLauncherAndUsesAccountIdentityNotContactName() {
+        val context = RuntimeEnvironment.getApplication()
+        val store = MemoryKeyValueStore()
+        val auth = AuthStore(store, PrefixTokenCipher())
+        val cache = ContactCache(store)
+        val first = AccountContact(AccountId("first"), "https://a.example", Contact("anna", "Мама"))
+        val second = AccountContact(AccountId("second"), "https://b.example", Contact("anna", "Мама"))
+        val shortcuts = ContactShortcuts(context, TestPhotos(), auth, cache)
+        val manager = context.getSystemService(ShortcutManager::class.java)
+        val shadow = Shadow.extract<ShortcutEnabledStateShadow>(manager)
+
+        assertNull(shortcuts.pinnedContacts.value)
+        assertFalse(shortcuts.preparePin(first).alreadyPinned)
+        manager.requestPinShortcut(shortcuts.create(first), null)
+        assertTrue(shortcuts.preparePin(first.copy(contact = Contact("anna", "Мамуля"))).alreadyPinned)
+        assertFalse(shortcuts.preparePin(second).alreadyPinned)
+        assertEquals(setOf(first.peerKey), shortcuts.pinnedContacts.value)
+
+        // Model the system response after the user removes the icon from the launcher.
+        shadow.pinnedOverride = emptyList()
+        shortcuts.syncPinned()
+        assertEquals(emptySet<AccountPeerKey>(), shortcuts.pinnedContacts.value)
+        assertFalse(shortcuts.preparePin(first).alreadyPinned)
+    }
+
+    @Test
+    fun failedLauncherQueryClearsStaleStateAndDoesNotPrepareAnotherShortcut() {
+        val context = RuntimeEnvironment.getApplication()
+        val store = MemoryKeyValueStore()
+        val contact = AccountContact(AccountId("account"), "https://a.example", Contact("anna", "Мама"))
+        val shortcuts = ContactShortcuts(context, TestPhotos(), AuthStore(store, PrefixTokenCipher()), ContactCache(store))
+        val manager = context.getSystemService(ShortcutManager::class.java)
+        manager.requestPinShortcut(shortcuts.create(contact), null)
+        assertTrue(shortcuts.preparePin(contact).alreadyPinned)
+
+        Shadow.extract<ShortcutEnabledStateShadow>(manager).queryFailure = IllegalStateException("User locked")
+        assertThrows(IllegalStateException::class.java) { shortcuts.preparePin(contact) }
+        assertNull(shortcuts.pinnedContacts.value)
+    }
+
     @Test
     fun removalDisablesOnlyRelatedShortcutsButCallAvailabilityDoesNot() {
         val context = RuntimeEnvironment.getApplication()
@@ -129,6 +171,15 @@ private class TestPhotos : ContactPhotoReader {
 // Robolectric 4.16 moves disabled shortcuts between maps but does not update isEnabled.
 @Implements(ShortcutManager::class)
 class ShortcutEnabledStateShadow : ShadowShortcutManager() {
+    var pinnedOverride: List<ShortcutInfo>? = null
+    var queryFailure: RuntimeException? = null
+
+    @Implementation
+    override fun getPinnedShortcuts(): List<ShortcutInfo> {
+        queryFailure?.let { throw it }
+        return pinnedOverride ?: super.getPinnedShortcuts()
+    }
+
     @Implementation
     override fun disableShortcuts(ids: List<String>, message: CharSequence) {
         changeEnabledFlag(ids, "addFlags")

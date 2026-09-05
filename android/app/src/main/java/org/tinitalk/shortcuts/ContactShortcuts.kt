@@ -22,6 +22,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.tinitalk.MainActivity
 import org.tinitalk.R
@@ -43,6 +45,7 @@ private const val CallShortcutAction = "org.tinitalk.action.CALL_CONTACT_SHORTCU
 private const val IconSize = 192
 
 private data class ShortcutVisuals(val name: String, val photoGeneration: Int?)
+internal data class PreparedContactShortcut(val info: ShortcutInfo, val alreadyPinned: Boolean)
 
 internal fun contactShortcutIntent(context: Context, peer: AccountPeerKey): Intent =
     Intent(context, ShortcutCallActivity::class.java)
@@ -69,6 +72,8 @@ internal class ContactShortcuts(
     private val manager = context.getSystemService(ShortcutManager::class.java)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshRequests = Channel<Unit>(Channel.CONFLATED)
+    private val pinnedContactsFlow = MutableStateFlow<Set<AccountPeerKey>?>(null)
+    val pinnedContacts = pinnedContactsFlow.asStateFlow()
     private val lastVisuals = mutableMapOf<String, ShortcutVisuals>()
     private val contactObserver: (AccountId) -> Unit = { refresh() }
     private val accountObserver: (AuthSessionEvent) -> Unit = { refresh() }
@@ -100,7 +105,7 @@ internal class ContactShortcuts(
     internal fun syncPinned() {
         if (closed) return
         val manager = manager ?: return
-        val pinned = manager.pinnedShortcuts
+        val pinned = readPinned()
         lastVisuals.keys.retainAll(pinned.map { it.id }.toSet())
         if (pinned.isEmpty()) return
         val accounts = auth.list()
@@ -150,6 +155,25 @@ internal class ContactShortcuts(
     }
 
     fun isSupported(): Boolean = manager?.isRequestPinShortcutSupported == true
+
+    @Synchronized
+    private fun readPinned(): List<ShortcutInfo> {
+        try {
+            val pinned = checkNotNull(manager).pinnedShortcuts
+            pinnedContactsFlow.value = pinned.mapNotNull { shortcutPeer(it.intent) }.toSet()
+            return pinned
+        } catch (error: Exception) {
+            // Unknown is not the same as an empty launcher, and must not permit a blind retry.
+            pinnedContactsFlow.value = null
+            throw error
+        }
+    }
+
+    // Always recheck the launcher before offering to pin, even if the menu showed an older state.
+    fun preparePin(contact: AccountContact): PreparedContactShortcut {
+        val pinned = readPinned().any { shortcutPeer(it.intent) == contact.peerKey }
+        return PreparedContactShortcut(create(contact), pinned)
+    }
 
     // Preparing the bitmap may read a local photo: call this off the UI thread.
     fun create(contact: AccountContact): ShortcutInfo = create(contact, photos.loadBitmap(contact.address, IconSize))

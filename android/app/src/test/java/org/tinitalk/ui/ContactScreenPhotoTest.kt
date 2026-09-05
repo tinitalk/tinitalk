@@ -3,6 +3,7 @@ package org.tinitalk.ui
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertWidthIsAtLeast
@@ -48,6 +49,40 @@ class ContactScreenPhotoTest {
     private val address = ContactAddress.of("https://example.com", "alex")
     private val target = ContactPhotoEditTarget(AccountId("account-1"), address, "Алексей")
     private val contact = Contact(login = "alex", displayName = "Алексей")
+
+    @Test
+    fun shortcutMenuUpdatesFromSystemStateAndStillAllowsExplicitRepeatAction() {
+        val pinned = mutableStateOf<Boolean?>(null)
+        var pinRequests = 0
+        var refreshRequests = 0
+        render {
+            ContactScreen(
+                contact = contact,
+                contactAddress = address,
+                nameUpdate = ContactNameUpdateState(),
+                history = ContactHistoryState(),
+                ongoingCall = null,
+                onBack = {}, onCall = {}, onOpenCall = {}, onRename = {},
+                onRenameHandled = {}, onLoadMoreHistory = {}, onRetryHistory = {},
+                shortcutPinned = pinned.value,
+                onPinContact = { pinRequests++ },
+                onRefreshShortcuts = { refreshRequests++ },
+            )
+        }
+
+        composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
+        composeRule.onNodeWithText("На главный экран").assertExists()
+        assertEquals(2, refreshRequests)
+        composeRule.runOnIdle { pinned.value = true }
+        composeRule.onNodeWithText("Уже на главном экране").performClick()
+        assertEquals(1, pinRequests)
+
+        composeRule.runOnIdle { pinned.value = false }
+        composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
+        composeRule.onNodeWithText("На главный экран").assertExists()
+        composeRule.onNodeWithText("Уже на главном экране").assertDoesNotExist()
+        assertEquals(3, refreshRequests)
+    }
 
     @Test
     fun actionSheetOffersGalleryFilesAndRemoveWithoutLocalStorageWarning() {
