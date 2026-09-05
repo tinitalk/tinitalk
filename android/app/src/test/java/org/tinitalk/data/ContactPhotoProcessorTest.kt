@@ -18,7 +18,7 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import android.media.ExifInterface
+import androidx.exifinterface.media.ExifInterface
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])

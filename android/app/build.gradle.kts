@@ -129,6 +129,7 @@ kotlin {
 dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.core.telecom)
     implementation(libs.gson)
