@@ -10,7 +10,7 @@ val tinitalkAbi = providers.gradleProperty("tinitalkAbi").getOrElse("all")
 require(tinitalkAbi == "arm64" || tinitalkAbi == "all") {
     "tinitalkAbi must be 'arm64' or 'all'"
 }
-val tinitalkVersionName = "0.11"
+val tinitalkVersionName = "0.11.0"
 
 val releaseSigningPropertiesFile = rootProject.file("keystore/release.properties")
 val releaseSigningProperties = Properties().apply {
