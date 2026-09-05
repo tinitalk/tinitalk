@@ -1,0 +1,172 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_CERT_SHA256: "68:D3:AC:A0:56:3C:44:CF:4A:7D:FC:2D:E8:9F:12:C8:FF:84:59:F4:EE:07:C5:A8:CA:AC:73:7F:E8:C2:6D:BF"
+
+jobs:
+  release:
+    name: Build release draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check tag and application version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! grep -Fqx "val tinitalkVersionName = \"$VERSION\"" \
+            android/app/build.gradle.kts; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Android versionName"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::Release tag must point to a commit in main"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up JDK
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-provider: basic
+
+      - name: Verify Go dependencies
+        run: go mod verify
+
+      - name: Test Go
+        run: go test -count=1 ./...
+
+      - name: Vet Go
+        run: go vet ./...
+
+      - name: Build Linux servers
+        run: |
+          make server GOARCH=amd64
+          make server GOARCH=arm64
+
+      - name: Restore Android signing configuration
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_STORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+          umask 077
+          mkdir -p android/keystore
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" \
+            | base64 --decode \
+            > android/keystore/release.jks
+          test -s android/keystore/release.jks
+
+          {
+            printf 'storeFile=keystore/release.jks\n'
+            printf 'storePassword=%s\n' "$ANDROID_STORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+          } > android/keystore/release.properties
+
+      - name: Lint Android
+        working-directory: android
+        run: ./gradlew --no-daemon lintRelease -PtinitalkAbi=arm64
+
+      - name: Build signed APK
+        run: make client-release
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          APK="dist/tinitalk-v$VERSION.apk"
+          test -f "$APK"
+
+          APKSIGNER="$(
+            find "$ANDROID_HOME/build-tools" \
+              -type f -name apksigner -print \
+              | sort -V \
+              | tail -n 1
+          )"
+          test -x "$APKSIGNER"
+
+          SIGNATURE_OUTPUT="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1)"
+          printf '%s\n' "$SIGNATURE_OUTPUT"
+
+          EXPECTED_CERT_SHA256="${RELEASE_CERT_SHA256//:/}"
+          if ! printf '%s\n' "$SIGNATURE_OUTPUT" \
+            | tr -d ':' \
+            | grep -Fqi "certificate SHA-256 digest $EXPECTED_CERT_SHA256"; then
+            echo "::error::APK signing certificate does not match RELEASE_CERT_SHA256"
+            exit 1
+          fi
+
+      - name: Remove Android signing files
+        if: always()
+        shell: bash
+        run: |
+          rm -f \
+            android/keystore/release.jks \
+            android/keystore/release.properties
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd dist
+          sha256sum \
+            tinitalk-linux-amd64 \
+            tinitalk-linux-arm64 \
+            "tinitalk-v$VERSION.apk" \
+            > SHA256SUMS
+
+      - name: Create GitHub Release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          gh release create "$GITHUB_REF_NAME" \
+            dist/tinitalk-linux-amd64 \
+            dist/tinitalk-linux-arm64 \
+            "dist/tinitalk-v$VERSION.apk" \
+            dist/SHA256SUMS \
+            --verify-tag \
+            --generate-notes \
+            --draft \
+            --prerelease \
+            --title "TiniTalk $VERSION"

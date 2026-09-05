@@ -1,6 +1,7 @@
 # TiniTalk
 
 [![CI](https://github.com/tinitalk/tinitalk/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/tinitalk/tinitalk/actions/workflows/ci.yml?query=branch%3Amain)
+[![Release](https://img.shields.io/github/v/release/tinitalk/tinitalk?include_prereleases&sort=semver)](https://github.com/tinitalk/tinitalk/releases)
 
 TiniTalk — self-hosted приложение для аудио- и видеозвонков один на один для
 небольшой семьи или закрытой группы. Для работы нужно развернуть собственный
