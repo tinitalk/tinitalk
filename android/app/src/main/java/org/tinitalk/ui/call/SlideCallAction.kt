@@ -38,6 +38,8 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.R
@@ -129,7 +131,7 @@ internal fun SlideCallAction(
             )
             Box(
                 modifier = Modifier
-                    .offset(y = -(travel * renderedProgress))
+                    .offset { IntOffset(0, (-travel.toPx() * renderedProgress).roundToInt()) }
                     .size(72.dp)
                     .clip(CircleShape)
                     .background(if (enabled) color else color.copy(alpha = 0.45f))

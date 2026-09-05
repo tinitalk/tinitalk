@@ -1,5 +1,6 @@
 package org.tinitalk.ui.call
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -49,6 +50,8 @@ internal fun VideoCallRenderer(
     }
 }
 
+// RendererTouchListener forwards taps to performClick; setOnClickListener also serves TalkBack.
+@SuppressLint("ClickableViewAccessibility")
 @Composable
 private fun VideoCallRendererForSource(
     source: VideoRenderSource,
@@ -246,6 +249,8 @@ private class VideoRendererHandle(
 }
 
 /** Keeps adaptive incoming resolutions from repeatedly resizing the full-screen Surface. */
+// Created only by VideoRendererHandle, never inflated from XML.
+@SuppressLint("ViewConstructor")
 private class StableSurfaceViewRenderer(
     context: Context,
     private val onSurfaceReady: () -> Unit,
