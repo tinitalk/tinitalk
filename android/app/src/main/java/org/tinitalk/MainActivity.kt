@@ -26,6 +26,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSessionBinding
@@ -63,9 +65,7 @@ import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.AccountBadgeRefreshId
-import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
-import org.tinitalk.telecom.OutgoingCallStartResult
 import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.AccountPage
@@ -117,6 +117,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var network: NetworkAvailability
     private var screenState by mutableStateOf(MainScreenState())
     private var callUiState by mutableStateOf(CallUiStateStore.snapshot())
+    private var callLaunchError by mutableStateOf<CallLaunchError?>(null)
+    private var launchingCall = false
     private var loginResetKey by mutableIntStateOf(0)
     @Volatile
     private var mainScreenResumed = false
@@ -295,6 +297,16 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                     )
+                    callLaunchError?.let { error ->
+                        CallLaunchErrorDialog(
+                            error,
+                            onDismiss = { callLaunchError = null },
+                            onRequestMicrophone = {
+                                callLaunchError = null
+                                requestMicrophonePermission()
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -411,31 +423,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startCall(accountContact: AccountContact) {
-        val contact = accountContact.contact
-        val currentCall = CallServiceState.snapshot()
-        if (currentCall.phase != CallPhase.Idle && currentCall.phase != CallPhase.Ended) {
-            startActivity(CallActivity.ongoingIntent(this))
-            return
-        }
-        when (val start = CallForegroundService.tryStartOutgoing(this, accountContact.peerKey, contact.displayName)) {
-            is OutgoingCallStartResult.Started -> startActivity(
-                CallActivity.outgoingIntent(
-                    this,
-                    accountContact.peerKey,
-                    accountContact.address,
-                    contact.displayName,
-                    start.key,
-                ),
-            )
-            is OutgoingCallStartResult.Busy -> {
-                val pending = IncomingCallController().load(this)?.invite
-                    ?.takeIf { it.owner == start.owner }
-                if (pending != null) IncomingCallController().openScreen(this, pending)
-                else startActivity(CallActivity.ongoingIntent(this))
+        if (launchingCall) return
+        launchingCall = true
+        lifecycleScope.launch {
+            try {
+                callLaunchError = launchContactCall(accountContact.peerKey)
+            } finally {
+                launchingCall = false
             }
-            OutgoingCallStartResult.Offline -> showNoInternetMessage()
-            OutgoingCallStartResult.Unavailable ->
-                Toast.makeText(this, "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043d\u0430\u0447\u0430\u0442\u044c \u0437\u0432\u043e\u043d\u043e\u043a", Toast.LENGTH_SHORT).show()
         }
     }
 
