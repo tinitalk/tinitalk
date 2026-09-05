@@ -17,15 +17,24 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSessionBinding
@@ -63,9 +72,7 @@ import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.AccountBadgeRefreshId
-import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
-import org.tinitalk.telecom.OutgoingCallStartResult
 import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.AccountPage
@@ -117,6 +124,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var network: NetworkAvailability
     private var screenState by mutableStateOf(MainScreenState())
     private var callUiState by mutableStateOf(CallUiStateStore.snapshot())
+    private var callLaunchError by mutableStateOf<CallLaunchError?>(null)
+    private var launchingCall = false
+    private var pinningShortcut = false
+    private var shortcutToConfirm by mutableStateOf<AccountContact?>(null)
+    private val contactShortcuts get() = (application as TinitalkApplication).contactShortcuts
     private var loginResetKey by mutableIntStateOf(0)
     @Volatile
     private var mainScreenResumed = false
@@ -196,6 +208,7 @@ class MainActivity : ComponentActivity() {
             TiniTalkTheme(darkTheme = true) {
                 CompositionLocalProvider(LocalContactPhotoReader provides (application as TinitalkApplication).contactPhotoStore) {
                     val contactNameUpdate = contactNameViewModel.state
+                    val pinnedContacts by contactShortcuts.pinnedContacts.collectAsState()
                     val visibleScreenState = screenState.withContactUpdates(contactNameViewModel.updatedContacts)
                     LaunchedEffect(contactNameUpdate.authExpired) {
                         if (contactNameUpdate.authExpired) {
@@ -228,6 +241,9 @@ class MainActivity : ComponentActivity() {
                         onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
                         onRefreshPermissions = ::refreshPermissions,
                         onCall = ::startCall,
+                        onPinContact = { pinContact(it) },
+                        pinnedContacts = pinnedContacts,
+                        onRefreshShortcuts = contactShortcuts::refresh,
                         onRenameContact = { key, customName ->
                             if (network.available) {
                                 contactNameViewModel.rename(repository, key, customName)
@@ -295,6 +311,32 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                     )
+                    callLaunchError?.let { error ->
+                        CallLaunchErrorDialog(
+                            error,
+                            onDismiss = { callLaunchError = null },
+                            onRequestMicrophone = {
+                                callLaunchError = null
+                                requestMicrophonePermission()
+                            },
+                        )
+                    }
+                    shortcutToConfirm?.let { contact ->
+                        AlertDialog(
+                            onDismissRequest = { shortcutToConfirm = null },
+                            title = { Text("Ярлык уже добавлен") },
+                            text = { Text("Ярлык контакта «${contact.displayName}» уже добавлен на главный экран. Добавить ещё один?") },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    shortcutToConfirm = null
+                                    pinContact(contact, allowDuplicate = true)
+                                }) { Text("Добавить ещё") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { shortcutToConfirm = null }) { Text("Отмена") }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -411,31 +453,49 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startCall(accountContact: AccountContact) {
-        val contact = accountContact.contact
-        val currentCall = CallServiceState.snapshot()
-        if (currentCall.phase != CallPhase.Idle && currentCall.phase != CallPhase.Ended) {
-            startActivity(CallActivity.ongoingIntent(this))
-            return
-        }
-        when (val start = CallForegroundService.tryStartOutgoing(this, accountContact.peerKey, contact.displayName)) {
-            is OutgoingCallStartResult.Started -> startActivity(
-                CallActivity.outgoingIntent(
-                    this,
-                    accountContact.peerKey,
-                    accountContact.address,
-                    contact.displayName,
-                    start.key,
-                ),
-            )
-            is OutgoingCallStartResult.Busy -> {
-                val pending = IncomingCallController().load(this)?.invite
-                    ?.takeIf { it.owner == start.owner }
-                if (pending != null) IncomingCallController().openScreen(this, pending)
-                else startActivity(CallActivity.ongoingIntent(this))
+        if (launchingCall) return
+        launchingCall = true
+        lifecycleScope.launch {
+            try {
+                callLaunchError = launchContactCall(accountContact.peerKey)
+            } finally {
+                launchingCall = false
             }
-            OutgoingCallStartResult.Offline -> showNoInternetMessage()
-            OutgoingCallStartResult.Unavailable ->
-                Toast.makeText(this, "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043d\u0430\u0447\u0430\u0442\u044c \u0437\u0432\u043e\u043d\u043e\u043a", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun pinContact(contact: AccountContact, allowDuplicate: Boolean = false) {
+        if (pinningShortcut) return
+        pinningShortcut = true
+        lifecycleScope.launch {
+            try {
+                val supported = withContext(Dispatchers.IO) { runCatching { contactShortcuts.isSupported() } }
+                if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
+                if (supported.getOrNull() == false) {
+                    Toast.makeText(this@MainActivity, "Этот главный экран не поддерживает добавление ярлыков", Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+                val prepared = withContext(Dispatchers.IO) {
+                    runCatching {
+                        supported.getOrThrow()
+                        resolveContactCallTarget(authStore, contactCache, contact.peerKey)?.contact?.let(contactShortcuts::preparePin)
+                    }
+                }
+                if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
+                val shortcut = prepared.getOrNull()
+                if (shortcut?.alreadyPinned == true && !allowDuplicate) {
+                    shortcutToConfirm = contact
+                    return@launch
+                }
+                val requested = shortcut != null && withContext(Dispatchers.IO) {
+                    runCatching { contactShortcuts.requestPin(shortcut.info) }.getOrDefault(false)
+                }
+                if (!requested && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    Toast.makeText(this@MainActivity, "Не удалось добавить ярлык. Проверьте контакт и попробуйте ещё раз.", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                pinningShortcut = false
+            }
         }
     }
 
@@ -1222,6 +1282,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        contactShortcuts.refresh()
         mainScreenResumed = true
         cleanupStaleIncomingPresentation()
         consumeAccountAdditionIfResumed()

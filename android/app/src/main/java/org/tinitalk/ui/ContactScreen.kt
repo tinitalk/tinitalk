@@ -93,12 +93,16 @@ fun ContactScreen(
     removeErrorMessage: String? = null,
     onRemoveContact: () -> Unit = {},
     onRemoveContactDismissed: () -> Unit = {},
+    onPinContact: () -> Unit = {},
+    shortcutPinned: Boolean? = null,
+    onRefreshShortcuts: () -> Unit = {},
 ) {
     var renameVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var photoActionsVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var contactMenuVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var removeContactVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var unavailableCallVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
+    LaunchedEffect(identityKey) { onRefreshShortcuts() }
     LaunchedEffect(contact.canCall) {
         if (contact.canCall != false) unavailableCallVisible = false
     }
@@ -163,7 +167,10 @@ fun ContactScreen(
                     )
                     Box {
                         IconButton(
-                            onClick = { contactMenuVisible = true },
+                            onClick = {
+                                onRefreshShortcuts()
+                                contactMenuVisible = true
+                            },
                             modifier = Modifier.size(48.dp),
                         ) {
                             Icon(
@@ -221,6 +228,30 @@ fun ContactScreen(
                                 onClick = {
                                     contactMenuVisible = false
                                     photoActionsVisible = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (shortcutPinned == true) "Уже на главном экране" else "На главный экран",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(if (shortcutPinned == true) R.drawable.ic_server_available else R.drawable.ic_add_to_home),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                        tint = if (shortcutPinned == true) CallAnswerGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                },
+                                enabled = !removing,
+                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-shortcut"),
+                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                                onClick = {
+                                    contactMenuVisible = false
+                                    onPinContact()
                                 },
                             )
                             DropdownMenuItem(

@@ -38,6 +38,7 @@ import org.tinitalk.telecom.AndroidTelecomRegistrar
 import org.tinitalk.telecom.CallForegroundService
 import org.tinitalk.telecom.IncomingCallController
 import org.tinitalk.telecom.TelecomCallController
+import org.tinitalk.shortcuts.ContactShortcuts
 import java.util.concurrent.Executors
 
 class TinitalkApplication : Application() {
@@ -52,6 +53,8 @@ class TinitalkApplication : Application() {
     lateinit var contactPhotoAccountLifecycle: ContactPhotoAccountLifecycle
         private set
     lateinit var networkAvailability: NetworkAvailability
+        private set
+    internal lateinit var contactShortcuts: ContactShortcuts
         private set
     private val authSessionObserver: (AuthSessionEvent) -> Unit = {
         mainHandler.post {
@@ -79,6 +82,8 @@ class TinitalkApplication : Application() {
             },
         )
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+        contactShortcuts = ContactShortcuts(this, contactPhotoStore, authStore, ContactCache(SharedPreferencesKeyValueStore(this)))
+        contactShortcuts.observeChanges()
         contactPhotoAccountLifecycle = ContactPhotoAccountLifecycle(contactPhotoStore) { serverUrl ->
             authStore.list().any { account -> normalizeServerUrl(account.session.url) == normalizeServerUrl(serverUrl) }
         }
@@ -101,6 +106,11 @@ class TinitalkApplication : Application() {
         registerActivityLifecycleCallbacks(AppActivityVisibility)
         runCatching { TelecomCallController(AndroidTelecomRegistrar(this)).registerAudioOnly() }
         AuthSessionEvents.observe(authSessionObserver)
+    }
+
+    override fun onTerminate() {
+        contactShortcuts.close()
+        super.onTerminate()
     }
 
     private fun restoreIncomingCall() {
