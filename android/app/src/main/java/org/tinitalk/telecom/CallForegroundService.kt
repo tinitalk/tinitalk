@@ -278,8 +278,8 @@ class CallForegroundService : Service() {
         if (coordinator != null && !(callResourcesReleased && replacesTerminalCall(intent)) &&
             !acceptsRuntimeAction(intent.action, requestOwner)
         ) return START_NOT_STICKY
-        if (rejectOfflineOutgoingStart(intent?.action, networkAvailability().canStartNetworkAction())) {
-            requestOwner?.let(GlobalCallAdmission::releaseStaged)
+        if (rejectOfflineOutgoingStart(intent.action, networkAvailability().canStartNetworkAction())) {
+            GlobalCallAdmission.releaseStaged(requestOwner)
             val phase = coordinator?.snapshot()?.phase ?: CallServiceState.snapshot().phase
             if (phase == CallPhase.Idle || phase == CallPhase.Ended) stopSelf(startId)
             return START_NOT_STICKY
@@ -288,7 +288,7 @@ class CallForegroundService : Service() {
             resetReleasedRuntime()
         }
         if (finishing) {
-            endSystemCall(requestOwner?.key)
+            endSystemCall(requestOwner.key)
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -299,12 +299,12 @@ class CallForegroundService : Service() {
                 if (!satisfyTerminalForegroundStart()) {
                     finishing = true
                     terminalSignalGate.close()
-                    endSystemCall(requestOwner?.key)
+                    endSystemCall(requestOwner.key)
                     stopSelf(startId)
                 }
             } else {
                 finishing = true
-                endSystemCall(requestOwner?.key)
+                endSystemCall(requestOwner.key)
                 stopSelf(startId)
                 return START_NOT_STICKY
             }
@@ -314,8 +314,8 @@ class CallForegroundService : Service() {
         val runtimeReady = runCatching { ensureRuntime(requestOwner) }.getOrDefault(false)
         if (!runtimeReady) {
             finishing = true
-            requestOwner?.let(GlobalCallAdmission::releaseStaged)
-            releaseCallResources(requestOwner?.key)
+            GlobalCallAdmission.releaseStaged(requestOwner)
+            releaseCallResources(requestOwner.key)
             stopSelf()
             return START_NOT_STICKY
         }

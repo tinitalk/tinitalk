@@ -19,7 +19,6 @@ import org.tinitalk.data.signal.SignalEvent
 import org.tinitalk.data.AccountId
 import org.tinitalk.push.IncomingInvite
 import java.time.Instant
-import kotlin.jvm.functions.Function0
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

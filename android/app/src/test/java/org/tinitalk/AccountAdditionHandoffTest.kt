@@ -26,7 +26,7 @@ class AccountAdditionHandoffTest {
         handoff.removeObserver(previousActivityObserver)
 
         var replacementActivitySignals = 0
-        handoff.observe { replacementActivitySignals++; Unit }
+        handoff.observe { replacementActivitySignals++ }
 
         assertEquals(1, replacementActivitySignals)
         assertEquals(listOf(success, failure), handoff.drain())

@@ -7,6 +7,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.os.Bundle
+import androidx.core.os.BundleCompat
 import android.service.notification.StatusBarNotification
 import org.tinitalk.CallActivity
 import org.tinitalk.MainActivity
@@ -221,7 +223,7 @@ class IncomingCallNotifierTest {
 
         val notification = childFor(context.getSystemService(NotificationManager::class.java), "anna")
         val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
-            requireNotNull(notification.extras.getParcelableArray(Notification.EXTRA_MESSAGES)),
+            requireNotNull(BundleCompat.getParcelableArray(notification.extras, Notification.EXTRA_MESSAGES, Bundle::class.java)),
         )
         val sender = requireNotNull(messages.single().senderPerson)
         assertEquals(ContactAddress.of(binding.serverUrl, "anna"), loadedAddress)
@@ -264,7 +266,7 @@ class IncomingCallNotifierTest {
 
         val notification = childFor(context.getSystemService(NotificationManager::class.java), "anna")
         val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
-            requireNotNull(notification.extras.getParcelableArray(Notification.EXTRA_MESSAGES)),
+            requireNotNull(BundleCompat.getParcelableArray(notification.extras, Notification.EXTRA_MESSAGES, Bundle::class.java)),
         )
 
         assertEquals(Notification.MessagingStyle::class.java.name, notification.extras.getString(Notification.EXTRA_TEMPLATE))
@@ -324,7 +326,7 @@ class IncomingCallNotifierTest {
         queued.last().run()
         val afterCurrentLoad = childFor(manager, "ira")
         val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
-            requireNotNull(afterCurrentLoad.extras.getParcelableArray(Notification.EXTRA_MESSAGES)),
+            requireNotNull(BundleCompat.getParcelableArray(afterCurrentLoad.extras, Notification.EXTRA_MESSAGES, Bundle::class.java)),
         )
         val sender = requireNotNull(messages.single().senderPerson)
         assertEquals("Ira", sender.name)

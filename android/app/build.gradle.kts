@@ -46,6 +46,8 @@ android {
     defaultConfig {
         applicationId = "org.tinitalk"
         minSdk = 26
+        // API 37 requires a separate LAN-permission and certificate-transparency migration.
+        //noinspection OldTargetApi
         targetSdk = 36
         versionCode = 16
         versionName = tinitalkVersionName
@@ -53,6 +55,8 @@ android {
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
         buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
         if (tinitalkAbi == "arm64") {
+            // This opt-in compact APK is for ARM64 phones; the default APK keeps all ABIs.
+            //noinspection ChromeOsAbiSupport
             ndk {
                 abiFilters += "arm64-v8a"
             }
@@ -102,7 +106,7 @@ android {
     }
 }
 
-val validateReleaseSigning by tasks.registering {
+val validateReleaseSigning = tasks.register("validateReleaseSigning") {
     group = "verification"
     description = "Checks that the release signing key is configured."
     doLast {
@@ -156,7 +160,8 @@ dependencies {
 
 val requiredWebRtcJniStrings = listOf(
     // Existing audio-call JNI contract.
-    "Lorg/jni_zero/JniInit;",
+    "Lorg/jni_zero/JniZero;",
+    "Lorg/jni_zero/CommonApis;",
     "Lorg/webrtc/PeerConnection;",
     "Lorg/webrtc/PeerConnection\$RTCConfiguration;",
     "Lorg/webrtc/PeerConnection\$Observer;",

@@ -806,7 +806,7 @@ class IncomingCallNotifier(
                     CallActivity.redialIntent(
                         context,
                         peer,
-                        redialName ?: login,
+                        redialName,
                         binding,
                     ),
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
