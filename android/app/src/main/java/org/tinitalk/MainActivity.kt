@@ -69,7 +69,6 @@ import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.AccountBadgeRefreshId
 import org.tinitalk.telecom.IncomingCallController
-import org.tinitalk.shortcuts.ContactShortcuts
 import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.AccountPage
@@ -124,7 +123,7 @@ class MainActivity : ComponentActivity() {
     private var callLaunchError by mutableStateOf<CallLaunchError?>(null)
     private var launchingCall = false
     private var pinningShortcut = false
-    private val contactShortcuts by lazy { ContactShortcuts(this, (application as TinitalkApplication).contactPhotoStore) }
+    private val contactShortcuts get() = (application as TinitalkApplication).contactShortcuts
     private var loginResetKey by mutableIntStateOf(0)
     @Volatile
     private var mainScreenResumed = false
@@ -1247,6 +1246,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        contactShortcuts.refresh()
         mainScreenResumed = true
         cleanupStaleIncomingPresentation()
         consumeAccountAdditionIfResumed()
