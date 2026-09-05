@@ -8,10 +8,10 @@ provides them.
 
 | Component | Version | Source | License |
 | --- | --- | --- | --- |
-| Go standard library and vendored modules | 1.26.7 | [source](https://go.googlesource.com/go/+/refs/tags/go1.26.7) | [BSD-3-Clause](https://go.googlesource.com/go/+/refs/tags/go1.26.7/LICENSE), [patent grant](https://go.googlesource.com/go/+/refs/tags/go1.26.7/PATENTS) |
+| Go standard library and vendored modules | 1.26.8 | [source](https://go.googlesource.com/go/+/refs/tags/go1.26.8) | [BSD-3-Clause](https://go.googlesource.com/go/+/refs/tags/go1.26.8/LICENSE), [patent grant](https://go.googlesource.com/go/+/refs/tags/go1.26.8/PATENTS) |
 | `github.com/dustin/go-humanize` | 1.0.1 | [source](https://github.com/dustin/go-humanize/tree/v1.0.1) | [MIT](https://github.com/dustin/go-humanize/blob/v1.0.1/LICENSE) |
 | `github.com/ergochat/webpush-go/v2` | 2.0.0 | [source](https://github.com/ergochat/webpush-go/tree/v2.0.0) | [MIT](https://github.com/ergochat/webpush-go/blob/v2.0.0/LICENSE) |
-| `github.com/golang-jwt/jwt/v5` | 5.2.1 | [source](https://github.com/golang-jwt/jwt/tree/v5.2.1) | [MIT](https://github.com/golang-jwt/jwt/blob/v5.2.1/LICENSE) |
+| `github.com/golang-jwt/jwt/v5` | 5.2.2 | [source](https://github.com/golang-jwt/jwt/tree/v5.2.2) | [MIT](https://github.com/golang-jwt/jwt/blob/v5.2.2/LICENSE) |
 | `github.com/google/uuid` | 1.6.0 | [source](https://github.com/google/uuid/tree/v1.6.0) | [BSD-3-Clause](https://github.com/google/uuid/blob/v1.6.0/LICENSE) |
 | `github.com/gorilla/websocket` | 1.5.3 | [source](https://github.com/gorilla/websocket/tree/v1.5.3) | [BSD-2-Clause](https://github.com/gorilla/websocket/blob/v1.5.3/LICENSE) |
 | `github.com/pion/dtls/v3` | 3.1.4 | [source](https://github.com/pion/dtls/tree/v3.1.4) | [MIT](https://github.com/pion/dtls/blob/v3.1.4/LICENSE) |
@@ -22,7 +22,7 @@ provides them.
 | `github.com/pion/turn/v5` | 5.0.9 | [source](https://github.com/pion/turn/tree/v5.0.9) | [MIT](https://github.com/pion/turn/blob/v5.0.9/LICENSE) |
 | `github.com/remyoudompheng/bigfft` | 24d4a6f8daec | [source](https://github.com/remyoudompheng/bigfft/tree/24d4a6f8daec) | [BSD-3-Clause](https://github.com/remyoudompheng/bigfft/blob/24d4a6f8daec/LICENSE) |
 | `github.com/wlynxg/anet` | 0.0.5 | [source](https://github.com/wlynxg/anet/tree/v0.0.5) | [BSD-3-Clause](https://github.com/wlynxg/anet/blob/v0.0.5/LICENSE) |
-| `golang.org/x/crypto` | 0.48.0 | [source](https://go.googlesource.com/crypto/+/refs/tags/v0.48.0) | [BSD-3-Clause](https://go.googlesource.com/crypto/+/refs/tags/v0.48.0/LICENSE), [patent grant](https://go.googlesource.com/crypto/+/refs/tags/v0.48.0/PATENTS) |
+| `golang.org/x/crypto` | 0.56.0 | [source](https://go.googlesource.com/crypto/+/refs/tags/v0.56.0) | [BSD-3-Clause](https://go.googlesource.com/crypto/+/refs/tags/v0.56.0/LICENSE), [patent grant](https://go.googlesource.com/crypto/+/refs/tags/v0.56.0/PATENTS) |
 | `golang.org/x/sys` | 0.47.0 | [source](https://go.googlesource.com/sys/+/refs/tags/v0.47.0) | [BSD-3-Clause](https://go.googlesource.com/sys/+/refs/tags/v0.47.0/LICENSE), [patent grant](https://go.googlesource.com/sys/+/refs/tags/v0.47.0/PATENTS) |
 | `modernc.org/libc` | 1.74.4 | [source](https://pkg.go.dev/modernc.org/libc@v1.74.4) | [license files](https://pkg.go.dev/modernc.org/libc@v1.74.4?tab=licenses) |
 | `modernc.org/mathutil` | 1.7.1 | [source](https://pkg.go.dev/modernc.org/mathutil@v1.7.1) | [BSD-3-Clause](https://pkg.go.dev/modernc.org/mathutil@v1.7.1?tab=licenses) |

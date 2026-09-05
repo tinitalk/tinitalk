@@ -10,7 +10,7 @@ TiniTalk — self-hosted приложение для аудио- и видеоз
 
 ## Сборка
 
-Для сборки TiniTalk-сервера нужны Go 1.26.7 или новее, Git и GNU Make. Для
+Для сборки TiniTalk-сервера нужны Go 1.26.8 или новее, Git и GNU Make. Для
 сборки Android-приложения дополнительно нужны JDK 17 и Android SDK Platform 37;
 Gradle запускается через wrapper. JDK должен быть настроен через `JAVA_HOME`
 или доступен как команда `java` через `PATH`.
