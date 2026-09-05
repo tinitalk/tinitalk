@@ -548,7 +548,10 @@ class IncomingCallNotifierTest {
 
         val manager = context.getSystemService(NotificationManager::class.java)
         val deadline = System.currentTimeMillis() + 2_000L
-        while (missedChildren(manager).size != 1 && System.currentTimeMillis() < deadline) {
+        while (
+            (missedChildren(manager).size != 1 || missedSummary(manager).number != 1) &&
+            System.currentTimeMillis() < deadline
+        ) {
             Thread.sleep(10)
         }
         val remaining = missedChildren(manager).single().notification
