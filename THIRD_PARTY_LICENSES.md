@@ -34,21 +34,29 @@ provides them.
 | Component | Version | Source | License |
 | --- | --- | --- | --- |
 | AndroidX libraries | Compose BOM 2026.08.00 and resolved runtime dependencies | [source](https://android.googlesource.com/platform/frameworks/support/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
-| Gson | 2.13.2 | [source](https://github.com/google/gson/tree/gson-parent-2.13.2) | [Apache-2.0](https://github.com/google/gson/blob/gson-parent-2.13.2/LICENSE) |
+| AndroidX ExifInterface | 1.4.2 | [source](https://android.googlesource.com/platform/frameworks/support/+/androidx-main/exifinterface/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| Gson | 2.14.0 | [source](https://github.com/google/gson/tree/gson-parent-2.14.0) | [Apache-2.0](https://github.com/google/gson/blob/gson-parent-2.14.0/LICENSE) |
 | Google Tink | 1.23.0 | [source](https://github.com/tink-crypto/tink-java/tree/v1.23.0) | [Apache-2.0](https://github.com/tink-crypto/tink-java/blob/v1.23.0/LICENSE) |
-| Error Prone annotations | 2.41.0 | [source](https://github.com/google/error-prone/tree/v2.41.0) | [Apache-2.0](https://github.com/google/error-prone/blob/v2.41.0/COPYING) |
+| Error Prone annotations | 2.48.0 | [source](https://github.com/google/error-prone/tree/v2.48.0) | [Apache-2.0](https://github.com/google/error-prone/blob/v2.48.0/COPYING) |
 | Guava listenablefuture | 1.0 | [source](https://github.com/google/guava) | [Apache-2.0](https://github.com/google/guava/blob/master/COPYING) |
 | Protocol Buffers Java | 4.33.6 | [source](https://github.com/protocolbuffers/protobuf/tree/6e1998413a5bca7c058b85999667893f167434bc) | [BSD-3-Clause](https://github.com/protocolbuffers/protobuf/blob/6e1998413a5bca7c058b85999667893f167434bc/LICENSE) |
-| OkHttp | 4.12.0 | [source](https://github.com/square/okhttp/tree/parent-4.12.0) | [Apache-2.0](https://github.com/square/okhttp/blob/parent-4.12.0/LICENSE.txt) |
-| Okio | 3.6.0 | [source](https://github.com/square/okio/tree/parent-3.6.0) | [Apache-2.0](https://github.com/square/okio/blob/parent-3.6.0/LICENSE.txt) |
-| OkHttp Public Suffix List data | 4.12.0 | [source](https://github.com/square/okhttp/blob/40cb04338da423f7f73e83025717652ed35b7896/okhttp/src/test/resources/okhttp3/internal/publicsuffix/public_suffix_list.dat) | [MPL-2.0](https://mozilla.org/MPL/2.0/) |
+| OkHttp | 5.5.0 | [source](https://github.com/lysine-dev/okhttp/tree/parent-5.5.0) | [Apache-2.0](https://github.com/lysine-dev/okhttp/blob/parent-5.5.0/LICENSE.txt) |
+| Okio | 3.18.1 | [source](https://github.com/lysine-dev/okio/tree/parent-3.18.1) | [Apache-2.0](https://github.com/lysine-dev/okio/blob/parent-3.18.1/LICENSE.txt) |
+| OkHttp Public Suffix List data | 2024-11-26 snapshot bundled with OkHttp 5.5.0 | [source](https://github.com/lysine-dev/okhttp/blob/parent-5.5.0/okhttp/src/jvmTest/resources/okhttp3/internal/publicsuffix/public_suffix_list.dat) | [MPL-2.0](https://mozilla.org/MPL/2.0/), [notice](https://github.com/lysine-dev/okhttp/blob/parent-5.5.0/okhttp/src/jvmTest/resources/okhttp3/internal/publicsuffix/NOTICE) |
+| Unicode IDNA mapping data used by OkHttp | 15.1.0 | [source](https://github.com/lysine-dev/okhttp/blob/parent-5.5.0/okhttp-idna-mapping-table/src/main/resources/okhttp3/internal/idna/IdnaMappingTable.txt) | [Unicode-3.0](https://www.unicode.org/license.txt) |
 | JSR305 | 3.0.2 | [source](https://code.google.com/archive/p/jsr-305/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0), [BSD-3-Clause](https://opensource.org/license/bsd-3-clause), [CC-BY-2.5](https://creativecommons.org/licenses/by/2.5/) |
-| Kotlin standard library | 2.3.0; JDK 7/8 compatibility artifacts 1.9.10 | [source](https://github.com/JetBrains/kotlin) | [Apache-2.0](https://github.com/JetBrains/kotlin/blob/v2.3.0/license/LICENSE.txt) |
-| Kotlin coroutines | 1.10.2 | [source](https://github.com/Kotlin/kotlinx.coroutines/tree/1.10.2) | [Apache-2.0](https://github.com/Kotlin/kotlinx.coroutines/blob/1.10.2/LICENSE.txt) |
+| Kotlin standard library | 2.4.10 | [source](https://github.com/JetBrains/kotlin/tree/v2.4.10) | [Apache-2.0](https://github.com/JetBrains/kotlin/blob/v2.4.10/license/LICENSE.txt) |
+| Kotlin coroutines | 1.11.0 | [source](https://github.com/Kotlin/kotlinx.coroutines/tree/1.11.0) | [Apache-2.0](https://github.com/Kotlin/kotlinx.coroutines/blob/1.11.0/LICENSE.txt) |
 | Kotlin serialization | 1.7.3 | [source](https://github.com/Kotlin/kotlinx.serialization/tree/v1.7.3) | [Apache-2.0](https://github.com/Kotlin/kotlinx.serialization/blob/v1.7.3/LICENSE.txt) |
 | JetBrains annotations | 23.0.0 | [source](https://github.com/JetBrains/java-annotations/tree/23.0.0) | [Apache-2.0](https://github.com/JetBrains/java-annotations/blob/23.0.0/LICENSE.txt) |
 | JSpecify | 1.0.0 | [source](https://github.com/jspecify/jspecify/tree/v1.0.0) | [Apache-2.0](https://github.com/jspecify/jspecify/blob/v1.0.0/LICENSE) |
-| UnifiedPush connector | 3.3.5 | [source](https://github.com/UnifiedPush/android-connector) | [Apache-2.0](https://github.com/UnifiedPush/android-connector/blob/main/LICENSE) |
-| UnifiedPush embedded FCM distributor | 3.1.0 | [source](https://github.com/UnifiedPush/android-embedded-fcm-distributor) | [Apache-2.0](https://github.com/UnifiedPush/android-embedded-fcm-distributor/blob/main/LICENSE) |
-| WebRTC SDK Android wrapper | 144.7559.12 | [source](https://github.com/webrtc-sdk/android/tree/v144.7559.12) | [MIT](https://github.com/webrtc-sdk/android/blob/500cadca96fa4be0fb5951c046fd611be181490c/LICENSE) |
-| WebRTC and bundled native components | 144.7559.12 | [source](https://github.com/webrtc-sdk/android/tree/v144.7559.12) | [upstream license bundle](https://github.com/webrtc-sdk/android/blob/500cadca96fa4be0fb5951c046fd611be181490c/Licenses/WEBRTC.md) |
+| UnifiedPush connector | 3.3.5 | [source](https://codeberg.org/UnifiedPush/android-connector/src/tag/3.3.5) | [Apache-2.0](https://codeberg.org/UnifiedPush/android-connector/src/tag/3.3.5/LICENSE) |
+| UnifiedPush embedded FCM distributor | 3.1.0 | [source](https://codeberg.org/UnifiedPush/android-embedded_fcm_distributor/src/tag/3.1.0) | [LGPL-2.1 in source](https://codeberg.org/UnifiedPush/android-embedded_fcm_distributor/src/tag/3.1.0/LICENSE); Apache-2.0 in published metadata (see below) |
+| WebRTC SDK Android wrapper | 150.7871.01 | [source](https://github.com/webrtc-sdk/android/tree/v150.7871.01) | [MIT](https://github.com/webrtc-sdk/android/blob/v150.7871.01/LICENSE) |
+| WebRTC and bundled native components | 150.7871.01 | [source](https://github.com/webrtc-sdk/android/tree/v150.7871.01) | [upstream license bundle](https://github.com/webrtc-sdk/android/blob/v150.7871.01/Licenses/WEBRTC.md) |
+
+UnifiedPush embedded FCM distributor 3.1.0 has conflicting upstream license
+information: its `LICENSE` contains LGPL 2.1, while its
+[Maven publication configuration](https://codeberg.org/UnifiedPush/android-embedded_fcm_distributor/src/tag/3.1.0/embedded_fcm_distributor/build.gradle)
+declares Apache-2.0. These are not presented as a confirmed dual-license choice;
+upstream clarification is needed before relying on Apache-2.0 alone.
