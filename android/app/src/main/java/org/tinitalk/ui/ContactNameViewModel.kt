@@ -32,7 +32,7 @@ class ContactNameViewModel : ViewModel() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var operationId = 0
 
-    fun rename(repository: ContactRepository, key: AccountPeerKey, customName: String?) {
+    fun rename(repository: ContactRepository, key: AccountPeerKey, customName: String) {
         if (state.saving) return
         val currentOperation = ++operationId
         state = ContactNameUpdateState(key = key, saving = true)

@@ -1,23 +1,20 @@
 package httpapi
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
 	"tinitalk/internal/state"
 )
 
 type contactResponse struct {
-	Login              string  `json:"login"`
-	DisplayName        string  `json:"display_name"`
-	DefaultDisplayName string  `json:"default_display_name"`
-	CustomName         *string `json:"custom_name"`
-	CanCall            bool    `json:"can_call"`
+	Login       string  `json:"login"`
+	DisplayName string  `json:"display_name"`
+	CustomName  *string `json:"custom_name"`
+	CanCall     bool    `json:"can_call"`
 }
 
 func (s *Server) contacts(w http.ResponseWriter, r *http.Request) {
@@ -91,22 +88,15 @@ func decodeContactCursor(value string) (*state.ContactCursor, error) {
 
 func (s *Server) contactName(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		CustomName json.RawMessage `json:"custom_name"`
+		CustomName string `json:"custom_name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || len(request.CustomName) == 0 {
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	name := ""
-	if !bytes.Equal(bytes.TrimSpace(request.CustomName), []byte("null")) {
-		if err := json.Unmarshal(request.CustomName, &name); err != nil || strings.TrimSpace(name) == "" {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-	}
 	owner := currentUser(r).Login
 	login := r.PathValue("login")
-	if err := s.db.SetContactName(owner, login, name); err != nil {
+	if err := s.db.SetContactName(owner, login, request.CustomName); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -183,10 +173,9 @@ func (s *Server) notifyContactChanged(recipient, contact string) {
 
 func contactJSON(contact state.Contact) contactResponse {
 	response := contactResponse{
-		Login:              contact.Login,
-		DisplayName:        contact.DisplayName,
-		DefaultDisplayName: contact.DefaultDisplayName,
-		CanCall:            contact.CanCall,
+		Login:       contact.Login,
+		DisplayName: contact.DisplayName,
+		CanCall:     contact.CanCall,
 	}
 	if contact.CustomName != "" {
 		response.CustomName = &contact.CustomName

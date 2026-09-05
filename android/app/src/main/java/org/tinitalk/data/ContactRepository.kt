@@ -154,7 +154,7 @@ class ContactRepository internal constructor(
                 configId = config.configId,
             )
             if (previous == null) {
-                authStore.add(accountId, session, config, "")
+                authStore.add(accountId, session, config)
             } else {
                 check(authStore.activateWebPushIfCurrent(accountId, previous, session, config)) {
                     "authentication state changed"
@@ -164,7 +164,6 @@ class ContactRepository internal constructor(
             api = api(session)
             val profile = api.me()
             val contacts = api.allContacts(profile.login)
-            runCatching { authStore.saveIfCurrent(accountId, session, session, profile.displayName) }
             contactCache?.replace(contacts.boundTo(accountId, session.url))
             contacts
         } catch (e: ApiException) {
@@ -204,7 +203,7 @@ class ContactRepository internal constructor(
             val claimedApi = api(session)
             val profile = claimedApi.me()
             val contacts = claimedApi.allContacts(profile.login)
-            val account = authStore.add(accountId, session, config, profile.displayName)
+            val account = authStore.add(accountId, session, config)
             committed = true
             val bound = contacts.boundTo(accountId, session.url)
             contactCache?.replace(bound)
@@ -265,7 +264,7 @@ class ContactRepository internal constructor(
         throw IOException("contact changed during refresh")
     }
 
-    fun updateContactName(accountId: AccountId, login: String, customName: String?): AccountContact? {
+    fun updateContactName(accountId: AccountId, login: String, customName: String): AccountContact? {
         val account = authStore.get(accountId) ?: return null
         return try {
             val contact = api(account.session).updateContactName(login, customName)

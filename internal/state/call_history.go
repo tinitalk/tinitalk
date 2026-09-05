@@ -314,7 +314,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 
 	rows, err := db.sql.Query(`
 		SELECT h.id, h.call_id, h.caller_id, peer.login,
-			COALESCE(personal.custom_name, peer.display_name),
+			COALESCE(NULLIF(personal.custom_name, ''), peer.login),
 			h.outcome, h.stage, h.started_at, h.connected_at, h.ended_at
 		FROM call_history h
 		JOIN users peer ON peer.id = CASE WHEN h.caller_id = ? THEN h.callee_id ELSE h.caller_id END
@@ -467,7 +467,7 @@ func (db *DB) markCallHistoryRead(login, peer string, throughID int64) (CallUnre
 func unreadMissedState(queryer callHistoryQueryer, userID int64) (CallUnreadState, error) {
 	var state CallUnreadState
 	rows, err := queryer.Query(`
-		SELECT caller.login, COALESCE(personal.custom_name, caller.display_name),
+		SELECT caller.login, COALESCE(NULLIF(personal.custom_name, ''), caller.login),
 			MAX(history.started_at), COUNT(*)
 		FROM call_history_unread unread
 		JOIN call_history history ON history.id = unread.call_history_id
@@ -475,7 +475,7 @@ func unreadMissedState(queryer callHistoryQueryer, userID int64) (CallUnreadStat
 		LEFT JOIN user_contacts personal
 			ON personal.owner_user_id = ? AND personal.contact_user_id = caller.id
 		WHERE unread.user_id = ?
-		GROUP BY caller.id, caller.login, personal.custom_name, caller.display_name
+		GROUP BY caller.id, caller.login, personal.custom_name
 		ORDER BY MAX(history.id) DESC
 	`, userID, userID)
 	if err != nil {

@@ -83,7 +83,7 @@ fun ContactScreen(
     onBack: () -> Unit,
     onCall: (Contact) -> Unit,
     onOpenCall: () -> Unit,
-    onRename: (customName: String?) -> Unit,
+    onRename: (customName: String) -> Unit,
     onRenameHandled: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryHistory: () -> Unit,
@@ -606,7 +606,7 @@ private fun RenameContactDialog(
     saving: Boolean,
     errorMessage: String?,
     onDismiss: () -> Unit,
-    onRename: (customName: String?) -> Unit,
+    onRename: (customName: String) -> Unit,
     onErrorCleared: () -> Unit,
 ) {
     var value by rememberSaveable(identityKey) { mutableStateOf(contact.displayName) }

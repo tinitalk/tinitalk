@@ -4,7 +4,7 @@ import "fmt"
 
 type User struct {
 	Login       string
-	DisplayName string
+	DisplayName string `json:"-"`
 	Disabled    bool
 }
 
@@ -52,12 +52,6 @@ func (db *DB) ListUsers() ([]User, error) {
 		users = append(users, user)
 	}
 	return users, rows.Err()
-}
-
-func (db *DB) DisplayName(login string) (string, error) {
-	var displayName string
-	err := db.sql.QueryRow("SELECT display_name FROM users WHERE login = ? AND disabled = 0", login).Scan(&displayName)
-	return displayName, err
 }
 
 func (db *DB) RenameUser(login, displayName string) error {

@@ -26,7 +26,6 @@ class PushRegistrationStoreTest {
             accountId,
             session,
             StoredWebPushConfig("https://a.example", "vapid-a", "config-a"),
-            "Alice",
         )
         val store = PushRegistrationStore(persistence)
 

@@ -148,7 +148,7 @@ class HistoryContactPhotoTest {
         override fun serverInfo() = ServerInfo("tinitalk", "ok", 4)
         override fun me() = Profile("owner", "Owner")
         override fun contactsPage(limit: Int, cursor: String) = error("not used")
-        override fun updateContactName(login: String, customName: String?) = error("not used")
+        override fun updateContactName(login: String, customName: String) = error("not used")
         override fun calls(limit: Int, before: Long, peerLogin: String?) = page
         override fun markCallsRead(throughId: Long, peerLogin: String?) = CallUnreadState(0, emptyList())
     }

@@ -29,7 +29,7 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	if err := json.Unmarshal(me.Body.Bytes(), &profile); err != nil {
 		t.Fatal(err)
 	}
-	if profile["login"] != "alice" || profile["display_name"] != "Alice" {
+	if profile["login"] != "alice" || profile["display_name"] != "alice" {
 		t.Fatalf("profile = %+v", profile)
 	}
 
@@ -50,6 +50,49 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	device := request(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","webpush_subscription":{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=server-test","keys":{"p256dh":"BEkDdNnpEcD8M4mRGOFJWTDJ4GkDI5Xs3vpIOrAaBZKRCVv6V3sB3CFujTFiD6DHda7W8pCyChJDU205otrbCAw","auth":"AAAAAAAAAAAAAAAAAAAAAA"}},"config_id":"sha256:webpush"}`), "alice", tokens["alice"])
 	if device.Code != http.StatusNoContent {
 		t.Fatalf("/api/device status = %d, body %s", device.Code, device.Body.String())
+	}
+}
+
+func TestAdminNamesNeverReachUserEndpointsOrPushNames(t *testing.T) {
+	db, tokens := testDB(t)
+	for _, login := range []string{"alice", "bob"} {
+		if err := db.RenameUser(login, "ADMIN-ONLY-"+login); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := time.Now().Add(-time.Minute)
+	if err := db.StartCall("private-names", "bob", "alice", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("private-names", state.CallOutcomeUnanswered, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(db, Options{AllowInsecureLoopback: true})
+	check := func(paths []string, wantName string) {
+		t.Helper()
+		for _, path := range paths {
+			response := request(t, server, http.MethodGet, path, nil, "alice", tokens["alice"])
+			if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "ADMIN-ONLY-") || strings.Contains(response.Body.String(), "default_display_name") {
+				t.Fatalf("%s: status %d, body %s", path, response.Code, response.Body.String())
+			}
+		}
+		name, err := db.ContactDisplayName("alice", "bob")
+		if err != nil || name != wantName {
+			t.Fatalf("push name = %q, %v; want %q", name, err, wantName)
+		}
+		history, err := db.CallHistory("alice", 0, 20)
+		if err != nil || len(history.Items) != 1 || history.Items[0].PeerName != wantName || len(history.LatestUnreadMissed) != 1 || history.LatestUnreadMissed[0].PeerName != wantName {
+			t.Fatalf("history = %+v, %v; want personal name %q", history, err, wantName)
+		}
+	}
+	check([]string{"/api/me", "/api/contacts", "/api/contacts/page?limit=20", "/api/contacts/bob/details", "/api/calls"}, "Bob")
+	if err := db.RemoveContact("alice", "bob"); err != nil {
+		t.Fatal(err)
+	}
+	check([]string{"/api/me", "/api/contacts", "/api/contacts/page?limit=20", "/api/calls"}, "bob")
+	users, err := db.ListUsers()
+	if err != nil || len(users) != 2 || users[0].DisplayName != "ADMIN-ONLY-alice" || users[1].DisplayName != "ADMIN-ONLY-bob" {
+		t.Fatalf("admin list = %+v, %v; private names must remain intact", users, err)
 	}
 }
 
@@ -128,7 +171,7 @@ func TestSocketRequiresSignalingProtocolV2(t *testing.T) {
 	}
 }
 
-func TestContactNamesArePersonalAndResettable(t *testing.T) {
+func TestContactNamesArePersonalAndCannotBeReset(t *testing.T) {
 	db, tokens := testDB(t)
 	server := NewServer(db, Options{AllowInsecureLoopback: true})
 
@@ -137,16 +180,18 @@ func TestContactNamesArePersonalAndResettable(t *testing.T) {
 		t.Fatalf("rename status = %d, body %s", renamed.Code, renamed.Body.String())
 	}
 	var contact struct {
-		Login              string  `json:"login"`
-		DisplayName        string  `json:"display_name"`
-		DefaultDisplayName string  `json:"default_display_name"`
-		CustomName         *string `json:"custom_name"`
+		Login       string  `json:"login"`
+		DisplayName string  `json:"display_name"`
+		CustomName  *string `json:"custom_name"`
 	}
 	if err := json.Unmarshal(renamed.Body.Bytes(), &contact); err != nil {
 		t.Fatal(err)
 	}
-	if contact.Login != "bob" || contact.DisplayName != "Мама" || contact.DefaultDisplayName != "Bob" || contact.CustomName == nil || *contact.CustomName != "Мама" {
+	if contact.Login != "bob" || contact.DisplayName != "Мама" || contact.CustomName == nil || *contact.CustomName != "Мама" {
 		t.Fatalf("renamed contact = %+v", contact)
+	}
+	if bytes.Contains(renamed.Body.Bytes(), []byte("default_display_name")) {
+		t.Fatalf("rename exposes admin name field: %s", renamed.Body.String())
 	}
 
 	aliceContacts := request(t, server, http.MethodGet, "/api/contacts", nil, "alice", tokens["alice"])
@@ -165,14 +210,8 @@ func TestContactNamesArePersonalAndResettable(t *testing.T) {
 	}
 
 	reset := request(t, server, http.MethodPut, "/api/contacts/bob/name", []byte(`{"custom_name":null}`), "alice", tokens["alice"])
-	if reset.Code != http.StatusOK {
+	if reset.Code != http.StatusBadRequest {
 		t.Fatalf("reset status = %d, body %s", reset.Code, reset.Body.String())
-	}
-	if err := json.Unmarshal(reset.Body.Bytes(), &contact); err != nil {
-		t.Fatal(err)
-	}
-	if contact.DisplayName != "Bob" || contact.CustomName != nil {
-		t.Fatalf("reset contact = %+v", contact)
 	}
 
 	invalid := request(t, server, http.MethodPut, "/api/contacts/bob/name", []byte(`{"custom_name":"   "}`), "alice", tokens["alice"])
@@ -623,11 +662,8 @@ func testDB(t *testing.T) (*state.DB, map[string]string) {
 		}
 		tokens[user.login] = token
 	}
-	for _, pair := range [][2]string{{"alice", "bob"}, {"bob", "alice"}} {
-		if _, err := db.AddContact(pair[0], pair[1], pair[1]); err != nil {
-			t.Fatal(err)
-		}
-		if err := db.SetContactName(pair[0], pair[1], ""); err != nil {
+	for _, pair := range [][3]string{{"alice", "bob", "Bob"}, {"bob", "alice", "Alice"}} {
+		if _, err := db.AddContact(pair[0], pair[1], pair[2]); err != nil {
 			t.Fatal(err)
 		}
 	}

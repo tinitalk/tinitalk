@@ -9,6 +9,21 @@ import org.junit.Test
 
 class AuthStoreTest {
     @Test
+    fun clearsCachedAdminLabelWithoutLosingAccount() {
+        val persistence = MemoryKeyValueStore()
+        val store = AuthStore(persistence, PrefixTokenCipher())
+        store.save(Session("https://a.example", "alice", "token"))
+        val json = requireNotNull(persistence.get(AccountCollectionKey))
+        persistence.put(AccountCollectionKey, json.replace("\"login\":\"alice\"", "\"login\":\"alice\",\"displayName\":\"ADMIN-ONLY\""))
+
+        val account = store.list().single()
+
+        assertNull(account.displayName)
+        assertEquals("token", account.session.token)
+        assertTrue(!requireNotNull(persistence.get(AccountCollectionKey)).contains("ADMIN-ONLY"))
+    }
+
+    @Test
     fun versionPointNineIgnoresLegacySingleAccountWithoutDeletingIt() {
         val persistence = MemoryKeyValueStore()
         val encrypted = PrefixTokenCipher().encrypt("legacy-token")
@@ -40,10 +55,10 @@ class AuthStoreTest {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
         val first = session("https://a.example", "alice", "session-a", "config-a")
         val duplicate = session("https://A.EXAMPLE:443/", "anna", "session-b", "config-b")
-        store.add(store.newAccountId(), first, config(first), "Alice")
+        store.add(store.newAccountId(), first, config(first))
 
         assertThrows(IllegalArgumentException::class.java) {
-            store.add(store.newAccountId(), duplicate, config(duplicate), "Anna")
+            store.add(store.newAccountId(), duplicate, config(duplicate))
         }
 
         assertEquals(listOf("alice"), store.list().map { it.session.login })
@@ -55,8 +70,8 @@ class AuthStoreTest {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
         val sessionA = session("https://a.example", "alice", "session-a", "config-a")
         val sessionB = session("https://b.example", "bob", "session-b", "config-b")
-        val accountA = store.add(store.newAccountId(), sessionA, config(sessionA), "Alice")
-        val accountB = store.add(store.newAccountId(), sessionB, config(sessionB), "Bob")
+        val accountA = store.add(store.newAccountId(), sessionA, config(sessionA))
+        val accountB = store.add(store.newAccountId(), sessionB, config(sessionB))
 
         assertEquals(listOf(accountA, accountB), store.list())
         assertEquals(config(sessionA), store.webPushConfig(accountA.id))
@@ -82,8 +97,8 @@ class AuthStoreTest {
         val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
         val sessionA = session("https://a.example", "alice", "session-a", "config-a")
         val sessionB = session("https://b.example", "bob", "session-b", "config-b")
-        val accountA = store.add(store.newAccountId(), sessionA, config(sessionA), "Alice")
-        val accountB = store.add(store.newAccountId(), sessionB, config(sessionB), "Bob")
+        val accountA = store.add(store.newAccountId(), sessionA, config(sessionA))
+        val accountB = store.add(store.newAccountId(), sessionB, config(sessionB))
 
         assertTrue(store.removeIfCurrent(accountA.id, sessionA))
 
@@ -97,8 +112,8 @@ class AuthStoreTest {
         val cipher = CountingTokenCipher()
         val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
         val store = AuthStore(persistence, cipher) { ids.removeFirst() }
-        store.add(store.newAccountId(), session("https://a.example", "alice", "session-a", "config-a"), config(session("https://a.example", "alice", "session-a", "config-a")), "Alice")
-        store.add(store.newAccountId(), session("https://b.example", "bob", "session-b", "config-b"), config(session("https://b.example", "bob", "session-b", "config-b")), "Bob")
+        store.add(store.newAccountId(), session("https://a.example", "alice", "session-a", "config-a"), config(session("https://a.example", "alice", "session-a", "config-a")))
+        store.add(store.newAccountId(), session("https://b.example", "bob", "session-b", "config-b"), config(session("https://b.example", "bob", "session-b", "config-b")))
         val before = AccountCollectionStorage.read(persistence).accounts.associate { it.id to it.token }
         persistence.resetWrites()
         cipher.reset()
@@ -120,7 +135,7 @@ class AuthStoreTest {
         val cipher = CountingTokenCipher()
         val store = AuthStore(persistence, cipher) { AccountId("account-a") }
         val account = session("https://a.example", "alice", "session-a", "config-a")
-        store.add(store.newAccountId(), account, config(account), "Alice")
+        store.add(store.newAccountId(), account, config(account))
         persistence.resetWrites()
         cipher.reset()
 

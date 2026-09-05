@@ -145,7 +145,7 @@ class PushRegistrationWorkerTest {
         val currentConfig = StoredWebPushConfig("https://a.example", "vapid-current", "config-current")
         val current = original.copy(token = "token-current", sessionId = "session-current", configId = currentConfig.configId)
         assertTrue(fixture.authStore.removeIfCurrent(fixture.accountId, original))
-        fixture.authStore.add(fixture.accountId, current, currentConfig, "Alice")
+        fixture.authStore.add(fixture.accountId, current, currentConfig)
         var subscriptions = 0
         val refresher = StaleWebPushConfigRefresher(
             accountId = fixture.accountId,
@@ -178,7 +178,7 @@ class PushRegistrationWorkerTest {
             fetch = { WebPushClientConfig("vapid-new", "config-new") },
             subscribe = { _, _ ->
                 assertTrue(fixture.authStore.removeIfCurrent(fixture.accountId, original))
-                fixture.authStore.add(fixture.accountId, current, currentConfig, "Alice")
+                fixture.authStore.add(fixture.accountId, current, currentConfig)
                 WebPushSubscription("https://push.example/stale", WebPushKeys("p256dh", "auth"))
             },
             onStaleSubscription = { accountId ->
@@ -264,7 +264,7 @@ private class RegistrationFixture(
             sessionId = "session-a",
             configId = config.configId,
         )
-        authStore.add(accountId, session, config, "Alice")
+        authStore.add(accountId, session, config)
         registrationStore.upsert(
             accountId,
             session,

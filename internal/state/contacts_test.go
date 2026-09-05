@@ -1,7 +1,9 @@
 package state
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,28 +80,32 @@ func TestPersonalContactsUseIndependentCustomNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := contactByLogin(t, granContacts, "anna"); got.DisplayName != "Мама" || got.DefaultDisplayName != "Анна" || got.CustomName != "Мама" {
+	if got := contactByLogin(t, granContacts, "anna"); got.DisplayName != "Мама" || got.CustomName != "Мама" {
 		t.Fatalf("gran's anna = %+v, want personal name Мама", got)
 	}
-	if got := contactByLogin(t, iraContacts, "anna"); got.DisplayName != "Бабушка" || got.DefaultDisplayName != "Анна" || got.CustomName != "Бабушка" {
+	if got := contactByLogin(t, iraContacts, "anna"); got.DisplayName != "Бабушка" || got.CustomName != "Бабушка" {
 		t.Fatalf("ira's anna = %+v, want personal name Бабушка", got)
 	}
 	if name, err := db.ContactDisplayName("gran", "anna"); err != nil || name != "Мама" {
 		t.Fatalf("gran's resolved anna = %q, %v, want Мама", name, err)
 	}
 
-	if err := db.SetContactName("gran", "anna", ""); err != nil {
+	if err := db.SetContactName("gran", "anna", ""); !errors.Is(err, ErrInvalidContactName) {
+		t.Fatalf("empty name error = %v, want ErrInvalidContactName", err)
+	}
+	// Older books could have no personal name. Never substitute the admin's label.
+	if _, err := db.sql.Exec(`UPDATE user_contacts SET custom_name = NULL WHERE owner_user_id = (SELECT id FROM users WHERE login = 'gran')`); err != nil {
 		t.Fatal(err)
 	}
 	granContacts, err = db.ContactsForUser("gran")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := contactByLogin(t, granContacts, "anna"); got.DisplayName != "Анна" || got.CustomName != "" {
-		t.Fatalf("gran's reset anna = %+v, want default name Анна", got)
+	if got := contactByLogin(t, granContacts, "anna"); got.DisplayName != "anna" || got.CustomName != "" {
+		t.Fatalf("gran's unnamed contact = %+v, want login anna", got)
 	}
-	if name, err := db.ContactDisplayName("gran", "anna"); err != nil || name != "Анна" {
-		t.Fatalf("gran's reset resolved anna = %q, %v, want Анна", name, err)
+	if name, err := db.ContactDisplayName("gran", "anna"); err != nil || name != "anna" {
+		t.Fatalf("gran's unnamed resolved contact = %q, %v, want anna", name, err)
 	}
 }
 
@@ -123,10 +129,7 @@ func TestContactPagesDoNotSkipAfterLoadedContactIsRenamed(t *testing.T) {
 	}
 
 	for _, login := range []string{"a", "b", "c", "d", "e"} {
-		if _, err := db.AddContact("owner", login, login); err != nil {
-			t.Fatal(err)
-		}
-		if err := db.SetContactName("owner", login, ""); err != nil {
+		if _, err := db.AddContact("owner", login, strings.ToUpper(login)); err != nil {
 			t.Fatal(err)
 		}
 	}

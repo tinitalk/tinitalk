@@ -9,7 +9,8 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 	}
 	user := currentUser(r)
 	writeJSON(w, map[string]string{
-		"login":        user.Login,
-		"display_name": user.DisplayName,
+		"login": user.Login,
+		// Keep the field for older clients without disclosing the administrative name.
+		"display_name": user.Login,
 	})
 }

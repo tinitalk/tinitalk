@@ -34,7 +34,6 @@ private data class ServerInfoWire(
 data class Contact(
     val login: String,
     val displayName: String,
-    val defaultDisplayName: String = displayName,
     val customName: String? = null,
     val canCall: Boolean? = null,
 )
@@ -54,7 +53,6 @@ data class AccountContact(
 ) {
     val login: String get() = contact.login
     val displayName: String get() = contact.displayName
-    val defaultDisplayName: String get() = contact.defaultDisplayName
     val customName: String? get() = contact.customName
     val canCall: Boolean get() = contact.canCall != false
     val peerKey: AccountPeerKey get() = AccountPeerKey(accountId, login)
@@ -71,12 +69,10 @@ data class AccountContactPage(
 )
 private data class ContactWire(
     val login: String,
-    @SerializedName("display_name") val displayName: String,
-    @SerializedName("default_display_name") val defaultDisplayName: String?,
     @SerializedName("custom_name") val customName: String?,
     @SerializedName("can_call") val canCall: Boolean?,
 ) {
-    fun toContact() = Contact(login, displayName, defaultDisplayName ?: displayName, customName, canCall)
+    fun toContact() = Contact(login, customName?.takeIf(String::isNotBlank) ?: login, customName, canCall)
 }
 private data class ContactPageWire(
     val items: List<ContactWire>,
@@ -188,7 +184,7 @@ interface HouseholdApi {
     fun contact(login: String): Contact = error("Individual contacts are unavailable")
     fun addContact(login: String, customName: String): Contact = error("Personal contacts are unavailable")
     fun removeContact(login: String): Unit = error("Personal contacts are unavailable")
-    fun updateContactName(login: String, customName: String?): Contact
+    fun updateContactName(login: String, customName: String): Contact
     fun calls(limit: Int = 50, before: Long = 0, peerLogin: String? = null): CallHistoryPage
     fun markCallsRead(throughId: Long, peerLogin: String? = null): CallUnreadState
     fun putDevice(deviceId: String, subscription: WebPushSubscription, configId: String): Unit =
@@ -210,7 +206,7 @@ class UrlConnectionApiClient(
         get("/api/webpush-config", WebPushClientConfig::class.java, includeSessionId = false)
 
     override fun me(): Profile =
-        get("/api/me", Profile::class.java)
+        get("/api/me", Profile::class.java).let { it.copy(displayName = it.login) }
 
     override fun contactsPage(limit: Int, cursor: String): ContactPage =
         get(
@@ -239,7 +235,7 @@ class UrlConnectionApiClient(
         )
     }
 
-    override fun updateContactName(login: String, customName: String?): Contact =
+    override fun updateContactName(login: String, customName: String): Contact =
         put(
             "/api/contacts/${encode(login)}/name",
             mapOf("custom_name" to customName),

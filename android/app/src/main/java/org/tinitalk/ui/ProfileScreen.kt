@@ -169,7 +169,7 @@ private fun ProfileAccountCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    account.displayName?.takeIf(String::isNotBlank) ?: account.login,
+                    account.login,
                     modifier = Modifier.weight(1f),
                     fontWeight = FontWeight.SemiBold,
                 )

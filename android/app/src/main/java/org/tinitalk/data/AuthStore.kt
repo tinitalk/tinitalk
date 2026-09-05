@@ -106,7 +106,9 @@ internal object AccountCollectionStorage {
                     account.webPushRegistration?.isValid() != false &&
                     identities.add(normalizeServerUrl(account.url) to account.login.trim())
             })
-            collection
+            val privateCollection = collection.copy(accounts = collection.accounts.map { it.copy(displayName = null) })
+            if (privateCollection != collection) write(store, privateCollection)
+            privateCollection
         }.getOrElse { error ->
             throw AccountStorageException("invalid account collection", error)
         }
@@ -115,7 +117,9 @@ internal object AccountCollectionStorage {
     fun write(store: KeyValueStore, collection: PersistedAccountCollection) {
         val previous = store.get(AccountCollectionKey)
         try {
-            store.put(AccountCollectionKey, gson.toJson(collection))
+            store.put(AccountCollectionKey, gson.toJson(
+                collection.copy(accounts = collection.accounts.map { it.copy(displayName = null) }),
+            ))
         } catch (error: Exception) {
             val rollback = runCatching {
                 if (previous == null) store.remove(AccountCollectionKey) else store.put(AccountCollectionKey, previous)
@@ -234,7 +238,6 @@ class AuthStore(
         accountId: AccountId,
         session: Session,
         webPushConfig: StoredWebPushConfig,
-        displayName: String,
     ): AccountRecord = synchronized(AccountStorageLock) {
         val collection = readCollectionUnlocked()
         require(session.sessionId?.isNotBlank() == true) { "session ID is required" }
@@ -244,7 +247,6 @@ class AuthStore(
         require(collection.accounts.none { sameServerUrl(it.url, session.url) }) { "duplicate server" }
         val persisted = persistedAccount(accountId.value, session).copy(
             webPushConfig = webPushConfig,
-            displayName = displayName.trim().takeIf(String::isNotEmpty),
         )
         AccountCollectionStorage.write(store, collection.copy(accounts = collection.accounts + persisted))
         AccountRecord(accountId, session, persisted.displayName)
@@ -261,20 +263,6 @@ class AuthStore(
             if (!current.toSession().sameIdentity(expected)) return@synchronized false
             if (!collection.canReplace(current.id, session)) return@synchronized false
             replaceUnlocked(collection, current.id, session)
-            true
-        }
-
-    fun saveIfCurrent(accountId: AccountId, expected: Session, session: Session, displayName: String?): Boolean =
-        synchronized(AccountStorageLock) {
-            val collection = readCollectionUnlocked()
-            val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
-            if (!current.toSession().sameIdentity(expected) || !collection.canReplace(current.id, session)) return@synchronized false
-            val replacement = persistedAccount(current.id, session, current)
-                .copy(displayName = displayName?.trim()?.takeIf(String::isNotEmpty) ?: current.displayName)
-            AccountCollectionStorage.write(
-                store,
-                collection.copy(accounts = collection.accounts.map { if (it.id == current.id) replacement else it }),
-            )
             true
         }
 
@@ -366,7 +354,6 @@ class AuthStore(
             features = session.features,
             sessionId = session.sessionId,
             configId = session.configId,
-            displayName = previous?.displayName,
             webPushConfig = previous?.webPushConfig,
             webPushRegistration = previous?.webPushRegistration,
         )

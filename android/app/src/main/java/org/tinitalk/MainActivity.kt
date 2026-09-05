@@ -1546,7 +1546,6 @@ private fun MainScreenState.withContactUpdates(updates: Map<org.tinitalk.data.Ac
             updates[accountContact.peerKey]?.let {
                 accountContact.copy(contact = accountContact.contact.copy(
                     displayName = it.displayName,
-                    defaultDisplayName = it.defaultDisplayName,
                     customName = it.customName,
                 ))
             } ?: accountContact

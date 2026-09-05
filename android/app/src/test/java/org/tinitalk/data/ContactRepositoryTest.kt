@@ -13,6 +13,22 @@ import org.junit.Test
 
 class ContactRepositoryTest {
     @Test
+    fun legacyCacheKeepsOnlyPersonalNamesOffline() {
+        val store = MemoryKeyValueStore()
+        val account = AccountRecord(AccountId("account-a"), Session("https://a.example", "alice", "token"))
+        store.put("contacts_v1:account-a", """{"version":1,"revision":7,"items":[
+            {"login":"bob","displayName":"ADMIN-ONLY-bob","defaultDisplayName":"ADMIN-ONLY-bob"},
+            {"login":"anna","displayName":"Мама","defaultDisplayName":"ADMIN-ONLY-anna","customName":"Мама"}
+        ]}""")
+        val cache = ContactCache(store)
+
+        assertEquals(listOf("bob", "Мама"), cache.load(account).items.map { it.displayName })
+        assertEquals(8L, cache.revision(account.id))
+        assertFalse(requireNotNull(store.get("contacts_v1:account-a")).contains("ADMIN-ONLY"))
+        assertEquals(listOf("bob", "Мама"), ContactCache(store).load(account).items.map { it.displayName })
+    }
+
+    @Test
     fun firstLoginClaimsSessionWithWebPushBeforeSavingAccount() {
         val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { AccountId("account-a") }
         val registration = RecordingWebPushRegistration()
@@ -56,7 +72,7 @@ class ContactRepositoryTest {
             "config-a",
         )
         val firstId = auth.newAccountId()
-        auth.add(firstId, firstSession, storedConfig(firstSession), "Alice")
+        auth.add(firstId, firstSession, storedConfig(firstSession))
         val registration = RecordingWebPushRegistration()
         val cache = ContactCache(MemoryKeyValueStore())
         val api = RecordingApi(
@@ -88,7 +104,7 @@ class ContactRepositoryTest {
         val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
         val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
         val first = Session("https://a.example", "alice", "token-a", setOf("webpush_v1"), "session-a", "config-a")
-        auth.add(auth.newAccountId(), first, storedConfig(first), "Alice")
+        auth.add(auth.newAccountId(), first, storedConfig(first))
         val registration = RecordingWebPushRegistration()
         val repository = ContactRepository(
             auth,
@@ -109,7 +125,7 @@ class ContactRepositoryTest {
         val ids = ArrayDeque(listOf(AccountId("account-a"), AccountId("account-b")))
         val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { ids.removeFirst() }
         val first = Session("https://a.example", "alice", "token", setOf("webpush_v1"), "s-a", "config-a")
-        auth.add(auth.newAccountId(), first, storedConfig(first), "Alice")
+        auth.add(auth.newAccountId(), first, storedConfig(first))
         val registration = RecordingWebPushRegistration()
         val api = RecordingApi("bob", "config-b", features = emptySet())
         val repository = ContactRepository(auth, registration, apiFactory = { _, _, _, _ -> api })
@@ -149,7 +165,7 @@ class ContactRepositoryTest {
             "config-a",
         )
         val accountId = auth.newAccountId()
-        auth.add(accountId, session, storedConfig(session), "Alice")
+        auth.add(accountId, session, storedConfig(session))
         val api = RecordingApi(
             "alice",
             "config-a",
@@ -181,7 +197,7 @@ class ContactRepositoryTest {
             "config-a",
         )
         val accountId = auth.newAccountId()
-        val account = auth.add(accountId, session, storedConfig(session), "Alice")
+        val account = auth.add(accountId, session, storedConfig(session))
         val cache = ContactCache(MemoryKeyValueStore()).apply {
             replace(
                 AccountContactPage(
@@ -467,7 +483,7 @@ private class RecordingApi(
         claimedSubscription = subscription
         return "session-$login"
     }
-    override fun updateContactName(login: String, customName: String?) = Contact(login, customName.orEmpty())
+    override fun updateContactName(login: String, customName: String) = Contact(login, customName, customName)
     override fun calls(limit: Int, before: Long, peerLogin: String?) = CallHistoryPage(emptyList(), 0, 0, 0)
     override fun markCallsRead(throughId: Long, peerLogin: String?) = CallUnreadState(0, emptyList())
     override fun putDevice(deviceId: String, subscription: WebPushSubscription, configId: String) = Unit

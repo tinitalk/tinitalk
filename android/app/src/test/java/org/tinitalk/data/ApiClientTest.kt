@@ -11,6 +11,23 @@ import org.junit.Test
 
 class ApiClientTest {
     @Test
+    fun ignoresAdminNamesReturnedByOlderServers() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"login":"alice","display_name":"ADMIN-ONLY"}"""))
+        server.enqueue(MockResponse().setBody("""{"login":"bob","display_name":"ADMIN-ONLY","default_display_name":"ADMIN-ONLY","custom_name":"Папа"}"""))
+        server.enqueue(MockResponse().setBody("""{"login":"bob","display_name":"ADMIN-ONLY","default_display_name":"ADMIN-ONLY"}"""))
+        server.start()
+        try {
+            val api = UrlConnectionApiClient(server.url("/").toString(), "alice", "token")
+            assertEquals("alice", api.me().displayName)
+            assertEquals(Contact("bob", "Папа", "Папа"), api.contact("bob"))
+            assertEquals(Contact("bob", "bob"), api.contact("bob"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun loadsWebPushConfigurationWithBasicCredentialsOnly() {
         val server = MockWebServer()
         server.enqueue(
@@ -108,7 +125,7 @@ class ApiClientTest {
             )
                 .contactsPage(limit = 20, cursor = "current-page")
 
-            assertEquals(listOf(Contact("bob", "Bob", "Bob", null)), page.items)
+            assertEquals(listOf(Contact("bob", "bob")), page.items)
             assertEquals("next-page", page.nextCursor)
             val request = server.takeRequest()
             assertEquals("/api/contacts/page?limit=20&cursor=current-page", request.path)
@@ -300,16 +317,11 @@ class ApiClientTest {
     }
 
     @Test
-    fun updatesAndResetsPersonalContactName() {
+    fun updatesPersonalContactName() {
         val server = MockWebServer()
         server.enqueue(
             MockResponse().setBody(
                 """{"login":"bob","display_name":"Мама","default_display_name":"Bob","custom_name":"Мама"}""",
-            ),
-        )
-        server.enqueue(
-            MockResponse().setBody(
-                """{"login":"bob","display_name":"Bob","default_display_name":"Bob","custom_name":null}""",
             ),
         )
         server.start()
@@ -318,14 +330,9 @@ class ApiClientTest {
 
             val renamed = api.updateContactName("bob", "Мама")
             val renameRequest = server.takeRequest()
-            val reset = api.updateContactName("bob", null)
-            val resetRequest = server.takeRequest()
-
-            assertEquals(Contact("bob", "Мама", "Bob", "Мама"), renamed)
+            assertEquals(Contact("bob", "Мама", "Мама"), renamed)
             assertEquals("/api/contacts/bob/name", renameRequest.path)
             assertEquals("{\"custom_name\":\"Мама\"}", renameRequest.body.readUtf8())
-            assertEquals(Contact("bob", "Bob", "Bob", null), reset)
-            assertEquals("{\"custom_name\":null}", resetRequest.body.readUtf8())
         } finally {
             server.shutdown()
         }
