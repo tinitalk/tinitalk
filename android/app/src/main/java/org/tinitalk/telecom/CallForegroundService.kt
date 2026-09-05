@@ -185,8 +185,9 @@ class CallForegroundService : Service() {
     private val terminalSignalGate = TerminalSignalGate(
         timeoutMillis = TerminalSignalTimeoutMillis,
         scheduleTimeout = { delayMillis, action ->
-            handler.postDelayed(action, delayMillis)
-            CancellableTask { handler.removeCallbacks(action) }
+            val runnable = Runnable { action() }
+            handler.postDelayed(runnable, delayMillis)
+            CancellableTask { handler.removeCallbacks(runnable) }
         },
     )
     private val callUiObserver: (CallUiState) -> Unit = { state ->
