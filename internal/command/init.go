@@ -113,6 +113,7 @@ func runServe(args []string) error {
 	}
 	notifier := signaling.Notifier(signaling.NoopNotifier{})
 	var sessionNotifier httpapi.SessionReplacementNotifier
+	var contactNotifier httpapi.ContactChangeNotifier
 	webPushVAPID, err := db.EnsureWebPushVAPID()
 	if err != nil {
 		return err
@@ -132,6 +133,7 @@ func runServe(args []string) error {
 		)
 		notifier = pushNotifier
 		sessionNotifier = pushNotifier
+		contactNotifier = pushNotifier
 	}
 	hub := signaling.NewHub(notifier)
 	hub.SetCallHistoryStore(db)
@@ -171,6 +173,7 @@ func runServe(args []string) error {
 		WebPushConfigID:       webPushVAPID.ConfigID,
 		Hub:                   hub,
 		SessionNotifier:       sessionNotifier,
+		ContactNotifier:       contactNotifier,
 		ICEConfigProvider:     iceConfig,
 		TLSConfig:             tlsConfig,
 	})

@@ -39,12 +39,17 @@ type SessionStore interface {
 	CurrentSession(login string) (state.AccountSession, bool, error)
 }
 
+type CallPermissionStore interface {
+	CanCall(caller, callee string) (bool, error)
+}
+
 type Hub struct {
 	mu             sync.Mutex
 	notifier       Notifier
 	iceConfig      ICEConfigProvider
 	history        CallHistoryStore
 	sessionStore   SessionStore
+	permissions    CallPermissionStore
 	clients        map[string]map[*Client]struct{}
 	sessions       map[string]string
 	calls          map[string]*call
@@ -101,6 +106,12 @@ func (h *Hub) SetSessionStore(store SessionStore) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.sessionStore = store
+}
+
+func (h *Hub) SetCallPermissionStore(store CallPermissionStore) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.permissions = store
 }
 
 func (h *Hub) Connect(user string) *Client {
@@ -556,6 +567,15 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	}
 	if err := h.checkCallStartRate(sender); err != nil {
 		return err
+	}
+	if h.permissions != nil {
+		allowed, err := h.permissions.CanCall(sender, payload.CalleeID)
+		if err != nil {
+			return fmt.Errorf("check call permission: %w", err)
+		}
+		if !allowed {
+			return ErrNotInContacts
+		}
 	}
 	if _, ok := h.activeByUser[payload.CalleeID]; ok {
 		if h.history != nil {

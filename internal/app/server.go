@@ -18,6 +18,7 @@ type ServerConfig struct {
 	WebPushConfigID       string
 	Hub                   *signaling.Hub
 	SessionNotifier       httpapi.SessionReplacementNotifier
+	ContactNotifier       httpapi.ContactChangeNotifier
 	ICEConfigProvider     signaling.ICEConfigProvider
 	TLSConfig             *tls.Config
 }
@@ -39,6 +40,7 @@ func NewHTTPServer(db *state.DB, config ServerConfig) *http.Server {
 			WebPushConfigID:       config.WebPushConfigID,
 			Hub:                   hub,
 			SessionNotifier:       config.SessionNotifier,
+			ContactNotifier:       config.ContactNotifier,
 		}),
 		TLSConfig:         config.TLSConfig,
 		ReadHeaderTimeout: 5 * time.Second,

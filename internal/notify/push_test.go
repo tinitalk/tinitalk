@@ -184,6 +184,24 @@ func TestNotifierSendsSessionReplacementToRevokedSubscription(t *testing.T) {
 	}
 }
 
+func TestContactChangePushIsBoundToCurrentSessionAndContainsNoCall(t *testing.T) {
+	sender := &fakeWebPushSender{}
+	phone := notifyTarget("phone")
+	notifier := NewPushNotifier(&fakePushTargetStore{targets: []state.Device{
+		{DeviceID: "phone", PushTarget: phone},
+		{DeviceID: "old-phone", PushTarget: notifyTarget("old-phone")},
+	}}, sender)
+	notifier.ContactChanged("bob", "alice", state.AccountSession{DeviceID: "phone", SessionID: "bob-session"})
+	if sender.calls != 1 || sender.last.Subscription != phone.Subscription || sender.last.TTL != missedNotificationTTL {
+		t.Fatalf("contact push = %+v, calls = %d", sender.last, sender.calls)
+	}
+	data := sender.last.Data
+	if data["type"] != "contact_changed" || data["contact_login"] != "alice" || data["target_login"] != "bob" ||
+		data["target_session_id"] != "bob-session" || data["target_device_id"] != "phone" || data["call_id"] != "" {
+		t.Fatalf("contact push data = %+v", data)
+	}
+}
+
 func TestNotifierSuppressesCallAfterTargetResolutionFailure(t *testing.T) {
 	sender := &fakeWebPushSender{}
 	notifier := NewPushNotifier(&fakePushTargetStore{targets: []state.Device{{PushTarget: notifyTarget("phone")}}}, sender)

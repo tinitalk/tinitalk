@@ -17,6 +17,11 @@ type Options struct {
 	WebPushConfigID       string
 	Hub                   *signaling.Hub
 	SessionNotifier       SessionReplacementNotifier
+	ContactNotifier       ContactChangeNotifier
+}
+
+type ContactChangeNotifier interface {
+	ContactChanged(recipient, contact string, session state.AccountSession)
 }
 
 type SessionReplacementNotifier interface {
@@ -54,6 +59,7 @@ var serverCommit = "unknown"
 func NewServer(db *state.DB, options Options) http.Handler {
 	if options.Hub != nil {
 		options.Hub.SetSessionStore(db)
+		options.Hub.SetCallPermissionStore(db)
 	}
 	s := &Server{
 		db:            db,
@@ -80,6 +86,9 @@ func (s *Server) routes() {
 	s.mux.Handle("/api/me", s.requireAuth(http.HandlerFunc(s.profile)))
 	s.mux.Handle("/api/contacts", s.requireAuth(http.HandlerFunc(s.contacts)))
 	s.mux.Handle("GET /api/contacts/page", s.requireAuth(http.HandlerFunc(s.contactsPage)))
+	s.mux.Handle("GET /api/contacts/{login}/details", s.requireAuth(http.HandlerFunc(s.contact)))
+	s.mux.Handle("PUT /api/contacts/{login}", s.requireAuth(http.HandlerFunc(s.contact)))
+	s.mux.Handle("DELETE /api/contacts/{login}", s.requireAuth(http.HandlerFunc(s.contact)))
 	s.mux.Handle("PUT /api/contacts/{login}/name", s.requireAuth(http.HandlerFunc(s.contactName)))
 	s.mux.Handle("/api/device", s.requireAuth(http.HandlerFunc(s.device)))
 	s.mux.Handle("/api/calls", s.requireAuth(http.HandlerFunc(s.calls)))
@@ -88,7 +97,7 @@ func (s *Server) routes() {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	features := []string{"video_1to1", "single_device_session", "webpush_v1"}
+	features := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts"}
 	writeJSON(w, struct {
 		Service    string   `json:"service"`
 		Status     string   `json:"status"`

@@ -49,6 +49,7 @@ import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.CompatibilityProblem
 import org.tinitalk.data.ContactCache
+import org.tinitalk.data.ContactEvents
 import org.tinitalk.data.ServerCompatibilityException
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.httpsServerUrl
@@ -128,11 +129,15 @@ class MainActivity : ComponentActivity() {
     private var nextContactOpenRequestId = 0L
     private var contactOpenRequest by mutableStateOf<ContactOpenRequest?>(null)
     private var authGeneration = 0
+    private var contactsGeneration = 0
     private var contactsSyncing = false
     @Volatile
     private var accountRemovalInProgress = false
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread { callUiState = state }
+    }
+    private val contactObserver: (AccountId) -> Unit = {
+        mainHandler.post { reloadCachedContacts() }
     }
     private val accountMissedCountObserver: (Int) -> Unit = { count ->
         runOnUiThread {
@@ -259,6 +264,35 @@ class MainActivity : ComponentActivity() {
                         onAddAccount = ::addAccount,
                         onRemoveAccount = ::removeAccount,
                         onCheckAddAccountServer = repository::checkAddAccountServer,
+                        onOpenAddContact = {
+                            screenState = screenState.copy(
+                                accountPage = AccountPage.AddContact,
+                                addContactErrorMessage = null,
+                            )
+                        },
+                        onCloseAddContact = {
+                            if (!screenState.addingContact) {
+                                screenState = screenState.copy(
+                                    accountPage = AccountPage.Main,
+                                    addContactErrorMessage = null,
+                                )
+                            }
+                        },
+                        onAddContactInputChanged = {
+                            if (screenState.addContactErrorMessage != null) {
+                                screenState = screenState.copy(addContactErrorMessage = null)
+                            }
+                        },
+                        onAddContact = ::addContact,
+                        onRemoveContact = ::removeContact,
+                        onRemoveContactDismissed = {
+                            if (screenState.removingContact == null) {
+                                screenState = screenState.copy(
+                                    removeContactErrorFor = null,
+                                    removeContactErrorMessage = null,
+                                )
+                            }
+                        },
                     )
                 }
             }
@@ -266,6 +300,7 @@ class MainActivity : ComponentActivity() {
         CallUiStateStore.observe(callUiObserver)
         IncomingCallNotifier(this).observeAccountMissedCount(accountMissedCountObserver)
         CallHistoryEvents.observeAccount(accountCallHistoryObserver)
+        ContactEvents.observe(contactObserver)
         AuthSessionEvents.observe(authSessionObserver)
         accountAdditionHandoff.observe(accountAdditionObserver)
         network.observe(networkObserver)
@@ -406,6 +441,7 @@ class MainActivity : ComponentActivity() {
     private fun showContacts(pages: List<AccountContactPage>) {
         runOnUiThread {
             authGeneration++
+            contactsGeneration++
             historyLoadGeneration++
             contactHistoryGeneration++
             contactHistoryLogin = null
@@ -424,6 +460,11 @@ class MainActivity : ComponentActivity() {
                 ),
                 contactsRefreshing = false,
                 contactsRefreshErrorMessage = null,
+                addingContact = false,
+                addContactErrorMessage = null,
+                removingContact = null,
+                removeContactErrorFor = null,
+                removeContactErrorMessage = null,
                 accountHistory = emptyList(),
                 historyLoaded = false,
                 historyLoading = false,
@@ -446,6 +487,7 @@ class MainActivity : ComponentActivity() {
     private fun refreshContacts(showProgress: Boolean = true) {
         if (!network.available || !screenState.signedIn || contactsSyncing) return
         val requestAuthGeneration = authGeneration
+        val requestContactsGeneration = contactsGeneration
         val accounts = repository.accounts()
         if (accounts.isEmpty()) return
         contactsSyncing = true
@@ -467,6 +509,7 @@ class MainActivity : ComponentActivity() {
                 if (!screenState.signedIn || !isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
                     return@runOnUiThread
                 }
+                if (requestContactsGeneration != contactsGeneration) return@runOnUiThread
                 val activeAccounts = repository.accounts().filter { current ->
                     accounts.any { it.id == current.id && it.session.sameIdentity(current.session) }
                 }
@@ -490,6 +533,17 @@ class MainActivity : ComponentActivity() {
 
     private fun clearContactsRefreshMessage() {
         screenState = screenState.copy(contactsRefreshErrorMessage = null)
+    }
+
+    private fun reloadCachedContacts() {
+        if (isDestroyed || !screenState.signedIn) return
+        val accounts = repository.accounts()
+        screenState = screenState.copy(
+            accountContacts = org.tinitalk.ui.mergeAccountContacts(
+                accounts.map { it.id },
+                accounts.associate { it.id to contactCache.load(it).items },
+            ),
+        )
     }
 
     private fun showHistory() {
@@ -905,6 +959,92 @@ class MainActivity : ComponentActivity() {
         }.start()
     }
 
+    private fun addContact(accountId: AccountId, login: String, name: String) {
+        if (!network.available || screenState.addingContact || screenState.removingContact != null) return
+        val account = repository.accounts().firstOrNull { it.id == accountId } ?: return
+        val key = AccountPeerKey(accountId, login.trim())
+        if (account.session.login == key.login) {
+            screenState = screenState.copy(addContactErrorMessage = "Нельзя добавить свой аккаунт в контакты")
+            return
+        }
+        if (screenState.accountContacts.any { it.peerKey == key }) {
+            screenState = screenState.copy(addContactErrorMessage = "Этот контакт уже есть в вашей телефонной книге")
+            return
+        }
+        contactsGeneration++
+        screenState = screenState.copy(addingContact = true, addContactErrorMessage = null)
+        Thread {
+            runCatching { repository.addContact(accountId, key.login, name) }
+                .onSuccess { added ->
+                    runOnUiThread {
+                        if (added == null || repository.accounts().none { it.id == accountId }) {
+                            screenState = screenState.copy(addingContact = false)
+                            return@runOnUiThread
+                        }
+                        contactNameViewModel.forget(key)
+                        screenState = screenState.copy(
+                            accountPage = AccountPage.Main,
+                            addingContact = false,
+                            addContactErrorMessage = null,
+                        )
+                        reloadCachedContacts()
+                    }
+                }
+                .onFailure { error ->
+                    runOnUiThread {
+                        val accountStillExists = repository.accounts().any { it.id == accountId }
+                        screenState = screenState.copy(
+                            addingContact = false,
+                            addContactErrorMessage = contactAddError(error, key.login, account.session.url)
+                                .takeIf { accountStillExists },
+                        )
+                    }
+                }
+        }.start()
+    }
+
+    private fun removeContact(contact: AccountContact) {
+        if (!network.available || screenState.addingContact || screenState.removingContact != null) return
+        val key = contact.peerKey
+        contactsGeneration++
+        screenState = screenState.copy(
+            removingContact = key,
+            removeContactErrorFor = null,
+            removeContactErrorMessage = null,
+        )
+        Thread {
+            runCatching {
+                check(repository.removeContact(key.accountId, key.login)) { "session ended" }
+                (application as TinitalkApplication).contactPhotoStore.remove(contact.address)
+            }.onSuccess {
+                runOnUiThread {
+                    contactPhotoEditorViewModel.state.target
+                        ?.takeIf { it.accountId == key.accountId && it.address == contact.address }
+                        ?.let(contactPhotoEditorViewModel::onTargetHidden)
+                    contactNameViewModel.forget(key)
+                    if (contactHistoryAccountId == key.accountId && contactHistoryLogin == key.login) {
+                        hideContactHistory()
+                    }
+                    screenState = screenState.copy(
+                        removingContact = null,
+                        removeContactErrorFor = null,
+                        removeContactErrorMessage = null,
+                        accountContacts = screenState.accountContacts.filterNot { it.peerKey == key },
+                    )
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    val accountStillExists = repository.accounts().any { it.id == key.accountId }
+                    screenState = screenState.copy(
+                        removingContact = null,
+                        removeContactErrorFor = key.takeIf { accountStillExists },
+                        removeContactErrorMessage = contactRemoveError(error).takeIf { accountStillExists },
+                    )
+                }
+            }
+        }.start()
+    }
+
     private fun consumeAccountAdditionIfResumed() {
         if (isDestroyed || !mainScreenResumed) return
         val outcomes = accountAdditionHandoff.drain()
@@ -974,7 +1114,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun removeAccount(accountId: AccountId) {
-        if (accountRemovalInProgress || screenState.addingAccount) return
+        if (accountRemovalInProgress || screenState.addingAccount || screenState.addingContact ||
+            screenState.removingContact != null
+        ) return
         accountRemovalInProgress = true
         Thread {
             val removed = repository.removeAccount(accountId)
@@ -1020,6 +1162,11 @@ class MainActivity : ComponentActivity() {
             accountHistory = screenState.accountHistory.filterNot { it.accountId == accountId },
             unreadByAccount = screenState.unreadByAccount - accountId,
             latestUnreadMissedByAccountContact = screenState.latestUnreadMissedByAccountContact.filterKeys { it.accountId != accountId },
+            removingContact = screenState.removingContact?.takeUnless { it.accountId == accountId },
+            removeContactErrorFor = screenState.removeContactErrorFor?.takeUnless { it.accountId == accountId },
+            removeContactErrorMessage = screenState.removeContactErrorMessage.takeUnless {
+                screenState.removeContactErrorFor?.accountId == accountId
+            },
             contactHistory = if (contactHistoryAccountId == null) ContactHistoryState() else screenState.contactHistory,
             serverUrl = remaining.aboutServerUrl(),
             accounts = remaining.toAccountSummaries(),
@@ -1075,6 +1222,8 @@ class MainActivity : ComponentActivity() {
         cleanupStaleIncomingPresentation()
         consumeAccountAdditionIfResumed()
         refreshPermissions()
+        reloadCachedContacts()
+        refreshContacts(showProgress = false)
         when {
             contactHistoryLogin != null -> loadContactHistory(contactHistoryLogin.orEmpty(), reset = true)
             historyVisible -> loadHistory(reset = true)
@@ -1224,6 +1373,7 @@ class MainActivity : ComponentActivity() {
         accountAdditionHandoff.removeObserver(accountAdditionObserver)
         AuthSessionEvents.removeObserver(authSessionObserver)
         CallHistoryEvents.removeAccountObserver(accountCallHistoryObserver)
+        ContactEvents.removeObserver(contactObserver)
         IncomingCallNotifier(this).removeAccountMissedCountObserver(accountMissedCountObserver)
         CallUiStateStore.removeObserver(callUiObserver)
         super.onDestroy()
@@ -1360,6 +1510,26 @@ private fun userErrorMessage(error: Throwable): String = when (error) {
     else -> "Не удалось подключиться к серверу"
 }
 
+private fun contactAddError(error: Throwable, login: String, serverUrl: String): String = when (error) {
+    is ServerCompatibilityException -> "Сервер ${serverUrl.removePrefix("https://")} необходимо обновить, чтобы добавлять контакты"
+    is ApiException -> when (error.code) {
+        400 -> "Проверьте логин и имя контакта"
+        404 -> "Пользователь «$login» не найден на сервере ${serverUrl.removePrefix("https://")}. Проверьте логин"
+        409 -> "Этот контакт уже есть в вашей телефонной книге"
+        else -> "Сервер вернул ошибку ${error.code}"
+    }
+    is UnknownHostException -> "Сервер не найден. Проверьте подключение к интернету"
+    is SocketTimeoutException -> "Сервер не отвечает. Попробуйте ещё раз"
+    else -> "Не удалось добавить контакт. Проверьте соединение"
+}
+
+private fun contactRemoveError(error: Throwable): String = when (error) {
+    is ServerCompatibilityException -> "Сервер необходимо обновить, чтобы удалять контакты"
+    is SocketTimeoutException -> "Сервер не отвечает. Попробуйте ещё раз"
+    is UnknownHostException -> "Нет связи с сервером. Проверьте интернет"
+    else -> "Не удалось удалить контакт. Попробуйте ещё раз"
+}
+
 internal fun markEachAccountHistoryPage(
     pages: List<org.tinitalk.data.AccountCallHistoryPage>,
     mark: (org.tinitalk.data.AccountCallHistoryPage) -> AccountUnreadState?,
@@ -1369,7 +1539,13 @@ private fun MainScreenState.withContactUpdates(updates: Map<org.tinitalk.data.Ac
     if (updates.isEmpty()) return this
     val sortedAccountContacts = org.tinitalk.ui.sortAccountContacts(
         accountContacts.map { accountContact ->
-            updates[accountContact.peerKey]?.let { accountContact.copy(contact = it) } ?: accountContact
+            updates[accountContact.peerKey]?.let {
+                accountContact.copy(contact = accountContact.contact.copy(
+                    displayName = it.displayName,
+                    defaultDisplayName = it.defaultDisplayName,
+                    customName = it.customName,
+                ))
+            } ?: accountContact
         },
     )
     val updatedHistory = accountHistory.map { history ->

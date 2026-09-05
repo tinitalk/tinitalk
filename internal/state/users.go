@@ -34,20 +34,6 @@ func (db *DB) AddUser(login, displayName string) (string, error) {
 		_ = tx.Rollback()
 		return "", err
 	}
-	if _, err := tx.Exec(`
-		INSERT INTO user_contacts(owner_user_id, contact_user_id)
-		SELECT id, ? FROM users WHERE id <> ?
-	`, userID, userID); err != nil {
-		_ = tx.Rollback()
-		return "", err
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO user_contacts(owner_user_id, contact_user_id)
-		SELECT ?, id FROM users WHERE id <> ?
-	`, userID, userID); err != nil {
-		_ = tx.Rollback()
-		return "", err
-	}
 	return token, tx.Commit()
 }
 

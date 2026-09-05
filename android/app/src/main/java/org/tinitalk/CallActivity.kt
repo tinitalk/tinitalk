@@ -320,7 +320,15 @@ class CallActivity : ComponentActivity() {
                 LaunchedEffect(visibleState.callId, visibleState.phase) {
                     when (visibleState.phase) {
                         CallPhase.Ended -> {
-                            delay(if (visibleState.endReason == CallEndReason.Busy) BusyScreenMillis else EndedScreenMillis)
+                            delay(
+                                if (visibleState.endReason == CallEndReason.Busy ||
+                                    visibleState.endReason == CallEndReason.NotInContacts
+                                ) {
+                                    BusyScreenMillis
+                                } else {
+                                    EndedScreenMillis
+                                },
+                            )
                             finish()
                         }
                         CallPhase.Idle -> {

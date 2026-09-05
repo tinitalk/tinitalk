@@ -64,6 +64,12 @@ class ContactNameViewModel : ViewModel() {
         if (!state.saving) state = ContactNameUpdateState()
     }
 
+    fun forget(key: AccountPeerKey) {
+        operationId++
+        if (state.key == key) state = ContactNameUpdateState()
+        updatedContacts = updatedContacts - key
+    }
+
     fun reset() {
         operationId++
         state = ContactNameUpdateState()

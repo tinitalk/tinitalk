@@ -90,6 +90,12 @@ internal class IncomingPushHandler(private val context: android.content.Context)
         }
         if (!IncomingPushPayload.matchesTarget(data, session, deviceId)) return
 
+        if (data["type"] == "contact_changed") {
+            val login = data["contact_login"]?.takeIf(String::isNotBlank) ?: return
+            ContactRefreshScheduler(context).enqueue(account, login)
+            return
+        }
+
         val notifier = IncomingCallNotifier(context)
         val cancellation = IncomingPushPayload.cancellation(data, account.id)
         if (cancellation != null) {

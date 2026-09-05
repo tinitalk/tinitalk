@@ -5,6 +5,48 @@ import (
 	"testing"
 )
 
+func TestNewUserDoesNotChangePersonalContactBooks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, login := range []string{"alice", "bob"} {
+		if _, err := db.AddUser(login, login); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.AddContact("alice", "bob", "Папа"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.AddUser("carol", "Carol"); err != nil {
+		t.Fatal(err)
+	}
+	check := func() {
+		t.Helper()
+		contacts, err := db.ContactsForUser("alice")
+		if err != nil || len(contacts) != 1 || contacts[0].Login != "bob" || contacts[0].DisplayName != "Папа" {
+			t.Fatalf("existing book = %+v, %v; want only bob named Папа", contacts, err)
+		}
+		for _, login := range []string{"bob", "carol"} {
+			contacts, err := db.ContactsForUser(login)
+			if err != nil || len(contacts) != 0 {
+				t.Fatalf("%s book = %+v, %v; want empty", login, contacts, err)
+			}
+		}
+	}
+	check()
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check()
+}
+
 func TestPersonalContactsUseIndependentCustomNames(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -21,10 +63,10 @@ func TestPersonalContactsUseIndependentCustomNames(t *testing.T) {
 		}
 	}
 
-	if err := db.SetContactName("gran", "anna", "Мама"); err != nil {
+	if _, err := db.AddContact("gran", "anna", "Мама"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetContactName("ira", "anna", "Бабушка"); err != nil {
+	if _, err := db.AddContact("ira", "anna", "Бабушка"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,6 +122,14 @@ func TestContactPagesDoNotSkipAfterLoadedContactIsRenamed(t *testing.T) {
 		}
 	}
 
+	for _, login := range []string{"a", "b", "c", "d", "e"} {
+		if _, err := db.AddContact("owner", login, login); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetContactName("owner", login, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
 	first, next, err := db.ContactsPageForUser("owner", 2, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +143,44 @@ func TestContactPagesDoNotSkipAfterLoadedContactIsRenamed(t *testing.T) {
 	}
 	if second[0].DisplayName != "C" {
 		t.Fatalf("second page starts with %q, want C", second[0].DisplayName)
+	}
+}
+
+func TestCallsRequireBothUsersToKeepEachOtherAsContacts(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, login := range []string{"alice", "bob"} {
+		if _, err := db.AddUser(login, login); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if allowed, err := db.CanCall("alice", "bob"); err != nil || allowed {
+		t.Fatalf("empty books allowed = %v, %v, want false", allowed, err)
+	}
+	for _, pair := range [][2]string{{"alice", "bob"}, {"bob", "alice"}} {
+		if _, err := db.AddContact(pair[0], pair[1], pair[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if allowed, err := db.CanCall("alice", "bob"); err != nil || !allowed {
+		t.Fatalf("mutual contacts allowed = %v, %v, want true", allowed, err)
+	}
+	if err := db.RemoveContact("bob", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := db.CanCall("alice", "bob"); err != nil || allowed {
+		t.Fatalf("one-sided contacts allowed = %v, %v, want false", allowed, err)
+	}
+	contact, err := db.ContactForUser("alice", "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contact.CanCall {
+		t.Fatalf("contact = %+v, want calls unavailable", contact)
 	}
 }
 

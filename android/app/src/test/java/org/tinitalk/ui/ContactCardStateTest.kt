@@ -47,4 +47,14 @@ class ContactCardStateTest {
             ),
         )
     }
+
+    @Test
+    fun unavailableContactKeepsExplanationButtonClickable() {
+        val action = contactCallAction("anna", null, canCall = false)
+
+        assertEquals("Позвонить", action.label)
+        assertTrue(action.enabled)
+        assertFalse(action.opensCurrentCall)
+        assertTrue(action.explainsUnavailableContact)
+    }
 }

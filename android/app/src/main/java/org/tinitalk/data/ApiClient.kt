@@ -36,6 +36,7 @@ data class Contact(
     val displayName: String,
     val defaultDisplayName: String = displayName,
     val customName: String? = null,
+    val canCall: Boolean? = null,
 )
 data class ContactPage(
     val items: List<Contact>,
@@ -55,6 +56,7 @@ data class AccountContact(
     val displayName: String get() = contact.displayName
     val defaultDisplayName: String get() = contact.defaultDisplayName
     val customName: String? get() = contact.customName
+    val canCall: Boolean get() = contact.canCall != false
     val peerKey: AccountPeerKey get() = AccountPeerKey(accountId, login)
     val address: ContactAddress get() = ContactAddress.of(serverUrl, login)
 }
@@ -72,8 +74,9 @@ private data class ContactWire(
     @SerializedName("display_name") val displayName: String,
     @SerializedName("default_display_name") val defaultDisplayName: String?,
     @SerializedName("custom_name") val customName: String?,
+    @SerializedName("can_call") val canCall: Boolean?,
 ) {
-    fun toContact() = Contact(login, displayName, defaultDisplayName ?: displayName, customName)
+    fun toContact() = Contact(login, displayName, defaultDisplayName ?: displayName, customName, canCall)
 }
 private data class ContactPageWire(
     val items: List<ContactWire>,
@@ -182,6 +185,9 @@ interface HouseholdApi {
     fun webPushConfig(): WebPushClientConfig = error("WebPush is unavailable")
     fun me(): Profile
     fun contactsPage(limit: Int = 20, cursor: String = ""): ContactPage
+    fun contact(login: String): Contact = error("Individual contacts are unavailable")
+    fun addContact(login: String, customName: String): Contact = error("Personal contacts are unavailable")
+    fun removeContact(login: String): Unit = error("Personal contacts are unavailable")
     fun updateContactName(login: String, customName: String?): Contact
     fun calls(limit: Int = 50, before: Long = 0, peerLogin: String? = null): CallHistoryPage
     fun markCallsRead(throughId: Long, peerLogin: String? = null): CallUnreadState
@@ -212,6 +218,26 @@ class UrlConnectionApiClient(
                 cursor.takeIf(String::isNotEmpty)?.let { "&cursor=${encode(it)}" }.orEmpty(),
             ContactPageWire::class.java,
         ).toContactPage()
+
+    override fun contact(login: String): Contact =
+        get("/api/contacts/${encode(login)}/details", ContactWire::class.java).toContact()
+
+    override fun addContact(login: String, customName: String): Contact =
+        put(
+            "/api/contacts/${encode(login)}",
+            mapOf("custom_name" to customName),
+            ContactWire::class.java,
+        ).toContact()
+
+    override fun removeContact(login: String) {
+        write<Unit>(
+            "DELETE",
+            "/api/contacts/${encode(login)}",
+            emptyMap<String, String>(),
+            null,
+            expectedStatus = 204,
+        )
+    }
 
     override fun updateContactName(login: String, customName: String?): Contact =
         put(

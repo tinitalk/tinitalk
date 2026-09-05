@@ -64,6 +64,7 @@ import org.tinitalk.call.CallUiState
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.Contact
 import org.tinitalk.ui.theme.CallAnswerGreen
+import org.tinitalk.ui.theme.CallRejectRed
 import java.time.Instant
 import java.time.ZoneId
 
@@ -88,12 +89,26 @@ fun ContactScreen(
     onRetryHistory: () -> Unit,
     onChoosePhotoSource: (ContactPhotoEditTarget, ContactPhotoSource) -> Unit = { _, _ -> },
     onRemovePhoto: (ContactPhotoEditTarget) -> Unit = {},
+    removing: Boolean = false,
+    removeErrorMessage: String? = null,
+    onRemoveContact: () -> Unit = {},
+    onRemoveContactDismissed: () -> Unit = {},
 ) {
     var renameVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var photoActionsVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var contactMenuVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
+    var removeContactVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
+    var unavailableCallVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
+    LaunchedEffect(contact.canCall) {
+        if (contact.canCall != false) unavailableCallVisible = false
+    }
     val name = contactDisplayName(contact.displayName)
-    val action = contactCallAction(contact.login, ongoingCall, internetAvailable)
+    val action = contactCallAction(
+        contact.login,
+        ongoingCall,
+        internetAvailable,
+        canCall = contact.canCall != false,
+    )
     val relevantUpdate = nameUpdate.takeIf { it.login == contact.login }
     val now = Instant.now()
     val zone = ZoneId.systemDefault()
@@ -208,6 +223,32 @@ fun ContactScreen(
                                     photoActionsVisible = true
                                 },
                             )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Удалить контакт",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = CallRejectRed,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_delete),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                        tint = CallRejectRed,
+                                    )
+                                },
+                                enabled = internetAvailable && !photoState.busy,
+                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-delete"),
+                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                                onClick = {
+                                    contactMenuVisible = false
+                                    onRemoveContactDismissed()
+                                    removeContactVisible = true
+                                },
+                            )
                         }
                     }
                 }
@@ -319,13 +360,27 @@ fun ContactScreen(
                             )
                             Spacer(Modifier.height(34.dp))
                             Button(
-                                onClick = { if (action.opensCurrentCall) onOpenCall() else onCall(contact) },
+                                onClick = {
+                                    when {
+                                        action.opensCurrentCall -> onOpenCall()
+                                        action.explainsUnavailableContact -> unavailableCallVisible = true
+                                        else -> onCall(contact)
+                                    }
+                                },
                                 enabled = action.enabled,
                                 modifier = Modifier.fillMaxWidth().widthIn(max = 380.dp).heightIn(min = 58.dp),
                                 shape = RoundedCornerShape(20.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = CallAnswerGreen,
-                                    contentColor = Color.White,
+                                    containerColor = if (action.explainsUnavailableContact) {
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    } else {
+                                        CallAnswerGreen
+                                    },
+                                    contentColor = if (action.explainsUnavailableContact) {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    } else {
+                                        Color.White
+                                    },
                                     disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                                     disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                 ),
@@ -443,6 +498,71 @@ fun ContactScreen(
             },
             onRename = onRename,
             onErrorCleared = onRenameHandled,
+        )
+    }
+
+    if (removeContactVisible) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!removing) {
+                    removeContactVisible = false
+                    onRemoveContactDismissed()
+                }
+            },
+            title = { Text("Удалить контакт?") },
+            text = {
+                Column {
+                    Text("Удалить «$name» из списка контактов?")
+                    removeErrorMessage?.let { message ->
+                        Spacer(Modifier.height(10.dp))
+                        Text(message, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = onRemoveContact,
+                    enabled = !removing && internetAvailable,
+                    colors = ButtonDefaults.buttonColors(containerColor = CallRejectRed),
+                ) {
+                    if (removing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White,
+                        )
+                    } else {
+                        Text("Удалить")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        removeContactVisible = false
+                        onRemoveContactDismissed()
+                    },
+                    enabled = !removing,
+                ) { Text("Отмена") }
+            },
+        )
+    }
+
+    if (unavailableCallVisible) {
+        AlertDialog(
+            onDismissRequest = { unavailableCallVisible = false },
+            title = { Text("Пока нельзя позвонить") },
+            text = {
+                Text(
+                    "Позвонить можно после того, как $name добавит вас " +
+                        "в свой список контактов.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = { unavailableCallVisible = false }) {
+                    Text("Понятно")
+                }
+            },
         )
     }
 }

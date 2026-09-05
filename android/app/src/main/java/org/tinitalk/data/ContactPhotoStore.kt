@@ -30,6 +30,7 @@ data class StoredContactPhoto(
 class ContactPhotoWriteToken internal constructor(
     val address: ContactAddress,
     internal val serverGeneration: Long,
+    internal val addressGeneration: Long = 0L,
 )
 
 fun interface ContactPhotoEncoder {
@@ -65,7 +66,11 @@ class ContactPhotoStore(
     override val revision: StateFlow<Long> = revisions
 
     fun beginReplace(address: ContactAddress): ContactPhotoWriteToken = synchronized(lock) {
-        ContactPhotoWriteToken(address, serverGenerations[address.serverUrl] ?: 0L)
+        ContactPhotoWriteToken(
+            address,
+            serverGenerations[address.serverUrl] ?: 0L,
+            addressGenerations[addressKey(address)] ?: 0L,
+        )
     }
 
     fun photo(address: ContactAddress): StoredContactPhoto? = synchronized(lock) {
@@ -130,6 +135,8 @@ class ContactPhotoStore(
         runCatching {
             val currentGeneration = serverGenerations[token.address.serverUrl] ?: 0L
             check(currentGeneration == token.serverGeneration) { "stale contact photo write token" }
+            val currentAddressGeneration = addressGenerations[addressKey(token.address)] ?: 0L
+            check(currentAddressGeneration == token.addressGeneration) { "stale contact photo write token" }
             val target = fileFor(token.address)
             ensureInsideRoot(target)
             target.parentFile?.mkdirs()
@@ -153,10 +160,10 @@ class ContactPhotoStore(
     fun remove(address: ContactAddress): Result<Boolean> = synchronized(lock) {
         runCatching {
             val file = fileFor(address)
+            invalidateAddress(address)
             if (!file.exists()) return@runCatching false
             val deleted = file.delete()
             if (deleted) {
-                invalidateAddress(address)
                 publishRevision()
                 deleteEmptyParents(file.parentFile)
             }

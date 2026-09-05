@@ -43,6 +43,9 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	if !bytes.Contains(contacts.Body.Bytes(), []byte(`"login":"bob"`)) {
 		t.Fatalf("contacts missing bob: %s", contacts.Body.String())
 	}
+	if !bytes.Contains(contacts.Body.Bytes(), []byte(`"can_call":true`)) {
+		t.Fatalf("contacts missing call availability: %s", contacts.Body.String())
+	}
 
 	device := request(t, server, http.MethodPut, "/api/device", []byte(`{"device_id":"phone","webpush_subscription":{"endpoint":"https://fcm.distributor.unifiedpush.org/wpfcm?t=server-test","keys":{"p256dh":"BEkDdNnpEcD8M4mRGOFJWTDJ4GkDI5Xs3vpIOrAaBZKRCVv6V3sB3CFujTFiD6DHda7W8pCyChJDU205otrbCAw","auth":"AAAAAAAAAAAAAAAAAAAAAA"}},"config_id":"sha256:webpush"}`), "alice", tokens["alice"])
 	if device.Code != http.StatusNoContent {
@@ -75,7 +78,7 @@ func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 4 || health.Commit != "01234567" {
 		t.Fatalf("health = %+v, want tinitalk, ok, API version 4, commit 01234567", health)
 	}
-	want := []string{"video_1to1", "single_device_session", "webpush_v1"}
+	want := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts"}
 	if fmt.Sprint(health.Features) != fmt.Sprint(want) {
 		t.Fatalf("health features = %v, want %v", health.Features, want)
 	}
@@ -178,10 +181,38 @@ func TestContactNamesArePersonalAndResettable(t *testing.T) {
 	}
 }
 
+func TestContactCanBeRemovedAndAddedBackWithPersonalName(t *testing.T) {
+	db, tokens := testDB(t)
+	server := NewServer(db, Options{AllowInsecureLoopback: true})
+
+	removed := request(t, server, http.MethodDelete, "/api/contacts/bob", nil, "alice", tokens["alice"])
+	if removed.Code != http.StatusNoContent {
+		t.Fatalf("remove status = %d, body %s", removed.Code, removed.Body.String())
+	}
+	added := request(t, server, http.MethodPut, "/api/contacts/bob", []byte(`{"custom_name":"  Мама  "}`), "alice", tokens["alice"])
+	if added.Code != http.StatusOK {
+		t.Fatalf("add status = %d, body %s", added.Code, added.Body.String())
+	}
+	if !bytes.Contains(added.Body.Bytes(), []byte(`"display_name":"Мама"`)) {
+		t.Fatalf("added contact = %s, want personal name", added.Body.String())
+	}
+	duplicate := request(t, server, http.MethodPut, "/api/contacts/bob", []byte(`{"custom_name":"Мама"}`), "alice", tokens["alice"])
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("duplicate status = %d, want 409", duplicate.Code)
+	}
+	missing := request(t, server, http.MethodPut, "/api/contacts/nobody", []byte(`{"custom_name":"Неизвестный"}`), "alice", tokens["alice"])
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing status = %d, want 404", missing.Code)
+	}
+}
+
 func TestContactsPageReturnsTwentyContactsAtATime(t *testing.T) {
 	db, tokens := testDB(t)
 	for i := 0; i < 23; i++ {
 		if _, err := db.AddUser(fmt.Sprintf("user%02d", i), fmt.Sprintf("Person %02d", i)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.AddContact("alice", fmt.Sprintf("user%02d", i), fmt.Sprintf("Person %02d", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -219,6 +250,64 @@ func TestContactsPageReturnsTwentyContactsAtATime(t *testing.T) {
 	if firstPage.Items[19].Login == secondPage.Items[0].Login {
 		t.Fatalf("pages overlap at %q", secondPage.Items[0].Login)
 	}
+}
+
+func TestContactChangesNotifyPeerAndExposeCurrentAvailability(t *testing.T) {
+	db, tokens := testDB(t)
+	notifier := contactChangeRecorder{changes: make(chan [2]string, 4)}
+	server := NewServer(db, Options{AllowInsecureLoopback: true, ContactNotifier: notifier})
+	for _, step := range []struct {
+		method  string
+		status  int
+		canCall bool
+	}{
+		{http.MethodDelete, http.StatusNoContent, false},
+		{http.MethodPut, http.StatusOK, true},
+	} {
+		response := request(t, server, step.method, "/api/contacts/bob", []byte(`{"custom_name":"Bobby"}`), "alice", tokens["alice"])
+		if response.Code != step.status {
+			t.Fatalf("%s: status %d, body %s", step.method, response.Code, response.Body.String())
+		}
+		select {
+		case change := <-notifier.changes:
+			if change != [2]string{"bob", "alice"} {
+				t.Fatalf("notification = %v", change)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing contact change notification")
+		}
+		response = request(t, server, http.MethodGet, "/api/contacts/alice/details", nil, "bob", tokens["bob"])
+		var contact contactResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &contact); err != nil {
+			t.Fatal(err)
+		}
+		if response.Code != http.StatusOK || contact.CanCall != step.canCall || contact.DisplayName != "Alice" {
+			t.Fatalf("peer's contact = %+v, status %d", contact, response.Code)
+		}
+	}
+	if err := db.RemoveContact("bob", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	hidden := request(t, server, http.MethodGet, "/api/contacts/alice/details", nil, "bob", tokens["bob"])
+	if hidden.Code != http.StatusNotFound {
+		t.Fatalf("contact outside personal book: status %d", hidden.Code)
+	}
+	if _, err := db.AddUser("page", "Page"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.AddContact("alice", "page", "Page"); err != nil {
+		t.Fatal(err)
+	}
+	page := request(t, server, http.MethodGet, "/api/contacts/page/details", nil, "alice", tokens["alice"])
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `"login":"page"`) {
+		t.Fatalf("login page conflicts with pagination: %s", page.Body.String())
+	}
+}
+
+type contactChangeRecorder struct{ changes chan [2]string }
+
+func (n contactChangeRecorder) ContactChanged(recipient, contact string, _ state.AccountSession) {
+	n.changes <- [2]string{recipient, contact}
 }
 
 func TestUnauthorizedCredentialsReturn401(t *testing.T) {
@@ -295,6 +384,42 @@ func TestSocketRoutesCallEvents(t *testing.T) {
 	}
 	if failure["error"] != "call not found" || failure["call_id"] != missingCallID {
 		t.Fatalf("failure = %+v", failure)
+	}
+}
+
+func TestSocketRejectsCallWhenCalleeRemovedCaller(t *testing.T) {
+	db, tokens := testDB(t)
+	if err := db.RemoveContact("bob", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	server := httptest.NewServer(NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}))
+	defer server.Close()
+
+	alice := dialSocket(t, server.URL, "alice", tokens["alice"])
+	defer alice.Close()
+	bob := dialSocket(t, server.URL, "bob", tokens["bob"])
+	defer bob.Close()
+	callID := "018f7d51-40a1-7bb5-a2d0-7e47f9180311"
+	eventID := "018f7d51-3f90-7e63-b657-4a83a6a90311"
+	if err := alice.WriteJSON(map[string]any{
+		"id": eventID, "call_id": callID, "type": "call.start", "sent_at": 1787666400000,
+		"payload": map[string]any{"callee_id": "bob"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var failure map[string]any
+	if err := alice.ReadJSON(&failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure["code"] != "not_in_contacts" || failure["call_id"] != callID || failure["event_id"] != eventID {
+		t.Fatalf("failure = %+v", failure)
+	}
+	if err := bob.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := bob.ReadMessage(); err == nil {
+		t.Fatal("blocked call was delivered to callee")
 	}
 }
 
@@ -497,6 +622,14 @@ func testDB(t *testing.T) (*state.DB, map[string]string) {
 			t.Fatal(err)
 		}
 		tokens[user.login] = token
+	}
+	for _, pair := range [][2]string{{"alice", "bob"}, {"bob", "alice"}} {
+		if _, err := db.AddContact(pair[0], pair[1], pair[1]); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetContactName(pair[0], pair[1], ""); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return db, tokens
 }

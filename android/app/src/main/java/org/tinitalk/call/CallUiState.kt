@@ -29,6 +29,7 @@ enum class CallEndReason {
     Cancelled,
     TimedOut,
     Busy,
+    NotInContacts,
     ConnectionLost,
     Failed,
 }

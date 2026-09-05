@@ -180,9 +180,14 @@ data class MainScreenState(
     val accounts: List<AccountSummary> = emptyList(),
     val addingAccount: Boolean = false,
     val addAccountErrorMessage: String? = null,
+    val addingContact: Boolean = false,
+    val addContactErrorMessage: String? = null,
+    val removingContact: AccountPeerKey? = null,
+    val removeContactErrorFor: AccountPeerKey? = null,
+    val removeContactErrorMessage: String? = null,
 )
 
-enum class AccountPage { Main, Profile, AddAccount }
+enum class AccountPage { Main, Profile, AddAccount, AddContact }
 
 data class AccountSummary(
     val id: AccountId,
@@ -356,6 +361,12 @@ fun MainScreen(
     onAddAccount: (url: String, login: String, token: String) -> Unit,
     onRemoveAccount: (AccountId) -> Unit,
     onCheckAddAccountServer: (String) -> ServerCheckResult = onCheckServer,
+    onOpenAddContact: () -> Unit = {},
+    onCloseAddContact: () -> Unit = {},
+    onAddContactInputChanged: () -> Unit = {},
+    onAddContact: (AccountId, String, String) -> Unit = { _, _, _ -> },
+    onRemoveContact: (AccountContact) -> Unit = {},
+    onRemoveContactDismissed: () -> Unit = {},
 ) {
     var aboutVisible by rememberSaveable(state.signedIn) { mutableStateOf(false) }
     LaunchedEffect(contactOpenRequest) {
@@ -394,6 +405,15 @@ fun MainScreen(
                     onAdd = onAddAccount,
                     onCheckServer = onCheckAddAccountServer,
                 )
+                state.accountPage == AccountPage.AddContact -> AddContactScreen(
+                    accounts = state.accounts,
+                    loading = state.addingContact,
+                    errorMessage = state.addContactErrorMessage,
+                    internetAvailable = state.networkAvailable,
+                    onBack = onCloseAddContact,
+                    onInputChanged = onAddContactInputChanged,
+                    onAdd = onAddContact,
+                )
                 !state.permissions.allRequiredGranted -> PermissionsScreen(
                     permissions = state.permissions,
                     multipleAccounts = state.accounts.size > 1,
@@ -431,6 +451,9 @@ fun MainScreen(
                     onCancelContactPhotoCrop = onCancelContactPhotoCrop,
                     onConfirmContactPhotoCrop = onConfirmContactPhotoCrop,
                     onContactPhotoMessageShown = onContactPhotoMessageShown,
+                    onOpenAddContact = onOpenAddContact,
+                    onRemoveContact = onRemoveContact,
+                    onRemoveContactDismissed = onRemoveContactDismissed,
                     onAbout = { aboutVisible = true },
                     onOpenProfile = onOpenProfile,
                 )
@@ -677,6 +700,9 @@ private fun HomeScreen(
     onCancelContactPhotoCrop: () -> Unit,
     onConfirmContactPhotoCrop: (NormalizedCropSquare) -> Unit,
     onContactPhotoMessageShown: () -> Unit,
+    onOpenAddContact: () -> Unit,
+    onRemoveContact: (AccountContact) -> Unit,
+    onRemoveContactDismissed: () -> Unit,
     onAbout: () -> Unit,
     onOpenProfile: () -> Unit,
 ) {
@@ -741,7 +767,6 @@ private fun HomeScreen(
         if (visibleContacts.none { it.peerKey == key }) {
             selectedContactAccountId = null
             selectedContactLogin = null
-            scope.launch { snackbarHostState.showSnackbar("Контакт больше недоступен") }
         }
     }
     LaunchedEffect(selectedContactKey) {
@@ -786,6 +811,7 @@ private fun HomeScreen(
                                 listState = contactsListState,
                                 refreshing = state.contactsRefreshing,
                                 onRefresh = onRefreshContacts,
+                                onAddContact = onOpenAddContact,
                                 onContactSelected = {
                                     selectedContactAccountId = it.accountId.value
                                     selectedContactLogin = it.login
@@ -902,6 +928,12 @@ private fun HomeScreen(
                     ?: ContactPhotoEditorState(target = selectedPhotoTarget),
                 onChoosePhotoSource = onChooseContactPhoto,
                 onRemovePhoto = onRemoveContactPhoto,
+                removing = state.removingContact == contact.peerKey,
+                removeErrorMessage = state.removeContactErrorMessage.takeIf {
+                    state.removeContactErrorFor == contact.peerKey
+                },
+                onRemoveContact = { onRemoveContact(contact) },
+                onRemoveContactDismissed = onRemoveContactDismissed,
             )
         }
         if (
@@ -930,6 +962,7 @@ private fun ContactsPage(
     listState: LazyListState,
     refreshing: Boolean,
     onRefresh: () -> Unit,
+    onAddContact: () -> Unit,
     onContactSelected: (AccountContact) -> Unit,
 ) {
     val contactsWithServerSubtitle = remember(contacts) { contactsRequiringServerSubtitle(contacts) }
@@ -939,28 +972,31 @@ private fun ContactsPage(
         modifier = Modifier.fillMaxSize(),
     ) {
         if (contacts.isEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(32.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    if (internetAvailable) "Контактов пока нет" else "Нет подключения к интернету",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    if (internetAvailable) {
-                        "Добавьте абонентов в настройках сервера."
-                    } else {
-                        "Контакты появятся после восстановления связи."
-                    },
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier.align(Alignment.Center).padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        if (internetAvailable) "Контактов пока нет" else "Нет подключения к интернету",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (internetAvailable) {
+                            "Добавьте первый контакт."
+                        } else {
+                            "Контакты появятся после восстановления связи."
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                AddContactListButton(
+                    onClick = onAddContact,
+                    enabled = internetAvailable,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
                 )
             }
         } else {
@@ -981,8 +1017,34 @@ private fun ContactsPage(
                         latestUnreadMissedAt = latestUnreadMissedByContact[contact.peerKey],
                     ) { onContactSelected(contact) }
                 }
+                item(key = "add-contact") {
+                    AddContactListButton(
+                        onClick = onAddContact,
+                        enabled = internetAvailable,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun AddContactListButton(
+    onClick: () -> Unit,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.heightIn(min = 48.dp),
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+        ),
+    ) {
+        Text("＋ Добавить", style = MaterialTheme.typography.bodyLarge)
     }
 }
 
@@ -1048,13 +1110,18 @@ private fun ContactRow(
 ) {
     val name = contactDisplayName(contact.displayName)
     val missedSubtitle = latestUnreadMissedAt?.let(::missedContactSubtitle)
+    val detailsSubtitle = listOfNotNull(
+        serverHostname,
+        "Звонки пока недоступны".takeIf { !contact.canCall },
+    ).joinToString(" • ").takeIf(String::isNotEmpty)
     val rowHeight = 82.dp
     val avatarInset = 4.dp
     val avatarSize = rowHeight - avatarInset * 2
     Surface(
         onClick = { onOpen(contact) },
         modifier = Modifier.fillMaxWidth().semantics {
-            contentDescription = listOfNotNull("Открыть контакт: $name", serverHostname, missedSubtitle).joinToString(". ")
+            contentDescription = listOfNotNull("Открыть контакт: $name", detailsSubtitle, missedSubtitle)
+                .joinToString(". ")
         },
         shape = RoundedCornerShape(rowHeight / 2),
         color = MaterialTheme.colorScheme.surface,
@@ -1083,12 +1150,15 @@ private fun ContactRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (serverHostname != null) {
+                if (detailsSubtitle != null) {
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        serverHostname,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        detailsSubtitle,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                            alpha = if (contact.canCall) 1f else 0.78f,
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (contact.canCall) FontWeight.Normal else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

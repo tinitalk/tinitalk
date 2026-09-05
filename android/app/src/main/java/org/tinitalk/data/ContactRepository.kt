@@ -8,10 +8,12 @@ import org.tinitalk.push.StoredWebPushConfig
 import org.tinitalk.push.UnifiedPushAccountRegistration
 import org.tinitalk.push.WebPushClientConfig
 import org.tinitalk.push.isValid
+import java.io.IOException
 
 private const val TINITALK_SERVICE = "tinitalk"
 private const val SUPPORTED_API_VERSION = 4
 private const val WEBPUSH_FEATURE = "webpush_v1"
+private const val PERSONAL_CONTACTS_FEATURE = "personal_contacts"
 
 data class AddedAccount(
     val account: AccountRecord,
@@ -221,9 +223,53 @@ class ContactRepository internal constructor(
     fun refreshContacts(accountId: AccountId): AccountContactPage? {
         val account = authStore.get(accountId) ?: return null
         return try {
-            val page = api(account.session).allContacts(account.session.login)
-            if (!authStore.isCurrent(account.id, account.session)) null else {
-                page.boundTo(account.id, account.session.url).also { contactCache?.replace(it) }
+            repeat(2) {
+                val revision = contactCache?.revision(account.id)
+                val page = api(account.session).allContacts(account.session.login).boundTo(account.id, account.session.url)
+                val applied = authStore.withCurrent(account.id, account.session) {
+                    contactCache?.replace(page, revision) != false
+                } ?: return null
+                if (applied) return page
+            }
+            contactCache?.load(account)
+        } catch (e: ApiException) {
+            if (!authStore.isCurrent(account.id, account.session)) return null
+            handleUnauthorized(e, account.id, account.session)
+            throw e
+        }
+    }
+
+    internal fun refreshContact(accountId: AccountId, login: String, expectedSession: Session) {
+        val account = authStore.get(accountId) ?: return
+        if (!account.session.sameIdentity(expectedSession)) return
+        val cache = contactCache ?: return
+        repeat(2) {
+            val revision = cache.revision(accountId)
+            if (cache.load(account).items.none { it.login == login }) return
+            val canCall = try {
+                api(account.session).contact(login).canCall
+            } catch (e: ApiException) {
+                if (!authStore.isCurrent(account.id, account.session)) return
+                handleUnauthorized(e, account.id, account.session)
+                if (e.code != 404) throw e
+                false
+            }
+            val applied = authStore.withCurrent(account.id, account.session) {
+                cache.updateAvailability(account, login, canCall, revision)
+            } ?: return
+            if (applied) return
+        }
+        throw IOException("contact changed during refresh")
+    }
+
+    fun updateContactName(accountId: AccountId, login: String, customName: String?): AccountContact? {
+        val account = authStore.get(accountId) ?: return null
+        return try {
+            val contact = api(account.session).updateContactName(login, customName)
+            authStore.withCurrent(account.id, account.session) {
+                AccountContact(account.id, account.session.url, contact).also {
+                    contactCache?.updateName(account, it)
+                }
             }
         } catch (e: ApiException) {
             if (!authStore.isCurrent(account.id, account.session)) return null
@@ -232,17 +278,36 @@ class ContactRepository internal constructor(
         }
     }
 
-    fun updateContactName(accountId: AccountId, login: String, customName: String?): AccountContact? {
+    fun addContact(accountId: AccountId, login: String, customName: String): AccountContact? {
         val account = authStore.get(accountId) ?: return null
         return try {
-            val contact = api(account.session).updateContactName(login, customName)
-            if (!authStore.isCurrent(account.id, account.session)) null else {
+            val client = api(account.session)
+            requirePersonalContacts(client, account)
+            val contact = client.addContact(login.trim(), customName.trim())
+            authStore.withCurrent(account.id, account.session) {
                 AccountContact(account.id, account.session.url, contact).also {
                     contactCache?.update(account, it)
                 }
             }
         } catch (e: ApiException) {
             if (!authStore.isCurrent(account.id, account.session)) return null
+            handleUnauthorized(e, account.id, account.session)
+            throw e
+        }
+    }
+
+    fun removeContact(accountId: AccountId, login: String): Boolean {
+        val account = authStore.get(accountId) ?: return false
+        return try {
+            val client = api(account.session)
+            requirePersonalContacts(client, account)
+            client.removeContact(login)
+            authStore.withCurrent(account.id, account.session) {
+                contactCache?.remove(account, login)
+                true
+            } ?: false
+        } catch (e: ApiException) {
+            if (!authStore.isCurrent(account.id, account.session)) return false
             handleUnauthorized(e, account.id, account.session)
             throw e
         }
@@ -298,6 +363,15 @@ class ContactRepository internal constructor(
 
     private fun api(session: Session): HouseholdApi =
         apiFactory(session.url, session.login, session.token, session.sessionId)
+
+    private fun requirePersonalContacts(api: HouseholdApi, account: AccountRecord) {
+        if (PERSONAL_CONTACTS_FEATURE in account.session.features) return
+        val info = api.requireCompatibleServer(account.session.url)
+        if (PERSONAL_CONTACTS_FEATURE !in info.features) {
+            throw ServerCompatibilityException(CompatibilityProblem.ServerOutdated, account.session.url)
+        }
+        authStore.updateFeatures(account.session.url, info.features)
+    }
 
     private fun handleUnauthorized(error: ApiException, session: Session) {
         val account = authStore.list().singleOrNull { it.session.sameIdentity(session) } ?: return

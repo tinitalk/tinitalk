@@ -3,11 +3,17 @@ package signaling
 import "time"
 
 const (
+	notInContactsCode              = "not_in_contacts"
 	callStartRateLimitCode         = "call_start_rate_limited"
 	iceRateLimitCode               = "ice_rate_limited"
 	iceRestartRateLimitCode        = "ice_restart_rate_limited"
 	iceRestartRequestRateLimitCode = "ice_restart_request_rate_limited"
 )
+
+var ErrNotInContacts = clientError{
+	message: "caller and callee are not mutual contacts",
+	code:    notInContactsCode,
+}
 
 type ClientError interface {
 	error

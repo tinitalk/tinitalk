@@ -82,7 +82,7 @@ func TestEveryUnansweredIncomingCallIsUnreadMissed(t *testing.T) {
 func TestCallHistoryPagesNewestFirstAndCountsMissed(t *testing.T) {
 	db := openCallHistoryTestDB(t)
 	defer db.Close()
-	if err := db.SetContactName("bob", "alice", "Мама"); err != nil {
+	if _, err := db.AddContact("bob", "alice", "Мама"); err != nil {
 		t.Fatal(err)
 	}
 	older := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)

@@ -250,6 +250,86 @@ class ContactRepositoryTest {
     }
 
     @Test
+    fun targetedRefreshUpdatesOnlyAvailabilityOnItsServerAndNotifiesUi() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val a = auth.upsert(Session("https://a.example", "alice", "token-a"))
+        val b = auth.upsert(Session("https://b.example", "alice", "token-b"))
+        val cache = ContactCache(MemoryKeyValueStore())
+        for (account in listOf(a, b)) {
+            cache.update(account, AccountContact(account.id, account.session.url, Contact("bob", "Папа", canCall = true)))
+        }
+        var allowed = false
+        var requests = 0
+        val api = object : HouseholdApi by RecordingApi("alice", "config-a") {
+            override fun contact(login: String): Contact {
+                requests++
+                assertEquals("bob", login)
+                return Contact(login, "Bob", canCall = allowed)
+            }
+            override fun contactsPage(limit: Int, cursor: String): ContactPage = error("must not reload all contacts")
+        }
+        val repository = ContactRepository(auth, contactCache = cache, apiFactory = { _, _, _, _ -> api })
+        val changes = mutableListOf<AccountId>()
+        val observer: (AccountId) -> Unit = { changes += it }
+        ContactEvents.observe(observer)
+        try {
+            for (status in listOf(false, true)) {
+                allowed = status
+                repository.refreshContact(a.id, "bob", a.session)
+                assertEquals(status, cache.load(a).items.single().canCall)
+                assertEquals("Папа", cache.load(a).items.single().displayName)
+                assertTrue(cache.load(b).items.single().canCall)
+            }
+            repository.refreshContact(a.id, "bob", a.session.copy(sessionId = "revoked-session"))
+            assertEquals(2, requests)
+            assertEquals(listOf(a.id, a.id), changes)
+        } finally {
+            ContactEvents.removeObserver(observer)
+        }
+    }
+
+    @Test
+    fun delayedListAndRenameCannotOverwriteUpdatedAvailability() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val account = auth.upsert(Session("https://a.example", "alice", "token"))
+        val cache = ContactCache(MemoryKeyValueStore())
+        val original = AccountContact(account.id, account.session.url, Contact("bob", "Bob", canCall = true))
+        cache.update(account, original)
+        var requests = 0
+        val api = object : HouseholdApi by RecordingApi("alice", "config-a") {
+            override fun contactsPage(limit: Int, cursor: String): ContactPage {
+                requests++
+                if (requests == 1) cache.updateAvailability(account, "bob", false)
+                return ContactPage(listOf(original.contact.copy(canCall = requests == 1)), "")
+            }
+        }
+        val repository = ContactRepository(auth, contactCache = cache, apiFactory = { _, _, _, _ -> api })
+        repository.refreshContacts(account.id)
+        assertEquals(2, requests)
+        assertFalse(cache.load(account).items.single().canCall)
+        repository.updateContactName(account.id, "bob", "Папа")
+        assertFalse(cache.load(account).items.single().canCall)
+        assertEquals("Папа", cache.load(account).items.single().displayName)
+    }
+
+    @Test
+    fun delayedContactResponseCannotRestoreDeletedContact() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val account = auth.upsert(Session("https://a.example", "alice", "token"))
+        val cache = ContactCache(MemoryKeyValueStore())
+        cache.update(account, AccountContact(account.id, account.session.url, Contact("bob", "Папа")))
+        val api = object : HouseholdApi by RecordingApi("alice", "config-a") {
+            override fun contact(login: String): Contact {
+                cache.remove(account, login)
+                return Contact(login, "Bob", canCall = true)
+            }
+        }
+        val repository = ContactRepository(auth, contactCache = cache, apiFactory = { _, _, _, _ -> api })
+        repository.refreshContact(account.id, "bob", account.session)
+        assertTrue(cache.load(account).items.isEmpty())
+    }
+
+    @Test
     fun explicitRemoveAccountInvokesCommonAndExplicitCallbacksOnce() {
         val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
         val session = Session("https://a.example", "alice", "token-a")

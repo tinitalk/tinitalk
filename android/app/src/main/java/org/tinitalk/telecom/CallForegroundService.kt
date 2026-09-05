@@ -47,6 +47,7 @@ import org.tinitalk.data.AuthStore
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.ContactAddress
+import org.tinitalk.data.ContactCache
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.SignalSocket
@@ -62,6 +63,7 @@ import org.tinitalk.media.CallMediaDispatcher
 import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.ContactPhotoNotificationLoader
+import org.tinitalk.push.ContactRefreshScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -662,9 +664,23 @@ class CallForegroundService : Service() {
                     val activeCallId = current.callId.takeIf { current.phase != CallPhase.Ended }
                     routeMediaCallback { it.onSignalFailure(failure) }
                     val reason = signalingFailureEndReason(failure, activeCallId) ?: return@post
+                    if (reason == CallEndReason.NotInContacts) {
+                        runCatching {
+                            outgoingPeer?.login?.let { login ->
+                                auth.withCurrent(owner.key.accountId, session) {
+                                    auth.get(owner.key.accountId)?.let { account ->
+                                        ContactCache(SharedPreferencesKeyValueStore(this)).updateAvailability(account, login, false)
+                                        ContactRefreshScheduler(this).enqueue(account, login)
+                                    }
+                                }
+                            }
+                        }.onFailure {
+                            Log.w(CallLogTag, "failed to refresh contact after call rejection", it)
+                        }
+                    }
                     newCoordinator.fail()
                     publish(reason)
-                    if (reason == CallEndReason.Busy) {
+                    if (reason == CallEndReason.Busy || reason == CallEndReason.NotInContacts) {
                         finishCallAfter(BusyToneDelayMillis)
                     } else {
                         finishCallSoon()
@@ -1142,7 +1158,11 @@ class CallForegroundService : Service() {
             CallPhase.Ringing -> if (state.direction == CallDirection.Outgoing) "Ждём ответа…" else "Входящий звонок"
             CallPhase.Connecting -> "Пробуем связаться…"
             CallPhase.Active -> if (state.muted) "Микрофон выключен" else "Звонок идёт"
-            CallPhase.Ended -> if (state.endReason == CallEndReason.Busy) "Занято" else "Звонок завершён"
+            CallPhase.Ended -> when (state.endReason) {
+                CallEndReason.Busy -> "Занято"
+                CallEndReason.NotInContacts -> "Вас ещё не добавили в контакты"
+                else -> "Звонок завершён"
+            }
             CallPhase.Idle -> "Звонок"
         }
         builder
@@ -1435,6 +1455,7 @@ internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: St
     currentCallId == null -> null
     failure.callId != null && failure.callId != currentCallId -> null
     failure.code == "busy" -> CallEndReason.Busy
+    failure.code == "not_in_contacts" -> CallEndReason.NotInContacts
     failure.code == "ice_rate_limited" ||
         failure.code == "ice_restart_rate_limited" ||
         failure.code == "ice_restart_request_rate_limited" -> null

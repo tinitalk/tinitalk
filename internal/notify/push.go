@@ -80,6 +80,18 @@ func (n *PushNotifier) CancelCall(callee string, event signaling.DeliveredEvent)
 	n.send(callee, CancelMessage(event, ttl))
 }
 
+func (n *PushNotifier) ContactChanged(recipient, contact string, session state.AccountSession) {
+	n.send(recipient, PushMessage{
+		Data: map[string]string{
+			"type":              "contact_changed",
+			"contact_login":     contact,
+			"target_session_id": session.SessionID,
+			"target_device_id":  session.DeviceID,
+		},
+		ttl: missedNotificationTTL,
+	})
+}
+
 func (n *PushNotifier) SessionReplaced(login, revokedSessionID string, devices []state.Device) {
 	for _, device := range devices {
 		if device.PushTarget.Subscription == "" {

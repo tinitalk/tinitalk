@@ -1136,7 +1136,11 @@ fun EndedCallScreen(
     fallbackLogin: String = peerName,
 ) {
     CallScreenSurface(
-        status = if (reason == CallEndReason.Busy) "Занято" else "Звонок завершён",
+        status = when (reason) {
+            CallEndReason.Busy -> "Занято"
+            CallEndReason.NotInContacts -> "Вас ещё не добавили в контакты"
+            else -> "Звонок завершён"
+        },
         peerName = peerName,
         contactAddress = contactAddress,
         fallbackLogin = fallbackLogin,
