@@ -1,6 +1,9 @@
 package org.tinitalk.push
 
+import androidx.core.net.toUri
 import android.app.Notification
+import androidx.core.content.edit
+import androidx.core.graphics.createBitmap
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Person
@@ -153,7 +156,7 @@ internal class AccountMissedBadgeStore(private val preferences: SharedPreference
 
     fun save(counts: Map<AccountId, Int>) {
         val value = JSONObject().apply { counts.forEach { (id, count) -> put(id.value, count.coerceAtLeast(0)) } }
-        preferences.edit().putString(AccountMissedBadgeKey, value.toString()).apply()
+        preferences.edit { putString(AccountMissedBadgeKey, value.toString()) }
     }
 }
 
@@ -427,7 +430,7 @@ private const val MissedContactPlaceholderForeground = 0xFFD4AF37.toInt()
 
 internal fun roundedNotificationPhoto(source: Bitmap): Bitmap {
     val size = min(source.width, source.height)
-    val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val output = createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val halfSize = size / 2f
     val cornerRadius = size * NotificationPhotoCornerRadiusFraction
     val innerHalfSize = halfSize - cornerRadius
@@ -457,7 +460,7 @@ internal fun missedContactPlaceholder(
     size: Int = MissedContactPlaceholderPixels,
 ): Bitmap {
     require(size > 0) { "placeholder size must be positive" }
-    val square = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
+    val square = createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
         eraseColor(MissedContactPlaceholderBackground)
     }
     val person = DrawableCompat.wrap(
@@ -530,15 +533,10 @@ class IncomingCallNotifier(
         fullScreen: PendingIntent,
         bitmap: Bitmap?,
     ): Notification.Builder {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(
-                context,
-                if (mode == IncomingCallPresentationMode.InApp) InAppChannelId else ChannelId,
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(context)
-        }
+        val builder = Notification.Builder(
+            context,
+            if (mode == IncomingCallPresentationMode.InApp) InAppChannelId else ChannelId,
+        )
         val notificationPhoto = bitmap?.let(::roundedNotificationPhoto)
         notificationPhoto?.let(builder::setLargeIcon)
         val personBuilder = if (Build.VERSION.SDK_INT >= 28) {
@@ -777,17 +775,12 @@ class IncomingCallNotifier(
             openAppIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(context, MissedChannelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(context)
-        }
+        val builder = Notification.Builder(context, MissedChannelId)
         builder
             .setSmallIcon(R.drawable.ic_call_missed)
             .setContentTitle(redialName)
             .setContentText(missedTargetText(target.missedCount))
-            .setCategory(Notification.CATEGORY_MISSED_CALL)
+            .setCategory(if (Build.VERSION.SDK_INT >= 31) Notification.CATEGORY_MISSED_CALL else Notification.CATEGORY_CALL)
             .setContentIntent(openApp)
             .setAutoCancel(false)
             .setOngoing(true)
@@ -863,12 +856,7 @@ class IncomingCallNotifier(
             openAppIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(context, MissedChannelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(context)
-        }
+        val builder = Notification.Builder(context, MissedChannelId)
         val style = Notification.InboxStyle()
         targets.take(MaxMissedSummaryLines).forEach { target ->
             style.addLine(
@@ -887,7 +875,7 @@ class IncomingCallNotifier(
                 else "$displayCount ${missedCallsWord(displayCount)}",
             )
             .setStyle(style.setSummaryText("$displayCount ${missedCallsWord(displayCount)}"))
-            .setCategory(Notification.CATEGORY_MISSED_CALL)
+            .setCategory(if (Build.VERSION.SDK_INT >= 31) Notification.CATEGORY_MISSED_CALL else Notification.CATEGORY_CALL)
             .setContentIntent(openApp)
             .setAutoCancel(false)
             .setOngoing(true)
@@ -1048,7 +1036,7 @@ class IncomingCallNotifier(
 
     private fun missedOpenIntent(target: String): Intent = Intent(context, MainActivity::class.java)
         .setAction(Intent.ACTION_VIEW)
-        .setData(Uri.parse("tinitalk://missed/$target"))
+        .setData("tinitalk://missed/$target".toUri())
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
 
     private fun missedPhotoAddress(
@@ -1092,7 +1080,6 @@ class IncomingCallNotifier(
     }
 
     private fun ensureChannel(mode: IncomingCallPresentationMode) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         if (mode == IncomingCallPresentationMode.InApp) {
             context.getSystemService(NotificationManager::class.java).createNotificationChannel(
                 NotificationChannel(
@@ -1124,7 +1111,6 @@ class IncomingCallNotifier(
     }
 
     private fun ensureMissedChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(MissedChannelId, "Пропущенные звонки", NotificationManager.IMPORTANCE_LOW).apply {
                 setShowBadge(true)

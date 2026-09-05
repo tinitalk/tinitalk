@@ -1,6 +1,8 @@
 package org.tinitalk.telecom
 
+import androidx.core.net.toUri
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -109,6 +111,8 @@ internal fun postCurrentMediaCallback(
     }
 }
 
+// These inlined flags are passed only to ServiceCompat, which handles older Android versions.
+@SuppressLint("InlinedApi")
 internal fun callForegroundServiceType(cameraSending: Boolean): Int =
     ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
         ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
@@ -1062,6 +1066,8 @@ class CallForegroundService : Service() {
         }
     }
 
+    // ServiceCompat ignores the type argument before API 29.
+    @SuppressLint("InlinedApi")
     private fun satisfyTerminalForegroundStart(): Boolean = synchronized(foregroundLock) {
         try {
             ServiceCompat.startForeground(
@@ -1133,12 +1139,7 @@ class CallForegroundService : Service() {
         state.peer?.contactAddress?.let { address ->
             if (bitmap == null) enqueueNotificationPhotoRefresh(state, address)
         }
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, ChannelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
+        val builder = Notification.Builder(this, ChannelId)
         val content = PendingIntent.getActivity(
             this,
             0,
@@ -1220,12 +1221,7 @@ class CallForegroundService : Service() {
     }
 
     private fun terminalNotification(): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, ChannelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
+        val builder = Notification.Builder(this, ChannelId)
         return builder
             .setSmallIcon(R.drawable.ic_call_active)
             .setContentTitle("TiniTalk")
@@ -1237,7 +1233,6 @@ class CallForegroundService : Service() {
     }
 
     private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(ChannelId, "Активные звонки", NotificationManager.IMPORTANCE_LOW),
@@ -1415,7 +1410,7 @@ class CallForegroundService : Service() {
 
         private fun putOwner(intent: Intent, owner: AccountCallOwner) {
             intent
-                .setData(android.net.Uri.parse("tinitalk://service/${android.net.Uri.encode(owner.localId())}/${android.net.Uri.encode(intent.action)}"))
+                .setData("tinitalk://service/${android.net.Uri.encode(owner.localId())}/${android.net.Uri.encode(intent.action)}".toUri())
                 .putExtra(ExtraAccountId, owner.key.accountId.value)
                 .putExtra(ExtraCallId, owner.key.callId)
                 .putExtra(ExtraServerUrl, owner.sessionBinding.serverUrl)
@@ -1444,7 +1439,7 @@ class CallForegroundService : Service() {
         }
 
         fun start(context: Context, intent: Intent) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+            context.startForegroundService(intent)
         }
     }
 }

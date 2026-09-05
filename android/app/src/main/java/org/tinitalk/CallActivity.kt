@@ -1,5 +1,6 @@
 package org.tinitalk
 
+import androidx.core.net.toUri
 import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -741,7 +742,7 @@ class CallActivity : ComponentActivity() {
             callKey: AccountCallKey,
         ): Intent =
             Intent(context, CallActivity::class.java)
-                .setData(android.net.Uri.parse("tinitalk://outgoing/${android.net.Uri.encode(callKey.localId())}"))
+                .setData("tinitalk://outgoing/${android.net.Uri.encode(callKey.localId())}".toUri())
                 .putExtra(ExtraOutgoingAccountId, peer.accountId.value)
                 .putExtra(ExtraOutgoingCallId, callKey.callId)
                 .putExtra(ExtraOutgoingLogin, peer.login)
@@ -767,7 +768,7 @@ class CallActivity : ComponentActivity() {
                 displayName,
                 callKey,
             )
-                .setData(android.net.Uri.parse("tinitalk://redial/${android.net.Uri.encode(owner.localId())}"))
+                .setData("tinitalk://redial/${android.net.Uri.encode(owner.localId())}".toUri())
                 .setAction(ActionRedial)
                 .putExtra(ExtraRedialServerUrl, binding.serverUrl)
                 .putExtra(ExtraRedialSessionLogin, binding.login)

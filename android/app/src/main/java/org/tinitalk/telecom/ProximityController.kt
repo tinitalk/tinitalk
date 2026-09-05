@@ -11,7 +11,9 @@ class ProximityController(context: Context) : Closeable {
         ?.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "TiniTalk:proximity")
         ?.apply { setReferenceCounted(false) }
 
-    @SuppressLint("WakelockTimeout")
+    // Held across callbacks while using the earpiece; released on disable and Activity teardown.
+    // A timeout or method-scoped finally would turn the screen back on during a long call.
+    @SuppressLint("WakelockTimeout", "Wakelock")
     fun setEnabled(enabled: Boolean) {
         val lock = wakeLock ?: return
         if (enabled && !lock.isHeld) {

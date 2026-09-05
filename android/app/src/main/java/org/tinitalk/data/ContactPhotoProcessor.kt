@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import android.net.Uri
 import java.io.File
@@ -96,7 +97,7 @@ class ContactPhotoProcessor(context: Context) {
             val left = (longest * crop.left).roundToInt().coerceIn(0, bitmap.width - size)
             val top = (longest * crop.top).roundToInt().coerceIn(0, bitmap.height - size)
             val cropped = Bitmap.createBitmap(bitmap, left, top, size, size)
-            val scaled = Bitmap.createScaledBitmap(cropped, ContactPhotoOutputPixels, ContactPhotoOutputPixels, true)
+            val scaled = cropped.scale(ContactPhotoOutputPixels, ContactPhotoOutputPixels, filter = true)
             if (cropped !== scaled) cropped.recycle()
             if (bitmap !== cropped && bitmap !== scaled) bitmap.recycle()
             ContactPhotoResult.Success(scaled)

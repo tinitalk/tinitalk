@@ -1,5 +1,6 @@
 package org.tinitalk.push
 
+import android.annotation.SuppressLint
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
@@ -23,6 +24,8 @@ class IncomingCallForegroundService : Service() {
     private var foreground = false
     private var presentedOwner: AccountCallOwner? = null
 
+    // ServiceCompat ignores the inlined phone-call type before API 29.
+    @SuppressLint("InlinedApi")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val incoming = IncomingCallController()
         val invite = IncomingCallController.inviteFrom(intent)

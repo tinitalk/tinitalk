@@ -1,6 +1,7 @@
 package org.tinitalk.data
 
 import android.content.Context
+import android.annotation.SuppressLint
 import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -487,10 +488,14 @@ internal class SharedPreferencesKeyValueStore(context: Context) : KeyValueStore 
 
     override fun get(key: String): String? = prefs.getString(key, null)
 
+    // KTX edit(commit = true) discards the result; authentication must detect disk-write failure.
+    @SuppressLint("UseKtx")
     override fun put(key: String, value: String) {
         check(prefs.edit().putString(key, value).commit()) { "failed to persist auth state" }
     }
 
+    // Keep the synchronous commit result for the same reason as put().
+    @SuppressLint("UseKtx")
     override fun remove(vararg keys: String) {
         check(prefs.edit().apply {
             keys.forEach { remove(it) }

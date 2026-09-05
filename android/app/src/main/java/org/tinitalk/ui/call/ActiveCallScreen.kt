@@ -1,6 +1,7 @@
 package org.tinitalk.ui.call
 
 import android.content.Context
+import androidx.core.content.edit
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateIntOffsetAsState
 import androidx.compose.animation.core.snap
@@ -649,7 +650,7 @@ private fun VideoActiveCallScreen(
                 draggedPreviewPosition?.let { position ->
                     val corner = nearestSelfPreviewCorner(position, previewBounds)
                     previewCorner = corner
-                    previewPreferences.edit().putString(SelfPreviewCornerKey, corner.name).apply()
+                    previewPreferences.edit { putString(SelfPreviewCornerKey, corner.name) }
                 }
                 draggedPreviewPosition = null
                 previewDragging = false

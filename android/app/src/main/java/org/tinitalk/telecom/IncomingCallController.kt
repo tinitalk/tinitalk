@@ -1,5 +1,6 @@
 package org.tinitalk.telecom
 
+import androidx.core.net.toUri
 import android.app.PendingIntent
 import android.app.ActivityOptions
 import android.content.Context
@@ -7,6 +8,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import androidx.core.content.edit
+import androidx.annotation.RequiresApi
 import org.tinitalk.CallActivity
 import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.AccountCallOwner
@@ -44,19 +47,19 @@ class IncomingCallController internal constructor(
     internal fun save(context: Context, invite: IncomingInvite, action: String? = null) =
         synchronized(PresentationLock) {
             synchronized(PendingActionLock) {
-                prefs(context).edit()
-                    .putString(ExtraAccountId, invite.accountId.value)
-                    .putString(ExtraCallId, invite.callId)
-                    .putString(ExtraServerUrl, invite.sessionBinding.serverUrl)
-                    .putString(ExtraSessionLogin, invite.sessionBinding.login)
-                    .putString(ExtraSessionId, invite.sessionBinding.sessionId)
-                    .putString(ExtraConfigId, invite.sessionBinding.configId)
-                    .putString(ExtraCaller, invite.caller)
-                    .putString(ExtraCallerLogin, invite.callerLogin)
-                    .putString(ExtraExpiresAt, invite.expiresAt.toString())
-                    .putLong(ExtraLastSeq, invite.lastSeq)
-                    .putString(ExtraAction, action)
-                    .apply()
+                prefs(context).edit {
+                    putString(ExtraAccountId, invite.accountId.value)
+                    putString(ExtraCallId, invite.callId)
+                    putString(ExtraServerUrl, invite.sessionBinding.serverUrl)
+                    putString(ExtraSessionLogin, invite.sessionBinding.login)
+                    putString(ExtraSessionId, invite.sessionBinding.sessionId)
+                    putString(ExtraConfigId, invite.sessionBinding.configId)
+                    putString(ExtraCaller, invite.caller)
+                    putString(ExtraCallerLogin, invite.callerLogin)
+                    putString(ExtraExpiresAt, invite.expiresAt.toString())
+                    putLong(ExtraLastSeq, invite.lastSeq)
+                    putString(ExtraAction, action)
+                }
             }
         }
 
@@ -64,7 +67,7 @@ class IncomingCallController internal constructor(
         synchronized(PendingActionLock) {
             val pending = load(context) ?: return@synchronized false
             if (pending.invite.owner != owner) return@synchronized false
-            prefs(context).edit().clear().apply()
+            prefs(context).edit { clear() }
             admission.releaseStaged(owner)
             clearIncomingRingingUi(owner)
             true
@@ -102,7 +105,7 @@ class IncomingCallController internal constructor(
             }
             rememberTerminal(context, owner)
             if (pendingCall?.invite?.owner == owner) {
-                prefs(context).edit().clear().apply()
+                prefs(context).edit { clear() }
                 if (releaseReserved) admission.releaseStaged(pendingCall.invite.owner)
             }
             clearIncomingRingingUi(owner)
@@ -124,7 +127,7 @@ class IncomingCallController internal constructor(
                 val pending = load(context)
                 if (pending?.invite?.owner == candidate.invite.owner) {
                     rememberTerminal(context, pending.invite.owner)
-                    prefs(context).edit().clear().apply()
+                    prefs(context).edit { clear() }
                     admission.releaseStaged(pending.invite.owner)
                     clearIncomingRingingUi(pending.invite.owner)
                 }
@@ -139,7 +142,7 @@ class IncomingCallController internal constructor(
                 is CallAdmissionAttempt.Existing -> pending.invite.key
                 is CallAdmissionAttempt.Busy -> {
                     rememberTerminal(context, pending.invite.owner)
-                    prefs(context).edit().clear().apply()
+                    prefs(context).edit { clear() }
                     clearIncomingRingingUi(pending.invite.owner)
                     null
                 }
@@ -167,7 +170,7 @@ class IncomingCallController internal constructor(
                 is CallAdmissionAttempt.Busy -> {
                     rememberBusyRejected(context, invite.owner)
                     restored?.takeIf { it.invite.owner == invite.owner }?.let { pending ->
-                        prefs(context).edit().clear().apply()
+                        prefs(context).edit { clear() }
                         admission.releaseStaged(pending.invite.owner)
                         clearIncomingRingingUi(pending.invite.owner)
                     }
@@ -217,7 +220,7 @@ class IncomingCallController internal constructor(
             val pending = load(context) ?: return@synchronized false
             if (pending.invite.owner != owner || pending.invite.expiresAt.isAfter(now)) return@synchronized false
             rememberTerminal(context, owner)
-            prefs(context).edit().clear().apply()
+            prefs(context).edit { clear() }
             admission.releaseStaged(pending.invite.owner)
             clearIncomingRingingUi(owner)
             true
@@ -261,7 +264,7 @@ class IncomingCallController internal constructor(
             val pending = load(context) ?: return@synchronized null
             if (!pending.invite.owner.matchesRemoval(accountId, binding)) return@synchronized null
             rememberTerminal(context, pending.invite.owner)
-            prefs(context).edit().clear().apply()
+            prefs(context).edit { clear() }
             admission.releaseStaged(pending.invite.owner)
             clearIncomingRingingUi(pending.invite.owner)
             pending.invite.key
@@ -281,7 +284,7 @@ class IncomingCallController internal constructor(
                     owner,
                     nowMillis,
                 )
-                prefs.edit().putStringSet(TerminalEntries, updated).apply()
+                prefs.edit { putStringSet(TerminalEntries, updated) }
             }
         }
 
@@ -306,7 +309,7 @@ class IncomingCallController internal constructor(
                 val prefs = terminalPrefs(context)
                 val stored = prefs.getStringSet(TerminalEntries, emptySet()).orEmpty()
                 val pruned = TerminalCallTombstones.prune(stored, nowMillis)
-                if (pruned != stored) prefs.edit().putStringSet(TerminalEntries, pruned).apply()
+                if (pruned != stored) prefs.edit { putStringSet(TerminalEntries, pruned) }
                 TerminalCallTombstones.contains(pruned, owner, nowMillis)
             }
         }
@@ -322,7 +325,7 @@ class IncomingCallController internal constructor(
             owner,
             nowMillis,
         )
-        prefs.edit().putStringSet(BusyEntries, updated).apply()
+        prefs.edit { putStringSet(BusyEntries, updated) }
     }
 
     private fun isBusyRejected(
@@ -333,7 +336,7 @@ class IncomingCallController internal constructor(
         val prefs = busyPrefs(context)
         val stored = prefs.getStringSet(BusyEntries, emptySet()).orEmpty()
         val pruned = BusyCallTombstones.prune(stored, nowMillis)
-        if (pruned != stored) prefs.edit().putStringSet(BusyEntries, pruned).apply()
+        if (pruned != stored) prefs.edit { putStringSet(BusyEntries, pruned) }
         BusyCallTombstones.contains(pruned, owner, nowMillis)
     }
 
@@ -390,7 +393,7 @@ class IncomingCallController internal constructor(
                 return@synchronized IncomingAnswerClaim.Invalid
             }
             if (pending.action == ActionAnswer) return@synchronized IncomingAnswerClaim.AlreadyClaimed
-            prefs(context).edit().putString(ExtraAction, ActionAnswer).apply()
+            prefs(context).edit { putString(ExtraAction, ActionAnswer) }
             IncomingAnswerClaim.Claimed
         }
     }
@@ -563,6 +566,7 @@ class IncomingCallController internal constructor(
                 .toBundle()
         }
 
+        @RequiresApi(34)
         @Suppress("DEPRECATION")
         private fun backgroundStartMode(): Int =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
@@ -574,7 +578,7 @@ class IncomingCallController internal constructor(
         private fun intent(context: Context, target: Class<*>, action: String, invite: IncomingInvite): Intent =
             Intent(context, target)
                 .setAction(action)
-                .setData(Uri.parse("tinitalk://call/${Uri.encode(invite.owner.localId())}/${Uri.encode(action)}"))
+                .setData("tinitalk://call/${Uri.encode(invite.owner.localId())}/${Uri.encode(action)}".toUri())
                 .putExtra(ExtraAccountId, invite.accountId.value)
                 .putExtra(ExtraCallId, invite.callId)
                 .putExtra(ExtraServerUrl, invite.sessionBinding.serverUrl)

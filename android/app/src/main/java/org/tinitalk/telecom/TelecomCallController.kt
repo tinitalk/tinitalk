@@ -1,5 +1,6 @@
 package org.tinitalk.telecom
 
+import androidx.core.net.toUri
 import android.content.Context
 import android.net.Uri
 import android.telecom.DisconnectCause
@@ -168,7 +169,7 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
                 callsManager.addCall(
                     CallAttributesCompat(
                         displayName = displayName.ifEmpty { "TiniTalk" },
-                        address = Uri.parse("sip:${Uri.encode(key.localId())}@tinitalk"),
+                        address = "sip:${Uri.encode(key.localId())}@tinitalk".toUri(),
                         direction = direction,
                         callType = CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
                         callCapabilities = 0,

@@ -1,5 +1,6 @@
 package org.tinitalk
 
+import androidx.core.net.toUri
 import android.Manifest
 import android.app.NotificationManager
 import android.content.Intent
@@ -1422,7 +1423,7 @@ class MainActivity : ComponentActivity() {
         runCatching {
             startActivity(
                 Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
-                    .setData(Uri.parse("package:$packageName")),
+                    .setData("package:$packageName".toUri()),
             )
         }
     }
