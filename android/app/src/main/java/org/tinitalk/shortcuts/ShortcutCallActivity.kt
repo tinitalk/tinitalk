@@ -70,7 +70,7 @@ class ShortcutCallActivity : ComponentActivity() {
         if (launching) return
         setIntent(intent)
         error = null
-        consumed = false
+        consumed = intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0
     }
 
     private fun dialOnce() {

@@ -108,6 +108,11 @@ class TinitalkApplication : Application() {
         AuthSessionEvents.observe(authSessionObserver)
     }
 
+    override fun onTerminate() {
+        contactShortcuts.close()
+        super.onTerminate()
+    }
+
     private fun restoreIncomingCall() {
         val incoming = IncomingCallController()
         val reclaimed = incoming.reclaimPending(this) { owner ->

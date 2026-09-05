@@ -1,5 +1,7 @@
 package org.tinitalk.shortcuts
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -18,13 +20,18 @@ import androidx.core.graphics.createBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import org.tinitalk.MainActivity
+import org.tinitalk.R
+import org.tinitalk.TinitalkApplication
 import org.tinitalk.data.AccountContact
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.AuthSessionEvents
+import org.tinitalk.data.AuthSessionEvent
 import org.tinitalk.data.ContactCache
 import org.tinitalk.data.ContactEvents
 import org.tinitalk.data.ContactPhotoReader
@@ -63,9 +70,13 @@ internal class ContactShortcuts(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshRequests = Channel<Unit>(Channel.CONFLATED)
     private val lastVisuals = mutableMapOf<String, ShortcutVisuals>()
+    private val contactObserver: (AccountId) -> Unit = { refresh() }
+    private val accountObserver: (AuthSessionEvent) -> Unit = { refresh() }
+    private var closed = false
 
     fun observeChanges() {
-        ContactEvents.observe { refresh() }
+        ContactEvents.observe(contactObserver)
+        AuthSessionEvents.observe(accountObserver)
         scope.launch { photos.revision.collect { refresh() } }
         scope.launch {
             for (request in refreshRequests) {
@@ -76,25 +87,66 @@ internal class ContactShortcuts(
 
     fun refresh() { refreshRequests.trySend(Unit) }
 
-    // Serialized by the refresh collector. Only changed visuals consume Android's update quota.
+    fun close() {
+        ContactEvents.removeObserver(contactObserver)
+        AuthSessionEvents.removeObserver(accountObserver)
+        scope.cancel()
+        // Wait for any synchronous platform update before the application is torn down.
+        synchronized(this) { closed = true }
+    }
+
+    // Both the refresh collector and the pin callback use this off the UI thread.
+    @Synchronized
     internal fun syncPinned() {
+        if (closed) return
         val manager = manager ?: return
         val pinned = manager.pinnedShortcuts
         lastVisuals.keys.retainAll(pinned.map { it.id }.toSet())
         if (pinned.isEmpty()) return
-        val contacts = auth.list().flatMap { cache.load(it).items }.associateBy { it.peerKey }
+        val accounts = auth.list()
+        val contacts = accounts.flatMap { cache.load(it).items }.associateBy { it.peerKey }
         val updated = mutableListOf<ShortcutInfo>()
         val visuals = mutableMapOf<String, ShortcutVisuals>()
+        val disabled = mutableMapOf<String, String>()
+        val enabled = mutableListOf<String>()
         pinned.forEach { shortcut ->
-            val contact = contacts[shortcutPeer(shortcut.intent)] ?: return@forEach
+            val peer = shortcutPeer(shortcut.intent) ?: return@forEach
+            val contact = contacts[peer]
+            if (contact == null) {
+                val hasAccount = accounts.any { it.id == peer.accountId }
+                val label = if (hasAccount) "Контакт удалён" else "Нет учётной записи"
+                if (shortcut.isEnabled || shortcut.shortLabel.toString() != label) {
+                    // Do not leave the deleted personal photo and name on the launcher.
+                    updated += ShortcutInfo.Builder(context, shortcut.id)
+                        .setActivity(ComponentName(context, MainActivity::class.java))
+                        .setIntent(contactShortcutIntent(context, peer))
+                        .setShortLabel(label).setLongLabel(label)
+                        .setIcon(Icon.createWithResource(context, R.mipmap.ic_launcher))
+                        .build()
+                }
+                if (shortcut.isEnabled) disabled[shortcut.id] = if (hasAccount) {
+                    "Контакт удалён из вашей телефонной книги."
+                } else {
+                    "Вы вышли из учётной записи. Добавьте ярлык заново после входа в TiniTalk."
+                }
+                lastVisuals.remove(shortcut.id)
+                return@forEach
+            }
             val photo = photos.loadBitmap(contact.address, IconSize)
             val current = ShortcutVisuals(contact.displayName, photo?.generationId)
-            if (lastVisuals[shortcut.id] != current) {
+            if (!shortcut.isEnabled || lastVisuals[shortcut.id] != current) {
                 updated += create(contact, photo)
                 visuals[shortcut.id] = current
             }
+            if (!shortcut.isEnabled) enabled += shortcut.id
         }
-        if (updated.isNotEmpty() && manager.updateShortcuts(updated)) lastVisuals.putAll(visuals)
+        if (updated.isNotEmpty() && manager.updateShortcuts(updated)) {
+            lastVisuals.putAll(visuals)
+            if (enabled.isNotEmpty()) manager.enableShortcuts(enabled)
+        }
+        disabled.entries.groupBy({ it.value }, { it.key }).forEach { (message, ids) ->
+            manager.disableShortcuts(ids, message)
+        }
     }
 
     fun isSupported(): Boolean = manager?.isRequestPinShortcutSupported == true
@@ -113,7 +165,13 @@ internal class ContactShortcuts(
             .build()
     }
 
-    fun requestPin(shortcut: ShortcutInfo): Boolean = manager?.requestPinShortcut(shortcut, null) == true
+    fun requestPin(shortcut: ShortcutInfo): Boolean {
+        val callback = PendingIntent.getBroadcast(
+            context, 0, Intent(context, ShortcutPinnedReceiver::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return manager?.requestPinShortcut(shortcut, callback.intentSender) == true
+    }
 
     private fun contactIcon(contact: AccountContact, photo: Bitmap?): Icon {
         val size = IconSize
@@ -133,5 +191,21 @@ internal class ContactShortcuts(
             canvas.drawText(contactInitial(contact.displayName, contact.login), size / 2f, baseline, paint)
         }
         return Icon.createWithAdaptiveBitmap(bitmap)
+    }
+}
+
+/** Recheck after confirmation: the contact may have changed while the launcher dialog was open. */
+class ShortcutPinnedReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                (context.applicationContext as TinitalkApplication).contactShortcuts.syncPinned()
+            } catch (error: Exception) {
+                Log.w("TiniTalkShortcuts", "Could not refresh newly pinned shortcut", error)
+            } finally {
+                pending.finish()
+            }
+        }
     }
 }
