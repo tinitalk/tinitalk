@@ -240,6 +240,7 @@ class CallForegroundService : Service() {
                                     snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
                                 if (accepted && stillActive && media === currentMedia) {
                                     Log.i(CallLogTag, CallDiagnostics.format(stats))
+                                    stats.videoDiagnostics.forEach { Log.i("TiniTalkVideo", it) }
                                     val currentHealth = CallUiStateStore.snapshot().connectionHealth
                                     val health = connectionHealthClassifier.update(stats, currentHealth)
                                     snapshot.callKey?.let { CallUiStateStore.setConnectionHealth(it, health) }

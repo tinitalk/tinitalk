@@ -358,6 +358,100 @@ class CallStatsTest {
         assertEquals(CallStats(), CallStatsCollector().collect(emptyMap(), nowMillis = 1_000))
     }
 
+    @Test
+    fun reportsVideoRatesAndDelaysForTheLatestIntervalSeparatelyFromAudio() {
+        val collector = CallStatsCollector()
+        fun snapshots(step: Int) = mapOf(
+            "codec" to sample("codec", "mimeType" to "video/VP8"),
+            "source" to sample("media-source", "kind" to "video", "framesPerSecond" to 30.0),
+            "send" to sample("outbound-rtp", "kind" to "video", "codecId" to "codec",
+                "mediaSourceId" to "source", "encoderImplementation" to "libvpx", "powerEfficientEncoder" to false,
+                "frameWidth" to 576, "frameHeight" to 1280, "qualityLimitationReason" to "bandwidth",
+                "framesEncoded" to 100 + step * 20, "framesSent" to 100 + step * 18,
+                "bytesSent" to 1_000_000L + step * 200_000L, "packetsSent" to 1000 + step * 100,
+                "totalEncodeTime" to 10.0 + step * 0.4, "totalPacketSendDelay" to 100.0 + step * 5.0),
+            "receive" to sample("inbound-rtp", "kind" to "video", "codecId" to "codec",
+                "decoderImplementation" to "AndroidVideoDecoder", "framesReceived" to 100 + step * 19,
+                "framesDecoded" to 100 + step * 18, "framesDropped" to 3 + step,
+                "bytesReceived" to 1_000_000L + step * 150_000L, "totalDecodeTime" to 10.0 + step * 0.18,
+                "jitterBufferDelay" to 100.0 + step * 7.2, "jitterBufferTargetDelay" to 100.0 + step * 5.4,
+                "jitterBufferEmittedCount" to 100 + step * 18, "totalProcessingDelay" to 200.0 + step * 9.0),
+        )
+        collector.collect(snapshots(0), nowMillis = 1_000)
+        val stats = collector.collect(snapshots(1), nowMillis = 2_000)
+        val send = videoFields(stats.videoDiagnostics.first())
+        val receive = videoFields(stats.videoDiagnostics.last())
+
+        assertEquals("send", send["direction"])
+        assertEquals("video/VP8", send["codec"])
+        assertEquals("libvpx", send["implementation"])
+        assertEquals("false", send["power_efficient"])
+        assertEquals("bandwidth", send["limitation"])
+        assertEquals("30.00", send["capture_fps"])
+        assertEquals("20.00", send["encoded_fps"])
+        assertEquals("18.00", send["sent_fps"])
+        assertEquals("1600.00", send["bitrate_kbps"])
+        assertEquals("20.00", send["encode_ms"])
+        assertEquals("50.00", send["send_queue_ms"])
+        assertEquals("receive", receive["direction"])
+        assertEquals("19.00", receive["received_fps"])
+        assertEquals("18.00", receive["decoded_fps"])
+        assertEquals("1.00", receive["dropped_frames"])
+        assertEquals("1200.00", receive["bitrate_kbps"])
+        assertEquals("10.00", receive["decode_ms"])
+        assertEquals("400.00", receive["buffer_ms"])
+        assertEquals("300.00", receive["buffer_target_ms"])
+        assertEquals("500.00", receive["processing_ms"])
+        assertEquals(0L, stats.bitrateKbps)
+        assertEquals(0L, stats.jitterBufferDelayMs)
+    }
+
+    @Test
+    fun videoDiagnosticsDistinguishMissingSamplesIdleFramesAndCounterResets() {
+        val collector = CallStatsCollector()
+        fun snapshot(frames: Int, total: Double, id: String = "send", codec: String = "vp8") = mapOf(
+            id to sample("outbound-rtp", "kind" to "video", "codecId" to codec,
+                "framesEncoded" to frames, "totalEncodeTime" to total),
+        )
+        fun fields(samples: Map<String, CallStatsSample>, time: Long) =
+            videoFields(collector.collect(samples, time).videoDiagnostics.single())
+
+        assertEquals("na", fields(snapshot(10, 1.0), 1000)["encode_ms"])
+        val idle = fields(snapshot(10, 1.0), 2000)
+        assertEquals("0.00", idle["encoded_fps"])
+        assertEquals("na", idle["encode_ms"])
+        val reset = fields(snapshot(1, 0.1), 3000)
+        assertEquals("na", reset["encoded_fps"])
+        assertEquals("na", reset["encode_ms"])
+        assertEquals("na", fields(snapshot(2, 0.2), 3000)["encoded_fps"])
+        assertEquals("na", fields(snapshot(3, Double.NaN), 4000)["encode_ms"])
+        assertEquals("na", fields(snapshot(10, 1.0, id = "new"), 5000)["encoded_fps"])
+        assertEquals("na", fields(snapshot(20, 2.0, id = "new", codec = "h264"), 6000)["encoded_fps"])
+        assertEquals(emptyList<String>(), collector.collect(emptyMap(), 7000).videoDiagnostics)
+        assertEquals("na", fields(snapshot(30, 3.0, id = "new", codec = "h264"), 8000)["encoded_fps"])
+    }
+
+    @Test
+    fun videoDiagnosticsOnlyLogSelectedMetricsAndSingleLineCodecLabels() {
+        val stats = CallStatsCollector().collect(mapOf(
+            "codec" to sample("codec", "mimeType" to "video/VP8\ncredential=secret", "sdpFmtpLine" to "secret"),
+            "video" to sample("outbound-rtp", "kind" to "video", "codecId" to "codec",
+                "encoderImplementation" to "libvpx\nsecret", "qualityLimitationReason" to "secret",
+                "frameWidth" to Double.POSITIVE_INFINITY, "trackIdentifier" to "secret"),
+        ), nowMillis = 1000)
+        val line = stats.videoDiagnostics.single()
+        val fields = videoFields(line)
+        assertEquals("na", fields["codec"])
+        assertEquals("na", fields["implementation"])
+        assertEquals("na", fields["limitation"])
+        assertEquals("na", fields["width"])
+        assertEquals(false, line.contains("secret"))
+        assertEquals(false, line.contains('\n'))
+    }
+
+    private fun videoFields(line: String): Map<String, String> =
+        line.split(' ').associate { it.substringBefore('=') to it.substringAfter('=') }
+
     private fun outboundBytes(bytes: Number): Map<String, CallStatsSample> = mapOf(
         "video-out" to sample("outbound-rtp", "kind" to "video", "bytesSent" to 999_999L),
         "audio-out" to sample("outbound-rtp", "kind" to "audio", "bytesSent" to bytes),
