@@ -1,6 +1,7 @@
 package org.tinitalk.media
 
 import android.content.Context
+import android.content.Intent
 import android.util.Log
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
@@ -35,7 +36,7 @@ class WebRtcCallSession private constructor(
     private val onRemoteVideoTrack: (VideoRenderSource) -> Unit,
     private val cameraCallbacks: CameraMediaCallbacks,
     private val forceRelay: Boolean,
-) : MediaSession, CameraMediaSession {
+) : MediaSession, CameraMediaSession, ScreenMediaSession {
     private val appContext = context.applicationContext
     private val iceQueue = IceQueue()
     private val coreResources = NativeResourceOwner()
@@ -57,6 +58,8 @@ class WebRtcCallSession private constructor(
     private var active = false
     private var muted = false
     private var cameraController: WebRtcCameraController? = null
+    private var screenController: WebRtcScreenController? = null
+    private val retiredScreens = mutableListOf<WebRtcScreenController>()
     private val cameraExecutor: ExecutorService? = if (videoAllowed) {
         Executors.newSingleThreadExecutor { task ->
             Thread(task, CameraControlThreadName).apply { isDaemon = true }
@@ -241,6 +244,7 @@ class WebRtcCallSession private constructor(
     @Synchronized
     override fun startCamera() {
         ensureOpen()
+        check(screenController == null) { "screen capture must stop before the camera" }
         check(videoAllowed) { "video is not allowed for this call" }
         val retainedVideoSender = configureVideoSender(screen = false)
         val controller = cameraController ?: WebRtcCameraController(
@@ -288,6 +292,35 @@ class WebRtcCallSession private constructor(
         if (!closed) cameraController?.switchCamera()
     }
 
+    @Synchronized
+    override fun startScreen(permission: Intent, onStarted: () -> Unit, onStopped: (String?) -> Unit) {
+        ensureOpen()
+        check(screenController == null)
+        val controller = WebRtcScreenController(
+            appContext, factory, requireNotNull(eglBase).eglBaseContext,
+            configureVideoSender(screen = true), requireNotNull(cameraQueue), onStarted, onStopped,
+        )
+        screenController = controller
+        controller.start(permission)
+    }
+
+    @Synchronized
+    override fun stopScreen(onStopped: () -> Unit) {
+        val controller = screenController
+        if (controller == null) { onStopped(); return }
+        controller.stop(afterStopped = {
+            synchronized(this) {
+                if (screenController === controller) {
+                    screenController = null
+                    if (controller.requiresPeerClose) retiredScreens += controller
+                }
+            }
+            onStopped()
+        })
+    }
+
+    override fun setScreenPaused(paused: Boolean) { screenController?.setPaused(paused) }
+
     override suspend fun close() {
         closeGate.runOnce(::startClose)
     }
@@ -296,6 +329,10 @@ class WebRtcCallSession private constructor(
         runCatching { audioTrack.setEnabled(false) }
         runCatching { audioDeviceModule.setMicrophoneMute(true) }
         runCatching { audioDeviceModule.setSpeakerMute(true) }
+        stopScreen { closeCameraAndPeer() }
+    }
+
+    private fun closeCameraAndPeer() {
         val camera = cameraController
         if (camera == null) {
             cleanupResources()
@@ -326,17 +363,26 @@ class WebRtcCallSession private constructor(
         } finally {
             val releaseCore = {
                 runCatching { coreResources.close(primaryFailure) }
+                cameraQueue?.close()
+                cameraExecutor?.shutdown()
                 cameraCleanupQueue?.close()
                 cameraCleanupExecutor?.shutdown()
                 Unit
             }
-            if (camera == null) {
-                releaseCore()
-            } else {
-                camera.disposeAfterPeerClosed(releaseCore)
+            val releaseScreens = {
+                val screens = retiredScreens.toList()
+                retiredScreens.clear()
+                if (screens.isEmpty()) releaseCore() else cameraQueue?.execute {
+                    screens.forEach { it.disposeAfterPeerClosed() }
+                    releaseCore()
+                }
+                Unit
             }
-            cameraQueue?.close()
-            cameraExecutor?.shutdown()
+            if (camera == null) {
+                releaseScreens()
+            } else {
+                camera.disposeAfterPeerClosed(releaseScreens)
+            }
         }
     }
 

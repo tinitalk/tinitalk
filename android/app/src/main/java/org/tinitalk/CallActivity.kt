@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -105,6 +106,17 @@ class CallActivity : ComponentActivity() {
     private var outgoingName by mutableStateOf<String?>(null)
     private var outgoingContactAddress by mutableStateOf<ContactAddress?>(null)
     private var pendingOutgoingStart = false
+    private var pendingScreenCallKey: AccountCallKey? = null
+    private val screenPermissionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val key = pendingScreenCallKey
+        pendingScreenCallKey = null
+        val current = visibleCallState()
+        val permission = result.data
+        if (result.resultCode == RESULT_OK && permission != null && key != null &&
+            current.callKey == key && current.phase == CallPhase.Active) {
+            CallForegroundService.startScreen(this, key, permission)
+        }
+    }
     private val networkObserver: (Boolean) -> Unit = { available ->
         handler.post {
             val servicePhase = CallServiceState.snapshot().phase
@@ -182,6 +194,9 @@ class CallActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         proximityController = ProximityController(this)
         network = networkAvailability()
+        pendingScreenCallKey = savedInstanceState?.getString("screen_permission_account")?.let { account ->
+            savedInstanceState.getString("screen_permission_call")?.let { AccountCallKey(AccountId(account), it) }
+        }
         cameraPermissionRouter = CameraPermissionActionRouter(
             permissionGranted = ::cameraPermissionGranted,
             requestPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
@@ -392,11 +407,29 @@ class CallActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        pendingScreenCallKey?.let { key ->
+            outState.putString("screen_permission_account", key.accountId.value)
+            outState.putString("screen_permission_call", key.callId)
+        }
         cameraPermissionRouter.pendingCallKey()?.let { callKey ->
             outState.putString(StatePendingCameraAccountId, callKey.accountId.value)
             outState.putString(StatePendingCameraCallId, callKey.callId)
         }
         super.onSaveInstanceState(outState)
+    }
+
+    private fun requestScreenSharing() {
+        val current = visibleCallState()
+        val key = current.callKey ?: return
+        val screen = VideoCallStateStore.snapshot().takeIf { it.callKey == key }?.screen ?: return
+        if (current.phase != CallPhase.Active || !screen.allowed || screen.requested || screen.remoteId != null || pendingScreenCallKey != null) return
+        pendingScreenCallKey = key
+        try {
+            screenPermissionLauncher.launch(getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
+        } catch (_: Exception) {
+            pendingScreenCallKey = null
+            Toast.makeText(this, "Не удалось открыть разрешение на показ экрана", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun applyIntent(intent: Intent?): Boolean {

@@ -1,5 +1,6 @@
 package org.tinitalk.call
 
+import android.content.Intent
 import com.google.gson.JsonObject
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.signal.SignalEvent
@@ -10,6 +11,7 @@ import org.tinitalk.media.CallStats
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.media.MediaSession
 import org.tinitalk.media.CameraMediaSession
+import org.tinitalk.media.ScreenMediaSession
 import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.ExecutorTaskScheduler
 import org.tinitalk.media.TaskScheduler
@@ -39,6 +41,9 @@ class ForegroundCallController(
     private val prepareCameraStart: (String, Long) -> Boolean = { _, _ -> true },
     private val onCameraLeaseReleased: (Long) -> Unit = {},
     private val accountId: AccountId,
+    private val selfLogin: String = "",
+    private val prepareScreenStart: (String) -> Boolean = { false },
+    private val onScreenReleased: () -> Unit = {},
 ) {
     constructor(
         signal: SignalClient,
@@ -94,6 +99,11 @@ class ForegroundCallController(
     private val recentLocalIceEvents = linkedMapOf<String, LocalIceEvent>()
     private val rateLimitedIceEvents = linkedMapOf<String, LocalIceEvent>()
     private var videoState = CallVideoState<VideoRenderSource>()
+    private var screenPermission: Intent? = null
+    private var screenStartEventId: String? = null
+    private var screenStartSubmitted = false
+    private var screenStopping = false
+    private var screenTimeout: CancellableTask? = null
     private var capturingVideoCallId: String? = null
     private val weakNetworkVideoGate = WeakNetworkVideoGate()
     private var foregroundCallId: String? = null
@@ -128,6 +138,7 @@ class ForegroundCallController(
                 }
             }
             "rtc.config" -> handleRtcConfig(event)
+            "rtc.screen" -> onScreenState(event)
             "rtc.answer" -> session?.takeIf { callId == event.callId }?.let { media ->
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
                 completeLocalOffer(event.callId)
@@ -203,6 +214,7 @@ class ForegroundCallController(
     @Synchronized
     fun setCameraRequested(callId: String, requested: Boolean, permissionGranted: Boolean = true) {
         if (videoState.callId != callId || !videoState.allowed) return
+        if (videoState.screen.requested || screenStopping) return
         cameraStartBlocked = false
         if (requested) {
             updateVideoState(videoState.request(callId, permissionGranted))
@@ -255,12 +267,14 @@ class ForegroundCallController(
 
     @Synchronized
     fun onCameraCaptureInvalidated(callId: String) {
+        if (videoState.screen.sending) return
         updateVideoState(videoState.captureStopped(callId))
         updateCapturingVideoCall(callId, enabled = false)
     }
 
     @Synchronized
     fun onCameraCaptureStopped(callId: String) {
+        if (videoState.screen.sending) return
         updateVideoState(videoState.captureStopped(callId))
         updateCapturingVideoCall(callId, enabled = false)
     }
@@ -317,6 +331,7 @@ class ForegroundCallController(
         closeWaiters += onClosed
         if (closing) return
         closing = true
+        stopScreen(videoState.callId)
         cameraTransitionGeneration++
         credentialRefreshTask?.cancel()
         credentialRefreshTask = null
@@ -414,6 +429,7 @@ class ForegroundCallController(
         updateVideoState(
             videoState
                 .configured(accountId, event.callId, videoAllowed)
+                .let { it.copy(screen = it.screen.copy(allowed = event.payload["screen_sharing_allowed"]?.asBoolean == true)) }
                 .withNetworkGate(event.callId, weakNetworkVideoGate.snapshot().networkGated),
         )
         configuredCallId = event.callId
@@ -528,6 +544,7 @@ class ForegroundCallController(
 
     private fun cameraEligible(nextCallId: String): Boolean =
         videoState.callId == nextCallId &&
+            !videoState.screen.requested && !screenStopping &&
             videoState.allowed &&
             videoState.requested &&
             videoState.permissionGranted &&
@@ -539,6 +556,10 @@ class ForegroundCallController(
         val wasGated = videoState.networkGated
         if (wasGated == gate.networkGated) return
         updateVideoState(videoState.withNetworkGate(callId, gate.networkGated))
+        if (videoState.screen.requested) {
+            (session as? ScreenMediaSession)?.setScreenPaused(gate.networkGated)
+            return
+        }
         val cameraActiveOrStarting = videoState.sending || cameraStartSubmitted || videoState.localTrack != null
         if (gate.networkGated && cameraActiveOrStarting) {
             pauseCamera(callId)
@@ -625,6 +646,7 @@ class ForegroundCallController(
 
     private fun pauseCamera(nextCallId: String) {
         if (videoState.callId != nextCallId) return
+        if (videoState.screen.requested) return
         cameraStartSubmitted = false
         updateVideoState(videoState.withLocalTrack(nextCallId, null).captureStopped(nextCallId))
         try {
@@ -684,13 +706,17 @@ class ForegroundCallController(
             event(
                 currentCallId,
                 "rtc.video",
-                JsonObject().apply { addProperty("enabled", enabled) },
+                JsonObject().apply { addProperty("enabled", enabled || videoState.screen.sending) },
             ),
         )
     }
 
     @Synchronized
     fun onSignalFailure(failure: SignalFailure) {
+        if (failure.callId == videoState.callId && failure.eventId == screenStartEventId && screenStartEventId != null) {
+            stopScreen(failure.callId, if (failure.code == "screen_share_busy") "Собеседник уже показывает экран" else "Не удалось начать показ экрана")
+            return
+        }
         when (failure.code) {
             "ice_rate_limited" -> {
                 val eventId = failure.eventId ?: return
@@ -745,6 +771,109 @@ class ForegroundCallController(
                 }
             }
         }
+    }
+
+    @Synchronized
+    fun requestScreen(nextCallId: String, permission: Intent) {
+        if (closing || videoState.callId != nextCallId || !videoState.screen.allowed ||
+            videoState.screen.requested || screenStopping || videoState.screen.remoteId != null ||
+            !weakNetworkVideoGate.snapshot().transportReady || session !is ScreenMediaSession) return
+        val shareId = ids.nextEventId()
+        screenPermission = permission
+        updateVideoState(videoState.copy(screen = videoState.screen.copy(localId = shareId, failure = null)))
+        val start = event(nextCallId, "rtc.screen", JsonObject().apply {
+            addProperty("enabled", true); addProperty("share_id", shareId)
+        })
+        screenStartEventId = start.id
+        screenTimeout = scheduler.schedule(15_000) {
+            synchronized(this) {
+                if (videoState.screen.localId == shareId && !videoState.screen.sending) {
+                    stopScreen(nextCallId, "Не удалось начать показ экрана. Попробуйте ещё раз.")
+                }
+            }
+        }
+        signal.send(start)
+    }
+
+    private fun onScreenState(event: SignalEvent) {
+        if (videoState.callId != event.callId || !videoState.screen.allowed || closing) return
+        val presenter = event.payload["presenter_id"]?.asString.orEmpty()
+        val shareId = event.payload["share_id"]?.asString ?: return
+        val remote = shareId.takeIf { presenter.isNotEmpty() && presenter != selfLogin }
+        updateVideoState(videoState.copy(screen = videoState.screen.copy(remoteId = remote)))
+        val local = videoState.screen.localId
+        if (presenter == selfLogin) {
+            if (local != shareId) {
+                sendScreenStop(event.callId, shareId) // A replay is not consent to capture again.
+                return
+            }
+            if (screenStartSubmitted || screenPermission == null) return
+            screenStartSubmitted = true
+            updateVideoState(videoState.manualOff(event.callId))
+            requestCameraStop(session, afterReleased = {
+                if (closing || videoState.screen.localId != shareId) return@requestCameraStop
+                val permission = screenPermission
+                screenPermission = null
+                if (permission == null) return@requestCameraStop
+                if (!prepareScreenStart(event.callId)) {
+                    stopScreen(event.callId, "Не удалось начать показ экрана")
+                    return@requestCameraStop
+                }
+                try {
+                    val screen = session as? ScreenMediaSession ?: error("screen session missing")
+                    screen.startScreen(permission,
+                        onStarted = { onScreenStarted(event.callId, shareId) },
+                        onStopped = { message -> onScreenStopped(event.callId, shareId, message) },
+                    )
+                    screen.setScreenPaused(videoState.networkGated)
+                } catch (_: Exception) {
+                    stopScreen(event.callId, "Не удалось начать показ экрана")
+                }
+            })
+        } else if (local != null && (remote != null || screenStartSubmitted)) {
+            stopScreen(event.callId, if (remote != null) "Собеседник уже показывает экран" else null)
+        }
+    }
+
+    @Synchronized
+    private fun onScreenStarted(nextCallId: String, shareId: String) {
+        if (closing || videoState.callId != nextCallId || videoState.screen.localId != shareId) return
+        screenTimeout?.cancel(); screenTimeout = null
+        updateVideoState(videoState.copy(screen = videoState.screen.copy(sending = true)))
+        sendVideoState(nextCallId, true)
+    }
+
+    @Synchronized
+    private fun onScreenStopped(nextCallId: String, shareId: String, message: String?) {
+        if (videoState.callId == nextCallId && videoState.screen.localId == shareId) stopScreen(nextCallId, message)
+    }
+
+    @Synchronized
+    fun stopScreen(nextCallId: String?, message: String? = null) {
+        if (videoState.callId != nextCallId || screenStopping) return
+        val shareId = videoState.screen.localId ?: return
+        screenStopping = true
+        screenTimeout?.cancel(); screenTimeout = null
+        screenPermission = null
+        screenStartSubmitted = false
+        screenStartEventId = null
+        updateVideoState(videoState.copy(screen = videoState.screen.copy(localId = null, sending = false, failure = message)))
+        sendVideoState(nextCallId, videoState.sending)
+        if (nextCallId != null) sendScreenStop(nextCallId, shareId)
+        val stopped = {
+            synchronized(this) {
+                screenStopping = false
+                onScreenReleased()
+            }
+        }
+        (session as? ScreenMediaSession)?.stopScreen(stopped) ?: stopped()
+    }
+
+    private fun sendScreenStop(nextCallId: String, shareId: String) {
+        if (closed) return
+        signal.send(event(nextCallId, "rtc.screen", JsonObject().apply {
+            addProperty("enabled", false); addProperty("share_id", shareId)
+        }))
     }
 
     @Synchronized
