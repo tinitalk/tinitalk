@@ -320,6 +320,7 @@ class WebRtcCallSession private constructor(
     }
 
     override fun setScreenPaused(paused: Boolean) { screenController?.setPaused(paused) }
+    override fun refreshScreenSender() { if (!closed) screenController?.refreshSender() }
 
     override suspend fun close() {
         closeGate.runOnce(::startClose)

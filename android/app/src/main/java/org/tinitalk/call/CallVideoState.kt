@@ -14,9 +14,11 @@ data class ScreenShareState(
     val localId: String? = null,
     val sending: Boolean = false,
     val remoteId: String? = null,
+    val ready: Boolean = false,
     val failure: String? = null,
 ) {
     val requested: Boolean get() = localId != null
+    val active: Boolean get() = requested || remoteId != null
 }
 
 data class CallVideoState<out Track>(

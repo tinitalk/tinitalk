@@ -44,10 +44,11 @@ class ScreenSharingTest {
             SignalEvent("00000000-0000-0000-0000-000000000001", callId, type, 1, payload))
     }
 
-    private fun grant(id: String, presenter: String = "alice") = event("rtc.screen", JsonObject().apply {
+    private fun grant(id: String, presenter: String = "alice", ready: Boolean = false) = event("rtc.screen", JsonObject().apply {
         addProperty("enabled", true)
         addProperty("share_id", id)
         addProperty("presenter_id", presenter)
+        addProperty("ready", ready)
     })
 
     @Test fun captureRequiresConsentAndMatchingServerGrant() {
@@ -58,9 +59,14 @@ class ScreenSharingTest {
         val id = requireNotNull(state.screen.localId)
         assertEquals(0, media.starts)
         grant(id)
-        grant(id)
+        assertEquals(0, media.starts)
+        assertEquals(id, sent.last { it.type == "rtc.screen.ready" }.payload["share_id"].asString)
+        grant(id, ready = true)
+        grant(id, ready = true)
         assertEquals(1, media.starts)
         media.started()
+        controller.onMediaConnection(callId, 3, MediaConnectionState.Connected)
+        assertEquals(1, media.refreshes)
         assertTrue(state.screen.sending)
         controller.stopScreen(callId)
         grant(id)
@@ -87,7 +93,7 @@ class ScreenSharingTest {
     @Test fun networkRecoveryKeepsSameCaptureAndSystemStopKeepsAudio() {
         prepare()
         controller.requestScreen(callId, Intent())
-        grant(requireNotNull(state.screen.localId))
+        grant(requireNotNull(state.screen.localId), ready = true)
         media.started()
         controller.onMediaConnection(callId, 2, MediaConnectionState.Disconnected)
         assertTrue(media.paused)
@@ -107,17 +113,113 @@ class ScreenSharingTest {
         assertEquals(600 to 800, screenCaptureSize(600, 800))
     }
 
-    private class ScreenMedia : MediaSession, ScreenMediaSession {
+    @Test fun captureFailureKeepsAudioAndAllowsAnotherAttempt() {
+        prepare()
+        media.startFailure = IllegalStateException("capture unavailable")
+        controller.requestScreen(callId, Intent())
+        grant(requireNotNull(state.screen.localId), ready = true)
+        assertFalse(state.screen.requested)
+        assertEquals("Не удалось начать показ экрана", state.screen.failure)
+        assertFalse(media.closed)
+
+        media.startFailure = null
+        controller.requestScreen(callId, Intent())
+        grant(requireNotNull(state.screen.localId), ready = true)
+        media.started()
+        assertTrue(state.screen.sending)
+        assertNull(state.screen.failure)
+        controller.close()
+    }
+
+    @Test fun cameraReleaseMustCompleteBeforeReadyAndCapture() {
+        prepare()
+        controller.setCameraForeground(callId, true, true)
+        controller.setCameraRequested(callId, true)
+        controller.onCameraCaptureStarted(callId, CameraFacing.Front)
+        media.deferCameraRelease = true
+        controller.requestScreen(callId, Intent())
+        val id = requireNotNull(state.screen.localId)
+        grant(id, ready = true)
+        assertFalse(state.requested)
+        assertFalse(state.sending)
+        assertEquals(0, media.starts)
+        assertFalse(sent.any { it.type == "rtc.screen.ready" })
+        media.cameraReleased()
+        assertEquals(1, media.starts)
+        controller.close()
+        media.cameraReleased()
+    }
+
+    @Test fun viewerStopsCameraAndDoesNotResumeItAfterSharing() {
+        prepare()
+        controller.setCameraForeground(callId, true, true)
+        controller.setCameraRequested(callId, true)
+        controller.onCameraCaptureStarted(callId, CameraFacing.Front)
+        val id = "00000000-0000-0000-0000-000000000077"
+        grant(id, "bob")
+        assertFalse(state.requested)
+        assertFalse(state.sending)
+        assertEquals(1, media.cameraStops)
+        assertTrue(sent.any { it.type == "rtc.screen.ready" })
+        controller.setCameraRequested(callId, true)
+        controller.setCameraForeground(callId, false, true)
+        controller.setCameraForeground(callId, true, true)
+        controller.onMediaConnection(callId, 2, MediaConnectionState.Disconnected)
+        controller.onMediaConnection(callId, 2, MediaConnectionState.Connected)
+        grant(id, presenter = "")
+        assertFalse(state.requested)
+        assertEquals(1, media.cameraStarts)
+        assertFalse(media.closed)
+        controller.setCameraRequested(callId, true)
+        assertEquals(2, media.cameraStarts)
+        controller.close()
+    }
+
+    @Test fun lateCameraReleaseAfterCancelledPreparationCannotStartScreen() {
+        prepare()
+        media.deferCameraRelease = true
+        controller.requestScreen(callId, Intent())
+        val id = requireNotNull(state.screen.localId)
+        grant(id)
+        grant(id, presenter = "")
+        media.cameraReleased()
+        grant(id, ready = true)
+        assertEquals(0, media.starts)
+        assertFalse(state.screen.requested)
+        assertFalse(sent.any { it.type == "rtc.screen.ready" })
+        assertFalse(media.closed)
+        controller.close()
+        media.cameraReleased()
+    }
+
+    private class ScreenMedia : MediaSession, ScreenMediaSession, CameraMediaSession {
+        var cameraStarts = 0
+        var cameraStops = 0
+        var deferCameraRelease = false
+        var cameraReleased: () -> Unit = {}
+        override fun startCamera() { cameraStarts++ }
+        override fun stopCamera(onDetached: () -> Unit, onReleased: () -> Unit) {
+            cameraStops++
+            onDetached()
+            cameraReleased = onReleased
+            if (!deferCameraRelease) onReleased()
+        }
+        override fun pauseCamera(onDetached: () -> Unit, onReleased: () -> Unit) = stopCamera(onDetached, onReleased)
+        override fun switchCamera() = Unit
         var starts = 0
+        var startFailure: Exception? = null
+        var refreshes = 0
         var paused = false
         var closed = false
         var started: () -> Unit = {}
         var stopped: (String?) -> Unit = {}
         override fun startScreen(permission: Intent, onStarted: () -> Unit, onStopped: (String?) -> Unit) {
+            startFailure?.let { throw it }
             starts++; started = onStarted; stopped = onStopped
         }
         override fun stopScreen(onStopped: () -> Unit) = onStopped()
         override fun setScreenPaused(paused: Boolean) { this.paused = paused }
+        override fun refreshScreenSender() { refreshes++ }
         override suspend fun createOffer() = "offer"
         override suspend fun acceptOffer(sdp: String) = "answer"
         override suspend fun setAnswer(sdp: String) = Unit

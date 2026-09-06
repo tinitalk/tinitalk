@@ -63,6 +63,7 @@ interface ScreenMediaSession {
     fun startScreen(permission: Intent, onStarted: () -> Unit, onStopped: (String?) -> Unit)
     fun stopScreen(onStopped: () -> Unit = {})
     fun setScreenPaused(paused: Boolean)
+    fun refreshScreenSender() = Unit
 }
 
 data class CameraMediaCallbacks(

@@ -30,6 +30,7 @@ object WebRtcPolicy {
     ): Boolean {
         val encoding = encodings.singleOrNull() ?: return false
         encoding.maxBitrateBps = VideoMaxBitrateBps
+        encoding.bitratePriority = 1.0
         encoding.maxFramerate = null
         encoding.scaleResolutionDownBy = null
         return runCatching(commit).getOrDefault(false)
@@ -38,6 +39,8 @@ object WebRtcPolicy {
     fun configureScreenSender(encodings: List<RtpParameters.Encoding>, commit: () -> Boolean): Boolean {
         val encoding = encodings.singleOrNull() ?: return false
         encoding.maxBitrateBps = 1_000_000
+        // Screen updates yield bandwidth to the call's audio sender.
+        encoding.bitratePriority = 0.5
         encoding.maxFramerate = 10
         encoding.scaleResolutionDownBy = null
         return runCatching(commit).getOrDefault(false)

@@ -1,6 +1,7 @@
 package org.tinitalk.call
 
 import android.content.Intent
+import android.util.Log
 import com.google.gson.JsonObject
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.signal.SignalEvent
@@ -102,6 +103,8 @@ class ForegroundCallController(
     private var screenPermission: Intent? = null
     private var screenStartEventId: String? = null
     private var screenStartSubmitted = false
+    private var screenPreparationId: String? = null
+    private var screenCameraReadyId: String? = null
     private var screenStopping = false
     private var screenTimeout: CancellableTask? = null
     private var capturingVideoCallId: String? = null
@@ -115,6 +118,7 @@ class ForegroundCallController(
     private var cameraRetirement: Long? = null
     private var cameraDetachPending = false
     private var cameraReleasePending = false
+    private var cameraReleaseFailed = false
     private val cameraDetachWaiters = ArrayDeque<() -> Unit>()
     private val cameraReleaseWaiters = ArrayDeque<() -> Unit>()
     private var cameraTransitionGeneration = 0L
@@ -214,7 +218,7 @@ class ForegroundCallController(
     @Synchronized
     fun setCameraRequested(callId: String, requested: Boolean, permissionGranted: Boolean = true) {
         if (videoState.callId != callId || !videoState.allowed) return
-        if (videoState.screen.requested || screenStopping) return
+        if (videoState.screen.active || screenStopping) return
         cameraStartBlocked = false
         if (requested) {
             updateVideoState(videoState.request(callId, permissionGranted))
@@ -238,7 +242,7 @@ class ForegroundCallController(
 
     @Synchronized
     fun onLocalVideoTrack(callId: String, track: VideoRenderSource?) {
-        if (videoState.callId != callId) {
+        if (videoState.callId != callId || videoState.screen.active || screenStopping) {
             track?.close()
             return
         }
@@ -256,6 +260,10 @@ class ForegroundCallController(
 
     @Synchronized
     fun onCameraCaptureStarted(callId: String, facing: CameraFacing) {
+        if (videoState.callId == callId && videoState.screen.active) {
+            requestCameraStop(session)
+            return
+        }
         if (!cameraEligible(callId)) {
             pauseCamera(callId)
             return
@@ -297,6 +305,8 @@ class ForegroundCallController(
     @Synchronized
     fun onMediaConnection(callId: String, epoch: Long, state: MediaConnectionState) {
         val previousGate = weakNetworkVideoGate.snapshot()
+        val refreshScreen = state == MediaConnectionState.Connected && previousGate.callId == callId &&
+            previousGate.transportReady && epoch > previousGate.epoch && videoState.screen.sending
         val refreshActiveVideo = state == MediaConnectionState.Connected &&
             previousGate.callId == callId &&
             previousGate.transportReady &&
@@ -312,6 +322,7 @@ class ForegroundCallController(
         }
         applyWeakNetworkGate(callId, gate)
         if (refreshActiveVideo) refreshVideoSender(callId, epoch)
+        if (refreshScreen) (session as? ScreenMediaSession)?.refreshScreenSender()
     }
 
     @Synchronized
@@ -544,7 +555,7 @@ class ForegroundCallController(
 
     private fun cameraEligible(nextCallId: String): Boolean =
         videoState.callId == nextCallId &&
-            !videoState.screen.requested && !screenStopping &&
+            !videoState.screen.active && !screenStopping &&
             videoState.allowed &&
             videoState.requested &&
             videoState.permissionGranted &&
@@ -605,6 +616,7 @@ class ForegroundCallController(
         cameraRetirement = retirement
         cameraDetachPending = true
         cameraReleasePending = true
+        cameraReleaseFailed = false
         cameraStartSubmitted = false
         val lease = activeCameraLease
         activeCameraLease = null
@@ -619,6 +631,7 @@ class ForegroundCallController(
             val released = { completeCameraRelease(retirement, lease) }
             if (usePause) camera.pauseCamera(detached, released) else camera.stopCamera(detached, released)
         }.onFailure {
+            cameraReleaseFailed = true
             completeCameraRelease(retirement, lease)
         }
     }
@@ -658,6 +671,7 @@ class ForegroundCallController(
 
     private fun cameraFailed(nextCallId: String, message: String) {
         if (videoState.callId != nextCallId) return
+        if (videoState.screen.active || screenStopping) return
         cameraStartBlocked = true
         cameraStartSubmitted = false
         updateVideoState(videoState.failed(nextCallId, message))
@@ -714,6 +728,7 @@ class ForegroundCallController(
     @Synchronized
     fun onSignalFailure(failure: SignalFailure) {
         if (failure.callId == videoState.callId && failure.eventId == screenStartEventId && screenStartEventId != null) {
+            Log.w("TiniTalkScreen", "screen request rejected by server: ${failure.code}")
             stopScreen(failure.callId, if (failure.code == "screen_share_busy") "Собеседник уже показывает экран" else "Не удалось начать показ экрана")
             return
         }
@@ -788,6 +803,8 @@ class ForegroundCallController(
         screenTimeout = scheduler.schedule(15_000) {
             synchronized(this) {
                 if (videoState.screen.localId == shareId && !videoState.screen.sending) {
+                    Log.w("TiniTalkScreen", "screen start timed out: cameraReady=${screenCameraReadyId == shareId} " +
+                        "serverReady=${videoState.screen.ready} captureSubmitted=$screenStartSubmitted")
                     stopScreen(nextCallId, "Не удалось начать показ экрана. Попробуйте ещё раз.")
                 }
             }
@@ -799,45 +816,85 @@ class ForegroundCallController(
         if (videoState.callId != event.callId || !videoState.screen.allowed || closing) return
         val presenter = event.payload["presenter_id"]?.asString.orEmpty()
         val shareId = event.payload["share_id"]?.asString ?: return
+        if (presenter.isEmpty()) {
+            val wasPreparing = screenPreparationId != null
+            if (videoState.screen.requested && wasPreparing && !videoState.screen.sending) {
+                Log.w("TiniTalkScreen", "server cleared screen preparation: cameraReady=${screenCameraReadyId == screenPreparationId} " +
+                    "serverReady=${videoState.screen.ready} captureSubmitted=$screenStartSubmitted")
+            }
+            screenPreparationId = null
+            screenCameraReadyId = null
+            updateVideoState(videoState.copy(
+                remoteSending = if (wasPreparing) false else videoState.remoteSending,
+                screen = videoState.screen.copy(remoteId = null, ready = false),
+            ))
+            if (videoState.screen.requested && wasPreparing) {
+                stopScreen(event.callId, if (videoState.screen.sending) null else "Не удалось начать показ экрана")
+            }
+            return
+        }
+        if (presenter == selfLogin && videoState.screen.localId != shareId) {
+            sendScreenStop(event.callId, shareId) // A replay is not consent to capture again.
+            return
+        }
         val remote = shareId.takeIf { presenter.isNotEmpty() && presenter != selfLogin }
-        updateVideoState(videoState.copy(screen = videoState.screen.copy(remoteId = remote)))
-        val local = videoState.screen.localId
-        if (presenter == selfLogin) {
-            if (local != shareId) {
-                sendScreenStop(event.callId, shareId) // A replay is not consent to capture again.
+        updateVideoState(videoState.copy(screen = videoState.screen.copy(
+            remoteId = remote, ready = event.payload["ready"]?.asBoolean == true,
+        )))
+        if (remote != null && videoState.screen.requested) {
+            stopScreen(event.callId, "Собеседник уже показывает экран")
+        }
+        if (screenPreparationId != shareId) {
+            screenPreparationId = shareId
+            screenCameraReadyId = null
+            updateVideoState(videoState.manualOff(event.callId).copy(remoteSending = false))
+            updateCapturingVideoCall(event.callId, enabled = false)
+            requestCameraStop(session, afterReleased = {
+                if (closing || videoState.callId != event.callId || screenPreparationId != shareId ||
+                    cameraReleaseFailed) return@requestCameraStop
+                screenCameraReadyId = shareId
+                sendScreenReady(event.callId, shareId)
+                startPreparedScreen(event.callId, shareId)
+            })
+        } else if (screenCameraReadyId == shareId && !videoState.screen.ready) {
+            // Repeat after resume if the previous acknowledgement never reached the server.
+            sendScreenReady(event.callId, shareId)
+        }
+        startPreparedScreen(event.callId, shareId)
+    }
+
+    private fun sendScreenReady(nextCallId: String, shareId: String) {
+        signal.send(event(nextCallId, "rtc.screen.ready", JsonObject().apply { addProperty("share_id", shareId) }))
+    }
+
+    private fun startPreparedScreen(nextCallId: String, shareId: String) {
+        if (closing || videoState.screen.localId != shareId || !videoState.screen.ready ||
+            screenCameraReadyId != shareId || screenStartSubmitted) return
+        val permission = screenPermission ?: return
+        screenPermission = null
+        screenStartSubmitted = true
+        try {
+            if (!prepareScreenStart(nextCallId)) {
+                Log.w("TiniTalkScreen", "screen foreground preparation failed")
+                stopScreen(nextCallId, "Не удалось начать показ экрана")
                 return
             }
-            if (screenStartSubmitted || screenPermission == null) return
-            screenStartSubmitted = true
-            updateVideoState(videoState.manualOff(event.callId))
-            requestCameraStop(session, afterReleased = {
-                if (closing || videoState.screen.localId != shareId) return@requestCameraStop
-                val permission = screenPermission
-                screenPermission = null
-                if (permission == null) return@requestCameraStop
-                if (!prepareScreenStart(event.callId)) {
-                    stopScreen(event.callId, "Не удалось начать показ экрана")
-                    return@requestCameraStop
-                }
-                try {
-                    val screen = session as? ScreenMediaSession ?: error("screen session missing")
-                    screen.startScreen(permission,
-                        onStarted = { onScreenStarted(event.callId, shareId) },
-                        onStopped = { message -> onScreenStopped(event.callId, shareId, message) },
-                    )
-                    screen.setScreenPaused(videoState.networkGated)
-                } catch (_: Exception) {
-                    stopScreen(event.callId, "Не удалось начать показ экрана")
-                }
-            })
-        } else if (local != null && (remote != null || screenStartSubmitted)) {
-            stopScreen(event.callId, if (remote != null) "Собеседник уже показывает экран" else null)
+            val screen = session as? ScreenMediaSession ?: error("screen session missing")
+            screen.startScreen(permission,
+                onStarted = { onScreenStarted(nextCallId, shareId) },
+                onStopped = { message -> onScreenStopped(nextCallId, shareId, message) },
+            )
+            screen.setScreenPaused(videoState.networkGated)
+        } catch (failure: Exception) {
+            Log.e("TiniTalkScreen", "screen session start failed", failure)
+            stopScreen(nextCallId, "Не удалось начать показ экрана")
         }
     }
 
     @Synchronized
     private fun onScreenStarted(nextCallId: String, shareId: String) {
         if (closing || videoState.callId != nextCallId || videoState.screen.localId != shareId) return
+        Log.i("TiniTalkScreen", "first screen frame captured")
         screenTimeout?.cancel(); screenTimeout = null
         updateVideoState(videoState.copy(screen = videoState.screen.copy(sending = true)))
         sendVideoState(nextCallId, true)
@@ -857,6 +914,10 @@ class ForegroundCallController(
         screenPermission = null
         screenStartSubmitted = false
         screenStartEventId = null
+        if (screenPreparationId == shareId) {
+            screenPreparationId = null
+            screenCameraReadyId = null
+        }
         updateVideoState(videoState.copy(screen = videoState.screen.copy(localId = null, sending = false, failure = message)))
         sendVideoState(nextCallId, videoState.sending)
         if (nextCallId != null) sendScreenStop(nextCallId, shareId)

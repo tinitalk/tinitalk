@@ -97,6 +97,20 @@ class WebRtcPolicyTest {
     }
 
     @Test
+    fun screenBudgetYieldsToAudioAndCameraRestoresItsOwnProfile() {
+        val video = RtpParameters.Encoding("video", true, null)
+        val audio = RtpParameters.Encoding("audio", true, null)
+        assertTrue(WebRtcPolicy.configureScreenSender(listOf(video)) { true })
+        assertEquals(1_000_000, video.maxBitrateBps)
+        assertEquals(10, video.maxFramerate)
+        assertTrue(video.bitratePriority < audio.bitratePriority)
+        assertTrue(WebRtcPolicy.configureVideoSender(listOf(video)) { true })
+        assertEquals(4_000_000, video.maxBitrateBps)
+        assertEquals(null, video.maxFramerate)
+        assertEquals(1.0, video.bitratePriority, 0.0)
+    }
+
+    @Test
     fun rejectsMissingOrSimulcastVideoEncodingsWithoutCommitting() {
         var commits = 0
         val commit = {

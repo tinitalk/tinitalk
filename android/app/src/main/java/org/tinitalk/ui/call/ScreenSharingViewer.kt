@@ -84,6 +84,7 @@ private fun ScreenImage(source: VideoRenderSource?, shareId: String?, modifier: 
                     translationX = pan.x; translationY = pan.y
                 },
                 contentDescription = "Экран собеседника",
+                keepLastFrame = true,
                 onFrameSizeChanged = { w, h -> if (w > 0 && h > 0) aspect = w.toFloat() / h },
                 onFrameVisibilityChanged = { frameVisible = it },
             )

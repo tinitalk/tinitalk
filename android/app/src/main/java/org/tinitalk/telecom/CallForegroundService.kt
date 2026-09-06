@@ -322,7 +322,7 @@ class CallForegroundService : Service() {
             }
             if (callResourcesReleased) return START_NOT_STICKY
         }
-        updateForegroundType(cameraSending = cameraForegroundTypeEnabled)
+        updateForegroundType()
         val runtimeReady = runCatching { ensureRuntime(requestOwner) }.getOrDefault(false)
         if (!runtimeReady) {
             finishing = true
@@ -550,8 +550,9 @@ class CallForegroundService : Service() {
                         state.failure?.let { message ->
                             Log.e(CallLogTag, "camera state failed for call ${state.callId}: $message")
                         }
+                        val screenChanged = VideoCallStateStore.snapshot().screen != state.screen
                         VideoCallStateStore.publish(state)
-                        if (state.screen.requested || screenForegroundTypeEnabled) {
+                        if (screenChanged || screenForegroundTypeEnabled) {
                             getSystemService(NotificationManager::class.java).notify(NotificationId, notification(CallUiStateStore.snapshot()))
                         }
                     }
@@ -587,13 +588,25 @@ class CallForegroundService : Service() {
             selfLogin = session.login,
             prepareScreenStart = { callId ->
                 synchronized(foregroundLock) {
-                    media === newMedia && CallServiceState.snapshot().let { it.callId == callId && it.phase == CallPhase.Active } &&
+                    val state = CallServiceState.snapshot()
+                    val blocked = when {
+                        media !== newMedia -> "call runtime changed"
+                        state.callId != callId || state.phase != CallPhase.Active -> "call is not active"
+                        !getSystemService(android.os.PowerManager::class.java).isInteractive -> "screen is off"
+                        getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked -> "screen is locked"
+                        else -> null
+                    }
+                    if (blocked != null) {
+                        Log.w("TiniTalkScreen", "screen start blocked: $blocked")
+                        false
+                    } else {
                         updateForegroundType(cameraSending = false, screenSending = true)
+                    }
                 }
             },
             onScreenReleased = {
                 synchronized(foregroundLock) {
-                    if (media === newMedia) updateForegroundType(cameraForegroundTypeEnabled, screenSending = false)
+                    if (media === newMedia) updateForegroundType(screenSending = false)
                 }
             },
         )
@@ -1280,18 +1293,31 @@ class CallForegroundService : Service() {
         )
     }
 
-    private fun updateForegroundType(cameraSending: Boolean, screenSending: Boolean = screenForegroundTypeEnabled): Boolean = synchronized(foregroundLock) {
+    private fun updateForegroundType(cameraSending: Boolean? = null, screenSending: Boolean? = null): Boolean = synchronized(foregroundLock) {
         if (callResourcesReleased) return@synchronized false
+        // Resolve unchanged flags under the lock, not in arguments evaluated before acquiring it.
+        val cameraEnabled = cameraSending ?: cameraForegroundTypeEnabled
+        val screenEnabled = screenSending ?: screenForegroundTypeEnabled
+        val requestedTypes = callForegroundServiceType(cameraEnabled, screenEnabled)
         val state = CallUiStateStore.snapshot()
         try {
             ServiceCompat.startForeground(
                 this,
                 NotificationId,
                 notification(state),
-                callForegroundServiceType(cameraSending, screenSending),
+                requestedTypes,
             )
-            cameraForegroundTypeEnabled = cameraSending
-            screenForegroundTypeEnabled = screenSending
+            if (screenEnabled && Build.VERSION.SDK_INT >= 29) {
+                val actualTypes = foregroundServiceType
+                check(actualTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION != 0) {
+                    "mediaProjection foreground type missing: requested=$requestedTypes actual=$actualTypes sdk=${Build.VERSION.SDK_INT}"
+                }
+                if (screenSending == true) {
+                    Log.i("TiniTalkScreen", "projection foreground ready: requested=$requestedTypes actual=$actualTypes sdk=${Build.VERSION.SDK_INT}")
+                }
+            }
+            cameraForegroundTypeEnabled = cameraEnabled
+            screenForegroundTypeEnabled = screenEnabled
             true
         } catch (failure: Throwable) {
             Log.e(CallLogTag, "failed to update foreground service type", failure)

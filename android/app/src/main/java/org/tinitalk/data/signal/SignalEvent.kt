@@ -28,7 +28,7 @@ data class SignalEvent(
                 "rtc.video enabled must be a boolean"
             }
         }
-        if (type == "rtc.screen") require(payload["share_id"]?.asString?.looksLikeUuid() == true) {
+        if (type == "rtc.screen" || type == "rtc.screen.ready") require(payload["share_id"]?.asString?.looksLikeUuid() == true) {
             "rtc.screen share_id must be a UUID"
         }
     }
@@ -56,6 +56,7 @@ data class SignalEvent(
             "rtc.ice",
             "rtc.video",
             "rtc.screen",
+            "rtc.screen.ready",
             "rtc.restart",
             "rtc.restart.request",
         )

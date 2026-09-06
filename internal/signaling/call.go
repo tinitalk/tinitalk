@@ -44,6 +44,9 @@ type call struct {
 	calleeSupportsScreen bool
 	screenPresenter      string
 	screenShareID        string
+	screenCallerReady    bool
+	screenCalleeReady    bool
+	screenPreparingAt    time.Time
 }
 
 func (c *call) remember(eventID string) {
@@ -83,4 +86,14 @@ func (c *call) videoAllowed() bool {
 
 func (c *call) screenAllowed() bool {
 	return c.videoAllowed() && c.callerSupportsScreen && c.calleeSupportsScreen
+}
+
+func (c *call) screenReady() bool {
+	return c.screenPresenter != "" && c.screenCallerReady && c.screenCalleeReady
+}
+
+func (c *call) clearScreen() {
+	c.screenPresenter, c.screenShareID = "", ""
+	c.screenCallerReady, c.screenCalleeReady = false, false
+	c.screenPreparingAt = time.Time{}
 }

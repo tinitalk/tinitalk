@@ -8,6 +8,7 @@ import android.media.projection.MediaProjection
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Display
 import android.view.WindowManager
 import org.webrtc.CapturerObserver
@@ -40,7 +41,9 @@ internal class WebRtcScreenController(
     private var stopped = false
     private var started = false
     private var paused = false
+    private var captureSize = 0 to 0
     private val firstFrame = AtomicBoolean(false)
+    private val stopRequested = AtomicBoolean(false)
     private var awaitingPeerClose = false
     val requiresPeerClose: Boolean get() = awaitingPeerClose
     private val displayManager = context.getSystemService(DisplayManager::class.java)
@@ -56,7 +59,7 @@ internal class WebRtcScreenController(
     }
 
     fun start(permission: Intent) = queue.execute {
-        if (stopped) return@execute
+        if (stopped || stopRequested.get()) return@execute
         try {
             val helper = SurfaceTextureHelper.create("TiniTalkScreenCapture", egl)
             resources.own(helper::dispose)
@@ -72,13 +75,16 @@ internal class WebRtcScreenController(
             capture.initialize(helper, context, object : CapturerObserver {
                 override fun onCapturerStarted(success: Boolean) {
                     videoSource.capturerObserver.onCapturerStarted(success)
-                    if (!success) stop("Не удалось начать показ экрана")
+                    if (!success) {
+                        Log.e("TiniTalkScreen", "capturer reported start failure")
+                        stop("Не удалось начать показ экрана")
+                    }
                 }
                 override fun onCapturerStopped() { videoSource.capturerObserver.onCapturerStopped() }
                 override fun onFrameCaptured(frame: VideoFrame) {
                     videoSource.capturerObserver.onFrameCaptured(frame)
                     if (firstFrame.compareAndSet(false, true)) queue.execute {
-                        if (!stopped && !started) {
+                        if (!stopped && !stopRequested.get() && !started) {
                             started = true
                             onStarted()
                         }
@@ -87,6 +93,7 @@ internal class WebRtcScreenController(
             })
             val size = displaySize()
             val dimensions = screenCaptureSize(size.x, size.y)
+            captureSize = dimensions
             videoSource.adaptOutputFormat(dimensions.first, dimensions.second, 10)
             val senderLease = SenderTrackLease(
                 track = videoTrack,
@@ -99,28 +106,49 @@ internal class WebRtcScreenController(
             videoTrack.setEnabled(!paused)
             capture.startCapture(dimensions.first, dimensions.second, 10)
             displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            Log.e("TiniTalkScreen", "capture start failed", failure)
             stopOnQueue("Не удалось начать показ экрана")
         }
     }
 
     fun setPaused(value: Boolean) = queue.execute {
+        val recovering = paused && !value
         paused = value
         if (!stopped) track?.setEnabled(!value)
+        if (recovering) refreshSenderOnQueue()
+    }
+
+    fun refreshSender() = queue.execute { refreshSenderOnQueue() }
+
+    private fun refreshSenderOnQueue() {
+        if (!stopped && started && !paused && lease?.refresh() != true) {
+            stopOnQueue("Не удалось восстановить показ экрана. Включите его ещё раз.")
+        }
     }
 
     private fun resize(width: Int, height: Int) = queue.execute {
-        if (stopped || width <= 0 || height <= 0) return@execute
-        val (w, h) = screenCaptureSize(width, height)
+        if (stopped || stopRequested.get() || width <= 0 || height <= 0) return@execute
+        val dimensions = screenCaptureSize(width, height)
+        // Resizing can trigger another size callback, even with identical dimensions.
+        if (dimensions == captureSize) return@execute
+        captureSize = dimensions
+        val (w, h) = dimensions
         runCatching {
             source?.adaptOutputFormat(w, h, 10)
             capturer?.changeCaptureFormat(w, h, 10)
-        }.onFailure { stopOnQueue("Показ экрана остановлен") }
+        }.onFailure {
+            Log.e("TiniTalkScreen", "capture resize failed: ${w}x$h", it)
+            stopOnQueue("Показ экрана остановлен")
+        }
     }
 
-    fun stop(message: String? = null, afterStopped: () -> Unit = {}) = queue.execute {
-        stopOnQueue(message)
-        afterStopped()
+    fun stop(message: String? = null, afterStopped: () -> Unit = {}) {
+        stopRequested.set(true)
+        queue.execute {
+            stopOnQueue(message)
+            afterStopped()
+        }
     }
 
     private fun stopOnQueue(message: String?) {
@@ -131,7 +159,9 @@ internal class WebRtcScreenController(
         val released = lease?.release()
         awaitingPeerClose = released?.requiresPeerClosed == true
         runCatching { capturer?.stopCapture() }
+            .onFailure { Log.e("TiniTalkScreen", "capture stop failed", it) }
         if (!awaitingPeerClose) runCatching { resources.close() }
+            .onFailure { Log.e("TiniTalkScreen", "capture cleanup failed", it) }
         onStopped(message ?: released?.failure?.let { "Показ экрана остановлен" })
     }
 

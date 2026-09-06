@@ -370,13 +370,24 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	if err := c.validateTransition(sender, event.Type); err != nil {
 		return err
 	}
-	if event.Type == "rtc.screen" {
+	if event.Type == "rtc.screen" || event.Type == "rtc.screen.ready" {
 		return h.handleScreen(c, sender, event)
+	}
+	if event.Type == "rtc.video" && c.screenPresenter != "" {
+		var payload struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Enabled && (sender != c.screenPresenter || !c.screenReady()) {
+			return clientError{message: "camera is unavailable during screen sharing", code: "screen_share_camera_blocked"}
+		}
 	}
 	if event.Type == "call.accept" {
 		var payload struct {
 			SupportsVideo  bool `json:"supports_video"`
-			SupportsScreen bool `json:"supports_screen_sharing"`
+			SupportsScreen bool `json:"supports_exclusive_screen_sharing"`
 		}
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
@@ -556,7 +567,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 		CalleeID          string `json:"callee_id"`
 		SupportsCrossCall bool   `json:"supports_cross_call"`
 		SupportsVideo     bool   `json:"supports_video"`
-		SupportsScreen    bool   `json:"supports_screen_sharing"`
+		SupportsScreen    bool   `json:"supports_exclusive_screen_sharing"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return err
@@ -726,6 +737,7 @@ func (h *Hub) Sweep() int {
 			continue
 		}
 		if c.state == callActive {
+			h.expireScreenPreparation(c, now)
 			for _, participant := range []string{c.caller, c.callee} {
 				offlineSince, ok := c.offlineSince[participant]
 				if !ok || now.Sub(offlineSince) <= ActiveDisconnectGrace {
@@ -1017,7 +1029,7 @@ func (h *Hub) deliverClient(client *Client, event DeliveredEvent) bool {
 
 func isDeviceBoundEvent(eventType string) bool {
 	switch eventType {
-	case "call.accept", "rtc.offer", "rtc.answer", "rtc.ice", "rtc.restart", "rtc.restart.request", "rtc.video", "rtc.screen":
+	case "call.accept", "rtc.offer", "rtc.answer", "rtc.ice", "rtc.restart", "rtc.restart.request", "rtc.video", "rtc.screen", "rtc.screen.ready":
 		return true
 	default:
 		return false
@@ -1029,7 +1041,7 @@ func (h *Hub) end(c *call) {
 		return
 	}
 	c.state = callEnded
-	c.screenPresenter, c.screenShareID = "", ""
+	c.clearScreen()
 	c.endedAt = h.now()
 	delete(h.activeByUser, c.caller)
 	delete(h.activeByUser, c.callee)
@@ -1093,7 +1105,7 @@ func (c *call) validateTransition(sender, eventType string) error {
 		}
 	}
 	switch eventType {
-	case "call.end", "call.connected", "rtc.ice", "rtc.video", "rtc.screen":
+	case "call.end", "call.connected", "rtc.ice", "rtc.video", "rtc.screen", "rtc.screen.ready":
 		return nil
 	case "rtc.offer", "rtc.restart":
 		if sender != c.caller {

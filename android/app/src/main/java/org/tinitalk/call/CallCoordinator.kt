@@ -43,7 +43,7 @@ class CallCoordinator(
             addProperty("supports_cross_call", true)
             if (supportsVideo) {
                 addProperty("supports_video", true)
-                addProperty("supports_screen_sharing", true)
+                addProperty("supports_exclusive_screen_sharing", true)
             }
         }
         signal.send(event(callId, "call.start", payload))
@@ -55,7 +55,7 @@ class CallCoordinator(
         val payload = JsonObject().apply {
             if (supportsVideo) {
                 addProperty("supports_video", true)
-                addProperty("supports_screen_sharing", true)
+                addProperty("supports_exclusive_screen_sharing", true)
             }
         }
         signal.send(event(callId, "call.accept", payload))

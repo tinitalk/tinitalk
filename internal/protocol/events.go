@@ -38,6 +38,7 @@ var allowedTypes = map[string]struct{}{
 	"rtc.ice":             {},
 	"rtc.video":           {},
 	"rtc.screen":          {},
+	"rtc.screen.ready":    {},
 	"rtc.restart":         {},
 	"rtc.restart.request": {},
 }
@@ -98,7 +99,7 @@ func (e Event) validatePayload() error {
 		var payload struct {
 			CalleeID       string `json:"callee_id"`
 			SupportsVideo  bool   `json:"supports_video"`
-			SupportsScreen bool   `json:"supports_screen_sharing"`
+			SupportsScreen bool   `json:"supports_exclusive_screen_sharing"`
 		}
 		if err := json.Unmarshal(e.Payload, &payload); err != nil {
 			return err
@@ -109,7 +110,7 @@ func (e Event) validatePayload() error {
 	case "call.accept":
 		var payload struct {
 			SupportsVideo  bool `json:"supports_video"`
-			SupportsScreen bool `json:"supports_screen_sharing"`
+			SupportsScreen bool `json:"supports_exclusive_screen_sharing"`
 		}
 		if err := json.Unmarshal(e.Payload, &payload); err != nil {
 			return err
@@ -124,7 +125,7 @@ func (e Event) validatePayload() error {
 		if payload.LastSeq < 0 {
 			return errors.New("last_seq must be non-negative")
 		}
-	case "rtc.video", "rtc.screen":
+	case "rtc.video", "rtc.screen", "rtc.screen.ready":
 		var payload struct {
 			Enabled *bool  `json:"enabled"`
 			ShareID string `json:"share_id"`
@@ -132,10 +133,10 @@ func (e Event) validatePayload() error {
 		if err := json.Unmarshal(e.Payload, &payload); err != nil {
 			return err
 		}
-		if payload.Enabled == nil {
+		if payload.Enabled == nil && e.Type != "rtc.screen.ready" {
 			return errors.New("enabled must be a boolean")
 		}
-		if e.Type == "rtc.screen" && !looksLikeUUID(payload.ShareID) {
+		if (e.Type == "rtc.screen" || e.Type == "rtc.screen.ready") && !looksLikeUUID(payload.ShareID) {
 			return errors.New("share_id must be a UUID")
 		}
 	case "rtc.ice":
