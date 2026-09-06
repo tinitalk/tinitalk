@@ -102,6 +102,7 @@ class WebRtcCallSession private constructor(
                     .createPeerConnectionFactory()
             } else {
                 PeerConnectionFactory.builder()
+                    .setFieldTrials(WebRtcPolicy.screenSharingFieldTrials)
                     .setAudioDeviceModule(audioDeviceModule)
                     .setVideoEncoderFactory(
                         DefaultVideoEncoderFactory(

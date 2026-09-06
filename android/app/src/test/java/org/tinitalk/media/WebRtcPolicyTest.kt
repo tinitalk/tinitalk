@@ -97,12 +97,21 @@ class WebRtcPolicyTest {
     }
 
     @Test
+    fun screenPacingChangesOnlyTheQueueTarget() {
+        assertEquals(
+            listOf("WebRTC-ProbingScreenshareBwe", "1.0,300,80,40,-60,3", ""),
+            WebRtcPolicy.screenSharingFieldTrials.split('/'),
+        )
+    }
+
+    @Test
     fun screenBudgetYieldsToAudioAndCameraRestoresItsOwnProfile() {
         val video = RtpParameters.Encoding("video", true, null)
         val audio = RtpParameters.Encoding("audio", true, null)
         assertTrue(WebRtcPolicy.configureScreenSender(listOf(video)) { true })
-        assertEquals(1_000_000, video.maxBitrateBps)
-        assertEquals(10, video.maxFramerate)
+        assertEquals(4_000_000, video.maxBitrateBps)
+        assertEquals(30, WebRtcPolicy.screenCaptureFps)
+        assertEquals(WebRtcPolicy.screenCaptureFps, video.maxFramerate)
         assertTrue(video.bitratePriority < audio.bitratePriority)
         assertTrue(WebRtcPolicy.configureVideoSender(listOf(video)) { true })
         assertEquals(4_000_000, video.maxBitrateBps)

@@ -94,7 +94,7 @@ internal class WebRtcScreenController(
             val size = displaySize()
             val dimensions = screenCaptureSize(size.x, size.y)
             captureSize = dimensions
-            videoSource.adaptOutputFormat(dimensions.first, dimensions.second, 10)
+            videoSource.adaptOutputFormat(dimensions.first, dimensions.second, WebRtcPolicy.screenCaptureFps)
             val senderLease = SenderTrackLease(
                 track = videoTrack,
                 attach = { sender.setTrack(it, false) },
@@ -104,7 +104,7 @@ internal class WebRtcScreenController(
             ).also { lease = it }
             check(senderLease.attach()) { "failed to attach screen track" }
             videoTrack.setEnabled(!paused)
-            capture.startCapture(dimensions.first, dimensions.second, 10)
+            capture.startCapture(dimensions.first, dimensions.second, WebRtcPolicy.screenCaptureFps)
             displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
         } catch (failure: Exception) {
             Log.e("TiniTalkScreen", "capture start failed", failure)
@@ -135,8 +135,8 @@ internal class WebRtcScreenController(
         captureSize = dimensions
         val (w, h) = dimensions
         runCatching {
-            source?.adaptOutputFormat(w, h, 10)
-            capturer?.changeCaptureFormat(w, h, 10)
+            source?.adaptOutputFormat(w, h, WebRtcPolicy.screenCaptureFps)
+            capturer?.changeCaptureFormat(w, h, WebRtcPolicy.screenCaptureFps)
         }.onFailure {
             Log.e("TiniTalkScreen", "capture resize failed: ${w}x$h", it)
             stopOnQueue("Показ экрана остановлен")
