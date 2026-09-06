@@ -342,6 +342,7 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 					break
 				}
 			}
+			h.deliverScreenState(c, sender, event)
 			return nil
 		}
 		replayed := c.after(sender, payload.LastSeq)
@@ -355,6 +356,9 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 				h.deliver(sender, delivered)
 			}
 		}
+		if c.deviceID(sender) == senderDeviceID {
+			h.deliverScreenState(c, sender, event)
+		}
 		return nil
 	}
 	if event.Type == "rtc.video" && !c.videoAllowed() {
@@ -366,14 +370,19 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	if err := c.validateTransition(sender, event.Type); err != nil {
 		return err
 	}
+	if event.Type == "rtc.screen" {
+		return h.handleScreen(c, sender, event)
+	}
 	if event.Type == "call.accept" {
 		var payload struct {
-			SupportsVideo bool `json:"supports_video"`
+			SupportsVideo  bool `json:"supports_video"`
+			SupportsScreen bool `json:"supports_screen_sharing"`
 		}
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
 		c.calleeSupportsVideo = payload.SupportsVideo
+		c.calleeSupportsScreen = payload.SupportsScreen
 		c.calleeDeviceID = senderDeviceID
 	}
 	if event.Type == "rtc.ice" {
@@ -463,6 +472,13 @@ func (h *Hub) deliverICEConfig(c *call, restartID string) {
 			payload = h.iceConfig.ICEConfig(c.id, participant)
 		}
 		payload = withVideoAllowed(payload, c.videoAllowed())
+		if c.screenAllowed() {
+			var config map[string]any
+			if json.Unmarshal(payload, &config) == nil {
+				config["screen_sharing_allowed"] = true
+				payload, _ = json.Marshal(config)
+			}
+		}
 		if restartID != "" {
 			payload = withRestartID(payload, restartID)
 		}
@@ -540,6 +556,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 		CalleeID          string `json:"callee_id"`
 		SupportsCrossCall bool   `json:"supports_cross_call"`
 		SupportsVideo     bool   `json:"supports_video"`
+		SupportsScreen    bool   `json:"supports_screen_sharing"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return err
@@ -560,7 +577,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 				existing.caller == payload.CalleeID &&
 				existing.callee == sender &&
 				existing.supportsCrossCall && payload.SupportsCrossCall {
-				return h.acceptCrossed(existing, senderDeviceID, event, payload.SupportsVideo)
+				return h.acceptCrossed(existing, senderDeviceID, event, payload.SupportsVideo, payload.SupportsScreen)
 			}
 		}
 		return ErrCalleeBusy
@@ -596,17 +613,18 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 		}
 	}
 	c := &call{
-		id:                  event.CallID,
-		caller:              sender,
-		callee:              payload.CalleeID,
-		callerDeviceID:      senderDeviceID,
-		seen:                map[string]struct{}{},
-		offlineSince:        map[string]time.Time{},
-		nextSeq:             1,
-		startedAt:           now,
-		state:               callRinging,
-		supportsCrossCall:   payload.SupportsCrossCall,
-		callerSupportsVideo: payload.SupportsVideo,
+		id:                   event.CallID,
+		caller:               sender,
+		callee:               payload.CalleeID,
+		callerDeviceID:       senderDeviceID,
+		seen:                 map[string]struct{}{},
+		offlineSince:         map[string]time.Time{},
+		nextSeq:              1,
+		startedAt:            now,
+		state:                callRinging,
+		supportsCrossCall:    payload.SupportsCrossCall,
+		callerSupportsVideo:  payload.SupportsVideo,
+		callerSupportsScreen: payload.SupportsScreen,
 	}
 	c.remember(event.ID)
 	h.calls[event.CallID] = c
@@ -642,7 +660,7 @@ func (h *Hub) checkCallStartRate(user string) error {
 	return nil
 }
 
-func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Event, calleeSupportsVideo bool) error {
+func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Event, calleeSupportsVideo, calleeSupportsScreen bool) error {
 	if h.history != nil {
 		if err := h.history.MarkCallAccepted(c.id); err != nil {
 			return err
@@ -650,6 +668,7 @@ func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Even
 	}
 	c.remember(source.ID)
 	c.calleeSupportsVideo = calleeSupportsVideo
+	c.calleeSupportsScreen = calleeSupportsScreen
 	c.calleeDeviceID = calleeDeviceID
 	h.callAliases[source.CallID] = c.id
 	c.aliases = append(c.aliases, source.CallID)
@@ -998,7 +1017,7 @@ func (h *Hub) deliverClient(client *Client, event DeliveredEvent) bool {
 
 func isDeviceBoundEvent(eventType string) bool {
 	switch eventType {
-	case "call.accept", "rtc.offer", "rtc.answer", "rtc.ice", "rtc.restart", "rtc.restart.request", "rtc.video":
+	case "call.accept", "rtc.offer", "rtc.answer", "rtc.ice", "rtc.restart", "rtc.restart.request", "rtc.video", "rtc.screen":
 		return true
 	default:
 		return false
@@ -1010,6 +1029,7 @@ func (h *Hub) end(c *call) {
 		return
 	}
 	c.state = callEnded
+	c.screenPresenter, c.screenShareID = "", ""
 	c.endedAt = h.now()
 	delete(h.activeByUser, c.caller)
 	delete(h.activeByUser, c.callee)
@@ -1073,7 +1093,7 @@ func (c *call) validateTransition(sender, eventType string) error {
 		}
 	}
 	switch eventType {
-	case "call.end", "call.connected", "rtc.ice", "rtc.video":
+	case "call.end", "call.connected", "rtc.ice", "rtc.video", "rtc.screen":
 		return nil
 	case "rtc.offer", "rtc.restart":
 		if sender != c.caller {

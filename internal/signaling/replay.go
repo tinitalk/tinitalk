@@ -35,5 +35,5 @@ func (c *call) after(recipient string, seq uint64) []DeliveredEvent {
 }
 
 func (c *call) canReplay(event DeliveredEvent, seq uint64) bool {
-	return event.Seq > seq && (c.state != callEnded || event.Type != "rtc.video")
+	return event.Seq > seq && (c.state != callEnded || (event.Type != "rtc.video" && event.Type != "rtc.screen"))
 }
