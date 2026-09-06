@@ -41,6 +41,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -129,10 +130,12 @@ fun ActiveCallScreen(
         Color.White.copy(alpha = 0.76f)
     }
     val videoMode = videoModeActive(
-        videoAllowed = videoState.allowed,
+        videoAllowed = videoState.allowed && !screen.active,
         localSending = videoState.sending,
         remoteSending = videoState.remoteSending,
     )
+    val cameraActive = videoState.requested || videoState.sending || videoState.remoteSending
+    val sharingPanelVisible = screen.allowed && !receivingScreen && (screen.requested || !cameraActive)
     val cameraPressed: (Boolean) -> Unit = { requested ->
         speakerRouteOnCameraPress(requested, currentEndpoint, availableEndpoints)?.let(onSelectEndpoint)
         onCamera(requested)
@@ -145,33 +148,60 @@ fun ActiveCallScreen(
     }
 
     Column(Modifier.fillMaxSize().background(CallBackgroundTop).then(
-        if (screen.allowed) Modifier.statusBarsPadding().consumeWindowInsets(WindowInsets.statusBars) else Modifier,
+        if (sharingPanelVisible) Modifier.statusBarsPadding().consumeWindowInsets(WindowInsets.statusBars) else Modifier,
     )) {
-        if (screen.allowed) {
+        if (sharingPanelVisible) {
             Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Icon(painterResource(R.drawable.ic_screen_share), null, tint = if (screen.requested) Color(0xFF77D9B4) else Color.White.copy(alpha = 0.7f), modifier = Modifier.size(24.dp))
-                Text(when {
-                    screen.requested && videoState.networkGated -> "Показ приостановлен · восстанавливаем связь"
-                    screen.sending -> "Вы показываете экран"
-                    screen.requested -> "Готовим показ…"
-                    receivingScreen -> "Собеседник показывает экран"
-                    else -> "Показ экрана"
-                }, Modifier.weight(1f), color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
-                if (!receivingScreen || screen.requested) TextButton(
-                    onClick = { if (screen.requested) onStopSharing() else confirmSharing = true },
-                    enabled = screen.requested || connectionHealth == ConnectionHealth.Good || connectionHealth == ConnectionHealth.Poor,
-                ) { Text(if (screen.requested) "Остановить показ" else "Показать экран") }
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+                val sharingActionEnabled = screen.requested || connectionHealth == ConnectionHealth.Good || connectionHealth == ConnectionHealth.Poor
+                if (screen.requested) {
+                    TextButton(
+                        onClick = onStopSharing,
+                        enabled = sharingActionEnabled,
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_screen_share),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(
+                            "Остановить показ",
+                            Modifier.padding(start = 8.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = { confirmSharing = true },
+                        enabled = sharingActionEnabled,
+                        modifier = Modifier.size(56.dp),
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_screen_share),
+                            contentDescription = "Показать экран",
+                            tint = Color.White.copy(alpha = if (sharingActionEnabled) 0.55f else 0.28f),
+                            modifier = Modifier.size(32.dp),
+                        )
+                    }
+                }
             }
-            if (screen.sending) Text("Откройте приложение, которое хотите показать.",
+            val sharingStatusText = when {
+                !screen.requested -> null
+                videoState.networkGated -> "Показ приостановлен · восстанавливаем связь"
+                screen.sending -> null
+                else -> "Готовим показ…"
+            }
+            if (sharingStatusText != null) Text(
+                sharingStatusText,
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.bodySmall)
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (receivingScreen) {
-                ScreenSharingViewer(peerName, durationText, status, videoState, muted,
+                ScreenSharingViewer(peerName, durationText, connectionHealth, videoState, muted,
                     currentEndpoint, availableEndpoints, onMute, onSelectEndpoint,
-                    { routePickerVisible = true }, cameraPressed, onVideoVisibilityChanged, onEnd)
+                    { routePickerVisible = true }, routePickerVisible, onVideoVisibilityChanged, onEnd)
             } else if (videoMode) {
                 VideoActiveCallScreen(
                     peerName = peerName,
@@ -203,7 +233,7 @@ fun ActiveCallScreen(
                     muted = muted,
                     currentEndpoint = currentEndpoint,
                     availableEndpoints = availableEndpoints,
-                    videoAllowed = videoState.allowed && !screen.requested,
+                    videoAllowed = videoState.allowed && !screen.active,
                     cameraRequested = videoState.requested,
                     onMute = onMute,
                     onSelectEndpoint = onSelectEndpoint,
@@ -218,7 +248,7 @@ fun ActiveCallScreen(
     if (confirmSharing) AlertDialog(
         onDismissRequest = { confirmSharing = false },
         title = { Text("Показать экран?") },
-        text = { Text("Собеседник увидит выбранное приложение или весь экран, включая уведомления. Камера выключится, разговор продолжится. Показ можно остановить в любой момент.") },
+        text = { Text("Собеседник увидит выбранное приложение или весь экран, включая уведомления. Показ можно остановить в любой момент.") },
         confirmButton = { TextButton(onClick = { confirmSharing = false; onShareScreen() }) { Text("Продолжить") } },
         dismissButton = { TextButton(onClick = { confirmSharing = false }) { Text("Отмена") } },
     )
@@ -869,7 +899,7 @@ private fun VideoFallbackContent(
 }
 
 @Composable
-private fun AdaptiveAudioControls(
+internal fun AdaptiveAudioControls(
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
