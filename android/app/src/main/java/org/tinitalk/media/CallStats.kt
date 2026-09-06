@@ -17,6 +17,7 @@ data class CallStats(
     val remoteCandidateType: String = "",
     val transportProtocol: String = "",
     val relayProtocol: String = "",
+    val videoDiagnostics: List<String> = emptyList(),
 )
 
 data class CallStatsSample(
@@ -25,6 +26,7 @@ data class CallStatsSample(
 )
 
 class CallStatsCollector {
+    private val videoDiagnostics = VideoDiagnosticsCollector()
     private var previousBytesSent: Long? = null
     private var previousAtMillis: Long? = null
     private var previousInbound: InboundCounters? = null
@@ -74,6 +76,7 @@ class CallStatsCollector {
             remoteCandidateType = candidateValue(remoteCandidate, "candidateType", CandidateTypes),
             transportProtocol = candidateValue(localCandidate, "protocol", TransportProtocols),
             relayProtocol = candidateValue(relayCandidate, "relayProtocol", RelayProtocols),
+            videoDiagnostics = videoDiagnostics.collect(samples, nowMillis),
         )
     }
 

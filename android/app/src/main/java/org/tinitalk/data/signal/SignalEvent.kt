@@ -22,11 +22,14 @@ data class SignalEvent(
         require(id.looksLikeUuid()) { "id must be a UUID" }
         require(callId.looksLikeUuid()) { "call_id must be a UUID" }
         require(type in allowedTypes) { "unknown event type" }
-        if (type == "rtc.video") {
+        if (type == "rtc.video" || type == "rtc.screen") {
             val enabled = payload["enabled"]
             require(enabled != null && enabled.isJsonPrimitive && enabled.asJsonPrimitive.isBoolean) {
                 "rtc.video enabled must be a boolean"
             }
+        }
+        if (type == "rtc.screen" || type == "rtc.screen.ready") require(payload["share_id"]?.asString?.looksLikeUuid() == true) {
+            "rtc.screen share_id must be a UUID"
         }
     }
 
@@ -52,6 +55,8 @@ data class SignalEvent(
             "rtc.answer",
             "rtc.ice",
             "rtc.video",
+            "rtc.screen",
+            "rtc.screen.ready",
             "rtc.restart",
             "rtc.restart.request",
         )

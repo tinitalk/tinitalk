@@ -34,14 +34,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -104,8 +109,15 @@ fun ActiveCallScreen(
     onSwitchCamera: () -> Unit,
     onVideoVisibilityChanged: (Boolean) -> Unit,
     onEnd: () -> Unit,
+    onShareScreen: () -> Unit = {},
+    onStopSharing: () -> Unit = {},
 ) {
     var routePickerVisible by remember { mutableStateOf(false) }
+    var confirmSharing by remember(videoState.callKey) { mutableStateOf(false) }
+    var sharingError by remember(videoState.callKey) { mutableStateOf<String?>(null) }
+    val screen = videoState.screen
+    val receivingScreen = screen.remoteId != null
+    LaunchedEffect(screen.failure) { sharingError = screen.failure }
     val status = when (connectionHealth) {
         ConnectionHealth.Connecting -> "Соединяемся…"
         ConnectionHealth.Reconnecting -> "Восстанавливаем связь…"
@@ -118,61 +130,133 @@ fun ActiveCallScreen(
         Color.White.copy(alpha = 0.76f)
     }
     val videoMode = videoModeActive(
-        videoAllowed = videoState.allowed,
+        videoAllowed = videoState.allowed && !screen.active,
         localSending = videoState.sending,
         remoteSending = videoState.remoteSending,
     )
+    val cameraActive = videoState.requested || videoState.sending || videoState.remoteSending
+    val sharingPanelVisible = screen.allowed && !receivingScreen && (screen.requested || !cameraActive)
     val cameraPressed: (Boolean) -> Unit = { requested ->
         speakerRouteOnCameraPress(requested, currentEndpoint, availableEndpoints)?.let(onSelectEndpoint)
         onCamera(requested)
     }
 
-    LaunchedEffect(videoState.callId, videoMode) {
-        if (videoMode) {
+    LaunchedEffect(videoState.callId, videoMode, screen.requested, receivingScreen) {
+        if (videoMode || screen.requested || receivingScreen) {
             speakerRouteOnCameraPress(true, currentEndpoint, availableEndpoints)?.let(onSelectEndpoint)
         }
     }
 
-    if (videoMode) {
-        VideoActiveCallScreen(
-            peerName = peerName,
-            contactAddress = contactAddress,
-            fallbackLogin = fallbackLogin,
-            durationText = durationText,
-            status = status,
-            statusColor = statusColor,
-            muted = muted,
-            currentEndpoint = currentEndpoint,
-            availableEndpoints = availableEndpoints,
-            videoState = videoState,
-            onMute = onMute,
-            onSelectEndpoint = onSelectEndpoint,
-            onShowRoutePicker = { routePickerVisible = true },
-            onCamera = cameraPressed,
-            onSwitchCamera = onSwitchCamera,
-            onVideoVisibilityChanged = onVideoVisibilityChanged,
-            onEnd = onEnd,
-        )
-    } else {
-        AudioActiveCallScreen(
-            peerName = peerName,
-            contactAddress = contactAddress,
-            fallbackLogin = fallbackLogin,
-            durationText = durationText,
-            status = status,
-            statusColor = statusColor,
-            muted = muted,
-            currentEndpoint = currentEndpoint,
-            availableEndpoints = availableEndpoints,
-            videoAllowed = videoState.allowed,
-            cameraRequested = videoState.requested,
-            onMute = onMute,
-            onSelectEndpoint = onSelectEndpoint,
-            onShowRoutePicker = { routePickerVisible = true },
-            onCamera = cameraPressed,
-            onEnd = onEnd,
-        )
+    Column(Modifier.fillMaxSize().background(CallBackgroundTop).then(
+        if (sharingPanelVisible) Modifier.statusBarsPadding().consumeWindowInsets(WindowInsets.statusBars) else Modifier,
+    )) {
+        if (sharingPanelVisible) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+                val sharingActionEnabled = screen.requested || connectionHealth == ConnectionHealth.Good || connectionHealth == ConnectionHealth.Poor
+                if (screen.requested) {
+                    TextButton(
+                        onClick = onStopSharing,
+                        enabled = sharingActionEnabled,
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_screen_share),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(
+                            "Остановить показ",
+                            Modifier.padding(start = 8.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = { confirmSharing = true },
+                        enabled = sharingActionEnabled,
+                        modifier = Modifier.size(56.dp),
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_screen_share),
+                            contentDescription = "Показать экран",
+                            tint = Color.White.copy(alpha = if (sharingActionEnabled) 0.55f else 0.28f),
+                            modifier = Modifier.size(32.dp),
+                        )
+                    }
+                }
+            }
+            val sharingStatusText = when {
+                !screen.requested -> null
+                videoState.networkGated -> "Показ приостановлен · восстанавливаем связь"
+                screen.sending -> null
+                else -> "Готовим показ…"
+            }
+            if (sharingStatusText != null) Text(
+                sharingStatusText,
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.bodySmall)
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (receivingScreen) {
+                ScreenSharingViewer(peerName, durationText, connectionHealth, videoState, muted,
+                    currentEndpoint, availableEndpoints, onMute, onSelectEndpoint,
+                    { routePickerVisible = true }, routePickerVisible, onVideoVisibilityChanged, onEnd)
+            } else if (videoMode) {
+                VideoActiveCallScreen(
+                    peerName = peerName,
+                    contactAddress = contactAddress,
+                    fallbackLogin = fallbackLogin,
+                    durationText = durationText,
+                    status = status,
+                    statusColor = statusColor,
+                    muted = muted,
+                    currentEndpoint = currentEndpoint,
+                    availableEndpoints = availableEndpoints,
+                    videoState = videoState,
+                    onMute = onMute,
+                    onSelectEndpoint = onSelectEndpoint,
+                    onShowRoutePicker = { routePickerVisible = true },
+                    onCamera = cameraPressed,
+                    onSwitchCamera = onSwitchCamera,
+                    onVideoVisibilityChanged = onVideoVisibilityChanged,
+                    onEnd = onEnd,
+                )
+            } else {
+                AudioActiveCallScreen(
+                    peerName = peerName,
+                    contactAddress = contactAddress,
+                    fallbackLogin = fallbackLogin,
+                    durationText = durationText,
+                    status = status,
+                    statusColor = statusColor,
+                    muted = muted,
+                    currentEndpoint = currentEndpoint,
+                    availableEndpoints = availableEndpoints,
+                    videoAllowed = videoState.allowed && !screen.active,
+                    cameraRequested = videoState.requested,
+                    onMute = onMute,
+                    onSelectEndpoint = onSelectEndpoint,
+                    onShowRoutePicker = { routePickerVisible = true },
+                    onCamera = cameraPressed,
+                    onEnd = onEnd,
+                )
+            }
+        }
     }
+
+    if (confirmSharing) AlertDialog(
+        onDismissRequest = { confirmSharing = false },
+        title = { Text("Показать экран?") },
+        text = { Text("Собеседник увидит выбранное приложение или весь экран, включая уведомления. Показ можно остановить в любой момент.") },
+        confirmButton = { TextButton(onClick = { confirmSharing = false; onShareScreen() }) { Text("Продолжить") } },
+        dismissButton = { TextButton(onClick = { confirmSharing = false }) { Text("Отмена") } },
+    )
+    sharingError?.let { message -> AlertDialog(
+        onDismissRequest = { sharingError = null },
+        title = { Text("Показ экрана") }, text = { Text(message) },
+        confirmButton = { TextButton(onClick = { sharingError = null }) { Text("Понятно") } },
+    ) }
 
     AudioRoutePicker(
         visible = routePickerVisible,
@@ -773,6 +857,7 @@ private fun VideoActiveCallScreen(
                     layout = controlLayout,
                     cameraRequested = videoState.requested,
                     switchCameraEnabled = presentation.switchCameraEnabled,
+                    cameraEnabled = !videoState.screen.requested,
                     onMute = onMute,
                     onSelectEndpoint = onSelectEndpoint,
                     onShowRoutePicker = onShowRoutePicker,
@@ -814,7 +899,7 @@ private fun VideoFallbackContent(
 }
 
 @Composable
-private fun AdaptiveAudioControls(
+internal fun AdaptiveAudioControls(
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
@@ -902,6 +987,7 @@ private fun AdaptiveVideoControls(
     layout: CallControlLayout,
     cameraRequested: Boolean,
     switchCameraEnabled: Boolean,
+    cameraEnabled: Boolean,
     onMute: (Boolean) -> Unit,
     onSelectEndpoint: (AudioEndpoint) -> Unit,
     onShowRoutePicker: () -> Unit,
@@ -912,7 +998,7 @@ private fun AdaptiveVideoControls(
     val buttonSize = layout.buttonSizeDp.dp
     Row(modifier = Modifier.fillMaxWidth()) {
         SwitchCameraCallAction(switchCameraEnabled, Modifier.weight(1f), onSwitchCamera, buttonSize)
-        CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera, buttonSize)
+        CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera, buttonSize, cameraEnabled)
         AudioRouteAction(
             currentEndpoint = currentEndpoint,
             availableEndpoints = availableEndpoints,
@@ -948,15 +1034,17 @@ private fun SwitchCameraCallAction(
 }
 
 @Composable
-private fun CameraCallAction(
+internal fun CameraCallAction(
     requested: Boolean,
     modifier: Modifier,
     onCamera: (Boolean) -> Unit,
     buttonSize: Dp = CompactCallActionSizeDp.dp,
+    enabled: Boolean = true,
 ) {
     RoundCallAction(
         label = "Камера",
         modifier = modifier,
+        enabled = enabled,
         contentDescription = if (requested) "Выключить камеру" else "Включить камеру",
         color = if (requested) Color(0xFF2A8C76) else Color(0xFF33465F),
         onClick = { onCamera(!requested) },
@@ -967,7 +1055,7 @@ private fun CameraCallAction(
 }
 
 @Composable
-private fun EndCallAction(
+internal fun EndCallAction(
     modifier: Modifier,
     onEnd: () -> Unit,
     compact: Boolean = false,

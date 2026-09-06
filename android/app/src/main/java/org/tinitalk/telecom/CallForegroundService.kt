@@ -10,7 +10,9 @@ import android.app.PendingIntent
 import android.app.Person
 import android.app.Service
 import android.content.Context
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -113,10 +115,11 @@ internal fun postCurrentMediaCallback(
 
 // These inlined flags are passed only to ServiceCompat, which handles older Android versions.
 @SuppressLint("InlinedApi")
-internal fun callForegroundServiceType(cameraSending: Boolean): Int =
+internal fun callForegroundServiceType(cameraSending: Boolean, screenSending: Boolean = false): Int =
     ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
         ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-        if (cameraSending) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0
+        (if (cameraSending) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0) or
+        (if (screenSending) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0)
 
 internal sealed interface OutgoingCallStartResult {
     data class Started(val key: AccountCallKey) : OutgoingCallStartResult
@@ -173,6 +176,7 @@ class CallForegroundService : Service() {
     private val statsRequestGate = MediaStatsRequestGate()
     @Volatile private var statsSession: MediaStatsSession? = null
     @Volatile private var cameraForegroundTypeEnabled = false
+    @Volatile private var screenForegroundTypeEnabled = false
     @Volatile private var cameraForegroundLease: CameraForegroundLease? = null
     @Volatile private var runtimeGeneration = 0L
     private var telecomCallKey: AccountCallKey? = null
@@ -236,6 +240,7 @@ class CallForegroundService : Service() {
                                     snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
                                 if (accepted && stillActive && media === currentMedia) {
                                     Log.i(CallLogTag, CallDiagnostics.format(stats))
+                                    stats.videoDiagnostics.forEach { Log.i("TiniTalkVideo", it) }
                                     val currentHealth = CallUiStateStore.snapshot().connectionHealth
                                     val health = connectionHealthClassifier.update(stats, currentHealth)
                                     snapshot.callKey?.let { CallUiStateStore.setConnectionHealth(it, health) }
@@ -252,11 +257,19 @@ class CallForegroundService : Service() {
         }
     }
     private val telecom by lazy { TelecomCallController(AndroidTelecomRegistrar(this)) }
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != Intent.ACTION_SCREEN_OFF) return
+            val key = callOwner?.key ?: return
+            dispatchMedia { it.stopScreen(key.callId) }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
         callTones = CallToneController(handler)
+        ContextCompat.registerReceiver(this, screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
         CallUiStateStore.observe(callUiObserver)
         contactPhotoRevisionJob = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
             photoLoader.revisions.drop(1).collect {
@@ -310,7 +323,7 @@ class CallForegroundService : Service() {
             }
             if (callResourcesReleased) return START_NOT_STICKY
         }
-        updateForegroundType(cameraSending = cameraForegroundTypeEnabled)
+        updateForegroundType()
         val runtimeReady = runCatching { ensureRuntime(requestOwner) }.getOrDefault(false)
         if (!runtimeReady) {
             finishing = true
@@ -357,6 +370,7 @@ class CallForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        unregisterReceiver(screenOffReceiver)
         val unexpected = !finishing
         val ownedLease = admissionLease
         val ownedKey = callOwner?.key
@@ -537,7 +551,11 @@ class CallForegroundService : Service() {
                         state.failure?.let { message ->
                             Log.e(CallLogTag, "camera state failed for call ${state.callId}: $message")
                         }
+                        val screenChanged = VideoCallStateStore.snapshot().screen != state.screen
                         VideoCallStateStore.publish(state)
+                        if (screenChanged || screenForegroundTypeEnabled) {
+                            getSystemService(NotificationManager::class.java).notify(NotificationId, notification(CallUiStateStore.snapshot()))
+                        }
                     }
                 }
                 if (Looper.myLooper() == Looper.getMainLooper()) publish() else handler.post(publish)
@@ -568,6 +586,30 @@ class CallForegroundService : Service() {
                 }
             },
             accountId = owner.key.accountId,
+            selfLogin = session.login,
+            prepareScreenStart = { callId ->
+                synchronized(foregroundLock) {
+                    val state = CallServiceState.snapshot()
+                    val blocked = when {
+                        media !== newMedia -> "call runtime changed"
+                        state.callId != callId || state.phase != CallPhase.Active -> "call is not active"
+                        !getSystemService(android.os.PowerManager::class.java).isInteractive -> "screen is off"
+                        getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked -> "screen is locked"
+                        else -> null
+                    }
+                    if (blocked != null) {
+                        Log.w("TiniTalkScreen", "screen start blocked: $blocked")
+                        false
+                    } else {
+                        updateForegroundType(cameraSending = false, screenSending = true)
+                    }
+                }
+            },
+            onScreenReleased = {
+                synchronized(foregroundLock) {
+                    if (media === newMedia) updateForegroundType(screenSending = false)
+                }
+            },
         )
         socket = newSocket
         httpClient = newHttpClient
@@ -916,6 +958,16 @@ class CallForegroundService : Service() {
                     is CameraCallAction.Switch -> dispatchMedia { it.switchCamera(cameraAction.callId) }
                 }
             }
+            ActionScreenStart -> {
+                if (call.snapshot().phase != CallPhase.Active) return
+                val permission = androidx.core.content.IntentCompat.getParcelableExtra(intent, ExtraScreenPermission, Intent::class.java) ?: return
+                val activeCallId = call.snapshot().callId ?: return
+                dispatchMedia { it.requestScreen(activeCallId, permission) }
+            }
+            ActionScreenStop -> {
+                val activeCallId = call.snapshot().callId ?: return
+                dispatchMedia { it.stopScreen(activeCallId) }
+            }
         }
         publish(endReason)
         acceptedIncomingOwner?.let { owner ->
@@ -1054,6 +1106,7 @@ class CallForegroundService : Service() {
         synchronized(foregroundLock) {
             cameraForegroundLease = null
             cameraForegroundTypeEnabled = false
+            screenForegroundTypeEnabled = false
             runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
             runCatching { getSystemService(NotificationManager::class.java).cancel(NotificationId) }
         }
@@ -1167,6 +1220,15 @@ class CallForegroundService : Service() {
             .setCategory(Notification.CATEGORY_CALL)
             .setContentIntent(content)
             .setOngoing(true)
+        val screen = VideoCallStateStore.snapshot().takeIf { it.callKey == state.callKey }?.screen
+        if (screen?.requested == true) {
+            val stop = PendingIntent.getService(this, 2,
+                Intent(this, CallForegroundService::class.java).setAction(ActionScreenStop).also { action -> callOwner?.let { putOwner(action, it) } },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.setContentText(if (screen.sending) "Вы показываете экран" else "Подготовка показа экрана…")
+                .addAction(Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_screen_share), "Остановить показ", stop).build())
+        }
         state.connectedAtElapsedMs?.takeIf { state.phase == CallPhase.Active }?.let { connectedAt ->
             val elapsed = (SystemClock.elapsedRealtime() - connectedAt).coerceAtLeast(0L)
             builder
@@ -1232,17 +1294,31 @@ class CallForegroundService : Service() {
         )
     }
 
-    private fun updateForegroundType(cameraSending: Boolean): Boolean = synchronized(foregroundLock) {
+    private fun updateForegroundType(cameraSending: Boolean? = null, screenSending: Boolean? = null): Boolean = synchronized(foregroundLock) {
         if (callResourcesReleased) return@synchronized false
+        // Resolve unchanged flags under the lock, not in arguments evaluated before acquiring it.
+        val cameraEnabled = cameraSending ?: cameraForegroundTypeEnabled
+        val screenEnabled = screenSending ?: screenForegroundTypeEnabled
+        val requestedTypes = callForegroundServiceType(cameraEnabled, screenEnabled)
         val state = CallUiStateStore.snapshot()
         try {
             ServiceCompat.startForeground(
                 this,
                 NotificationId,
                 notification(state),
-                callForegroundServiceType(cameraSending),
+                requestedTypes,
             )
-            cameraForegroundTypeEnabled = cameraSending
+            if (screenEnabled && Build.VERSION.SDK_INT >= 29) {
+                val actualTypes = foregroundServiceType
+                check(actualTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION != 0) {
+                    "mediaProjection foreground type missing: requested=$requestedTypes actual=$actualTypes sdk=${Build.VERSION.SDK_INT}"
+                }
+                if (screenSending == true) {
+                    Log.i("TiniTalkScreen", "projection foreground ready: requested=$requestedTypes actual=$actualTypes sdk=${Build.VERSION.SDK_INT}")
+                }
+            }
+            cameraForegroundTypeEnabled = cameraEnabled
+            screenForegroundTypeEnabled = screenEnabled
             true
         } catch (failure: Throwable) {
             Log.e(CallLogTag, "failed to update foreground service type", failure)
@@ -1262,6 +1338,9 @@ class CallForegroundService : Service() {
         const val ActionTelecomInactive = "org.tinitalk.action.TELECOM_INACTIVE"
         const val ActionSelectEndpoint = "org.tinitalk.action.SELECT_AUDIO_ENDPOINT"
         const val ActionCameraRequest = "org.tinitalk.action.CAMERA_REQUEST"
+        const val ActionScreenStart = "org.tinitalk.action.SCREEN_START"
+        const val ActionScreenStop = "org.tinitalk.action.SCREEN_STOP"
+        private const val ExtraScreenPermission = "screen_permission"
         const val ActionCameraForeground = "org.tinitalk.action.CAMERA_FOREGROUND"
         const val ActionCameraSwitch = "org.tinitalk.action.CAMERA_SWITCH"
         const val ActionAccountRemoved = "org.tinitalk.action.ACCOUNT_REMOVED"
@@ -1356,6 +1435,14 @@ class CallForegroundService : Service() {
             currentOwner(key)?.let { start(context, cameraRequestIntent(context, it, requested)) }
         }
 
+        fun startScreen(context: Context, key: AccountCallKey, permission: Intent) {
+            currentOwner(key)?.let { start(context, serviceIntent(context, ActionScreenStart, it).putExtra(ExtraScreenPermission, permission)) }
+        }
+
+        fun stopScreen(context: Context, key: AccountCallKey) {
+            currentOwner(key)?.let { start(context, serviceIntent(context, ActionScreenStop, it)) }
+        }
+
         fun cameraForeground(
             context: Context,
             key: AccountCallKey,
@@ -1445,6 +1532,7 @@ internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: St
     failure.callId != null && failure.callId != currentCallId -> null
     failure.code == "busy" -> CallEndReason.Busy
     failure.code == "not_in_contacts" -> CallEndReason.NotInContacts
+    failure.code?.startsWith("screen_share_") == true -> null
     failure.code == "ice_rate_limited" ||
         failure.code == "ice_restart_rate_limited" ||
         failure.code == "ice_restart_request_rate_limited" -> null

@@ -28,7 +28,23 @@ Limits:
 
 Control events: `call.start`, `call.incoming`, `call.ringing`, `call.accept`, `call.connected`, `call.reject`, `call.cancel`, `call.end`, `call.expire`, `call.resume`.
 
-WebRTC events: `rtc.config`, `rtc.offer`, `rtc.answer`, `rtc.ice`, `rtc.video`, `rtc.restart`, `rtc.restart.request`.
+WebRTC events: `rtc.config`, `rtc.offer`, `rtc.answer`, `rtc.ice`, `rtc.video`, `rtc.screen`, `rtc.restart`, `rtc.restart.request`.
+
+Screen sharing is an optional extension. Both bound devices advertise
+`supports_exclusive_screen_sharing: true` alongside `supports_video` in `call.start` and
+`call.accept` (including crossed starts). Only then does `rtc.config` include
+`screen_sharing_allowed: true`. A missing flag means screen sharing is unavailable.
+Clients request `rtc.screen` with `enabled` and a UUID `share_id`. The server
+allows one presenter and broadcasts the authoritative `enabled`, `presenter_id`
+and `share_id` to both devices, initially with `ready: false`. Both clients turn
+off camera capture and sending, then acknowledge native camera release with
+`rtc.screen.ready {share_id}`. Only after both acknowledgements does the server
+broadcast `ready: true`, allowing the presenter to start capture. Preparation
+expires after 15 seconds without ending the audio call. Cameras stay off after
+sharing until explicitly enabled again. A competing start returns `screen_share_busy`.
+A stop only releases the matching presenter's share ID. Resume sends the current
+screen state after replay. Grants alone must never start capture without a live,
+locally approved Android projection request. Older clients receive no screen events.
 
 ## WebSocket connection
 

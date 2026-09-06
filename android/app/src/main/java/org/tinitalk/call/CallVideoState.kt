@@ -9,6 +9,18 @@ enum class CameraFacing {
     Back,
 }
 
+data class ScreenShareState(
+    val allowed: Boolean = false,
+    val localId: String? = null,
+    val sending: Boolean = false,
+    val remoteId: String? = null,
+    val ready: Boolean = false,
+    val failure: String? = null,
+) {
+    val requested: Boolean get() = localId != null
+    val active: Boolean get() = requested || remoteId != null
+}
+
 data class CallVideoState<out Track>(
     val callId: String? = null,
     val allowed: Boolean = false,
@@ -22,6 +34,7 @@ data class CallVideoState<out Track>(
     val remoteTrack: Track? = null,
     val failure: String? = null,
     val accountId: AccountId? = null,
+    val screen: ScreenShareState = ScreenShareState(),
 ) {
     val callKey: AccountCallKey?
         get() = accountId?.let { id -> callId?.let { AccountCallKey(id, it) } }

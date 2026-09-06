@@ -35,5 +35,6 @@ func (c *call) after(recipient string, seq uint64) []DeliveredEvent {
 }
 
 func (c *call) canReplay(event DeliveredEvent, seq uint64) bool {
-	return event.Seq > seq && (c.state != callEnded || event.Type != "rtc.video")
+	// Resume sends one fresh screen snapshot; old grants/stops could interrupt a newer share.
+	return event.Seq > seq && event.Type != "rtc.screen" && (c.state != callEnded || event.Type != "rtc.video")
 }

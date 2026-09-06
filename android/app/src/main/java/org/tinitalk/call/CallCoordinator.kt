@@ -41,7 +41,10 @@ class CallCoordinator(
         val payload = JsonObject().apply {
             addProperty("callee_id", callee)
             addProperty("supports_cross_call", true)
-            if (supportsVideo) addProperty("supports_video", true)
+            if (supportsVideo) {
+                addProperty("supports_video", true)
+                addProperty("supports_exclusive_screen_sharing", true)
+            }
         }
         signal.send(event(callId, "call.start", payload))
         machine.transition(CallPhase.Connecting, callId)
@@ -50,7 +53,10 @@ class CallCoordinator(
     fun accept() {
         val callId = requireNotNull(machine.snapshot().callId) { "no call" }
         val payload = JsonObject().apply {
-            if (supportsVideo) addProperty("supports_video", true)
+            if (supportsVideo) {
+                addProperty("supports_video", true)
+                addProperty("supports_exclusive_screen_sharing", true)
+            }
         }
         signal.send(event(callId, "call.accept", payload))
         machine.transition(CallPhase.Active, callId)

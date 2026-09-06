@@ -17,29 +17,36 @@ type replayEntry struct {
 }
 
 type call struct {
-	id                  string
-	caller              string
-	callee              string
-	callerDeviceID      string
-	calleeDeviceID      string
-	nextSeq             uint64
-	seen                map[string]struct{}
-	seenOrder           []string
-	replay              []replayEntry
-	aliases             []string
-	startedAt           time.Time
-	ringingAt           time.Time
-	connectedAt         time.Time
-	endedAt             time.Time
-	iceWindowAt         time.Time
-	iceCount            int
-	lastRestart         time.Time
-	lastRestartRequest  time.Time
-	offlineSince        map[string]time.Time
-	state               callState
-	supportsCrossCall   bool
-	callerSupportsVideo bool
-	calleeSupportsVideo bool
+	id                   string
+	caller               string
+	callee               string
+	callerDeviceID       string
+	calleeDeviceID       string
+	nextSeq              uint64
+	seen                 map[string]struct{}
+	seenOrder            []string
+	replay               []replayEntry
+	aliases              []string
+	startedAt            time.Time
+	ringingAt            time.Time
+	connectedAt          time.Time
+	endedAt              time.Time
+	iceWindowAt          time.Time
+	iceCount             int
+	lastRestart          time.Time
+	lastRestartRequest   time.Time
+	offlineSince         map[string]time.Time
+	state                callState
+	supportsCrossCall    bool
+	callerSupportsVideo  bool
+	calleeSupportsVideo  bool
+	callerSupportsScreen bool
+	calleeSupportsScreen bool
+	screenPresenter      string
+	screenShareID        string
+	screenCallerReady    bool
+	screenCalleeReady    bool
+	screenPreparingAt    time.Time
 }
 
 func (c *call) remember(eventID string) {
@@ -75,4 +82,18 @@ func (c *call) devicesBound() bool {
 
 func (c *call) videoAllowed() bool {
 	return c.devicesBound() && c.callerSupportsVideo && c.calleeSupportsVideo
+}
+
+func (c *call) screenAllowed() bool {
+	return c.videoAllowed() && c.callerSupportsScreen && c.calleeSupportsScreen
+}
+
+func (c *call) screenReady() bool {
+	return c.screenPresenter != "" && c.screenCallerReady && c.screenCalleeReady
+}
+
+func (c *call) clearScreen() {
+	c.screenPresenter, c.screenShareID = "", ""
+	c.screenCallerReady, c.screenCalleeReady = false, false
+	c.screenPreparingAt = time.Time{}
 }
