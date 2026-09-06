@@ -242,14 +242,7 @@ class WebRtcCallSession private constructor(
     override fun startCamera() {
         ensureOpen()
         check(videoAllowed) { "video is not allowed for this call" }
-        val retainedVideoSender = requireNotNull(videoSender)
-        val videoParameters = retainedVideoSender.parameters
-        videoParameters.degradationPreference = WebRtcPolicy.videoDegradationPreference
-        check(
-            WebRtcPolicy.configureVideoSender(videoParameters.encodings) {
-                retainedVideoSender.setParameters(videoParameters)
-            },
-        ) { "failed to configure local video sender" }
+        val retainedVideoSender = configureVideoSender(screen = false)
         val controller = cameraController ?: WebRtcCameraController(
             context = appContext,
             factory = factory,
@@ -260,6 +253,17 @@ class WebRtcCallSession private constructor(
             callbacks = cameraCallbacks,
         ).also { cameraController = it }
         controller.start()
+    }
+
+    private fun configureVideoSender(screen: Boolean): RtpSender {
+        val retained = requireNotNull(videoSender)
+        val parameters = retained.parameters
+        parameters.degradationPreference = if (screen) org.webrtc.RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+            else WebRtcPolicy.videoDegradationPreference
+        val commit = { retained.setParameters(parameters) }
+        check(if (screen) WebRtcPolicy.configureScreenSender(parameters.encodings, commit)
+            else WebRtcPolicy.configureVideoSender(parameters.encodings, commit)) { "failed to configure video sender" }
+        return retained
     }
 
     override fun refreshVideoSender(onFailure: () -> Unit) {

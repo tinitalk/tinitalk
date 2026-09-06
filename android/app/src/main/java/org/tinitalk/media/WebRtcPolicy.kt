@@ -35,6 +35,14 @@ object WebRtcPolicy {
         return runCatching(commit).getOrDefault(false)
     }
 
+    fun configureScreenSender(encodings: List<RtpParameters.Encoding>, commit: () -> Boolean): Boolean {
+        val encoding = encodings.singleOrNull() ?: return false
+        encoding.maxBitrateBps = 1_000_000
+        encoding.maxFramerate = 10
+        encoding.scaleResolutionDownBy = null
+        return runCatching(commit).getOrDefault(false)
+    }
+
     fun iceTransport(forceRelay: Boolean): PeerConnection.IceTransportsType =
         if (forceRelay) PeerConnection.IceTransportsType.RELAY else PeerConnection.IceTransportsType.ALL
 

@@ -1,5 +1,6 @@
 package org.tinitalk.media
 
+import android.content.Intent
 import org.tinitalk.call.CameraFacing
 import java.time.Instant
 
@@ -55,6 +56,13 @@ interface CameraMediaSession {
         onReleased: () -> Unit = {},
     )
     fun switchCamera()
+}
+
+/** Shares the negotiated video sender with the camera; callers stop the old source first. */
+interface ScreenMediaSession {
+    fun startScreen(permission: Intent, onStarted: () -> Unit, onStopped: (String?) -> Unit)
+    fun stopScreen(onStopped: () -> Unit = {})
+    fun setScreenPaused(paused: Boolean)
 }
 
 data class CameraMediaCallbacks(
