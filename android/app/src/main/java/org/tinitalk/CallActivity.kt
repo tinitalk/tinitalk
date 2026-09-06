@@ -172,8 +172,8 @@ class CallActivity : ComponentActivity() {
             if (state.callKey != renderedVideoCallKey) {
                 renderedVideoCallKey = null
                 renderedVideoVisible = false
-                updateProximity()
             }
+            updateProximity()
         }
     }
 
@@ -296,6 +296,8 @@ class CallActivity : ComponentActivity() {
                             updateRenderedVideoVisibility(visibleState.callKey, visible)
                         },
                         onEnd = { endCall(visibleState) },
+                        onShareScreen = ::requestScreenSharing,
+                        onStopSharing = { visibleState.callKey?.let { CallForegroundService.stopScreen(this, it) } },
                     )
                     visibleState.direction == CallDirection.Incoming && visibleState.phase == CallPhase.Ringing -> {
                         val invite = incomingInvite
@@ -704,8 +706,10 @@ class CallActivity : ComponentActivity() {
         val activeConversation = callState.phase == CallPhase.Active &&
             callState.connectedAtElapsedMs != null && connected
         val videoVisible = renderedVideoCallKey == callState.callKey && renderedVideoVisible
+        val showingScreen = videoState.callKey == callState.callKey &&
+            (videoState.screen.requested || videoState.screen.remoteId != null)
         proximityController.setEnabled(
-            activityStarted && !videoVisible && earpiece && (outgoingDial || activeConversation),
+            activityStarted && !videoVisible && !showingScreen && earpiece && (outgoingDial || activeConversation),
         )
     }
 

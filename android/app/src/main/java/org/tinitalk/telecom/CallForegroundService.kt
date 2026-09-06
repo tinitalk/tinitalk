@@ -1213,7 +1213,7 @@ class CallForegroundService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             builder.setContentText(if (screen.sending) "Вы показываете экран" else "Подготовка показа экрана…")
-                .addAction(Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_add_to_home), "Остановить показ", stop).build())
+                .addAction(Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_screen_share), "Остановить показ", stop).build())
         }
         state.connectedAtElapsedMs?.takeIf { state.phase == CallPhase.Active }?.let { connectedAt ->
             val elapsed = (SystemClock.elapsedRealtime() - connectedAt).coerceAtLeast(0L)

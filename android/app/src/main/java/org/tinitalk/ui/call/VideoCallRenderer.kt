@@ -32,6 +32,7 @@ internal fun VideoCallRenderer(
     onDrag: ((Float, Float) -> Unit)? = null,
     onDragEnd: (() -> Unit)? = null,
     contentDescription: String? = null,
+    onFrameSizeChanged: ((Int, Int) -> Unit)? = null,
     onFrameVisibilityChanged: (Boolean) -> Unit,
 ) {
     androidx.compose.runtime.key(source) {
@@ -45,6 +46,7 @@ internal fun VideoCallRenderer(
             onDrag = onDrag,
             onDragEnd = onDragEnd,
             contentDescription = contentDescription,
+            onFrameSizeChanged = onFrameSizeChanged,
             onFrameVisibilityChanged = onFrameVisibilityChanged,
         )
     }
@@ -63,10 +65,12 @@ private fun VideoCallRendererForSource(
     onDrag: ((Float, Float) -> Unit)?,
     onDragEnd: (() -> Unit)?,
     contentDescription: String?,
+    onFrameSizeChanged: ((Int, Int) -> Unit)?,
     onFrameVisibilityChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val currentVisibilityCallback = rememberUpdatedState(onFrameVisibilityChanged)
+    val currentFrameSizeCallback = rememberUpdatedState(onFrameSizeChanged)
     val currentClick = rememberUpdatedState(onClick)
     val currentDragStart = rememberUpdatedState(onDragStart)
     val currentDrag = rememberUpdatedState(onDrag)
@@ -85,6 +89,7 @@ private fun VideoCallRendererForSource(
             source = source,
             localOverlay = localOverlay,
             onVisibilityChanged = { currentVisibilityCallback.value(it) },
+            onFrameSizeChanged = { width, height -> currentFrameSizeCallback.value?.invoke(width, height) },
         )
     }
 
@@ -186,6 +191,7 @@ private class VideoRendererHandle(
     private val source: VideoRenderSource,
     private val localOverlay: Boolean,
     private val onVisibilityChanged: (Boolean) -> Unit,
+    private val onFrameSizeChanged: (Int, Int) -> Unit,
 ) : AutoCloseable {
     private val stableRemoteRenderer = if (localOverlay) {
         null
@@ -206,9 +212,7 @@ private class VideoRendererHandle(
         renderer.visibility = View.INVISIBLE
         renderer.init(source.eglContext, null)
         stableRemoteRenderer?.markInitialized()
-        val nextSink = GuardedRendererSink(renderer) { visible ->
-            setFrameVisible(visible)
-        }
+        val nextSink = GuardedRendererSink(renderer, ::setFrameVisible, onFrameSizeChanged)
         sink = nextSink
         if (!source.attach(nextSink)) {
             nextSink.close()
@@ -292,13 +296,24 @@ private class StableSurfaceViewRenderer(
 private class GuardedRendererSink(
     private val renderer: VideoSink,
     onVisibilityChanged: (Boolean) -> Unit,
+    private val onFrameSizeChanged: (Int, Int) -> Unit,
 ) : VideoSink, AutoCloseable {
+    private val handler = Handler(Looper.getMainLooper())
+    private var width = 0
+    private var height = 0
     private val watchdog = FrameVisibilityWatchdog(onVisibilityChanged = onVisibilityChanged)
     private var open = true
 
     override fun onFrame(frame: VideoFrame) {
         synchronized(this) {
             if (!open) return
+            if (width != frame.rotatedWidth || height != frame.rotatedHeight) {
+                width = frame.rotatedWidth
+                height = frame.rotatedHeight
+                val w = width
+                val h = height
+                handler.post { synchronized(this) { if (open) onFrameSizeChanged(w, h) } }
+            }
             watchdog.onFrame()
             renderer.onFrame(frame)
         }
@@ -308,6 +323,7 @@ private class GuardedRendererSink(
         synchronized(this) {
             if (!open) return
             open = false
+            handler.removeCallbacksAndMessages(null)
         }
         watchdog.close()
     }
