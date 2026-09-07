@@ -234,6 +234,7 @@ fun ActiveCallScreen(
                     currentEndpoint = currentEndpoint,
                     availableEndpoints = availableEndpoints,
                     videoAllowed = videoState.allowed && !screen.active,
+                    cameraActionVisible = !screen.active,
                     cameraRequested = videoState.requested,
                     onMute = onMute,
                     onSelectEndpoint = onSelectEndpoint,
@@ -279,6 +280,7 @@ private fun AudioActiveCallScreen(
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
     videoAllowed: Boolean,
+    cameraActionVisible: Boolean,
     cameraRequested: Boolean,
     onMute: (Boolean) -> Unit,
     onSelectEndpoint: (AudioEndpoint) -> Unit,
@@ -293,6 +295,7 @@ private fun AudioActiveCallScreen(
             widthDp = (maxWidth.value - 40f).coerceAtLeast(0f),
             heightDp = maxHeight.value,
             fontScale = LocalDensity.current.fontScale,
+            cameraActionVisible = cameraActionVisible,
         )
         if (layout.scrollable) {
             ConstrainedAudioActiveCallScreen(
@@ -913,9 +916,10 @@ internal fun AdaptiveAudioControls(
     onEnd: () -> Unit,
 ) {
     val compact = layout.columns == 2
-    if (videoAllowed && !compact) {
+    val cameraActionVisible = CallControlAction.Camera in layout.actions
+    if (cameraActionVisible && !compact) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
+            CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera, enabled = videoAllowed)
             AudioRouteAction(
                 currentEndpoint,
                 availableEndpoints,
@@ -927,10 +931,10 @@ internal fun AdaptiveAudioControls(
             MuteCallAction(muted, Modifier.weight(1f), onMute, compact = true)
             EndCallAction(Modifier.weight(1f), onEnd, compact = true)
         }
-    } else if (videoAllowed) {
+    } else if (cameraActionVisible) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth()) {
-                CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera)
+                CameraCallAction(cameraRequested, Modifier.weight(1f), onCamera, enabled = videoAllowed)
                 AudioRouteAction(
                     currentEndpoint,
                     availableEndpoints,

@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -116,6 +117,50 @@ class CallComponentsTest {
         composeRule.onNodeWithTag("call-peer-avatar")
             .assertWidthIsEqualTo(224.dp)
             .assertHeightIsEqualTo(224.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun activeCallKeepsDisabledCameraSlotBeforeVideoIsAllowed() {
+        render {
+            ActiveCallScreen(
+                peerName = "Алексей",
+                durationText = "00:03",
+                muted = false,
+                connectionHealth = ConnectionHealth.Good,
+                currentEndpoint = null,
+                availableEndpoints = emptyList(),
+                videoState = CallVideoState(allowed = false),
+                onMute = {},
+                onSelectEndpoint = {},
+                onCamera = {},
+                onSwitchCamera = {},
+                onVideoVisibilityChanged = {},
+                onEnd = {},
+            )
+        }
+
+        composeRule.onNodeWithContentDescription("Включить камеру").assertIsNotEnabled()
+        composeRule.onNodeWithText("Камера").assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun outgoingCallShowsDisabledCameraSlotImmediately() {
+        render {
+            OutgoingCallScreen(
+                callee = "Алексей",
+                muted = false,
+                currentEndpoint = null,
+                availableEndpoints = emptyList(),
+                onMute = {},
+                onSelectEndpoint = {},
+                onCancel = {},
+            )
+        }
+
+        composeRule.onNodeWithContentDescription("Включить камеру").assertIsNotEnabled()
+        composeRule.onNodeWithText("Камера").assertExists()
     }
 
     @Test

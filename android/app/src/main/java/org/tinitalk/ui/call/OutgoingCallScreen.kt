@@ -39,21 +39,33 @@ fun OutgoingCallScreen(
         pulsingAvatar = true,
         prominentAvatar = true,
     ) {
+        val buttonSize = CompactCallActionSizeDp.dp
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
+            CameraCallAction(
+                requested = false,
+                modifier = Modifier.weight(1f),
+                onCamera = {},
+                buttonSize = buttonSize,
+                enabled = false,
+            )
             AudioRouteAction(
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
                 modifier = Modifier.weight(1f),
                 onSelectEndpoint = onSelectEndpoint,
                 onShowPicker = { routePickerVisible = true },
+                compact = true,
+                buttonSize = buttonSize,
             )
             MuteCallAction(
                 muted = muted,
                 modifier = Modifier.weight(1f),
                 onMute = onMute,
+                compact = true,
+                buttonSize = buttonSize,
             )
             RoundCallAction(
                 label = "Отменить",
@@ -61,6 +73,7 @@ fun OutgoingCallScreen(
                 color = CallRejectRed,
                 onClick = onCancel,
                 iconRotation = 135f,
+                buttonSize = buttonSize,
             )
         }
         Spacer(Modifier.height(18.dp))

@@ -194,9 +194,13 @@ internal fun weakNetworkVideoMessage(
     null
 }
 
-internal fun callControlColumns(videoAllowed: Boolean, videoModeActive: Boolean = false): Int = when {
+internal fun callControlColumns(
+    videoAllowed: Boolean,
+    videoModeActive: Boolean = false,
+    cameraActionVisible: Boolean = videoAllowed,
+): Int = when {
     videoModeActive -> 5
-    videoAllowed -> 4
+    cameraActionVisible -> 4
     else -> 3
 }
 
@@ -206,6 +210,7 @@ internal fun callControlLayout(
     widthDp: Float,
     heightDp: Float,
     fontScale: Float,
+    cameraActionVisible: Boolean = videoAllowed,
 ): CallControlLayout {
     val actions = buildList {
         if (videoModeActive) {
@@ -214,24 +219,22 @@ internal fun callControlLayout(
             add(CallControlAction.AudioRoute)
             add(CallControlAction.Mute)
             add(CallControlAction.End)
-        } else if (videoAllowed) {
-            add(CallControlAction.Camera)
-            add(CallControlAction.AudioRoute)
-            add(CallControlAction.Mute)
-            add(CallControlAction.End)
         } else {
+            if (cameraActionVisible) {
+                add(CallControlAction.Camera)
+            }
             add(CallControlAction.AudioRoute)
             add(CallControlAction.Mute)
             add(CallControlAction.End)
         }
     }
-    val viewportHeight = (heightDp - 150f)
-        .coerceAtLeast(CompactCallActionSizeDp.toFloat())
-        .coerceAtMost(320f)
-        .coerceAtMost(heightDp.coerceAtLeast(CompactCallActionSizeDp.toFloat()))
-        .toInt()
+    val columns = callControlColumns(
+        videoAllowed = videoAllowed,
+        videoModeActive = videoModeActive,
+        cameraActionVisible = cameraActionVisible,
+    )
     return CallControlLayout(
-        columns = callControlColumns(videoAllowed, videoModeActive),
+        columns = columns,
         actions = actions,
         buttonSizeDp = if (videoModeActive && widthDp < CompactCallActionSizeDp * 5) {
             DenseVideoCallActionSizeDp
@@ -239,7 +242,11 @@ internal fun callControlLayout(
             CompactCallActionSizeDp
         },
         scrollable = heightDp < 560f || fontScale >= 1.3f,
-        viewportHeightDp = viewportHeight,
+        viewportHeightDp = (heightDp - 150f)
+            .coerceAtLeast(CompactCallActionSizeDp.toFloat())
+            .coerceAtMost(320f)
+            .coerceAtMost(heightDp.coerceAtLeast(CompactCallActionSizeDp.toFloat()))
+            .toInt(),
     )
 }
 

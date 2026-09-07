@@ -170,7 +170,7 @@ internal fun RoundCallAction(
             Icon(
                 painter = painterResource(iconResource),
                 contentDescription = contentDescription,
-                tint = Color.White,
+                tint = Color.White.copy(alpha = if (enabled) 1f else 0.48f),
                 modifier = Modifier
                     .size(if (buttonSize == 72.dp) 31.dp else 28.dp)
                     .graphicsLayer(rotationZ = iconRotation),

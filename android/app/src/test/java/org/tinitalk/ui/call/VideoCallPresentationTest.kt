@@ -290,4 +290,27 @@ class VideoCallPresentationTest {
         assertTrue(video.viewportHeightDp >= CompactCallActionSizeDp)
         assertTrue(audio.viewportHeightDp >= CompactCallActionSizeDp)
     }
+
+    @Test
+    fun pendingVideoCapabilityKeepsCameraSlotReserved() {
+        val pendingVideo = callControlLayout(
+            videoAllowed = false,
+            videoModeActive = false,
+            widthDp = 320f,
+            heightDp = 700f,
+            fontScale = 1f,
+            cameraActionVisible = true,
+        )
+
+        assertEquals(
+            listOf(
+                CallControlAction.Camera,
+                CallControlAction.AudioRoute,
+                CallControlAction.Mute,
+                CallControlAction.End,
+            ),
+            pendingVideo.actions,
+        )
+        assertEquals(4, pendingVideo.columns)
+    }
 }
