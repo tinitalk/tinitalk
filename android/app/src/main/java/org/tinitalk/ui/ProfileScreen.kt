@@ -41,11 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import org.tinitalk.R
 import org.tinitalk.data.AccountId
@@ -190,27 +187,11 @@ private fun ProfileAccountCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    buildAnnotatedString {
-                        withStyle(
-                            SpanStyle(
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                        ) {
-                            append(account.login)
-                        }
-                        withStyle(
-                            SpanStyle(
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                                fontWeight = FontWeight.Light,
-                            ),
-                        ) {
-                            append("@")
-                            append(serverAddress(account.serverUrl))
-                        }
-                    },
+                    serverAddress(account.serverUrl),
                     modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
                     style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Light,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
