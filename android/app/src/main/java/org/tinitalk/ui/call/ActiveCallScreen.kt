@@ -672,6 +672,7 @@ private fun VideoActiveCallScreen(
         context.applicationContext.getSharedPreferences(SelfPreviewPreferencesName, Context.MODE_PRIVATE)
     }
     var controlsVisible by remember(videoState.callId) { mutableStateOf(true) }
+    var controlsActivityId by remember(videoState.callId) { mutableIntStateOf(0) }
     var previewCorner by remember(videoState.callId, previewPreferences) {
         mutableStateOf(
             storedSelfPreviewCorner(previewPreferences.getString(SelfPreviewCornerKey, null)),
@@ -688,6 +689,9 @@ private fun VideoActiveCallScreen(
             event = VideoControlsVisibilityEvent.SurfaceTapped,
         )
     }
+    val restartControlsAutoHide = {
+        controlsActivityId += 1
+    }
 
     LaunchedEffect(videoState.callId, videoState.remoteSending, remoteFrameVisible) {
         if (videoState.remoteSending && remoteFrameVisible) remoteVideoWasVisible = true
@@ -695,7 +699,13 @@ private fun VideoActiveCallScreen(
     LaunchedEffect(videoState.callId, localSource, remoteSource, presentation.blockProximity) {
         onVideoVisibilityChanged(presentation.blockProximity)
     }
-    LaunchedEffect(videoState.callId, controlsMayAutoHide, controlsVisible, previewDragging) {
+    LaunchedEffect(
+        videoState.callId,
+        controlsMayAutoHide,
+        controlsVisible,
+        previewDragging,
+        controlsActivityId,
+    ) {
         if (!controlsMayAutoHide) {
             controlsVisible = nextVideoControlsVisibility(
                 currentVisible = controlsVisible,
@@ -1002,19 +1012,37 @@ private fun VideoActiveCallScreen(
                     cameraRequested = videoState.requested,
                     switchCameraEnabled = presentation.switchCameraEnabled,
                     cameraEnabled = !videoState.screen.requested,
-                    onMute = onMute,
-                    onSelectEndpoint = onSelectEndpoint,
-                    onShowRoutePicker = onShowRoutePicker,
-                    onSwitchCamera = onSwitchCamera,
-                    onCamera = onCamera,
-                    onEnd = onEnd,
+                    onMute = { muted ->
+                        restartControlsAutoHide()
+                        onMute(muted)
+                    },
+                    onSelectEndpoint = { endpoint ->
+                        restartControlsAutoHide()
+                        onSelectEndpoint(endpoint)
+                    },
+                    onShowRoutePicker = {
+                        restartControlsAutoHide()
+                        onShowRoutePicker()
+                    },
+                    onSwitchCamera = {
+                        restartControlsAutoHide()
+                        onSwitchCamera()
+                    },
+                    onCamera = { requested ->
+                        restartControlsAutoHide()
+                        onCamera(requested)
+                    },
+                    onEnd = {
+                        restartControlsAutoHide()
+                        onEnd()
+                    },
                 )
             }
         }
     }
 }
 
-private const val VideoControlsAutoHideMillis = 3_000L
+private const val VideoControlsAutoHideMillis = 5_000L
 private const val VideoControlsFadeInMillis = 180
 private const val VideoControlsFadeOutMillis = 220
 private const val VideoControlsSlideMillis = 260
