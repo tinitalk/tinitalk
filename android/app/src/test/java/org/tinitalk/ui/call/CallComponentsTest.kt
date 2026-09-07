@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -56,6 +57,21 @@ class CallComponentsTest {
         composeRule.onNodeWithText("Звук").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Выбрать звук").assertExists()
 
+        activity.pause().stop().destroy()
+    }
+
+    @Test
+    fun muteActionKeepsActionDescriptionForBothStates() {
+        val muted = mutableStateOf(false)
+        val activity = render {
+            MuteCallAction(muted = muted.value, onMute = { muted.value = it })
+        }
+
+        composeRule.onNodeWithContentDescription("Выключить микрофон").assertExists()
+        composeRule.runOnUiThread { muted.value = true }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithContentDescription("Включить микрофон").assertExists()
         activity.pause().stop().destroy()
     }
 

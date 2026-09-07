@@ -1088,9 +1088,9 @@ internal fun MuteCallAction(
         label = "Микрофон",
         modifier = modifier,
         contentDescription = if (muted) "Включить микрофон" else "Выключить микрофон",
-        color = if (muted) Color(0xFF55708F) else Color(0xFF33465F),
+        color = if (muted) Color(0xFF315EA8) else Color(0xFF33465F),
         onClick = { onMute(!muted) },
-        iconResource = if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
+        iconResource = R.drawable.ic_mic_off,
         buttonSize = buttonSize,
         labelMaxLines = 1,
     )
