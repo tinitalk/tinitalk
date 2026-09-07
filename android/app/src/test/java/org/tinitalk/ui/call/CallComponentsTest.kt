@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.ConnectionHealth
+import org.tinitalk.call.CallTransportRoute
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.ContactPhotoReader
 import org.tinitalk.ui.LocalContactPhotoReader
@@ -133,6 +134,124 @@ class CallComponentsTest {
         composeRule.onNodeWithTag("call-peer-avatar")
             .assertWidthIsEqualTo(224.dp)
             .assertHeightIsEqualTo(224.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun transportRouteChangesWithoutMovingTheAudioCallAvatar() {
+        val route = mutableStateOf(CallTransportRoute.Unknown)
+        render {
+            ActiveCallScreen(
+                peerName = "Алексей",
+                durationText = "00:03",
+                muted = false,
+                connectionHealth = ConnectionHealth.Good,
+                transportRoute = route.value,
+                currentEndpoint = null,
+                availableEndpoints = emptyList(),
+                videoState = CallVideoState(allowed = false),
+                onMute = {},
+                onSelectEndpoint = {},
+                onCamera = {},
+                onSwitchCamera = {},
+                onVideoVisibilityChanged = {},
+                onEnd = {},
+            )
+        }
+
+        val initialAvatarY = composeRule.onNodeWithTag("call-peer-avatar")
+            .fetchSemanticsNode().boundsInRoot.center.y
+
+        composeRule.runOnUiThread { route.value = CallTransportRoute.Direct }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Прямое соединение").assertExists()
+        assertEquals(
+            initialAvatarY,
+            composeRule.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot.center.y,
+            0.01f,
+        )
+
+        composeRule.runOnUiThread { route.value = CallTransportRoute.Turn }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Соединение через TURN").assertExists()
+        assertEquals(
+            initialAvatarY,
+            composeRule.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot.center.y,
+            0.01f,
+        )
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun primaryCallStagesKeepTheAvatarAtTheSameVerticalPosition() {
+        val stage = mutableStateOf(0)
+        render {
+            when (stage.value) {
+                0 -> IncomingCallScreen(
+                    callId = "call-1",
+                    caller = "Алексей",
+                    onAnswer = {},
+                    onReject = {},
+                )
+                1 -> OutgoingCallScreen(
+                    callee = "Алексей",
+                    muted = false,
+                    currentEndpoint = null,
+                    availableEndpoints = emptyList(),
+                    onMute = {},
+                    onSelectEndpoint = {},
+                    onCancel = {},
+                )
+                2 -> ActiveCallScreen(
+                    peerName = "Алексей",
+                    durationText = "00:03",
+                    muted = false,
+                    connectionHealth = ConnectionHealth.Good,
+                    transportRoute = CallTransportRoute.Direct,
+                    currentEndpoint = null,
+                    availableEndpoints = emptyList(),
+                    videoState = CallVideoState(allowed = false),
+                    onMute = {},
+                    onSelectEndpoint = {},
+                    onCamera = {},
+                    onSwitchCamera = {},
+                    onVideoVisibilityChanged = {},
+                    onEnd = {},
+                )
+                3 -> ActiveCallScreen(
+                    peerName = "Алексей",
+                    durationText = "00:03",
+                    muted = false,
+                    connectionHealth = ConnectionHealth.Good,
+                    currentEndpoint = null,
+                    availableEndpoints = emptyList(),
+                    videoState = CallVideoState(
+                        allowed = true,
+                        requested = true,
+                        sending = true,
+                    ),
+                    onMute = {},
+                    onSelectEndpoint = {},
+                    onCamera = {},
+                    onSwitchCamera = {},
+                    onVideoVisibilityChanged = {},
+                    onEnd = {},
+                )
+                else -> EndedCallScreen("Алексей", CallEndReason.RemoteHangup)
+            }
+        }
+
+        val initialAvatarY = composeRule.onNodeWithTag("call-peer-avatar")
+            .fetchSemanticsNode().boundsInRoot.center.y
+        for (nextStage in 1..4) {
+            composeRule.runOnUiThread { stage.value = nextStage }
+            composeRule.waitForIdle()
+            assertEquals(
+                initialAvatarY,
+                composeRule.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot.center.y,
+                0.01f,
+            )
+        }
     }
 
     @Test

@@ -45,6 +45,28 @@ class CallUiStateTest {
     }
 
     @Test
+    fun transportRouteUsesTheSelectedIceCandidateTypes() {
+        assertEquals(CallTransportRoute.Direct, callTransportRoute("host", "srflx"))
+        assertEquals(CallTransportRoute.Turn, callTransportRoute("relay", "host"))
+        assertEquals(CallTransportRoute.Turn, callTransportRoute("srflx", "relay"))
+        assertEquals(CallTransportRoute.Unknown, callTransportRoute("host", ""))
+        assertEquals(CallTransportRoute.Unknown, callTransportRoute("", ""))
+    }
+
+    @Test
+    fun reconnectClearsThePreviousTransportRoute() {
+        val state = CallUiState(
+            phase = CallPhase.Active,
+            connectedAtElapsedMs = 1_000L,
+            transportRoute = CallTransportRoute.Turn,
+        )
+
+        val reconnecting = state.onMediaConnection(MediaConnectionState.Disconnected, 2_000L)
+
+        assertEquals(CallTransportRoute.Unknown, reconnecting.transportRoute)
+    }
+
+    @Test
     fun delayedResetCannotClearTheNextCall() {
         CallUiStateStore.begin(key("new-call"), CallPeer("Alice"), CallDirection.Incoming, CallPhase.Ringing)
 

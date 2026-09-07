@@ -279,6 +279,7 @@ class CallActivity : ComponentActivity() {
                         durationText = durationText,
                         muted = visibleState.muted,
                         connectionHealth = visibleState.connectionHealth,
+                        transportRoute = visibleState.transportRoute,
                         currentEndpoint = visibleState.currentAudioEndpoint,
                         availableEndpoints = visibleState.availableAudioEndpoints,
                         videoState = visibleVideoState,

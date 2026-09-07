@@ -22,6 +22,21 @@ enum class ConnectionHealth {
     Reconnecting,
 }
 
+enum class CallTransportRoute {
+    Unknown,
+    Direct,
+    Turn,
+}
+
+internal fun callTransportRoute(
+    localCandidateType: String,
+    remoteCandidateType: String,
+): CallTransportRoute = when {
+    localCandidateType == "relay" || remoteCandidateType == "relay" -> CallTransportRoute.Turn
+    localCandidateType.isNotEmpty() && remoteCandidateType.isNotEmpty() -> CallTransportRoute.Direct
+    else -> CallTransportRoute.Unknown
+}
+
 enum class CallEndReason {
     LocalHangup,
     RemoteHangup,
@@ -52,6 +67,7 @@ data class CallUiState(
     val currentAudioEndpoint: AudioEndpoint? = null,
     val availableAudioEndpoints: List<AudioEndpoint> = emptyList(),
     val connectionHealth: ConnectionHealth = ConnectionHealth.None,
+    val transportRoute: CallTransportRoute = CallTransportRoute.Unknown,
     val endReason: CallEndReason? = null,
 ) {
     val callKey: AccountCallKey?
@@ -65,6 +81,7 @@ data class CallUiState(
                 } else {
                     ConnectionHealth.Reconnecting
                 },
+                transportRoute = CallTransportRoute.Unknown,
             )
             MediaConnectionState.Connected -> copy(
                 connectedAtElapsedMs = connectedAtElapsedMs ?: nowElapsedMs,
@@ -77,8 +94,12 @@ data class CallUiState(
                 } else {
                     ConnectionHealth.Reconnecting
                 },
+                transportRoute = CallTransportRoute.Unknown,
             )
-            MediaConnectionState.Closed -> copy(connectionHealth = ConnectionHealth.None)
+            MediaConnectionState.Closed -> copy(
+                connectionHealth = ConnectionHealth.None,
+                transportRoute = CallTransportRoute.Unknown,
+            )
         }
 
     fun onEnded(reason: CallEndReason, nowElapsedMs: Long): CallUiState = copy(
@@ -87,6 +108,7 @@ data class CallUiState(
             endedAtElapsedMs ?: nowElapsedMs.coerceAtLeast(connectedAt)
         },
         connectionHealth = ConnectionHealth.None,
+        transportRoute = CallTransportRoute.Unknown,
         endReason = endReason ?: reason,
     )
 
@@ -254,6 +276,18 @@ object CallUiStateStore {
         val state = current
         if (state.callKey != callKey || state.phase != CallPhase.Active) return
         publish(state.copy(connectionHealth = health))
+    }
+
+    @Synchronized
+    fun setConnectionDiagnostics(
+        callKey: AccountCallKey,
+        health: ConnectionHealth,
+        transportRoute: CallTransportRoute,
+    ) {
+        val state = current
+        if (state.callKey != callKey || state.phase != CallPhase.Active) return
+        if (state.connectionHealth == health && state.transportRoute == transportRoute) return
+        publish(state.copy(connectionHealth = health, transportRoute = transportRoute))
     }
 
     @Synchronized

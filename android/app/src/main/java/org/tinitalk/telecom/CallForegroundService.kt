@@ -44,6 +44,7 @@ import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
+import org.tinitalk.call.callTransportRoute
 import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.AndroidKeystoreTokenCipher
@@ -243,7 +244,13 @@ class CallForegroundService : Service() {
                                     stats.videoDiagnostics.forEach { Log.i("TiniTalkVideo", it) }
                                     val currentHealth = CallUiStateStore.snapshot().connectionHealth
                                     val health = connectionHealthClassifier.update(stats, currentHealth)
-                                    snapshot.callKey?.let { CallUiStateStore.setConnectionHealth(it, health) }
+                                    val route = callTransportRoute(
+                                        stats.localCandidateType,
+                                        stats.remoteCandidateType,
+                                    )
+                                    snapshot.callKey?.let {
+                                        CallUiStateStore.setConnectionDiagnostics(it, health, route)
+                                    }
                                 }
                             }
                         }

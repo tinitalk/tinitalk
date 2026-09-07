@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -55,6 +56,7 @@ internal fun CallScreenSurface(
     fallbackLogin: String = peerName,
     detail: String? = null,
     statusColor: Color = Color.White.copy(alpha = 0.76f),
+    statusAccessory: (@Composable () -> Unit)? = null,
     pulsingAvatar: Boolean = false,
     prominentAvatar: Boolean = false,
     footer: @Composable ColumnScope.() -> Unit,
@@ -66,7 +68,7 @@ internal fun CallScreenSurface(
         if (compact) 88.dp else 120.dp
     }
     val verticalPadding = if (compact) 12.dp else 24.dp
-    val headerSpacing = if (compact) 12.dp else 28.dp
+    val headerSpacing = if (compact) 28.dp else 44.dp
     val transition = rememberInfiniteTransition(label = "callerPulse")
     val avatarScale = if (pulsingAvatar) {
         val scale by transition.animateFloat(
@@ -103,7 +105,14 @@ internal fun CallScreenSurface(
                 textAlign = TextAlign.Center,
                 maxLines = 2,
             )
-            Spacer(Modifier.height(headerSpacing))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(headerSpacing),
+                contentAlignment = Alignment.Center,
+            ) {
+                statusAccessory?.invoke()
+            }
             Box(
                 modifier = Modifier
                     .size(avatarSize)

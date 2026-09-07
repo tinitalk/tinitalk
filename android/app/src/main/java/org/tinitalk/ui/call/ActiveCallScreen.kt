@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.CircularProgressIndicator
@@ -66,6 +67,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,6 +82,7 @@ import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CameraFacing
 import org.tinitalk.call.ConnectionHealth
+import org.tinitalk.call.CallTransportRoute
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.telecom.AudioEndpoint
@@ -86,6 +90,7 @@ import org.tinitalk.ui.ContactAvatar
 import org.tinitalk.ui.theme.CallBackgroundBottom
 import org.tinitalk.ui.theme.CallBackgroundTop
 import org.tinitalk.ui.theme.CallRejectRed
+import org.tinitalk.ui.theme.BrandGold
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -98,6 +103,7 @@ fun ActiveCallScreen(
     durationText: String,
     muted: Boolean,
     connectionHealth: ConnectionHealth,
+    transportRoute: CallTransportRoute = CallTransportRoute.Unknown,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
     videoState: CallVideoState<VideoRenderSource>,
@@ -199,6 +205,7 @@ fun ActiveCallScreen(
                 durationText = durationText,
                 status = status,
                 statusColor = statusColor,
+                transportRoute = transportRoute,
                 muted = muted,
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
@@ -349,6 +356,7 @@ private fun AudioActiveCallScreen(
     durationText: String,
     status: String,
     statusColor: Color,
+    transportRoute: CallTransportRoute,
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
@@ -378,6 +386,7 @@ private fun AudioActiveCallScreen(
                 durationText = durationText,
                 status = status,
                 statusColor = statusColor,
+                transportRoute = transportRoute,
                 muted = muted,
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
@@ -398,6 +407,7 @@ private fun AudioActiveCallScreen(
                 durationText = durationText,
                 status = status,
                 statusColor = statusColor,
+                transportRoute = transportRoute,
                 muted = muted,
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
@@ -422,6 +432,7 @@ private fun RegularAudioActiveCallScreen(
     durationText: String,
     status: String,
     statusColor: Color,
+    transportRoute: CallTransportRoute,
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
@@ -441,6 +452,7 @@ private fun RegularAudioActiveCallScreen(
         fallbackLogin = fallbackLogin,
         detail = durationText,
         statusColor = statusColor,
+        statusAccessory = { CallTransportRouteIndicator(transportRoute) },
         prominentAvatar = true,
     ) {
         Text(
@@ -474,6 +486,7 @@ private fun ConstrainedAudioActiveCallScreen(
     durationText: String,
     status: String,
     statusColor: Color,
+    transportRoute: CallTransportRoute,
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
@@ -511,6 +524,7 @@ private fun ConstrainedAudioActiveCallScreen(
                 style = MaterialTheme.typography.titleMedium,
                 textAlign = TextAlign.Center,
             )
+            CallTransportRouteIndicator(transportRoute)
             Text(
                 text = peerName,
                 color = Color.White,
@@ -558,6 +572,60 @@ private fun ConstrainedAudioActiveCallScreen(
             )
         }
     }
+}
+
+@Composable
+private fun CallTransportRouteIndicator(
+    route: CallTransportRoute,
+    modifier: Modifier = Modifier,
+) {
+    val description = when (route) {
+        CallTransportRoute.Unknown -> null
+        CallTransportRoute.Direct -> "Прямое соединение"
+        CallTransportRoute.Turn -> "Соединение через TURN"
+    }
+    val accessibility = if (description == null) {
+        Modifier
+    } else {
+        Modifier.semantics { contentDescription = description }
+    }
+    Box(
+        modifier = modifier
+            .width(96.dp)
+            .height(18.dp)
+            .then(accessibility)
+            .testTag("call-transport-route"),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (route == CallTransportRoute.Unknown) return@Box
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RouteIcon(R.drawable.ic_call)
+            RouteIcon(R.drawable.ic_route_bidirectional, width = 16.dp, height = 10.dp)
+            if (route == CallTransportRoute.Turn) {
+                RouteIcon(R.drawable.ic_server_route, tint = BrandGold.copy(alpha = 0.9f))
+                RouteIcon(R.drawable.ic_route_bidirectional, width = 16.dp, height = 10.dp)
+            }
+            RouteIcon(R.drawable.ic_call)
+        }
+    }
+}
+
+@Composable
+private fun RouteIcon(
+    iconResource: Int,
+    width: Dp = 14.dp,
+    height: Dp = 14.dp,
+    tint: Color = Color.White.copy(alpha = 0.58f),
+) {
+    Icon(
+        painter = painterResource(iconResource),
+        contentDescription = null,
+        tint = tint,
+        modifier = Modifier.width(width).height(height),
+    )
 }
 
 @Composable
