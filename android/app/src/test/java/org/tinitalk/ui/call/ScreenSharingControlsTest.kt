@@ -13,9 +13,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.ConnectionHealth
@@ -92,8 +94,13 @@ class ScreenSharingControlsTest {
             compose.onNodeWithText("Камера").assertDoesNotExist()
             compose.onNodeWithText("Показ экрана").assertDoesNotExist()
             compose.onNodeWithText("Показать экран").assertDoesNotExist()
-            if (receiving) compose.onNodeWithText("Остановить показ").assertDoesNotExist()
-            else compose.onNodeWithText("Остановить показ").assertIsDisplayed()
+            compose.onNodeWithText("Остановить показ").assertDoesNotExist()
+            compose.onNodeWithText("Остановить").assertDoesNotExist()
+            if (!receiving) {
+                compose.onNodeWithContentDescription("Остановить показ экрана").assertIsDisplayed()
+            } else {
+                compose.onNodeWithContentDescription("Остановить показ экрана").assertDoesNotExist()
+            }
             val positions = listOf("Звук", "Микрофон", "Завершить").map { label ->
                 compose.onNodeWithText(label).assertIsDisplayed().fetchSemanticsNode().boundsInRoot.center.x
             }
@@ -124,6 +131,128 @@ class ScreenSharingControlsTest {
         compose.onNodeWithContentDescription("Показать экран").assertIsDisplayed()
         compose.onNodeWithText("Показать экран").assertDoesNotExist()
         compose.onNodeWithText("Остановить показ").assertDoesNotExist()
+        compose.onNodeWithText("Остановить").assertDoesNotExist()
+        activity.pause().stop().destroy()
+    }
+
+    @Test fun unavailableSharingDoesNotShowAction() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        compose.runOnUiThread {
+            activity.get().setContent {
+                TiniTalkTheme(darkTheme = true) {
+                    ActiveCallScreen(
+                        peerName = "Мама", durationText = "02:15", muted = false,
+                        connectionHealth = ConnectionHealth.Good,
+                        currentEndpoint = null, availableEndpoints = emptyList(),
+                        videoState = CallVideoState<VideoRenderSource>(
+                            allowed = true,
+                            screen = ScreenShareState(allowed = false),
+                        ),
+                        onMute = {}, onSelectEndpoint = {}, onCamera = {},
+                        onSwitchCamera = {}, onVideoVisibilityChanged = {}, onEnd = {},
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Показать экран").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Остановить показ экрана").assertDoesNotExist()
+        compose.onNodeWithText("Показать экран").assertDoesNotExist()
+        compose.onNodeWithText("Остановить").assertDoesNotExist()
+        activity.pause().stop().destroy()
+    }
+
+    @Test fun screenShareStartShowsCompactNotice() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        val screen = mutableStateOf(ScreenShareState(allowed = true, localId = "share"))
+        compose.runOnUiThread {
+            activity.get().setContent {
+                TiniTalkTheme(darkTheme = true) {
+                    ActiveCallScreen(
+                        peerName = "Мама", durationText = "02:15", muted = false,
+                        connectionHealth = ConnectionHealth.Good,
+                        currentEndpoint = null, availableEndpoints = emptyList(),
+                        videoState = CallVideoState<VideoRenderSource>(
+                            allowed = true,
+                            screen = screen.value,
+                        ),
+                        onMute = {}, onSelectEndpoint = {}, onCamera = {},
+                        onSwitchCamera = {}, onVideoVisibilityChanged = {}, onEnd = {},
+                    )
+                }
+            }
+        }
+
+        compose.runOnIdle { screen.value = screen.value.copy(sending = true) }
+        compose.waitUntil(timeoutMillis = 5_000) {
+            compose.onAllNodesWithText("Показ экрана начат").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Показ экрана начат").assertIsDisplayed()
+        activity.pause().stop().destroy()
+    }
+
+    @Test fun stopScreenShareShowsCompactNotice() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        var stopRequests = 0
+        compose.runOnUiThread {
+            activity.get().setContent {
+                TiniTalkTheme(darkTheme = true) {
+                    ActiveCallScreen(
+                        peerName = "Мама", durationText = "02:15", muted = false,
+                        connectionHealth = ConnectionHealth.Good,
+                        currentEndpoint = null, availableEndpoints = emptyList(),
+                        videoState = CallVideoState<VideoRenderSource>(
+                            allowed = true,
+                            screen = ScreenShareState(allowed = true, localId = "share", sending = true),
+                        ),
+                        onMute = {}, onSelectEndpoint = {}, onCamera = {},
+                        onSwitchCamera = {}, onVideoVisibilityChanged = {}, onEnd = {},
+                        onStopSharing = { stopRequests++ },
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithText("Остановить показ").assertDoesNotExist()
+        compose.onNodeWithText("Остановить").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Остановить показ экрана").assertIsDisplayed().performClick()
+        compose.waitUntil(timeoutMillis = 5_000) {
+            compose.onAllNodesWithText("Показ экрана остановлен").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Показ экрана остановлен").assertIsDisplayed()
+        assertEquals(1, stopRequests)
+        activity.pause().stop().destroy()
+    }
+
+    @Test fun idleSharingActionDoesNotShiftCallContent() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        val screenAllowed = mutableStateOf(false)
+        compose.runOnUiThread {
+            activity.get().setContent {
+                TiniTalkTheme(darkTheme = true) {
+                    ActiveCallScreen(
+                        peerName = "Мама", durationText = "02:15", muted = false,
+                        connectionHealth = ConnectionHealth.Good,
+                        currentEndpoint = null, availableEndpoints = emptyList(),
+                        videoState = CallVideoState<VideoRenderSource>(
+                            allowed = true,
+                            screen = ScreenShareState(allowed = screenAllowed.value),
+                        ),
+                        onMute = {}, onSelectEndpoint = {}, onCamera = {},
+                        onSwitchCamera = {}, onVideoVisibilityChanged = {}, onEnd = {},
+                    )
+                }
+            }
+        }
+
+        val avatarCenterBefore = compose.onNodeWithTag("call-peer-avatar")
+            .fetchSemanticsNode().boundsInRoot.center.y
+        compose.runOnIdle { screenAllowed.value = true }
+        compose.onNodeWithContentDescription("Показать экран").assertIsDisplayed()
+        val avatarCenterAfter = compose.onNodeWithTag("call-peer-avatar")
+            .fetchSemanticsNode().boundsInRoot.center.y
+
+        assertEquals(avatarCenterBefore, avatarCenterAfter, 0.5f)
         activity.pause().stop().destroy()
     }
 
@@ -149,7 +278,9 @@ class ScreenSharingControlsTest {
             }
         }
         compose.onNodeWithContentDescription("Показать экран").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Остановить показ экрана").assertDoesNotExist()
         compose.onNodeWithText("Остановить показ").assertDoesNotExist()
+        compose.onNodeWithText("Остановить").assertDoesNotExist()
         activity.pause().stop().destroy()
     }
 }

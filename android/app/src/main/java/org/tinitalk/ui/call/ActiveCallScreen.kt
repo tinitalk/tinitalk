@@ -34,9 +34,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.CircularProgressIndicator
@@ -115,9 +113,30 @@ fun ActiveCallScreen(
     var routePickerVisible by remember { mutableStateOf(false) }
     var confirmSharing by remember(videoState.callKey) { mutableStateOf(false) }
     var sharingError by remember(videoState.callKey) { mutableStateOf<String?>(null) }
+    var sharingNoticeText by remember(videoState.callKey) { mutableStateOf("") }
+    var sharingNoticeVisible by remember(videoState.callKey) { mutableStateOf(false) }
+    var sharingNoticeId by remember(videoState.callKey) { mutableIntStateOf(0) }
+    val showSharingNotice: (String) -> Unit = { message ->
+        sharingNoticeText = message
+        sharingNoticeVisible = true
+        sharingNoticeId += 1
+    }
+    var observedScreenSending by remember(videoState.callKey) { mutableStateOf(videoState.screen.sending) }
     val screen = videoState.screen
     val receivingScreen = screen.remoteId != null
     LaunchedEffect(screen.failure) { sharingError = screen.failure }
+    LaunchedEffect(videoState.callKey, screen.sending) {
+        val wasSending = observedScreenSending
+        observedScreenSending = screen.sending
+        if (screen.sending && !wasSending) {
+            showSharingNotice("Показ экрана начат")
+        }
+    }
+    LaunchedEffect(sharingNoticeId) {
+        if (sharingNoticeId == 0) return@LaunchedEffect
+        delay(2_000)
+        sharingNoticeVisible = false
+    }
     val status = when (connectionHealth) {
         ConnectionHealth.Connecting -> "Соединяемся…"
         ConnectionHealth.Reconnecting -> "Восстанавливаем связь…"
@@ -147,102 +166,96 @@ fun ActiveCallScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(CallBackgroundTop).then(
-        if (sharingPanelVisible) Modifier.statusBarsPadding().consumeWindowInsets(WindowInsets.statusBars) else Modifier,
-    )) {
+    Box(Modifier.fillMaxSize().background(CallBackgroundTop)) {
+        if (receivingScreen) {
+            ScreenSharingViewer(peerName, durationText, connectionHealth, videoState, muted,
+                currentEndpoint, availableEndpoints, onMute, onSelectEndpoint,
+                { routePickerVisible = true }, routePickerVisible, onVideoVisibilityChanged, onEnd)
+        } else if (videoMode) {
+            VideoActiveCallScreen(
+                peerName = peerName,
+                contactAddress = contactAddress,
+                fallbackLogin = fallbackLogin,
+                durationText = durationText,
+                status = status,
+                statusColor = statusColor,
+                muted = muted,
+                currentEndpoint = currentEndpoint,
+                availableEndpoints = availableEndpoints,
+                videoState = videoState,
+                onMute = onMute,
+                onSelectEndpoint = onSelectEndpoint,
+                onShowRoutePicker = { routePickerVisible = true },
+                onCamera = cameraPressed,
+                onSwitchCamera = onSwitchCamera,
+                onVideoVisibilityChanged = onVideoVisibilityChanged,
+                onEnd = onEnd,
+            )
+        } else {
+            AudioActiveCallScreen(
+                peerName = peerName,
+                contactAddress = contactAddress,
+                fallbackLogin = fallbackLogin,
+                durationText = durationText,
+                status = status,
+                statusColor = statusColor,
+                muted = muted,
+                currentEndpoint = currentEndpoint,
+                availableEndpoints = availableEndpoints,
+                videoAllowed = videoState.allowed && !screen.active,
+                cameraActionVisible = !screen.active,
+                cameraRequested = videoState.requested,
+                onMute = onMute,
+                onSelectEndpoint = onSelectEndpoint,
+                onShowRoutePicker = { routePickerVisible = true },
+                onCamera = cameraPressed,
+                onEnd = onEnd,
+            )
+        }
         if (sharingPanelVisible) {
-            Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
-                val sharingActionEnabled = screen.requested || connectionHealth == ConnectionHealth.Good || connectionHealth == ConnectionHealth.Poor
-                if (screen.requested) {
-                    TextButton(
-                        onClick = onStopSharing,
-                        enabled = sharingActionEnabled,
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_screen_share),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp),
-                        )
-                        Text(
-                            "Остановить показ",
-                            Modifier.padding(start = 8.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                } else {
-                    IconButton(
-                        onClick = { confirmSharing = true },
-                        enabled = sharingActionEnabled,
-                        modifier = Modifier.size(56.dp),
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_screen_share),
-                            contentDescription = "Показать экран",
-                            tint = Color.White.copy(alpha = if (sharingActionEnabled) 0.55f else 0.28f),
-                            modifier = Modifier.size(32.dp),
-                        )
-                    }
-                }
-            }
+            val sharingActionEnabled = screen.requested ||
+                connectionHealth == ConnectionHealth.Good ||
+                connectionHealth == ConnectionHealth.Poor
             val sharingStatusText = when {
                 !screen.requested -> null
                 videoState.networkGated -> "Показ приостановлен · восстанавливаем связь"
                 screen.sending -> null
                 else -> "Готовим показ…"
             }
-            if (sharingStatusText != null) Text(
-                sharingStatusText,
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.bodySmall)
+            ScreenShareActionOverlay(
+                requested = screen.requested,
+                enabled = sharingActionEnabled,
+                statusText = sharingStatusText,
+                onStart = { confirmSharing = true },
+                onStop = {
+                    onStopSharing()
+                    showSharingNotice("Показ экрана остановлен")
+                },
+                modifier = Modifier.align(Alignment.TopEnd),
+            )
         }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (receivingScreen) {
-                ScreenSharingViewer(peerName, durationText, connectionHealth, videoState, muted,
-                    currentEndpoint, availableEndpoints, onMute, onSelectEndpoint,
-                    { routePickerVisible = true }, routePickerVisible, onVideoVisibilityChanged, onEnd)
-            } else if (videoMode) {
-                VideoActiveCallScreen(
-                    peerName = peerName,
-                    contactAddress = contactAddress,
-                    fallbackLogin = fallbackLogin,
-                    durationText = durationText,
-                    status = status,
-                    statusColor = statusColor,
-                    muted = muted,
-                    currentEndpoint = currentEndpoint,
-                    availableEndpoints = availableEndpoints,
-                    videoState = videoState,
-                    onMute = onMute,
-                    onSelectEndpoint = onSelectEndpoint,
-                    onShowRoutePicker = { routePickerVisible = true },
-                    onCamera = cameraPressed,
-                    onSwitchCamera = onSwitchCamera,
-                    onVideoVisibilityChanged = onVideoVisibilityChanged,
-                    onEnd = onEnd,
-                )
-            } else {
-                AudioActiveCallScreen(
-                    peerName = peerName,
-                    contactAddress = contactAddress,
-                    fallbackLogin = fallbackLogin,
-                    durationText = durationText,
-                    status = status,
-                    statusColor = statusColor,
-                    muted = muted,
-                    currentEndpoint = currentEndpoint,
-                    availableEndpoints = availableEndpoints,
-                    videoAllowed = videoState.allowed && !screen.active,
-                    cameraActionVisible = !screen.active,
-                    cameraRequested = videoState.requested,
-                    onMute = onMute,
-                    onSelectEndpoint = onSelectEndpoint,
-                    onShowRoutePicker = { routePickerVisible = true },
-                    onCamera = cameraPressed,
-                    onEnd = onEnd,
-                )
-            }
+        AnimatedVisibility(
+            visible = sharingNoticeVisible,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(start = 24.dp, end = 24.dp, bottom = 132.dp),
+            enter = fadeIn(tween(150)) + slideInVertically(tween(180)) { it / 2 },
+            exit = fadeOut(tween(150)) + slideOutVertically(tween(180)) { it / 2 },
+        ) {
+            Text(
+                text = sharingNoticeText,
+                modifier = Modifier
+                    .widthIn(max = 360.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xFF4D4D52))
+                    .padding(horizontal = 24.dp, vertical = 14.dp),
+                color = Color.White,
+                style = MaterialTheme.typography.bodyLarge,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 
@@ -266,6 +279,66 @@ fun ActiveCallScreen(
         onDismiss = { routePickerVisible = false },
         onSelectEndpoint = onSelectEndpoint,
     )
+}
+
+@Composable
+private fun ScreenShareActionOverlay(
+    requested: Boolean,
+    enabled: Boolean,
+    statusText: String?,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .statusBarsPadding()
+            .padding(top = 8.dp, end = 12.dp),
+        horizontalAlignment = Alignment.End,
+    ) {
+        if (requested) {
+            RoundCallAction(
+                label = "Показ экрана",
+                contentDescription = "Остановить показ экрана",
+                color = Color(0xFF315EA8),
+                enabled = enabled,
+                onClick = onStop,
+                iconResource = R.drawable.ic_screen_share,
+                buttonSize = 56.dp,
+                iconSize = 32.dp,
+                showLabel = false,
+            )
+        } else {
+            IconButton(
+                onClick = onStart,
+                enabled = enabled,
+                modifier = Modifier.size(56.dp),
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_screen_share),
+                    contentDescription = "Показать экран",
+                    tint = Color.White.copy(alpha = if (enabled) 0.68f else 0.28f),
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+        }
+        if (statusText != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = statusText,
+                modifier = Modifier
+                    .widthIn(max = 260.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.Black.copy(alpha = 0.48f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                color = Color.White.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.End,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 @Composable

@@ -154,6 +154,7 @@ internal fun RoundCallAction(
     iconRotation: Float = 0f,
     iconResource: Int = R.drawable.ic_call,
     buttonSize: Dp = 72.dp,
+    iconSize: Dp = if (buttonSize == 72.dp) 31.dp else 28.dp,
     labelMaxLines: Int = 1,
     showLabel: Boolean = true,
 ) {
@@ -172,7 +173,7 @@ internal fun RoundCallAction(
                 contentDescription = contentDescription,
                 tint = Color.White.copy(alpha = if (enabled) 1f else 0.48f),
                 modifier = Modifier
-                    .size(if (buttonSize == 72.dp) 31.dp else 28.dp)
+                    .size(iconSize)
                     .graphicsLayer(rotationZ = iconRotation),
             )
         }
