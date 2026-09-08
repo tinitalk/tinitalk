@@ -51,6 +51,26 @@ class SignalEventTest {
     }
 
     @Test
+    fun validatesSASCryptoPayloads() {
+        val valid = SignalEvent(
+            id = "018f7d51-3f90-7e63-b657-4a83a6a90210",
+            callId = "018f7d51-40a1-7bb5-a2d0-7e47f9181766",
+            type = "rtc.sas.key",
+            sentAt = 1787666400000,
+            payload = com.google.gson.JsonObject().apply {
+                addProperty("public_key", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                addProperty("fingerprint", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+            },
+        )
+        val malformed = valid.copy(payload = valid.payload.deepCopy().apply {
+            addProperty("public_key", "too-short")
+        })
+
+        assertEquals("rtc.sas.key", SignalEvent.decode(valid.encode()).type)
+        assertTrue(runCatching { malformed.encode() }.isFailure)
+    }
+
+    @Test
     fun decodesValidFixtures() {
         listOf("call_start.json", "call_resume.json", "rtc_ice.json").forEach { name ->
             val event = SignalEvent.decode(readFixture(name))

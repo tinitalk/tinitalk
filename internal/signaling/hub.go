@@ -370,6 +370,11 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	if err := c.validateTransition(sender, event.Type); err != nil {
 		return err
 	}
+	if isSASEvent(event.Type) {
+		if err := c.acceptSASEvent(sender, event.Type, h.now()); err != nil {
+			return err
+		}
+	}
 	if event.Type == "rtc.screen" || event.Type == "rtc.screen.ready" {
 		return h.handleScreen(c, sender, event)
 	}
@@ -1060,7 +1065,16 @@ func (h *Hub) deliverClient(client *Client, event DeliveredEvent) bool {
 
 func isDeviceBoundEvent(eventType string) bool {
 	switch eventType {
-	case "call.accept", "rtc.offer", "rtc.answer", "rtc.ice", "rtc.restart", "rtc.restart.request", "rtc.video", "rtc.screen", "rtc.screen.ready":
+	case "call.accept", "rtc.offer", "rtc.answer", "rtc.ice", "rtc.restart", "rtc.restart.request", "rtc.video", "rtc.screen", "rtc.screen.ready", "rtc.sas.commit", "rtc.sas.key", "rtc.sas.reveal":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSASEvent(eventType string) bool {
+	switch eventType {
+	case "rtc.sas.commit", "rtc.sas.key", "rtc.sas.reveal":
 		return true
 	default:
 		return false
@@ -1136,7 +1150,7 @@ func (c *call) validateTransition(sender, eventType string) error {
 		}
 	}
 	switch eventType {
-	case "call.end", "call.connected", "rtc.ice", "rtc.video", "rtc.screen", "rtc.screen.ready":
+	case "call.end", "call.connected", "rtc.ice", "rtc.video", "rtc.screen", "rtc.screen.ready", "rtc.sas.commit", "rtc.sas.key", "rtc.sas.reveal":
 		return nil
 	case "rtc.offer", "rtc.restart":
 		if sender != c.caller {

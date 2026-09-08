@@ -13,4 +13,5 @@ const (
 	SweepInterval             = time.Second
 	TerminalRetention         = 2 * time.Minute
 	ActiveDisconnectGrace     = 30 * time.Second
+	SASExchangeTimeout        = 30 * time.Second
 )

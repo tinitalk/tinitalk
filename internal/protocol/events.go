@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +43,9 @@ var allowedTypes = map[string]struct{}{
 	"rtc.screen.ready":    {},
 	"rtc.restart":         {},
 	"rtc.restart.request": {},
+	"rtc.sas.commit":      {},
+	"rtc.sas.key":         {},
+	"rtc.sas.reveal":      {},
 }
 
 func Decode(raw []byte) (Event, error) {
@@ -170,8 +175,42 @@ func (e Event) validatePayload() error {
 				}
 			}
 		}
+	case "rtc.sas.commit":
+		var payload struct {
+			Commitment string `json:"commitment"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
+		}
+		if !isBase64URL32(payload.Commitment) {
+			return errors.New("commitment must be 32 bytes encoded as unpadded base64url")
+		}
+	case "rtc.sas.key", "rtc.sas.reveal":
+		var payload struct {
+			PublicKey   string `json:"public_key"`
+			Fingerprint string `json:"fingerprint"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
+		}
+		if !isBase64URL32(payload.PublicKey) {
+			return errors.New("public_key must be 32 bytes encoded as unpadded base64url")
+		}
+		if !isLowerHex32(payload.Fingerprint) {
+			return errors.New("fingerprint must be 32 bytes encoded as lowercase hex")
+		}
 	}
 	return nil
+}
+
+func isBase64URL32(value string) bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	return err == nil && len(decoded) == 32 && base64.RawURLEncoding.EncodeToString(decoded) == value
+}
+
+func isLowerHex32(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == 32 && hex.EncodeToString(decoded) == value
 }
 
 func looksLikeUUID(value string) bool {

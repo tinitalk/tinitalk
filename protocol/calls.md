@@ -91,6 +91,9 @@ If a valid event cannot be handled, the server sends an error frame:
 }
 ```
 
+SAS rejections use `call_sas_timeout`, `call_sas_invalid`, or
+`call_sas_unavailable`.
+
 `code` is optional. Rate-limit errors use `ice_rate_limited`,
 `ice_restart_rate_limited`, or `ice_restart_request_rate_limited` and include
 `retry_after_ms`. The rejected event was not applied; the client may resend it

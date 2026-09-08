@@ -4,10 +4,19 @@ import "time"
 
 type callState uint8
 
+type sasPhase uint8
+
 const (
 	callRinging callState = iota
 	callActive
 	callEnded
+)
+
+const (
+	sasWaitingCommit sasPhase = iota
+	sasWaitingKey
+	sasWaitingReveal
+	sasComplete
 )
 
 type replayEntry struct {
@@ -44,6 +53,8 @@ type call struct {
 	calleeSupportsScreen bool
 	callerSupportsSAS    bool
 	calleeSupportsSAS    bool
+	sasPhase             sasPhase
+	sasStartedAt         time.Time
 	screenPresenter      string
 	screenShareID        string
 	screenCallerReady    bool
@@ -92,6 +103,37 @@ func (c *call) screenAllowed() bool {
 
 func (c *call) sasAllowed() bool {
 	return c.devicesBound() && c.callerSupportsSAS && c.calleeSupportsSAS
+}
+
+func (c *call) acceptSASEvent(sender, eventType string, now time.Time) error {
+	if !c.sasAllowed() {
+		return clientError{message: "security code is not allowed for this call", code: "call_sas_unavailable"}
+	}
+	if !c.sasStartedAt.IsZero() && now.Sub(c.sasStartedAt) > SASExchangeTimeout {
+		return clientError{message: "security code exchange timed out", code: "call_sas_timeout"}
+	}
+	switch eventType {
+	case "rtc.sas.commit":
+		if sender != c.caller || c.sasPhase != sasWaitingCommit {
+			return clientError{message: "unexpected security code commitment", code: "call_sas_invalid"}
+		}
+		c.sasPhase = sasWaitingKey
+		c.sasStartedAt = now
+	case "rtc.sas.key":
+		if sender != c.callee || c.sasPhase != sasWaitingKey {
+			return clientError{message: "unexpected security code key", code: "call_sas_invalid"}
+		}
+		c.sasPhase = sasWaitingReveal
+
+	case "rtc.sas.reveal":
+		if sender != c.caller || c.sasPhase != sasWaitingReveal {
+			return clientError{message: "unexpected security code reveal", code: "call_sas_invalid"}
+		}
+		c.sasPhase = sasComplete
+	default:
+		return clientError{message: "unknown security code event", code: "call_sas_invalid"}
+	}
+	return nil
 }
 
 func (c *call) screenReady() bool {
