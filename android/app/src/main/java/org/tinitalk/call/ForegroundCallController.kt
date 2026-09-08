@@ -25,6 +25,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 internal const val CredentialRefreshLeadMillis = 60_000L
+internal const val SecurityCodeTimeoutMillis = 30_000L
 
 class ForegroundCallController(
     private val signal: SignalClient,
@@ -45,6 +46,7 @@ class ForegroundCallController(
     private val selfLogin: String = "",
     private val prepareScreenStart: (String) -> Boolean = { false },
     private val onScreenReleased: () -> Unit = {},
+    private val onSecurityStateChanged: (String, CallSecurityState) -> Unit = { _, _ -> },
 ) {
     constructor(
         signal: SignalClient,
@@ -69,6 +71,12 @@ class ForegroundCallController(
     )
 
     private data class LocalIceEvent(val sequence: Long, val event: SignalEvent)
+    private data class SASParties(
+        val callId: String,
+        val caller: String,
+        val callee: String,
+        val localIsCaller: Boolean,
+    )
 
     private var session: MediaSession? = null
     private var active = false
@@ -125,12 +133,25 @@ class ForegroundCallController(
     private var closing = false
     private var closed = false
     private val closeWaiters = ArrayDeque<() -> Unit>()
+    private var sasParties: SASParties? = null
+    private var sasHandshake: CallSASHandshake? = null
+    private var sasTimeoutTask: CancellableTask? = null
+    private var sasState: CallSecurityState? = null
 
     @Synchronized
     fun onSignalEvent(snapshot: CallSnapshot, event: SignalEvent) {
+        val parties = sasParties
+        if (parties != null && parties.callId != event.callId) {
+            // A crossed call may adopt the server's canonical ID before SAS starts.
+            // All subsequent media and security messages must belong to that call.
+            val canonicalCrossedAccept = event.type == "call.accept" && snapshot.phase == CallPhase.Active &&
+                event.payload["crossed"]?.asBoolean == true && sasState == null && sasHandshake == null
+            if (!canonicalCrossedAccept) return
+        }
         when (event.type) {
             "call.accept" -> if (snapshot.phase == CallPhase.Active) {
                 val offerer = !event.payload.has("offerer") || event.payload["offerer"].asBoolean
+                alignSASRole(event.callId, offerer, event.payload["crossed"]?.asBoolean == true)
                 acceptedCallId = event.callId.takeIf { offerer }
                 if (offerer) startOfferWhenReady(event.callId)
             }
@@ -144,9 +165,14 @@ class ForegroundCallController(
             "rtc.config" -> handleRtcConfig(event)
             "rtc.screen" -> onScreenState(event)
             "rtc.answer" -> session?.takeIf { callId == event.callId }?.let { media ->
+                sasHandshake?.takeIf { sasParties?.callId == event.callId }
+                    ?.recordRemoteSdp(event.payload["sdp"].asString)
                 runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
                 completeLocalOffer(event.callId)
             }
+            "rtc.sas.commit" -> sasHandshake?.takeIf { sasParties?.callId == event.callId }?.onCommitment(event.payload)
+            "rtc.sas.key" -> sasHandshake?.takeIf { sasParties?.callId == event.callId }?.onKey(event.payload)
+            "rtc.sas.reveal" -> sasHandshake?.takeIf { sasParties?.callId == event.callId }?.onReveal(event.payload)
             "rtc.video" -> {
                 val enabled = event.payload["enabled"]
                     ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
@@ -189,6 +215,18 @@ class ForegroundCallController(
     fun setMuted(muted: Boolean) {
         this.muted = muted
         session?.setMuted(muted)
+    }
+
+    @Synchronized
+    fun prepareSecurityCode(callId: String, peerLogin: String, localIsCaller: Boolean) {
+        if (selfLogin.isBlank() || peerLogin.isBlank()) return
+        val caller = if (localIsCaller) selfLogin else peerLogin
+        val callee = if (localIsCaller) peerLogin else selfLogin
+        val next = SASParties(callId, caller, callee, localIsCaller)
+        if (sasParties == next) return
+        resetSAS()
+        sasState = null
+        sasParties = next
     }
 
     @Synchronized
@@ -325,6 +363,18 @@ class ForegroundCallController(
         if (refreshScreen) (session as? ScreenMediaSession)?.refreshScreenSender()
     }
 
+    /** PeerConnection state includes DTLS; ICE connectivity alone is insufficient. */
+    @Synchronized
+    fun onTransportConnection(callId: String, state: MediaConnectionState) {
+        val handshake = sasHandshake?.takeIf { sasParties?.callId == callId } ?: return
+        when (state) {
+            MediaConnectionState.Connected -> handshake.onTransportConnected()
+            MediaConnectionState.Failed, MediaConnectionState.Closed ->
+                handshake.reject(CallSecurityFailureReason.TransportFailed)
+            MediaConnectionState.Connecting, MediaConnectionState.Disconnected -> handshake.onTransportUnavailable()
+        }
+    }
+
     @Synchronized
     fun getStats(onResult: (CallStats) -> Unit) {
         val current = session ?: return
@@ -354,6 +404,8 @@ class ForegroundCallController(
         restartRequestRetryTask?.cancel()
         restartRequestRetryTask = null
         scheduler.close()
+        resetSAS()
+        sasParties = null
         val media = session
         session = null
         callId = null
@@ -444,6 +496,7 @@ class ForegroundCallController(
                 .withNetworkGate(event.callId, weakNetworkVideoGate.snapshot().networkGated),
         )
         configuredCallId = event.callId
+        configureSAS(event.callId, event.payload)
         event.payload.restartID()?.let { localIceGeneration = it }
         session?.takeIf { callId == event.callId }?.let { media ->
             runBlockingLite { media.updateIceServers(iceServers) }
@@ -456,6 +509,7 @@ class ForegroundCallController(
             restartRequestID = null
             pendingRestart = null
             offerAwaitingAnswerCallId = event.callId
+            sasHandshake?.takeIf { sasParties?.callId == event.callId }?.recordLocalSdp(offer)
             sendSdp(event.callId, "rtc.offer", offer)
         } else {
             startOfferWhenReady(event.callId)
@@ -472,11 +526,15 @@ class ForegroundCallController(
         offerStartedCallId = nextCallId
         val offer = runBlockingLite { ensureSession(nextCallId).createOffer() }
         offerAwaitingAnswerCallId = nextCallId
+        sasHandshake?.takeIf { sasParties?.callId == nextCallId }?.recordLocalSdp(offer)
         sendSdp(nextCallId, "rtc.offer", offer)
     }
 
     private fun answerOffer(event: SignalEvent) {
-        val answer = runBlockingLite { ensureSession(event.callId).acceptOffer(event.payload["sdp"].asString) }
+        val remoteSdp = event.payload["sdp"].asString
+        sasHandshake?.takeIf { sasParties?.callId == event.callId }?.recordRemoteSdp(remoteSdp)
+        val answer = runBlockingLite { ensureSession(event.callId).acceptOffer(remoteSdp) }
+        sasHandshake?.takeIf { sasParties?.callId == event.callId }?.recordLocalSdp(answer)
         sendSdp(event.callId, "rtc.answer", answer)
         completeRemoteOffer(event.callId)
     }
@@ -727,6 +785,14 @@ class ForegroundCallController(
 
     @Synchronized
     fun onSignalFailure(failure: SignalFailure) {
+        if (failure.code?.startsWith("call_sas_") == true) {
+            if (failure.callId == sasParties?.callId && failure.callId != null) {
+                val reason = if (failure.code == "call_sas_timeout") CallSecurityFailureReason.ExchangeTimeout
+                    else CallSecurityFailureReason.UnexpectedMessage
+                sasHandshake?.reject(reason)
+            }
+            return
+        }
         if (failure.callId == videoState.callId && failure.eventId == screenStartEventId && screenStartEventId != null) {
             Log.w("TiniTalkScreen", "screen request rejected by server: ${failure.code}")
             stopScreen(failure.callId, if (failure.code == "screen_share_busy") "Собеседник уже показывает экран" else "Не удалось начать показ экрана")
@@ -1026,6 +1092,99 @@ class ForegroundCallController(
     private fun sendSdp(callId: String, type: String, sdp: String) {
         val payload = JsonObject().apply { addProperty("sdp", sdp) }
         signal.send(event(callId, type, payload))
+    }
+
+    private fun alignSASRole(nextCallId: String, localIsCaller: Boolean, crossed: Boolean) {
+        val current = sasParties ?: return
+        if (current.callId != nextCallId && !crossed) return
+        if (current.callId == nextCallId && current.localIsCaller == localIsCaller) return
+        if (sasState != null || sasHandshake != null) {
+            sasHandshake?.reject(CallSecurityFailureReason.UnexpectedMessage)
+            return
+        }
+        sasParties = current.copy(
+            callId = nextCallId,
+            caller = if (current.localIsCaller == localIsCaller) current.caller else current.callee,
+            callee = if (current.localIsCaller == localIsCaller) current.callee else current.caller,
+            localIsCaller = localIsCaller,
+        )
+    }
+
+    private fun configureSAS(nextCallId: String, payload: JsonObject) {
+        if (sasState is CallSecurityState.Failed || sasState is CallSecurityState.Unavailable) return
+        val allowed = payload["call_sas_allowed"]
+        if (sasHandshake != null) {
+            if (allowed == null || !allowed.isJsonPrimitive || !allowed.asJsonPrimitive.isBoolean || !allowed.asBoolean) {
+                sasHandshake?.reject(CallSecurityFailureReason.UnexpectedMessage)
+            }
+            return
+        }
+        if (allowed == null) {
+            publishSASUnavailable(nextCallId, CallSecurityUnavailableReason.ServerUnsupported)
+            return
+        }
+        if (!allowed.isJsonPrimitive || !allowed.asJsonPrimitive.isBoolean) {
+            resetSAS()
+            publishSAS(
+                nextCallId,
+                CallSecurityState.Failed(CallSecurityFailureReason.UnexpectedMessage),
+            )
+            return
+        }
+        if (!allowed.asBoolean) {
+            publishSASUnavailable(nextCallId, CallSecurityUnavailableReason.PeerUnsupported)
+            return
+        }
+        val parties = sasParties?.takeIf { it.callId == nextCallId }
+        if (parties == null) {
+            publishSAS(
+                nextCallId,
+                CallSecurityState.Failed(CallSecurityFailureReason.InternalError),
+            )
+            return
+        }
+        sasHandshake = CallSASHandshake(
+            callId = nextCallId,
+            caller = parties.caller,
+            callee = parties.callee,
+            role = if (parties.localIsCaller) CallSASRole.Caller else CallSASRole.Callee,
+            send = { type, payload -> signal.send(event(nextCallId, type, payload)) },
+            publish = { state -> publishSAS(nextCallId, state) },
+        )
+        scheduleSASTimeout()
+    }
+
+    private fun scheduleSASTimeout() {
+        if (sasTimeoutTask != null) return
+        val handshake = sasHandshake ?: return
+        sasTimeoutTask = scheduler.schedule(SecurityCodeTimeoutMillis) {
+            synchronized(this) { if (sasHandshake === handshake) handshake.timeOut() }
+        }
+    }
+
+    private fun publishSAS(nextCallId: String, state: CallSecurityState) {
+        if (sasState is CallSecurityState.Failed) return
+        sasState = state
+        if (state == CallSecurityState.Establishing) {
+            scheduleSASTimeout()
+        } else {
+            sasTimeoutTask?.cancel()
+            sasTimeoutTask = null
+        }
+        onSecurityStateChanged(nextCallId, state)
+    }
+
+    private fun publishSASUnavailable(nextCallId: String, reason: CallSecurityUnavailableReason) {
+        if (sasParties?.callId != nextCallId) return
+        resetSAS()
+        publishSAS(nextCallId, CallSecurityState.Unavailable(reason))
+    }
+
+    private fun resetSAS() {
+        sasTimeoutTask?.cancel()
+        sasTimeoutTask = null
+        sasHandshake?.close()
+        sasHandshake = null
     }
 
     @Synchronized

@@ -24,11 +24,12 @@ Limits:
 - per-call RAM replay buffer: 256 events;
 - `rtc.ice` events per call: 128 per minute;
 - minimum interval between `rtc.restart` events per call: 10 seconds;
-- minimum interval between `rtc.restart.request` events per call: 10 seconds.
+- minimum interval between `rtc.restart.request` events per call: 10 seconds;
+- security-code exchange: 30 seconds from the caller commitment.
 
 Control events: `call.start`, `call.incoming`, `call.ringing`, `call.accept`, `call.connected`, `call.reject`, `call.cancel`, `call.end`, `call.expire`, `call.resume`.
 
-WebRTC events: `rtc.config`, `rtc.offer`, `rtc.answer`, `rtc.ice`, `rtc.video`, `rtc.screen`, `rtc.restart`, `rtc.restart.request`.
+WebRTC events: `rtc.config`, `rtc.offer`, `rtc.answer`, `rtc.ice`, `rtc.video`, `rtc.screen`, `rtc.restart`, `rtc.restart.request`, `rtc.sas.commit`, `rtc.sas.key`, `rtc.sas.reveal`.
 
 Screen sharing is an optional extension. Both bound devices advertise
 `supports_exclusive_screen_sharing: true` alongside `supports_video` in `call.start` and
@@ -45,6 +46,65 @@ sharing until explicitly enabled again. A competing start returns `screen_share_
 A stop only releases the matching presenter's share ID. Resume sends the current
 screen state after replay. Grants alone must never start capture without a live,
 locally approved Android projection request. Older clients receive no screen events.
+
+## Call security code
+
+The optional `call_sas_v1` health feature protects a call against an active
+signaling-server MITM when both users compare the displayed code. A supporting
+client advertises `supports_call_sas: true` in `call.start` or `call.accept`.
+The server sets `call_sas_allowed: true` in `rtc.config` only when both bound
+devices advertised support. Otherwise the Android UI marks the call as not
+verified and sends no SAS events. This preserves calls with older servers and
+clients while making a downgrade visible.
+
+The caller and callee each create a fresh 32-byte X25519 private key for the
+call. The caller commits before learning the callee's key:
+
+1. Caller sends `rtc.sas.commit {"commitment":"<base64url>"}`.
+2. Callee sends `rtc.sas.key {"public_key":"<base64url>","fingerprint":"<hex>"}`.
+3. Caller sends `rtc.sas.reveal` with the same fields as `rtc.sas.key`.
+
+The server accepts those events once, in that order, from caller, callee and
+caller respectively. Keys and commitments use canonical unpadded base64url;
+fingerprints use 64 lowercase hex characters. A participant also rejects a
+duplicate or out-of-order message locally.
+
+Cryptographic transcripts use four-byte big-endian length prefixes for the
+domain and every following field. The commitment is SHA-256 over domain
+`tinitalk-call-sas-v1/commit`, ASCII `call_id`, caller public key and caller
+DTLS fingerprint. Each fingerprint is the 32-byte SHA-256 fingerprint parsed
+from the participant's local or remote WebRTC SDP. Repeated fingerprint lines
+must all contain the same value and use SHA-256; other algorithms and malformed
+fingerprint attributes fail SAS rather than being ignored. This prevents media-level
+SDP attributes from overriding the certificate being checked. WebRTC then verifies
+that the certificate used by DTLS matches the remote SDP before the code is displayed.
+
+Both clients calculate X25519 and derive eight bytes with HKDF-SHA256. The salt
+is SHA-256 over domain `tinitalk-call-sas-v1/salt` and `call_id`. HKDF info uses
+domain `tinitalk-call-sas-v1/code`, followed by `call_id`, caller login, callee
+login, caller and callee public keys, and caller and callee fingerprints in
+that order. The eight bytes are interpreted as an unsigned big-endian integer
+and reduced modulo 10^12. Android displays this value as five base-256 digits,
+most significant first, using the fixed table in `CallSecurityEmoji.kt` and the
+bundled Twemoji subset font. This mapping preserves every distinct numeric code.
+
+The code appears only after the aggregate PeerConnection state reports connected
+(including DTLS), not merely ICE connectivity. It is hidden while transport is
+disconnected and is restored only after transport reconnects with unchanged
+fingerprints. A transport failure invalidates the code. Users must compare all
+five emoji in order; the app does not confirm a match automatically. A timeout,
+malformed exchange or fingerprint change invalidates verification. Once SAS has started,
+subsequent configurations cannot disable it or clear a security failure. A crossed
+call adopts the server's canonical call ID before starting the exchange; subsequent
+messages for another call ID are ignored. Closing the call clears retained private
+key material and transcript values from application
+memory as far as the managed runtime permits.
+
+Matching codes authenticate the current WebRTC endpoints with about 40 bits of
+human-verifiable security. They do not hide metadata, prevent denial of service,
+or protect a call whose users do not actually compare the code. A malicious
+server can suppress support, but the UI then continues to say that the call is
+not verified.
 
 ## WebSocket connection
 
@@ -90,6 +150,11 @@ If a valid event cannot be handled, the server sends an error frame:
   "retry_after_ms": 1250
 }
 ```
+
+SAS rejections use `call_sas_timeout`, `call_sas_invalid`, or
+`call_sas_unavailable`. They invalidate security verification without ending the
+media call. Clients also classify unlabelled rejections of their pending SAS
+events this way for compatibility with earlier SAS servers.
 
 `code` is optional. Rate-limit errors use `ice_rate_limited`,
 `ice_restart_rate_limited`, or `ice_restart_request_rate_limited` and include

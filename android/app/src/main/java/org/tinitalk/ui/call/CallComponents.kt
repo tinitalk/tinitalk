@@ -55,6 +55,7 @@ internal fun CallScreenSurface(
     contactAddress: ContactAddress? = null,
     fallbackLogin: String = peerName,
     detail: String? = null,
+    detailAccessory: (@Composable () -> Unit)? = null,
     statusColor: Color = Color.White.copy(alpha = 0.76f),
     statusAccessory: (@Composable () -> Unit)? = null,
     pulsingAvatar: Boolean = false,
@@ -146,6 +147,7 @@ internal fun CallScreenSurface(
                     fontWeight = FontWeight.Medium,
                 )
             }
+            detailAccessory?.invoke()
             Spacer(Modifier.weight(1f))
             footer()
         }

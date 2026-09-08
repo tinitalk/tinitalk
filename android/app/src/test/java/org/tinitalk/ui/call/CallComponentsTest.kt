@@ -7,6 +7,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
@@ -14,6 +15,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -21,13 +23,18 @@ import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.call.CallTransportRoute
+import org.tinitalk.call.CallSecurityFailureReason
+import org.tinitalk.call.CallSecurityState
+import org.tinitalk.call.CallSecurityUnavailableReason
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.ContactPhotoReader
+import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.ui.LocalContactPhotoReader
 import org.tinitalk.ui.theme.TiniTalkTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -42,6 +49,81 @@ import org.robolectric.annotation.GraphicsMode
 class CallComponentsTest {
     @get:Rule
     val composeRule = createEmptyComposeRule()
+
+    @Test
+    fun securityCodeIsDisplayedWithoutConfirmationAction() {
+        val activity = renderSecurity(CallSecurityState.Ready("4821 7034 1596"))
+
+        composeRule.onNodeWithTag("security_code", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithText("🏰 🍆 🧵 🛷 🧬").assertExists()
+        composeRule.onNodeWithText("Сверьте весь код голосом").assertDoesNotExist()
+        composeRule.onAllNodesWithTag("security_code_confirm").assertCountEquals(0)
+        composeRule.onNodeWithTag("security_code_panel").performClick()
+        composeRule.onNodeWithText("Код безопасности").assertExists()
+        composeRule.onNodeWithText(
+            "Сравните все 5 эмодзи с собеседником. Если они совпадают, соединение защищено. " +
+                "Если отличается хотя бы один эмодзи, завершите звонок.",
+        ).assertExists()
+        activity.pause().stop().destroy()
+    }
+
+    @Test
+    fun failedSecurityCheckShowsExactReasonAndWarningIcon() {
+        val activity = renderSecurity(
+            CallSecurityState.Failed(CallSecurityFailureReason.FingerprintMismatch),
+        )
+
+        composeRule.onNodeWithText("Соединение небезопасно").performClick()
+        composeRule.onNodeWithTag("security_code_error_icon").assertExists()
+        composeRule.onNodeWithText(
+            "Сертификат соединения не совпал с данными проверки. Звонок небезопасен." +
+                "\n\nЗавершите звонок и не сообщайте конфиденциальные данные.",
+        ).assertExists()
+        activity.pause().stop().destroy()
+    }
+
+    @Test
+    fun unsupportedPeerExplainsHowToRestoreSecurityCode() {
+        val activity = renderSecurity(
+            CallSecurityState.Unavailable(CallSecurityUnavailableReason.PeerUnsupported),
+        )
+
+        composeRule.onNodeWithText("Не удаётся подтвердить безопасность соединения").performClick()
+        composeRule.onNodeWithText(
+            "Приложение собеседника устарело. Безопасность этого звонка нельзя подтвердить.",
+        ).assertExists()
+        activity.pause().stop().destroy()
+    }
+
+    @Test
+    fun securityCodeIsHiddenWhileVideoIsActive() {
+        val activity = renderSecurity(
+            security = CallSecurityState.Ready("4821 7034 1596"),
+            videoState = CallVideoState(
+                allowed = true,
+                requested = true,
+                sending = true,
+            ),
+        )
+
+        composeRule.onAllNodesWithTag("security_code_panel").assertCountEquals(0)
+        activity.pause().stop().destroy()
+    }
+
+    @Test
+    @Config(qualifiers = "w320dp-h480dp")
+    fun securityStatusFitsBelowDurationOnShortAudioScreen() {
+        val activity = renderSecurity(
+            CallSecurityState.Unavailable(CallSecurityUnavailableReason.PeerUnsupported),
+        )
+
+        val duration = composeRule.onNodeWithText("00:03").fetchSemanticsNode().boundsInRoot
+        val security = composeRule.onNodeWithTag("security_code_panel").fetchSemanticsNode().boundsInRoot
+        val avatar = composeRule.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot
+        assertTrue("security status must be below call duration", security.top >= duration.bottom)
+        assertTrue("security status must not overlap the avatar", security.bottom <= avatar.top)
+        activity.pause().stop().destroy()
+    }
 
     @Test
     fun hiddenActionLabelKeepsAccessibleDescription() {
@@ -448,6 +530,28 @@ class CallComponentsTest {
             }
         }
         return activity
+    }
+
+    private fun renderSecurity(
+        security: CallSecurityState,
+        videoState: CallVideoState<VideoRenderSource> = CallVideoState(allowed = false),
+    ): org.robolectric.android.controller.ActivityController<ComponentActivity> = render {
+        ActiveCallScreen(
+            peerName = "Alice",
+            durationText = "00:03",
+            muted = false,
+            connectionHealth = ConnectionHealth.Good,
+            currentEndpoint = null,
+            availableEndpoints = emptyList(),
+            videoState = videoState,
+            onMute = {},
+            onSelectEndpoint = {},
+            onCamera = {},
+            onSwitchCamera = {},
+            onVideoVisibilityChanged = {},
+            onEnd = {},
+            security = security,
+        )
     }
 
     private object NoPhotoReader : ContactPhotoReader {

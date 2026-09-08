@@ -36,6 +36,7 @@ class WebRtcCallSession private constructor(
     private val onRemoteVideoTrack: (VideoRenderSource) -> Unit,
     private val cameraCallbacks: CameraMediaCallbacks,
     private val forceRelay: Boolean,
+    private val onTransportStateChanged: (MediaConnectionState) -> Unit,
 ) : MediaSession, CameraMediaSession, ScreenMediaSession {
     private val appContext = context.applicationContext
     private val iceQueue = IceQueue()
@@ -123,6 +124,16 @@ class WebRtcCallSession private constructor(
                         onLocalIceCandidate = onLocalIceCandidate,
                         onLocalIceCandidatesRemoved = onLocalIceCandidatesRemoved,
                         onConnectionChange = { state -> onIceConnectionState(state) },
+                        onTransportConnectionChange = { state ->
+                            if (!closed) onTransportStateChanged(when (state) {
+                                PeerConnection.PeerConnectionState.NEW,
+                                PeerConnection.PeerConnectionState.CONNECTING -> MediaConnectionState.Connecting
+                                PeerConnection.PeerConnectionState.CONNECTED -> MediaConnectionState.Connected
+                                PeerConnection.PeerConnectionState.DISCONNECTED -> MediaConnectionState.Disconnected
+                                PeerConnection.PeerConnectionState.FAILED -> MediaConnectionState.Failed
+                                PeerConnection.PeerConnectionState.CLOSED -> MediaConnectionState.Closed
+                            })
+                        },
                         onRemoteVideoTrack = { track ->
                             publishRemoteVideoTrack(track)
                         },
@@ -561,6 +572,7 @@ class WebRtcCallSession private constructor(
             onConnectionStateChanged: (MediaConnectionState) -> Unit = {},
             onRemoteVideoTrack: (VideoRenderSource) -> Unit = {},
             cameraCallbacks: CameraMediaCallbacks = CameraMediaCallbacks(),
+            onTransportStateChanged: (MediaConnectionState) -> Unit = {},
         ): WebRtcCallSession = WebRtcCallSession(
             context,
             videoAllowed,
@@ -572,6 +584,7 @@ class WebRtcCallSession private constructor(
             onRemoteVideoTrack,
             cameraCallbacks,
             forceRelay,
+            onTransportStateChanged,
         )
 
         @Synchronized

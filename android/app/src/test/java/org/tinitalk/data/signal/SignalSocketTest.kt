@@ -2,6 +2,7 @@ package org.tinitalk.data.signal
 
 import com.google.gson.JsonObject
 import org.tinitalk.data.Session
+import org.tinitalk.call.SequencedSignalEvent
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -23,6 +24,44 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class SignalSocketTest {
+    @Test
+    fun malformedSASPayloadReachesCallSecurityWithoutFatalSocketError() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val failures = mutableListOf<SignalFailure>()
+        val events = mutableListOf<SequencedSignalEvent>()
+        val socket = SignalSocket(client, Session("https://talk.example.com", "alice", "token"), socketFactory = factory)
+        socket.connect(onEvent = events::add, onError = failures::add)
+        val connection = factory.connections.single()
+        connection.listener.onOpen(connection.webSocket, response(connection.webSocket.request()))
+        val payloads = listOf(",\"payload\":{}", ",\"payload\":null", ",\"payload\":[]", ",\"payload\":true", "")
+        payloads.forEachIndexed { index, payload ->
+            connection.listener.onMessage(connection.webSocket, """{"seq":${index + 1},"id":"018f7d51-3f90-7e63-b657-4a83a6a92000","call_id":"018f7d51-40a1-7bb5-a2d0-7e47f9182000","type":"rtc.sas.key","sent_at":1787666400000$payload}""")
+        }
+        assertTrue(failures.isEmpty())
+        assertEquals(payloads.size, events.size)
+        assertTrue(events.all { it.event.type == "rtc.sas.key" })
+        socket.close()
+        client.shutdown()
+    }
+
+    @Test
+    fun legacyServerSASRejectionIsClassifiedByPendingEvent() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val failures = mutableListOf<SignalFailure>()
+        val socket = SignalSocket(client, Session("https://talk.example.com", "alice", "token"), socketFactory = factory)
+        socket.connect(onEvent = {}, onError = failures::add)
+        val connection = factory.connections.single()
+        connection.listener.onOpen(connection.webSocket, response(connection.webSocket.request(), acknowledgesEvents = true))
+        val event = testEvent("rtc.sas.commit").copy(payload = JsonObject().apply { addProperty("commitment", "A".repeat(43)) })
+        socket.send(event)
+        connection.listener.onMessage(connection.webSocket, """{"error":"security code exchange timed out","event_id":"${event.id}","call_id":"${event.callId}"}""")
+        assertEquals("call_sas_invalid", failures.single().code)
+        socket.close()
+        client.shutdown()
+    }
+
     @Test
     fun connectsWithAuthAndDeviceHeadersAndNoQueryToken() {
         MockWebServer().use { server ->

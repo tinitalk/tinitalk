@@ -63,7 +63,7 @@ class IncomingRingingAcknowledger(context: Context) : Closeable {
             timeout,
             Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0),
         )
-        prepare(CallCoordinator(session.login, signal, serverFeatures = session.features, accountId = invite.accountId))
+        prepare(CallCoordinator(session.login, signal, accountId = invite.accountId))
         runCatching {
             signal.connect(
                 onEvent = {},

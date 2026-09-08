@@ -60,6 +60,53 @@ func TestRTCVideoRequiresBooleanEnabled(t *testing.T) {
 	}
 }
 
+func TestSASEventsValidateCanonicalPayloads(t *testing.T) {
+	valid := map[string]string{
+		"rtc.sas.commit": `{"commitment":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`,
+		"rtc.sas.key":    `{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","fingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`,
+		"rtc.sas.reveal": `{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","fingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`,
+	}
+	for eventType, payload := range valid {
+		event := Event{
+			ID:      uuidForProtocolTest,
+			CallID:  callIDForProtocolTest,
+			Type:    eventType,
+			SentAt:  1787666400000,
+			Payload: json.RawMessage(payload),
+		}
+		if err := event.Validate(); err != nil {
+			t.Fatalf("Validate(%s) error = %v", eventType, err)
+		}
+	}
+}
+
+func TestSASEventsRejectMalformedCryptoValues(t *testing.T) {
+	for _, test := range []struct {
+		eventType string
+		payload   string
+	}{
+		{"rtc.sas.commit", `{"commitment":"short"}`},
+		{"rtc.sas.key", `{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","fingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`},
+		{"rtc.sas.reveal", `{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","fingerprint":"0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"}`},
+	} {
+		event := Event{
+			ID:      uuidForProtocolTest,
+			CallID:  callIDForProtocolTest,
+			Type:    test.eventType,
+			SentAt:  1787666400000,
+			Payload: json.RawMessage(test.payload),
+		}
+		if err := event.Validate(); err == nil {
+			t.Fatalf("Validate(%s, %s) error = nil, want rejection", test.eventType, test.payload)
+		}
+	}
+}
+
+const (
+	uuidForProtocolTest   = "018f7d51-3f90-7e63-b657-4a83a6a90210"
+	callIDForProtocolTest = "018f7d51-40a1-7bb5-a2d0-7e47f9181766"
+)
+
 func TestDecodeValidFixtures(t *testing.T) {
 	for _, name := range []string{"call_start.json", "call_resume.json", "rtc_ice.json"} {
 		raw := readFixture(t, name)

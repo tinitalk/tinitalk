@@ -17,6 +17,7 @@ composeBom = "2026.08.00"
 work = "2.11.2"
 unifiedPush = "3.3.5"
 embeddedFcmDistributor = "3.1.0"
+bouncycastle = "1.85.2"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -47,3 +48,4 @@ androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "
 androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "work" }
 unifiedpush-connector = { module = "org.unifiedpush.android:connector", version.ref = "unifiedPush" }
 unifiedpush-embedded-fcm = { module = "org.unifiedpush.android:embedded-fcm-distributor", version.ref = "embeddedFcmDistributor" }
+bouncycastle = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }

@@ -315,6 +315,177 @@ func TestHubNegotiatesVideoCapability(t *testing.T) {
 	}
 }
 
+func TestHubNegotiatesSASCapability(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		callerSupports bool
+		calleeSupports bool
+		wantSAS        bool
+	}{
+		{name: "old old"},
+		{name: "new old", callerSupports: true},
+		{name: "old new", calleeSupports: true},
+		{name: "new new", callerSupports: true, calleeSupports: true, wantSAS: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hub := NewHub(NoopNotifier{})
+			alice := connectDevice(t, hub, "alice", "phone")
+			bob := connectDevice(t, hub, "bob", "phone")
+
+			startPayload := map[string]any{"callee_id": "bob"}
+			if test.callerSupports {
+				startPayload["supports_call_sas"] = true
+			}
+			start := event(uuid(2211), uuid(2212), "call.start", startPayload)
+			if err := hub.HandleClient(alice, start); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, bob)
+
+			acceptPayload := map[string]any{}
+			if test.calleeSupports {
+				acceptPayload["supports_call_sas"] = true
+			}
+			if err := hub.HandleClient(bob, event(uuid(2213), start.CallID, "call.accept", acceptPayload)); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, alice) // call.accept
+			assertSASAllowed(t, next(t, alice).Event, test.wantSAS)
+			assertSASAllowed(t, next(t, bob).Event, test.wantSAS)
+		})
+	}
+}
+
+func TestHubForwardsSASExchangeInStrictRoleOrder(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := connectDevice(t, hub, "alice", "phone")
+	bob := connectDevice(t, hub, "bob", "phone")
+	start := event(uuid(2221), uuid(2222), "call.start", map[string]any{
+		"callee_id": "bob", "supports_call_sas": true,
+	})
+	if err := hub.HandleClient(alice, start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	if err := hub.HandleClient(bob, event(uuid(2223), start.CallID, "call.accept", map[string]any{"supports_call_sas": true})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice) // call.accept
+	_ = next(t, alice) // rtc.config
+	_ = next(t, bob)   // rtc.config
+
+	commit := event(uuid(2224), start.CallID, "rtc.sas.commit", map[string]any{"commitment": sasBase64Value})
+	if err := hub.HandleClient(alice, commit); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, bob); got.Type != "rtc.sas.commit" {
+		t.Fatalf("bob event = %+v", got)
+	}
+	key := event(uuid(2225), start.CallID, "rtc.sas.key", sasKeyPayload())
+	if err := hub.HandleClient(bob, key); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, alice); got.Type != "rtc.sas.key" {
+		t.Fatalf("alice event = %+v", got)
+	}
+	reveal := event(uuid(2226), start.CallID, "rtc.sas.reveal", sasKeyPayload())
+	if err := hub.HandleClient(alice, reveal); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, bob); got.Type != "rtc.sas.reveal" {
+		t.Fatalf("bob event = %+v", got)
+	}
+}
+
+func TestHubRejectsSASWhenUnsupportedOrOutOfOrder(t *testing.T) {
+	t.Run("unsupported", func(t *testing.T) {
+		hub := NewHub(NoopNotifier{})
+		alice := connectDevice(t, hub, "alice", "phone")
+		bob := connectDevice(t, hub, "bob", "phone")
+		start := event(uuid(2231), uuid(2232), "call.start", map[string]any{"callee_id": "bob"})
+		if err := hub.HandleClient(alice, start); err != nil {
+			t.Fatal(err)
+		}
+		_ = next(t, bob)
+		if err := hub.HandleClient(bob, event(uuid(2233), start.CallID, "call.accept", map[string]any{})); err != nil {
+			t.Fatal(err)
+		}
+		_ = next(t, alice)
+		_ = next(t, alice)
+		_ = next(t, bob)
+
+		err := hub.HandleClient(alice, event(uuid(2234), start.CallID, "rtc.sas.commit", map[string]any{"commitment": sasBase64Value}))
+		if err == nil {
+			t.Fatal("SAS on unsupported call error = nil, want rejection")
+		}
+	})
+
+	t.Run("wrong role and order", func(t *testing.T) {
+		hub := NewHub(NoopNotifier{})
+		alice := connectDevice(t, hub, "alice", "phone")
+		bob := connectDevice(t, hub, "bob", "phone")
+		start := event(uuid(2241), uuid(2242), "call.start", map[string]any{"callee_id": "bob", "supports_call_sas": true})
+		if err := hub.HandleClient(alice, start); err != nil {
+			t.Fatal(err)
+		}
+		_ = next(t, bob)
+		if err := hub.HandleClient(bob, event(uuid(2243), start.CallID, "call.accept", map[string]any{"supports_call_sas": true})); err != nil {
+			t.Fatal(err)
+		}
+		_ = next(t, alice)
+		_ = next(t, alice)
+		_ = next(t, bob)
+
+		if err := hub.HandleClient(bob, event(uuid(2244), start.CallID, "rtc.sas.commit", map[string]any{"commitment": sasBase64Value})); err == nil {
+			t.Fatal("callee commitment error = nil, want rejection")
+		}
+		if err := hub.HandleClient(alice, event(uuid(2245), start.CallID, "rtc.sas.key", sasKeyPayload())); err == nil {
+			t.Fatal("key before commitment error = nil, want rejection")
+		}
+	})
+}
+
+func TestHubRejectsSASExchangeAfterTimeout(t *testing.T) {
+	now := time.Unix(1_787_666_400, 0)
+	hub := NewHub(NoopNotifier{})
+	hub.SetNow(func() time.Time { return now })
+	alice := connectDevice(t, hub, "alice", "phone")
+	bob := connectDevice(t, hub, "bob", "phone")
+	start := event(uuid(2251), uuid(2252), "call.start", map[string]any{
+		"callee_id": "bob", "supports_call_sas": true,
+	})
+	if err := hub.HandleClient(alice, start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	if err := hub.HandleClient(bob, event(uuid(2253), start.CallID, "call.accept", map[string]any{"supports_call_sas": true})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, alice)
+	_ = next(t, alice)
+	_ = next(t, bob)
+	if err := hub.HandleClient(alice, event(uuid(2254), start.CallID, "rtc.sas.commit", map[string]any{"commitment": sasBase64Value})); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	now = now.Add(SASExchangeTimeout + time.Millisecond)
+
+	err := hub.HandleClient(bob, event(uuid(2255), start.CallID, "rtc.sas.key", sasKeyPayload()))
+	var coded ClientError
+	if !errors.As(err, &coded) || coded.Code() != "call_sas_timeout" {
+		t.Fatalf("late SAS key error = %v, want classified SAS timeout", err)
+	}
+}
+
+const sasBase64Value = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+func sasKeyPayload() map[string]any {
+	return map[string]any{
+		"public_key":  sasBase64Value,
+		"fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+}
+
 func TestHubNegotiatesVideoCapabilityForCrossedCalls(t *testing.T) {
 	for _, test := range []struct {
 		name           string
@@ -1356,6 +1527,19 @@ func assertVideoAllowed(t *testing.T, event protocol.Event, want bool) {
 	}
 	if got != want {
 		t.Fatalf("video_allowed = %t, want %t", got, want)
+	}
+}
+
+func assertSASAllowed(t *testing.T, event protocol.Event, want bool) {
+	t.Helper()
+	var payload struct {
+		Allowed bool `json:"call_sas_allowed"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Allowed != want {
+		t.Fatalf("call_sas_allowed = %t, want %t; payload = %s", payload.Allowed, want, event.Payload)
 	}
 }
 

@@ -35,6 +35,7 @@ provides them.
 | --- | --- | --- | --- |
 | AndroidX libraries | Compose BOM 2026.08.00 and resolved runtime dependencies | [source](https://android.googlesource.com/platform/frameworks/support/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
 | AndroidX ExifInterface | 1.4.2 | [source](https://android.googlesource.com/platform/frameworks/support/+/androidx-main/exifinterface/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| Bouncy Castle (`bcprov-jdk18on`) | 1.85.2 | [source](https://github.com/bcgit/bc-java) | [MIT](https://www.bouncycastle.org/licence.html) |
 | Gson | 2.14.0 | [source](https://github.com/google/gson/tree/gson-parent-2.14.0) | [Apache-2.0](https://github.com/google/gson/blob/gson-parent-2.14.0/LICENSE) |
 | Google Tink | 1.23.0 | [source](https://github.com/tink-crypto/tink-java/tree/v1.23.0) | [Apache-2.0](https://github.com/tink-crypto/tink-java/blob/v1.23.0/LICENSE) |
 | Error Prone annotations | 2.48.0 | [source](https://github.com/google/error-prone/tree/v2.48.0) | [Apache-2.0](https://github.com/google/error-prone/blob/v2.48.0/COPYING) |
@@ -50,10 +51,20 @@ provides them.
 | Kotlin serialization | 1.7.3 | [source](https://github.com/Kotlin/kotlinx.serialization/tree/v1.7.3) | [Apache-2.0](https://github.com/Kotlin/kotlinx.serialization/blob/v1.7.3/LICENSE.txt) |
 | JetBrains annotations | 23.0.0 | [source](https://github.com/JetBrains/java-annotations/tree/23.0.0) | [Apache-2.0](https://github.com/JetBrains/java-annotations/blob/23.0.0/LICENSE.txt) |
 | JSpecify | 1.0.0 | [source](https://github.com/jspecify/jspecify/tree/v1.0.0) | [Apache-2.0](https://github.com/jspecify/jspecify/blob/v1.0.0/LICENSE) |
+| Twemoji COLR font | 15.0.3 | [source](https://github.com/mrdrogdrog/twemoji-color-font/tree/v15.0.3) | [SIL OFL 1.1](https://github.com/mrdrogdrog/twemoji-color-font/blob/v15.0.3/LICENSE) for the font; [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) for the Twemoji graphics |
 | UnifiedPush connector | 3.3.5 | [source](https://codeberg.org/UnifiedPush/android-connector/src/tag/3.3.5) | [Apache-2.0](https://codeberg.org/UnifiedPush/android-connector/src/tag/3.3.5/LICENSE) |
 | UnifiedPush embedded FCM distributor | 3.1.0 | [source](https://codeberg.org/UnifiedPush/android-embedded_fcm_distributor/src/tag/3.1.0) | [LGPL-2.1 in source](https://codeberg.org/UnifiedPush/android-embedded_fcm_distributor/src/tag/3.1.0/LICENSE); Apache-2.0 in published metadata (see below) |
 | WebRTC SDK Android wrapper | 150.7871.01 | [source](https://github.com/webrtc-sdk/android/tree/v150.7871.01) | [MIT](https://github.com/webrtc-sdk/android/blob/v150.7871.01/LICENSE) |
 | WebRTC and bundled native components | 150.7871.01 | [source](https://github.com/webrtc-sdk/android/tree/v150.7871.01) | [upstream license bundle](https://github.com/webrtc-sdk/android/blob/v150.7871.01/Licenses/WEBRTC.md) |
+
+The bundled `twemoji_security_256.ttf` is a Twemoji subset containing the 256 security-code emoji
+listed in `CallSecurityEmoji.kt`. Its internal family name is
+`TiniTalk Security Emoji`; the original graphics and licenses are unchanged.
+Its TTF metadata includes the full upstream license text (OFL 1.1 and the
+Twemoji CC BY 4.0 notice), copyright and attribution, source links, and a
+description of the subset and name changes. These notices are bundled with the
+font inside the APK. Bouncy Castle's MIT license is included in the APK as
+`META-INF/LICENSE.md`.
 
 UnifiedPush embedded FCM distributor 3.1.0 has conflicting upstream license
 information: its `LICENSE` contains LGPL 2.1, while its

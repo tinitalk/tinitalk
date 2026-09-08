@@ -10,7 +10,7 @@ val tinitalkAbi = providers.gradleProperty("tinitalkAbi").getOrElse("all")
 require(tinitalkAbi == "arm64" || tinitalkAbi == "all") {
     "tinitalkAbi must be 'arm64' or 'all'"
 }
-val tinitalkVersionName = "0.14.0"
+val tinitalkVersionName = "0.15.0"
 
 val releaseSigningPropertiesFile = rootProject.file("keystore/release.properties")
 val releaseSigningProperties = Properties().apply {
@@ -49,7 +49,7 @@ android {
         // API 37 requires a separate LAN-permission and certificate-transparency migration.
         //noinspection OldTargetApi
         targetSdk = 36
-        versionCode = 18
+        versionCode = 19
         versionName = tinitalkVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FORCE_RELAY", providers.gradleProperty("tinitalkForceRelay").getOrElse("false"))
@@ -143,6 +143,7 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.unifiedpush.connector)
     implementation(libs.unifiedpush.embedded.fcm)
+    implementation(libs.bouncycastle)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

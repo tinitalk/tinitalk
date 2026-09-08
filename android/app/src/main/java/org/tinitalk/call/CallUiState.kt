@@ -28,6 +28,31 @@ enum class CallTransportRoute {
     Turn,
 }
 
+sealed interface CallSecurityState {
+    data class Unavailable(val reason: CallSecurityUnavailableReason) : CallSecurityState
+    data object Establishing : CallSecurityState
+    data class Ready(val code: String) : CallSecurityState
+    data class Failed(val reason: CallSecurityFailureReason) : CallSecurityState
+}
+
+enum class CallSecurityUnavailableReason {
+    ServerUnsupported,
+    PeerUnsupported,
+}
+
+enum class CallSecurityFailureReason {
+    ExchangeTimeout,
+    TransportTimeout,
+    TransportFailed,
+    UnexpectedMessage,
+    InvalidFingerprint,
+    FingerprintMismatch,
+    CommitmentMismatch,
+    FingerprintChanged,
+    InvalidPublicKey,
+    InternalError,
+}
+
 internal fun callTransportRoute(
     localCandidateType: String,
     remoteCandidateType: String,
@@ -69,6 +94,7 @@ data class CallUiState(
     val connectionHealth: ConnectionHealth = ConnectionHealth.None,
     val transportRoute: CallTransportRoute = CallTransportRoute.Unknown,
     val endReason: CallEndReason? = null,
+    val security: CallSecurityState = CallSecurityState.Establishing,
 ) {
     val callKey: AccountCallKey?
         get() = accountId?.let { id -> callId?.let { AccountCallKey(id, it) } }
@@ -288,6 +314,13 @@ object CallUiStateStore {
         if (state.callKey != callKey || state.phase != CallPhase.Active) return
         if (state.connectionHealth == health && state.transportRoute == transportRoute) return
         publish(state.copy(connectionHealth = health, transportRoute = transportRoute))
+    }
+
+    @Synchronized
+    fun setSecurity(callKey: AccountCallKey, security: CallSecurityState) {
+        val state = current
+        if (state.callKey != callKey || state.phase == CallPhase.Ended) return
+        publish(state.copy(security = security))
     }
 
     @Synchronized

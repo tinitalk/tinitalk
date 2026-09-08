@@ -16,7 +16,6 @@ class CallCoordinatorTest {
             "alice",
             signal,
             FixedIds(),
-            serverFeatures = setOf("video_1to1"),
         )
         coordinator.startCall("bob")
 
@@ -48,7 +47,7 @@ class CallCoordinatorTest {
     }
 
     @Test
-    fun oldServerOmitsVideoSupportInBothCallDirections() {
+    fun advertisesCallCapabilitiesWithStaleServerFeaturesInBothCallDirections() {
         val outgoingSignal = FakeSignalClient()
         CallCoordinator("alice", outgoingSignal, ids = FixedIds()).startCall("bob")
         val incomingSignal = FakeSignalClient()
@@ -57,45 +56,12 @@ class CallCoordinatorTest {
             accept()
         }
 
-        assertFalse(outgoingSignal.sent.single().payload.has("supports_video"))
-        assertFalse(incomingSignal.sent.last().payload.has("supports_video"))
-    }
-
-    @Test
-    fun videoServerAdvertisesSupportInBothCallDirections() {
-        val outgoingSignal = FakeSignalClient()
-        CallCoordinator(
-            "alice",
-            outgoingSignal,
-            ids = FixedIds(),
-            serverFeatures = setOf("video_1to1"),
-        ).startCall("bob")
-        val incomingSignal = FakeSignalClient()
-        CallCoordinator(
-            "alice",
-            incomingSignal,
-            ids = FixedIds(),
-            serverFeatures = setOf("video_1to1"),
-        ).apply {
-            onEvent(event("call.incoming", seq = 1))
-            accept()
-        }
-
         assertTrue(outgoingSignal.sent.single().payload["supports_video"].asBoolean)
+        assertTrue(outgoingSignal.sent.single().payload["supports_exclusive_screen_sharing"].asBoolean)
+        assertTrue(outgoingSignal.sent.single().payload["supports_call_sas"].asBoolean)
         assertTrue(incomingSignal.sent.last().payload["supports_video"].asBoolean)
-    }
-
-    @Test
-    fun similarlyNamedServerFeatureDoesNotAdvertiseVideo() {
-        val signal = FakeSignalClient()
-        CallCoordinator(
-            "alice",
-            signal,
-            ids = FixedIds(),
-            serverFeatures = setOf("VIDEO_1TO1", "video_1to1_preview"),
-        ).startCall("bob")
-
-        assertFalse(signal.sent.single().payload.has("supports_video"))
+        assertTrue(incomingSignal.sent.last().payload["supports_exclusive_screen_sharing"].asBoolean)
+        assertTrue(incomingSignal.sent.last().payload["supports_call_sas"].asBoolean)
     }
 
     @Test

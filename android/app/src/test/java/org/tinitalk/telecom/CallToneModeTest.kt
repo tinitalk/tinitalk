@@ -12,6 +12,13 @@ import org.junit.Test
 
 class CallToneModeTest {
     @Test
+    fun securityExchangeRejectionDoesNotEndCall() {
+        for (code in listOf("call_sas_timeout", "call_sas_invalid", "call_sas_unavailable")) {
+            assertNull(signalingFailureEndReason(SignalFailure("security exchange rejected", code = code, callId = "call-1"), "call-1"))
+        }
+    }
+
+    @Test
     fun selectsSoundsForDeliveryReconnectAndCompletedConversation() {
         assertEquals(
             CallToneMode.Reaching,
