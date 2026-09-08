@@ -1,6 +1,7 @@
 package org.tinitalk.data.signal
 
 import com.google.gson.JsonParser
+import com.google.gson.JsonObject
 import org.tinitalk.call.SequencedSignalEvent
 import org.tinitalk.call.SignalClient
 import org.tinitalk.data.AuthReasonHeader
@@ -90,7 +91,7 @@ class SignalSocket(
     }
 
     override fun send(event: SignalEvent, onSettled: (() -> Unit)?) {
-        val queued = PendingEvent(event.id, event.encode(), onSettled)
+        val queued = PendingEvent(event.id, event.encode(), onSettled, event.type, event.callId)
         var failedSocket: WebSocket? = null
         var failedAttempt: SocketAttempt? = null
         var failureCallbacks: SignalCallbacks? = null
@@ -308,7 +309,10 @@ class SignalSocket(
             }
             json["ack"]?.asString?.let { return@runCatching ParsedSignal.Acknowledgement(it) }
             val seq = json.remove("seq")?.asLong ?: 0L
-            ParsedSignal.Event(SequencedSignalEvent(SignalEvent.decode(json.toString()), seq))
+            if (json["type"]?.asString?.startsWith("rtc.sas.") == true && json["payload"]?.isJsonObject != true) {
+                json.add("payload", JsonObject())
+            }
+            ParsedSignal.Event(SequencedSignalEvent(SignalEvent.decodeForDelivery(json.toString()), seq))
         }.getOrElse { ParsedSignal.Error(SignalFailure("invalid server event")) }
 
         var settled = emptyList<PendingEvent>()
@@ -317,8 +321,12 @@ class SignalSocket(
             when (result) {
                 is ParsedSignal.Event -> callbacks.onEvent(result.value)
                 is ParsedSignal.Error -> {
+                    val rejected = pending.firstOrNull { it.id == result.value.eventId }
+                    val failure = if (result.value.code == null && rejected?.type?.startsWith("rtc.sas.") == true) {
+                        result.value.copy(code = "call_sas_invalid", callId = rejected.callId)
+                    } else result.value
                     result.value.eventId?.let { eventId -> settled = removePendingLocked(eventId) }
-                    callbacks.onError(result.value)
+                    callbacks.onError(failure)
                 }
                 is ParsedSignal.Acknowledgement -> settled = removePendingLocked(result.eventId)
             }
@@ -415,6 +423,8 @@ class SignalSocket(
         val id: String,
         val raw: String,
         val onSettled: (() -> Unit)?,
+        val type: String,
+        val callId: String,
     )
 
     private sealed interface ParsedSignal {

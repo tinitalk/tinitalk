@@ -143,6 +143,7 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.unifiedpush.connector)
     implementation(libs.unifiedpush.embedded.fcm)
+    implementation(libs.bouncycastle)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

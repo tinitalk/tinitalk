@@ -299,6 +299,7 @@ class CallActivity : ComponentActivity() {
                         onEnd = { endCall(visibleState) },
                         onShareScreen = ::requestScreenSharing,
                         onStopSharing = { visibleState.callKey?.let { CallForegroundService.stopScreen(this, it) } },
+                        security = visibleState.security,
                     )
                     visibleState.direction == CallDirection.Incoming && visibleState.phase == CallPhase.Ringing -> {
                         val invite = incomingInvite

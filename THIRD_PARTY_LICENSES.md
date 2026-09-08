@@ -35,6 +35,7 @@ provides them.
 | --- | --- | --- | --- |
 | AndroidX libraries | Compose BOM 2026.08.00 and resolved runtime dependencies | [source](https://android.googlesource.com/platform/frameworks/support/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
 | AndroidX ExifInterface | 1.4.2 | [source](https://android.googlesource.com/platform/frameworks/support/+/androidx-main/exifinterface/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| Bouncy Castle (`bcprov-jdk18on`) | 1.85.2 | [source](https://github.com/bcgit/bc-java) | [MIT](https://www.bouncycastle.org/licence.html) |
 | Gson | 2.14.0 | [source](https://github.com/google/gson/tree/gson-parent-2.14.0) | [Apache-2.0](https://github.com/google/gson/blob/gson-parent-2.14.0/LICENSE) |
 | Google Tink | 1.23.0 | [source](https://github.com/tink-crypto/tink-java/tree/v1.23.0) | [Apache-2.0](https://github.com/tink-crypto/tink-java/blob/v1.23.0/LICENSE) |
 | Error Prone annotations | 2.48.0 | [source](https://github.com/google/error-prone/tree/v2.48.0) | [Apache-2.0](https://github.com/google/error-prone/blob/v2.48.0/COPYING) |
@@ -54,6 +55,9 @@ provides them.
 | UnifiedPush embedded FCM distributor | 3.1.0 | [source](https://codeberg.org/UnifiedPush/android-embedded_fcm_distributor/src/tag/3.1.0) | [LGPL-2.1 in source](https://codeberg.org/UnifiedPush/android-embedded_fcm_distributor/src/tag/3.1.0/LICENSE); Apache-2.0 in published metadata (see below) |
 | WebRTC SDK Android wrapper | 150.7871.01 | [source](https://github.com/webrtc-sdk/android/tree/v150.7871.01) | [MIT](https://github.com/webrtc-sdk/android/blob/v150.7871.01/LICENSE) |
 | WebRTC and bundled native components | 150.7871.01 | [source](https://github.com/webrtc-sdk/android/tree/v150.7871.01) | [upstream license bundle](https://github.com/webrtc-sdk/android/blob/v150.7871.01/Licenses/WEBRTC.md) |
+
+Bouncy Castle's MIT license is included in the APK as
+`META-INF/LICENSE.md`.
 
 UnifiedPush embedded FCM distributor 3.1.0 has conflicting upstream license
 information: its `LICENSE` contains LGPL 2.1, while its

@@ -5,8 +5,20 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 import org.webrtc.IceCandidate
 import org.webrtc.VideoTrack
+import org.webrtc.PeerConnection
 
 class PeerConnectionObserverTest {
+    @Test
+    fun iceConnectionDoesNotReportDtlsTransportConnected() {
+        val transport = mutableListOf<PeerConnection.PeerConnectionState>()
+        val observer = PeerConnectionObserver(onTransportConnectionChange = transport::add)
+        observer.onIceConnectionChange(PeerConnection.IceConnectionState.CONNECTED)
+        assertEquals(emptyList<PeerConnection.PeerConnectionState>(), transport)
+        observer.onConnectionChange(PeerConnection.PeerConnectionState.CONNECTED)
+        observer.onConnectionChange(PeerConnection.PeerConnectionState.FAILED)
+        assertEquals(listOf(PeerConnection.PeerConnectionState.CONNECTED, PeerConnection.PeerConnectionState.FAILED), transport)
+    }
+
     @Test
     fun reportsRemovedIceCandidatesAsData() {
         var removed = emptyList<IceCandidateData>()

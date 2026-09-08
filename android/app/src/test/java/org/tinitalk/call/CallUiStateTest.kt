@@ -76,6 +76,22 @@ class CallUiStateTest {
     }
 
     @Test
+    fun securityStateUpdatesOnlyItsCurrentCall() {
+        val current = key("current-call")
+        CallUiStateStore.begin(current, CallPeer("Alice"), CallDirection.Outgoing, CallPhase.Active)
+
+        CallUiStateStore.setSecurity(
+            key("stale-call"),
+            CallSecurityState.Failed(CallSecurityFailureReason.ExchangeTimeout),
+        )
+        assertEquals(CallSecurityState.Establishing, CallUiStateStore.snapshot().security)
+        CallUiStateStore.setSecurity(current, CallSecurityState.Ready("4821 7034 1596"))
+
+        assertEquals(CallSecurityState.Ready("4821 7034 1596"), CallUiStateStore.snapshot().security)
+        CallUiStateStore.reset()
+    }
+
+    @Test
     fun cancelledOutgoingCallIsNotTurnedBackIntoConnecting() {
         val address = ContactAddress.of("https://example.com", "bob")
         val ended = CallUiState(

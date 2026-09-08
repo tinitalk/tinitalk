@@ -83,6 +83,9 @@ import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CameraFacing
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.call.CallTransportRoute
+import org.tinitalk.call.CallSecurityFailureReason
+import org.tinitalk.call.CallSecurityState
+import org.tinitalk.call.CallSecurityUnavailableReason
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.telecom.AudioEndpoint
@@ -115,6 +118,7 @@ fun ActiveCallScreen(
     onEnd: () -> Unit,
     onShareScreen: () -> Unit = {},
     onStopSharing: () -> Unit = {},
+    security: CallSecurityState = CallSecurityState.Establishing,
 ) {
     var routePickerVisible by remember { mutableStateOf(false) }
     var confirmSharing by remember(videoState.callKey) { mutableStateOf(false) }
@@ -206,6 +210,7 @@ fun ActiveCallScreen(
                 status = status,
                 statusColor = statusColor,
                 transportRoute = transportRoute,
+                security = security,
                 muted = muted,
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
@@ -289,6 +294,143 @@ fun ActiveCallScreen(
 }
 
 @Composable
+private fun SecurityCodePanel(
+    security: CallSecurityState,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    var detailsVisible by remember { mutableStateOf(false) }
+    val accent = when (security) {
+        is CallSecurityState.Unavailable -> Color(0xFFFFCA6A)
+        is CallSecurityState.Failed -> CallRejectRed
+        CallSecurityState.Establishing -> Color.White.copy(alpha = 0.7f)
+        is CallSecurityState.Ready -> BrandGold
+    }
+    Column(
+        modifier = modifier
+            .testTag("security_code_panel")
+            .widthIn(max = 360.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.Black.copy(alpha = 0.48f))
+            .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+            .clickable(enabled = security != CallSecurityState.Establishing) { detailsVisible = true }
+            .padding(horizontal = 14.dp, vertical = if (compact) 6.dp else 9.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        when (security) {
+            is CallSecurityState.Unavailable -> Text(
+                "Не удаётся подтвердить безопасность соединения",
+                color = accent,
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            CallSecurityState.Establishing -> Text(
+                "Проверяем безопасность соединения…",
+                color = accent,
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            is CallSecurityState.Failed -> Text(
+                "Соединение небезопасно",
+                color = accent,
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            is CallSecurityState.Ready -> Text(
+                security.code,
+                modifier = Modifier.testTag("security_code"),
+                color = accent,
+                fontSize = if (compact) 18.sp else 22.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+                maxLines = 1,
+            )
+        }
+    }
+    if (detailsVisible) SecurityCodeDetailsDialog(security) { detailsVisible = false }
+}
+
+@Composable
+private fun SecurityCodeDetailsDialog(
+    security: CallSecurityState,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        modifier = Modifier.testTag("security_code_dialog"),
+        onDismissRequest = onDismiss,
+        icon = if (security is CallSecurityState.Failed) {
+            {
+                Icon(
+                    painter = painterResource(R.drawable.ic_server_incompatible),
+                    contentDescription = "Предупреждение об опасности",
+                    modifier = Modifier
+                        .size(56.dp)
+                        .testTag("security_code_error_icon"),
+                    tint = CallRejectRed,
+                )
+            }
+        } else {
+            null
+        },
+        title = { Text(securityDetailsTitle(security), textAlign = TextAlign.Center) },
+        text = { Text(securityDetailsText(security)) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Понятно") } },
+    )
+}
+
+private fun securityDetailsTitle(security: CallSecurityState): String = when (security) {
+    CallSecurityState.Establishing -> "Проверяем безопасность соединения"
+    is CallSecurityState.Ready -> "Код безопасности"
+    is CallSecurityState.Unavailable -> "Не удаётся подтвердить безопасность"
+    is CallSecurityState.Failed -> "Соединение небезопасно"
+}
+
+private fun securityDetailsText(security: CallSecurityState): String = when (security) {
+    CallSecurityState.Establishing ->
+        "Телефоны обмениваются временными ключами и проверяют сертификаты WebRTC."
+    is CallSecurityState.Ready ->
+        "Сравните все 12 цифр с собеседником голосом. Если коды совпадают, соединение защищено. " +
+            "Если отличается хотя бы одна цифра, завершите звонок."
+    is CallSecurityState.Unavailable -> when (security.reason) {
+        CallSecurityUnavailableReason.ServerUnsupported ->
+            "Сервер TiniTalk устарел. Приложение не может подтвердить безопасность этого звонка."
+        CallSecurityUnavailableReason.PeerUnsupported ->
+            "Приложение собеседника устарело. Безопасность этого звонка нельзя подтвердить."
+    }
+    is CallSecurityState.Failed -> securityFailureText(security.reason) +
+        "\n\nЗавершите звонок и не сообщайте конфиденциальные данные."
+}
+
+private fun securityFailureText(reason: CallSecurityFailureReason): String = when (reason) {
+    CallSecurityFailureReason.ExchangeTimeout ->
+        "Проверка безопасности не завершилась в отведённое время. Звонок небезопасен."
+    CallSecurityFailureReason.TransportTimeout ->
+        "Защищённое соединение не установилось в отведённое время. Звонок небезопасен."
+    CallSecurityFailureReason.TransportFailed ->
+        "Не удалось установить защищённое соединение. Звонок небезопасен."
+    CallSecurityFailureReason.UnexpectedMessage ->
+        "Данные проверки пришли в неправильном порядке или были повреждены. Звонок небезопасен."
+    CallSecurityFailureReason.InvalidFingerprint ->
+        "Сертификат соединения содержит ошибку. Звонок небезопасен."
+    CallSecurityFailureReason.FingerprintMismatch ->
+        "Сертификат соединения не совпал с данными проверки. Звонок небезопасен."
+    CallSecurityFailureReason.CommitmentMismatch ->
+        "Данные проверки изменились после начала звонка. Звонок небезопасен."
+    CallSecurityFailureReason.FingerprintChanged ->
+        "Сертификат соединения изменился во время звонка. Звонок небезопасен."
+    CallSecurityFailureReason.InvalidPublicKey ->
+        "Получен неправильный ключ безопасности. Звонок небезопасен."
+    CallSecurityFailureReason.InternalError ->
+        "Произошла ошибка проверки безопасности. Звонок небезопасен."
+}
+
+@Composable
 private fun ScreenShareActionOverlay(
     requested: Boolean,
     enabled: Boolean,
@@ -357,6 +499,7 @@ private fun AudioActiveCallScreen(
     status: String,
     statusColor: Color,
     transportRoute: CallTransportRoute,
+    security: CallSecurityState,
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
@@ -374,7 +517,7 @@ private fun AudioActiveCallScreen(
             videoAllowed = videoAllowed,
             videoModeActive = false,
             widthDp = (maxWidth.value - 40f).coerceAtLeast(0f),
-            heightDp = maxHeight.value,
+            heightDp = (maxHeight.value - SecurityPanelReservedHeightDp).coerceAtLeast(0f),
             fontScale = LocalDensity.current.fontScale,
             cameraActionVisible = cameraActionVisible,
         )
@@ -387,10 +530,12 @@ private fun AudioActiveCallScreen(
                 status = status,
                 statusColor = statusColor,
                 transportRoute = transportRoute,
+                security = security,
                 muted = muted,
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
                 layout = layout,
+                shortScreen = maxHeight.value < ShortAudioScreenHeightDp,
                 videoAllowed = videoAllowed,
                 cameraRequested = cameraRequested,
                 onMute = onMute,
@@ -408,6 +553,7 @@ private fun AudioActiveCallScreen(
                 status = status,
                 statusColor = statusColor,
                 transportRoute = transportRoute,
+                security = security,
                 muted = muted,
                 currentEndpoint = currentEndpoint,
                 availableEndpoints = availableEndpoints,
@@ -433,6 +579,7 @@ private fun RegularAudioActiveCallScreen(
     status: String,
     statusColor: Color,
     transportRoute: CallTransportRoute,
+    security: CallSecurityState,
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
@@ -451,6 +598,12 @@ private fun RegularAudioActiveCallScreen(
         contactAddress = contactAddress,
         fallbackLogin = fallbackLogin,
         detail = durationText,
+        detailAccessory = {
+            SecurityCodePanel(
+                security = security,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        },
         statusColor = statusColor,
         statusAccessory = { CallTransportRouteIndicator(transportRoute) },
         prominentAvatar = true,
@@ -487,10 +640,12 @@ private fun ConstrainedAudioActiveCallScreen(
     status: String,
     statusColor: Color,
     transportRoute: CallTransportRoute,
+    security: CallSecurityState,
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
     layout: CallControlLayout,
+    shortScreen: Boolean,
     videoAllowed: Boolean,
     cameraRequested: Boolean,
     onMute: (Boolean) -> Unit,
@@ -499,7 +654,11 @@ private fun ConstrainedAudioActiveCallScreen(
     onCamera: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
-    val avatarSize = prominentCallAvatarSize(LocalDensity.current.fontScale)
+    val avatarSize = if (shortScreen) {
+        ShortAudioScreenAvatarSize
+    } else {
+        prominentCallAvatarSize(LocalDensity.current.fontScale)
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -538,6 +697,11 @@ private fun ConstrainedAudioActiveCallScreen(
                 text = durationText,
                 color = Color.White.copy(alpha = 0.78f),
                 style = MaterialTheme.typography.titleSmall,
+            )
+            SecurityCodePanel(
+                security = security,
+                compact = true,
+                modifier = Modifier.padding(top = 6.dp),
             )
         }
         Column(
@@ -1047,6 +1211,9 @@ private const val VideoControlsFadeInMillis = 180
 private const val VideoControlsFadeOutMillis = 220
 private const val VideoControlsSlideMillis = 260
 private const val VideoPreviewSnapMillis = 220
+private const val SecurityPanelReservedHeightDp = 72f
+private const val ShortAudioScreenHeightDp = 640f
+private val ShortAudioScreenAvatarSize = 120.dp
 private const val SelfPreviewPreferencesName = "call_ui"
 private const val SelfPreviewCornerKey = "self_preview_corner"
 private val SelfPreviewEdgeSpacing = 12.dp

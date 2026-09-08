@@ -14,9 +14,11 @@ open class PeerConnectionObserver(
     private val onLocalIceCandidatesRemoved: (List<IceCandidateData>) -> Unit = {},
     private val onConnectionChange: (PeerConnection.IceConnectionState) -> Unit = {},
     private val onRemoteVideoTrack: (VideoTrack) -> Unit = {},
+    private val onTransportConnectionChange: (PeerConnection.PeerConnectionState) -> Unit = {},
 ) : PeerConnection.Observer {
     override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
     override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) = onConnectionChange(state)
+    override fun onConnectionChange(state: PeerConnection.PeerConnectionState) = onTransportConnectionChange(state)
     override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
     override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
 

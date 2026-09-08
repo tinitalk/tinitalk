@@ -19,10 +19,16 @@ data class SignalEvent(
         return raw
     }
 
-    fun validate() {
+    fun validate() = validate(validateSASPayload = true)
+
+    private fun validate(validateSASPayload: Boolean) {
         require(id.looksLikeUuid()) { "id must be a UUID" }
         require(callId.looksLikeUuid()) { "call_id must be a UUID" }
         require(type in allowedTypes) { "unknown event type" }
+        requireNotNull(payload) { "payload must be an object" }
+        // Incoming SAS payloads are checked by the handshake so errors invalidate
+        // verification without being treated as fatal signaling failures.
+        if (!validateSASPayload && type.startsWith("rtc.sas.")) return
         if (type == "rtc.video" || type == "rtc.screen") {
             val enabled = payload["enabled"]
             require(enabled != null && enabled.isJsonPrimitive && enabled.asJsonPrimitive.isBoolean) {
@@ -76,9 +82,13 @@ data class SignalEvent(
             "rtc.sas.reveal",
         )
 
-        fun decode(raw: String): SignalEvent {
+        fun decode(raw: String): SignalEvent = decode(raw, validateSASPayload = true)
+
+        internal fun decodeForDelivery(raw: String): SignalEvent = decode(raw, validateSASPayload = false)
+
+        private fun decode(raw: String, validateSASPayload: Boolean): SignalEvent {
             require(raw.toByteArray(Charsets.UTF_8).size <= MAX_EVENT_BYTES) { "event too large" }
-            return gson.fromJson(raw, SignalEvent::class.java).also { it.validate() }
+            return gson.fromJson(raw, SignalEvent::class.java).also { it.validate(validateSASPayload) }
         }
     }
 }

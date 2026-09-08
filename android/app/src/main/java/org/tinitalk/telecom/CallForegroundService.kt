@@ -526,6 +526,11 @@ class CallForegroundService : Service() {
                             it.onRemoteVideoTrack(callId, track)
                         }
                     },
+                    onTransportStateChanged = { state ->
+                        routeMediaCallback {
+                            if (statsSession === mediaStatsSession) it.onTransportConnection(callId, state)
+                        }
+                    },
                     cameraCallbacks = CameraMediaCallbacks(
                         onLocalTrackChanged = { track ->
                             routeMediaCallback(onDropped = { track?.close() }) {
@@ -614,6 +619,13 @@ class CallForegroundService : Service() {
             onScreenReleased = {
                 synchronized(foregroundLock) {
                     if (media === newMedia) updateForegroundType(screenSending = false)
+                }
+            },
+            onSecurityStateChanged = { callId, state ->
+                handler.post {
+                    if (!finishing && media === newMedia) {
+                        CallUiStateStore.setSecurity(AccountCallKey(owner.key.accountId, callId), state)
+                    }
                 }
             },
         )
@@ -796,6 +808,7 @@ class CallForegroundService : Service() {
                     )
                     telecomCallKey = key
                     outgoingPeer = peer
+                    dispatchMedia { it.prepareSecurityCode(callId, callee, localIsCaller = true) }
                     CallUiStateStore.begin(
                         key,
                         peer,
@@ -829,6 +842,9 @@ class CallForegroundService : Service() {
                     CallPhase.Ringing,
                 )
                 CallUiStateStore.setAudioEndpoints(invite.key, CallAudioState.snapshot())
+                invite.callerLogin?.let { caller ->
+                    dispatchMedia { it.prepareSecurityCode(invite.callId, caller, localIsCaller = false) }
+                }
                 call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
@@ -1539,6 +1555,7 @@ internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: St
     failure.code == "busy" -> CallEndReason.Busy
     failure.code == "not_in_contacts" -> CallEndReason.NotInContacts
     failure.code?.startsWith("screen_share_") == true -> null
+    failure.code?.startsWith("call_sas_") == true -> null
     failure.code == "ice_rate_limited" ||
         failure.code == "ice_restart_rate_limited" ||
         failure.code == "ice_restart_request_rate_limited" -> null
