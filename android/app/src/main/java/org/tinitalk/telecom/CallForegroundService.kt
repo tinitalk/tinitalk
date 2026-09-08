@@ -440,7 +440,6 @@ class CallForegroundService : Service() {
         val newCoordinator = CallCoordinator(
             session.login,
             newSocket,
-            serverFeatures = session.features,
             accountId = owner.key.accountId,
         )
         val newMediaDispatcher = CallMediaDispatcher()

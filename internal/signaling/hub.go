@@ -388,12 +388,14 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 		var payload struct {
 			SupportsVideo  bool `json:"supports_video"`
 			SupportsScreen bool `json:"supports_exclusive_screen_sharing"`
+			SupportsSAS    bool `json:"supports_call_sas"`
 		}
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
 		c.calleeSupportsVideo = payload.SupportsVideo
 		c.calleeSupportsScreen = payload.SupportsScreen
+		c.calleeSupportsSAS = payload.SupportsSAS
 		c.calleeDeviceID = senderDeviceID
 	}
 	if event.Type == "rtc.ice" {
@@ -483,6 +485,7 @@ func (h *Hub) deliverICEConfig(c *call, restartID string) {
 			payload = h.iceConfig.ICEConfig(c.id, participant)
 		}
 		payload = withVideoAllowed(payload, c.videoAllowed())
+		payload = withSASAllowed(payload, c.sasAllowed())
 		if c.screenAllowed() {
 			var config map[string]any
 			if json.Unmarshal(payload, &config) == nil {
@@ -507,6 +510,23 @@ func (h *Hub) deliverICEConfig(c *call, restartID string) {
 			h.deliver(participant, h.next(c, event, participant))
 		}
 	}
+}
+
+func withSASAllowed(payload json.RawMessage, sasAllowed bool) json.RawMessage {
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &config); err != nil {
+		return payload
+	}
+	encoded, err := json.Marshal(sasAllowed)
+	if err != nil {
+		return payload
+	}
+	config["call_sas_allowed"] = encoded
+	updated, err := json.Marshal(config)
+	if err != nil {
+		return payload
+	}
+	return updated
 }
 
 func withVideoAllowed(payload json.RawMessage, videoAllowed bool) json.RawMessage {
@@ -568,6 +588,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 		SupportsCrossCall bool   `json:"supports_cross_call"`
 		SupportsVideo     bool   `json:"supports_video"`
 		SupportsScreen    bool   `json:"supports_exclusive_screen_sharing"`
+		SupportsSAS       bool   `json:"supports_call_sas"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return err
@@ -588,7 +609,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 				existing.caller == payload.CalleeID &&
 				existing.callee == sender &&
 				existing.supportsCrossCall && payload.SupportsCrossCall {
-				return h.acceptCrossed(existing, senderDeviceID, event, payload.SupportsVideo, payload.SupportsScreen)
+				return h.acceptCrossed(existing, senderDeviceID, event, payload.SupportsVideo, payload.SupportsScreen, payload.SupportsSAS)
 			}
 		}
 		return ErrCalleeBusy
@@ -636,6 +657,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 		supportsCrossCall:    payload.SupportsCrossCall,
 		callerSupportsVideo:  payload.SupportsVideo,
 		callerSupportsScreen: payload.SupportsScreen,
+		callerSupportsSAS:    payload.SupportsSAS,
 	}
 	c.remember(event.ID)
 	h.calls[event.CallID] = c
@@ -671,7 +693,7 @@ func (h *Hub) checkCallStartRate(user string) error {
 	return nil
 }
 
-func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Event, calleeSupportsVideo, calleeSupportsScreen bool) error {
+func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Event, calleeSupportsVideo, calleeSupportsScreen, calleeSupportsSAS bool) error {
 	if h.history != nil {
 		if err := h.history.MarkCallAccepted(c.id); err != nil {
 			return err
@@ -680,6 +702,7 @@ func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Even
 	c.remember(source.ID)
 	c.calleeSupportsVideo = calleeSupportsVideo
 	c.calleeSupportsScreen = calleeSupportsScreen
+	c.calleeSupportsSAS = calleeSupportsSAS
 	c.calleeDeviceID = calleeDeviceID
 	h.callAliases[source.CallID] = c.id
 	c.aliases = append(c.aliases, source.CallID)
@@ -693,7 +716,11 @@ func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Even
 	accept.CallID = c.id
 	accept.Type = "call.accept"
 	accept.SentAt = h.now().UnixMilli()
-	accept.Payload = json.RawMessage(`{"crossed":true,"offerer":true}`)
+	callerPayload := map[string]any{"crossed": true, "offerer": true}
+	if c.calleeSupportsSAS {
+		callerPayload["supports_call_sas"] = true
+	}
+	accept.Payload, _ = json.Marshal(callerPayload)
 	var callerEvent DeliveredEvent
 	if c.devicesBound() {
 		callerEvent = h.nextDevice(c, accept, c.caller, c.callerDeviceID)
@@ -702,7 +729,11 @@ func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Even
 		callerEvent = h.next(c, accept, c.caller)
 		h.deliver(c.caller, callerEvent)
 	}
-	accept.Payload = json.RawMessage(`{"crossed":true,"offerer":false}`)
+	calleePayload := map[string]any{"crossed": true, "offerer": false}
+	if c.callerSupportsSAS {
+		calleePayload["supports_call_sas"] = true
+	}
+	accept.Payload, _ = json.Marshal(calleePayload)
 	var calleeEvent DeliveredEvent
 	if c.devicesBound() {
 		calleeEvent = h.nextDevice(c, accept, c.callee, c.calleeDeviceID)

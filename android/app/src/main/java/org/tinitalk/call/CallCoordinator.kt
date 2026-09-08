@@ -27,11 +27,9 @@ class CallCoordinator(
     private val self: String,
     private val signal: SignalClient,
     private val ids: EventIds = UuidEventIds(),
-    serverFeatures: Set<String> = emptySet(),
     accountId: AccountId = AccountId("single-account"),
 ) {
     private val machine = CallStateMachine(accountId)
-    private val supportsVideo = "video_1to1" in serverFeatures
     private var connectedCallId: String? = null
 
     fun snapshot(): CallSnapshot = machine.snapshot()
@@ -41,10 +39,9 @@ class CallCoordinator(
         val payload = JsonObject().apply {
             addProperty("callee_id", callee)
             addProperty("supports_cross_call", true)
-            if (supportsVideo) {
-                addProperty("supports_video", true)
-                addProperty("supports_exclusive_screen_sharing", true)
-            }
+            addProperty("supports_video", true)
+            addProperty("supports_exclusive_screen_sharing", true)
+            addProperty("supports_call_sas", true)
         }
         signal.send(event(callId, "call.start", payload))
         machine.transition(CallPhase.Connecting, callId)
@@ -53,10 +50,9 @@ class CallCoordinator(
     fun accept() {
         val callId = requireNotNull(machine.snapshot().callId) { "no call" }
         val payload = JsonObject().apply {
-            if (supportsVideo) {
-                addProperty("supports_video", true)
-                addProperty("supports_exclusive_screen_sharing", true)
-            }
+            addProperty("supports_video", true)
+            addProperty("supports_exclusive_screen_sharing", true)
+            addProperty("supports_call_sas", true)
         }
         signal.send(event(callId, "call.accept", payload))
         machine.transition(CallPhase.Active, callId)

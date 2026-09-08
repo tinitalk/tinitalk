@@ -315,6 +315,47 @@ func TestHubNegotiatesVideoCapability(t *testing.T) {
 	}
 }
 
+func TestHubNegotiatesSASCapability(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		callerSupports bool
+		calleeSupports bool
+		wantSAS        bool
+	}{
+		{name: "old old"},
+		{name: "new old", callerSupports: true},
+		{name: "old new", calleeSupports: true},
+		{name: "new new", callerSupports: true, calleeSupports: true, wantSAS: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hub := NewHub(NoopNotifier{})
+			alice := connectDevice(t, hub, "alice", "phone")
+			bob := connectDevice(t, hub, "bob", "phone")
+
+			startPayload := map[string]any{"callee_id": "bob"}
+			if test.callerSupports {
+				startPayload["supports_call_sas"] = true
+			}
+			start := event(uuid(2211), uuid(2212), "call.start", startPayload)
+			if err := hub.HandleClient(alice, start); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, bob)
+
+			acceptPayload := map[string]any{}
+			if test.calleeSupports {
+				acceptPayload["supports_call_sas"] = true
+			}
+			if err := hub.HandleClient(bob, event(uuid(2213), start.CallID, "call.accept", acceptPayload)); err != nil {
+				t.Fatal(err)
+			}
+			_ = next(t, alice) // call.accept
+			assertSASAllowed(t, next(t, alice).Event, test.wantSAS)
+			assertSASAllowed(t, next(t, bob).Event, test.wantSAS)
+		})
+	}
+}
+
 func TestHubNegotiatesVideoCapabilityForCrossedCalls(t *testing.T) {
 	for _, test := range []struct {
 		name           string
@@ -1356,6 +1397,19 @@ func assertVideoAllowed(t *testing.T, event protocol.Event, want bool) {
 	}
 	if got != want {
 		t.Fatalf("video_allowed = %t, want %t", got, want)
+	}
+}
+
+func assertSASAllowed(t *testing.T, event protocol.Event, want bool) {
+	t.Helper()
+	var payload struct {
+		Allowed bool `json:"call_sas_allowed"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Allowed != want {
+		t.Fatalf("call_sas_allowed = %t, want %t; payload = %s", payload.Allowed, want, event.Payload)
 	}
 }
 
