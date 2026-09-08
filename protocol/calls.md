@@ -83,14 +83,16 @@ Both clients calculate X25519 and derive eight bytes with HKDF-SHA256. The salt
 is SHA-256 over domain `tinitalk-call-sas-v1/salt` and `call_id`. HKDF info uses
 domain `tinitalk-call-sas-v1/code`, followed by `call_id`, caller login, callee
 login, caller and callee public keys, and caller and callee fingerprints in
-that order. The eight bytes are interpreted as an unsigned big-endian integer,
-reduced modulo 10^12 and displayed as three four-digit groups.
+that order. The eight bytes are interpreted as an unsigned big-endian integer
+and reduced modulo 10^12. Android displays this value as five base-256 digits,
+most significant first, using the fixed table in `CallSecurityEmoji.kt` and the
+bundled Twemoji subset font. This mapping preserves every distinct numeric code.
 
 The code appears only after the aggregate PeerConnection state reports connected
 (including DTLS), not merely ICE connectivity. It is hidden while transport is
 disconnected and is restored only after transport reconnects with unchanged
 fingerprints. A transport failure invalidates the code. Users must compare all
-12 digits in order; the app does not confirm a match automatically. A timeout,
+five emoji in order; the app does not confirm a match automatically. A timeout,
 malformed exchange or fingerprint change invalidates verification. Once SAS has started,
 subsequent configurations cannot disable it or clear a security failure. A crossed
 call adopts the server's canonical call ID before starting the exchange; subsequent

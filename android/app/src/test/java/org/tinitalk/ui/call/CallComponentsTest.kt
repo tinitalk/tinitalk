@@ -55,13 +55,14 @@ class CallComponentsTest {
         val activity = renderSecurity(CallSecurityState.Ready("4821 7034 1596"))
 
         composeRule.onNodeWithTag("security_code", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithText("🏰 🍆 🧵 🛷 🧬").assertExists()
         composeRule.onNodeWithText("Сверьте весь код голосом").assertDoesNotExist()
         composeRule.onAllNodesWithTag("security_code_confirm").assertCountEquals(0)
         composeRule.onNodeWithTag("security_code_panel").performClick()
         composeRule.onNodeWithText("Код безопасности").assertExists()
         composeRule.onNodeWithText(
-            "Сравните все 12 цифр с собеседником голосом. Если коды совпадают, соединение защищено. " +
-                "Если отличается хотя бы одна цифра, завершите звонок.",
+            "Сравните все 5 эмодзи с собеседником. Если они совпадают, соединение защищено. " +
+                "Если отличается хотя бы один эмодзи, завершите звонок.",
         ).assertExists()
         activity.pause().stop().destroy()
     }

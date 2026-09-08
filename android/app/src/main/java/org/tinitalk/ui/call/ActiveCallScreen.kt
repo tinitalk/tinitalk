@@ -69,6 +69,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,6 +88,7 @@ import org.tinitalk.call.CallTransportRoute
 import org.tinitalk.call.CallSecurityFailureReason
 import org.tinitalk.call.CallSecurityState
 import org.tinitalk.call.CallSecurityUnavailableReason
+import org.tinitalk.call.CallSecurityEmoji
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.telecom.AudioEndpoint
@@ -96,6 +99,8 @@ import org.tinitalk.ui.theme.CallRejectRed
 import org.tinitalk.ui.theme.BrandGold
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+
+private val SecurityEmojiFont = FontFamily(Font(R.font.twemoji_security_256))
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -306,51 +311,63 @@ private fun SecurityCodePanel(
         CallSecurityState.Establishing -> Color.White.copy(alpha = 0.7f)
         is CallSecurityState.Ready -> BrandGold
     }
+    val messageStyle = MaterialTheme.typography.titleMedium.copy(
+        fontSize = if (compact) 16.sp else 18.sp,
+        lineHeight = if (compact) 20.sp else 22.sp,
+        fontWeight = FontWeight.SemiBold,
+    )
     Column(
         modifier = modifier
             .testTag("security_code_panel")
             .widthIn(max = 360.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.Black.copy(alpha = 0.48f))
-            .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+            .fillMaxWidth()
             .clickable(enabled = security != CallSecurityState.Establishing) { detailsVisible = true }
-            .padding(horizontal = 14.dp, vertical = if (compact) 6.dp else 9.dp),
+            .padding(horizontal = 8.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         when (security) {
             is CallSecurityState.Unavailable -> Text(
                 "Не удаётся подтвердить безопасность соединения",
+                modifier = Modifier.fillMaxWidth(),
                 color = accent,
-                style = MaterialTheme.typography.labelMedium,
+                style = messageStyle,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             CallSecurityState.Establishing -> Text(
                 "Проверяем безопасность соединения…",
+                modifier = Modifier.fillMaxWidth(),
                 color = accent,
-                style = MaterialTheme.typography.labelMedium,
+                style = messageStyle,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             is CallSecurityState.Failed -> Text(
                 "Соединение небезопасно",
+                modifier = Modifier.fillMaxWidth(),
                 color = accent,
-                style = MaterialTheme.typography.labelMedium,
+                style = messageStyle,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            is CallSecurityState.Ready -> Text(
-                security.code,
-                modifier = Modifier.testTag("security_code"),
-                color = accent,
-                fontSize = if (compact) 18.sp else 22.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp,
-                maxLines = 1,
-            )
+            is CallSecurityState.Ready -> {
+                val emoji = remember(security.code) {
+                    CallSecurityEmoji.fromNumericCode(security.code).joinToString(" ")
+                }
+                Text(
+                    emoji,
+                    modifier = Modifier
+                        .testTag("security_code")
+                        .semantics { contentDescription = "Код безопасности: $emoji" },
+                    color = Color.White,
+                    fontFamily = SecurityEmojiFont,
+                    fontSize = if (compact) 26.sp else 29.sp,
+                    maxLines = 1,
+                )
+            }
         }
     }
     if (detailsVisible) SecurityCodeDetailsDialog(security) { detailsVisible = false }
@@ -395,8 +412,8 @@ private fun securityDetailsText(security: CallSecurityState): String = when (sec
     CallSecurityState.Establishing ->
         "Телефоны обмениваются временными ключами и проверяют сертификаты WebRTC."
     is CallSecurityState.Ready ->
-        "Сравните все 12 цифр с собеседником голосом. Если коды совпадают, соединение защищено. " +
-            "Если отличается хотя бы одна цифра, завершите звонок."
+        "Сравните все 5 эмодзи с собеседником. Если они совпадают, соединение защищено. " +
+            "Если отличается хотя бы один эмодзи, завершите звонок."
     is CallSecurityState.Unavailable -> when (security.reason) {
         CallSecurityUnavailableReason.ServerUnsupported ->
             "Сервер TiniTalk устарел. Приложение не может подтвердить безопасность этого звонка."
