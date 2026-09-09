@@ -17,6 +17,7 @@ import org.tinitalk.contactPeerFromIntent
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountPeerKey
+import org.tinitalk.data.AccountRecord
 import org.tinitalk.data.Session
 import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.CallSessionBinding
@@ -605,6 +606,64 @@ class IncomingCallNotifierTest {
         val manager = context.getSystemService(NotificationManager::class.java)
         assertEquals(2, missedChildren(manager).size)
         assertEquals(2, missedSummary(manager).number)
+    }
+
+    @Test
+    fun missedNotificationRetainsServerStartThroughIncomingHandoffs() {
+        val context = RuntimeEnvironment.getApplication()
+        val account = AccountRecord(AccountId("missed-start"), Session("https://a.example", "alice", "token"))
+        val notifier = IncomingCallNotifier(context)
+        notifier.syncMissedAccounts(listOf(account.id))
+        val incoming = controller()
+        val now = Instant.now()
+        val started = now.minusSeconds(5)
+        for (ttl in listOf(30L, 45L)) {
+            val invite = requireNotNull(IncomingPushPayload.parse(mapOf(
+                "type" to "incoming_call",
+                "call_id" to "start-$ttl",
+                "caller_login" to "bob-$ttl",
+                "caller" to "bob-$ttl",
+                "started_at" to started.toString(),
+                "expires_at" to started.plusSeconds(ttl).toString(),
+            ), account, now))
+            assertTrue(incoming.save(context, invite))
+            val restored = requireNotNull(incoming.load(context)).invite
+            val action = incoming.actionIntent(context, IncomingCallController.ActionReject, restored)
+            val handedOff = requireNotNull(IncomingCallController.inviteFrom(Shadows.shadowOf(action).savedIntent))
+
+            notifier.showAccountMissedIfAbsent(account.id, handedOff)
+
+            val child = childFor(context.getSystemService(NotificationManager::class.java), "bob-$ttl")
+            assertEquals("Wrong start with $ttl-second expiry", started.epochSecond * 1_000, child.`when`)
+        }
+    }
+
+    @Test
+    fun legacyMissedNotificationDoesNotInferStartFromExpiry() {
+        val context = RuntimeEnvironment.getApplication()
+        val account = AccountRecord(AccountId("legacy-missed-start"), Session("https://a.example", "alice", "token"))
+        val notifier = IncomingCallNotifier(context)
+        notifier.syncMissedAccounts(listOf(account.id))
+        for (ttl in listOf(30L, 45L)) {
+            for (startedAt in listOf(null, "invalid")) {
+                val before = Instant.now().epochSecond * 1_000
+                val data = mutableMapOf(
+                    "type" to "incoming_call",
+                    "call_id" to "legacy-$ttl-$startedAt",
+                    "caller_login" to "bob-$ttl-$startedAt",
+                    "caller" to "bob-$ttl-$startedAt",
+                    "expires_at" to Instant.now().plusSeconds(ttl - 5).toString(),
+                )
+                startedAt?.let { data["started_at"] = it }
+                val invite = requireNotNull(IncomingPushPayload.parse(data, account))
+
+                notifier.showAccountMissedIfAbsent(account.id, invite)
+
+                val child = childFor(context.getSystemService(NotificationManager::class.java), "bob-$ttl-$startedAt")
+                val after = Instant.now().epochSecond * 1_000
+                assertTrue("Expiry shifted fallback time with $ttl seconds", child.`when` in before..after)
+            }
+        }
     }
 
     @Test

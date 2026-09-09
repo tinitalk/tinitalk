@@ -68,6 +68,7 @@ data class IncomingInvite(
     val expiresAt: Instant,
     val callerLogin: String? = null,
     val lastSeq: Long = 0,
+    val startedAt: Instant? = null,
 ) {
     val key: AccountCallKey get() = AccountCallKey(accountId, callId)
     val owner: AccountCallOwner get() = AccountCallOwner(key, sessionBinding)
@@ -748,7 +749,9 @@ class IncomingCallNotifier internal constructor(
         return listOfNotNull(
             inviteTarget?.let { invite ->
                 MissedCallTarget(
-                    occurredAt = invite.expiresAt.minusSeconds(IncomingCallTtlSeconds).epochSecond,
+                    // Older servers omit the start. Use the missed-call observation time
+                    // until history arrives instead of guessing the server's ringing TTL.
+                    occurredAt = (invite.startedAt ?: Instant.now()).epochSecond,
                     accountId = accountId,
                     latest = invite,
                     latestUnread = null,
@@ -1201,7 +1204,6 @@ class IncomingCallNotifier internal constructor(
         private const val MissedSummaryNotificationId = 12
         private const val MissedChildNotificationId = 13
         private const val MaxMissedSummaryLines = 5
-        private const val IncomingCallTtlSeconds = 30L
     }
 }
 
@@ -1226,6 +1228,7 @@ object IncomingPushPayload {
             callerLogin = data["caller_login"]?.takeIf(String::isNotBlank),
             expiresAt = expiresAt,
             lastSeq = data["last_seq"]?.toLongOrNull() ?: 0,
+            startedAt = data["started_at"]?.let { runCatching { Instant.parse(it) }.getOrNull() },
         )
     }
 

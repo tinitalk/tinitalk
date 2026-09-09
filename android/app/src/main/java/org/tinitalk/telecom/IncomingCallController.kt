@@ -65,6 +65,7 @@ class IncomingCallController internal constructor(
                     .putString(ExtraCaller, invite.caller)
                     .putString(ExtraCallerLogin, invite.callerLogin)
                     .putString(ExtraExpiresAt, invite.expiresAt.toString())
+                    .putString(ExtraStartedAt, invite.startedAt?.toString())
                     .putLong(ExtraLastSeq, invite.lastSeq)
                     .putString(ExtraAction, action)
                     .putString(ExtraReplyCode, replyCode?.wireValue)
@@ -397,6 +398,7 @@ class IncomingCallController internal constructor(
                 expiresAt = expiresAt,
                 callerLogin = prefs.getString(ExtraCallerLogin, null),
                 lastSeq = prefs.getLong(ExtraLastSeq, 0),
+                startedAt = prefs.getString(ExtraStartedAt, null)?.let { runCatching { Instant.parse(it) }.getOrNull() },
             ),
             prefs.getString(ExtraAction, null),
             CallReplyCode.fromWire(prefs.getString(ExtraReplyCode, null)),
@@ -598,6 +600,7 @@ class IncomingCallController internal constructor(
         private const val ExtraCaller = "caller"
         private const val ExtraCallerLogin = "caller_login"
         private const val ExtraExpiresAt = "expires_at"
+        private const val ExtraStartedAt = "started_at"
         private const val ExtraLastSeq = "last_seq"
         private const val ExtraAction = "action"
         internal const val ExtraReplyCode = "reply_code"
@@ -626,6 +629,7 @@ class IncomingCallController internal constructor(
                 expiresAt = expiresAt,
                 callerLogin = intent.getStringExtra(ExtraCallerLogin),
                 lastSeq = intent.getLongExtra(ExtraLastSeq, 0),
+                startedAt = intent.getStringExtra(ExtraStartedAt)?.let { runCatching { Instant.parse(it) }.getOrNull() },
             )
         }
 
@@ -682,6 +686,7 @@ class IncomingCallController internal constructor(
                 .putExtra(ExtraCaller, invite.caller)
                 .putExtra(ExtraCallerLogin, invite.callerLogin)
                 .putExtra(ExtraExpiresAt, invite.expiresAt.toString())
+                .putExtra(ExtraStartedAt, invite.startedAt?.toString())
                 .putExtra(ExtraLastSeq, invite.lastSeq)
                 .putExtra(ExtraReplyCode, replyCode?.wireValue)
                 .putExtra(ExtraTerminalEventId, terminalEventId)

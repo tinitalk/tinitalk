@@ -70,6 +70,15 @@ clients show the localized reply. New clients treat absent or unrecognized reply
 codes as ordinary rejection. HTTP API 4 and WebSocket protocol 2 remain unchanged.
 Deploy the supporting server before updating clients.
 
+## Incoming push timestamps
+
+The `incoming_call` push includes `started_at` and `expires_at` as UTC RFC 3339
+timestamps with optional fractional seconds. Both use the server's call start,
+not the caller's clock. `started_at` is additive: older clients ignore it and
+new clients accept its absence from older servers. Clients must not infer the
+start by subtracting a fixed ringing duration from `expires_at`. Until call
+history is available, a missing start uses the time the missed call was observed.
+
 ## Call security code
 
 The optional `call_sas_v1` health feature protects a call against an active
