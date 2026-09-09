@@ -1,6 +1,8 @@
 package org.tinitalk.telecom
 
 import org.tinitalk.media.CancellableTask
+import org.tinitalk.call.SignalSendResult
+import java.util.concurrent.atomic.AtomicReference
 
 internal class TerminalSignalGate(
     private val timeoutMillis: Long,
@@ -29,6 +31,16 @@ internal class TerminalSignalGate(
             }
         }
         return settle
+    }
+
+    /** A timeout has no result. Legacy settlement must never be mistaken for an ACK. */
+    fun beginTracked(onReady: (SignalSendResult?) -> Unit): (SignalSendResult) -> Unit {
+        val result = AtomicReference<SignalSendResult?>(null)
+        val settle = begin { onReady(result.get()) }
+        return { outcome ->
+            result.compareAndSet(null, outcome)
+            settle()
+        }
     }
 
     fun close() {

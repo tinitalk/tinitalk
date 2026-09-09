@@ -135,7 +135,13 @@ data class CallUiState(
         },
         connectionHealth = ConnectionHealth.None,
         transportRoute = CallTransportRoute.Unknown,
-        endReason = endReason ?: reason,
+        endReason = endReason ?: if (
+            reason == CallEndReason.TimedOut && direction == CallDirection.Outgoing &&
+            phase == CallPhase.Connecting && connectedAtElapsedMs == null
+        ) {
+            // The peer never confirmed ringing, so this was a failed attempt to reach them.
+            CallEndReason.Failed
+        } else reason,
     )
 
     fun durationMillis(nowElapsedMs: Long): Long? = connectedAtElapsedMs?.let { connectedAt ->

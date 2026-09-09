@@ -1,12 +1,35 @@
 package org.tinitalk.telecom
 
 import org.tinitalk.media.CancellableTask
+import org.tinitalk.call.SignalSendResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TerminalSignalGateTest {
+    @Test
+    fun trackedTerminalDistinguishesAckErrorAndTimeoutAndIgnoresLateAck() {
+        for (result in SignalSendResult.entries) {
+            val scheduler = FakeTerminalScheduler()
+            val outcomes = mutableListOf<SignalSendResult?>()
+            val gate = TerminalSignalGate(20_000L, scheduler::schedule)
+            val complete = gate.beginTracked { outcomes.add(it) }
+            complete(result)
+            scheduler.runPending()
+            complete(SignalSendResult.Acknowledged)
+            assertEquals(listOf(result), outcomes)
+        }
+        val scheduler = FakeTerminalScheduler()
+        val outcomes = mutableListOf<SignalSendResult?>()
+        val gate = TerminalSignalGate(20_000L, scheduler::schedule)
+        val complete = gate.beginTracked { outcomes.add(it) }
+        scheduler.runPending()
+        complete(SignalSendResult.Acknowledged)
+        assertEquals(listOf<SignalSendResult?>(null), outcomes)
+        assertEquals(20_000L, scheduler.delayMillis)
+    }
+
     @Test
     fun waitsForSettlementAndCompletesOnlyOnce() {
         val scheduler = FakeTerminalScheduler()

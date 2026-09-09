@@ -10,11 +10,21 @@ import org.tinitalk.call.CallUiState
 import org.tinitalk.call.ConnectionHealth
 import java.io.Closeable
 
-internal enum class CallToneMode { Silent, Reaching, Ringing, Reconnecting, Busy, Ended }
+internal enum class CallToneMode { Silent, Reaching, Ringing, Reconnecting, Busy, Congestion, Ended }
+
+internal const val CallFailureToneDurationMillis = 2_200L
 
 internal fun callToneMode(state: CallUiState): CallToneMode = when {
     state.phase == CallPhase.Ended && state.endReason == CallEndReason.Busy -> CallToneMode.Busy
     state.phase == CallPhase.Ended && state.connectedAtElapsedMs != null -> CallToneMode.Ended
+    state.phase == CallPhase.Ended && state.direction == CallDirection.Outgoing &&
+        state.endReason == CallEndReason.Rejected -> CallToneMode.Busy
+    state.phase == CallPhase.Ended && state.direction == CallDirection.Outgoing &&
+        when (state.endReason) {
+            CallEndReason.TimedOut, CallEndReason.Failed,
+            CallEndReason.ConnectionLost, CallEndReason.NotInContacts -> true
+            else -> false
+        } -> CallToneMode.Congestion
     state.phase == CallPhase.Active && state.connectionHealth == ConnectionHealth.Reconnecting -> CallToneMode.Reconnecting
     state.direction == CallDirection.Outgoing && state.phase == CallPhase.Connecting -> CallToneMode.Reaching
     state.direction == CallDirection.Outgoing && state.phase == CallPhase.Ringing -> CallToneMode.Ringing
@@ -42,7 +52,12 @@ class CallToneController(private val handler: Handler) : Closeable {
         when (next) {
             CallToneMode.Reaching, CallToneMode.Reconnecting -> handler.post(pulseTone)
             CallToneMode.Ringing -> runCatching { tone?.startTone(ToneGenerator.TONE_SUP_RINGTONE) }
-            CallToneMode.Busy -> runCatching { tone?.startTone(ToneGenerator.TONE_SUP_BUSY) }
+            CallToneMode.Busy, CallToneMode.Congestion -> runCatching {
+                val toneType = if (next == CallToneMode.Busy) {
+                    ToneGenerator.TONE_SUP_BUSY
+                } else ToneGenerator.TONE_SUP_CONGESTION
+                tone?.startTone(toneType, CallFailureToneDurationMillis.toInt())
+            }
             CallToneMode.Ended -> runCatching { tone?.startTone(ToneGenerator.TONE_PROP_ACK, EndToneMillis) }
             CallToneMode.Silent -> Unit
         }
@@ -56,7 +71,7 @@ class CallToneController(private val handler: Handler) : Closeable {
     }
 
     private companion object {
-        const val ToneVolume = 60
+        const val ToneVolume = 80
         const val PulseToneMillis = 180
         const val PulseToneIntervalMillis = 4_000L
         const val EndToneMillis = 400

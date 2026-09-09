@@ -325,32 +325,43 @@ internal class IncomingCallAlertHandoff(
     private val startVibration: (IncomingInvite) -> Unit,
     private val startRingtone: (IncomingInvite) -> Unit,
     private val dismissNotification: () -> Unit,
+    private val isSilenced: (IncomingInvite) -> Boolean,
+    private val stopVibration: (AccountCallOwner) -> Unit,
+    private val stopRingtone: (AccountCallOwner) -> Unit,
 ) {
     fun fullScreenShown(invite: IncomingInvite) {
-        startVibration(invite)
-        startRingtone(invite)
+        if (!isSilenced(invite)) {
+            startVibration(invite)
+            startRingtone(invite)
+        }
         dismissNotification()
+    }
+
+    fun silence(invite: IncomingInvite) {
+        stopVibration(invite.owner)
+        stopRingtone(invite.owner)
     }
 }
 
 private object IncomingVibration {
     private val pattern = longArrayOf(0, 700, 500, 700, 1_500)
     private val handler = Handler(Looper.getMainLooper())
-    private var callKey: AccountCallKey? = null
+    private var callOwner: AccountCallOwner? = null
     private var vibrator: Vibrator? = null
     private var stopTask: Runnable? = null
 
     @Synchronized
     fun start(context: Context, invite: IncomingInvite) {
-        if (callKey == invite.key) return
+        if (incomingCallSilenceStore(context).isSilenced(invite)) return
+        if (callOwner == invite.owner) return
         stop()
 
         val next = getVibrator(context.applicationContext) ?: return
         if (!next.hasVibrator()) return
 
-        callKey = invite.key
+        callOwner = invite.owner
         vibrator = next
-        val task = Runnable { stop(invite.key) }
+        val task = Runnable { stop(invite.owner) }
         stopTask = task
         handler.postDelayed(
             task,
@@ -359,18 +370,18 @@ private object IncomingVibration {
         runCatching {
             next.vibrate(VibrationEffect.createWaveform(pattern, 0))
         }.onFailure {
-            stop(invite.key)
+            stop(invite.owner)
         }
     }
 
     @Synchronized
-    fun stop(expectedCallKey: AccountCallKey? = null) {
-        if (expectedCallKey != null && callKey != expectedCallKey) return
+    fun stop(expectedOwner: AccountCallOwner? = null) {
+        if (expectedOwner != null && callOwner != expectedOwner) return
         stopTask?.let(handler::removeCallbacks)
         stopTask = null
         runCatching { vibrator?.cancel() }
         vibrator = null
-        callKey = null
+        callOwner = null
     }
 
     @Suppress("DEPRECATION")
@@ -384,13 +395,14 @@ private object IncomingVibration {
 
 private object IncomingRingtone {
     private val handler = Handler(Looper.getMainLooper())
-    private var callKey: AccountCallKey? = null
+    private var callOwner: AccountCallOwner? = null
     private var ringtone: Ringtone? = null
     private var stopTask: Runnable? = null
 
     @Synchronized
     fun start(context: Context, invite: IncomingInvite) {
-        if (callKey == invite.key && ringtone?.isPlaying == true) return
+        if (incomingCallSilenceStore(context).isSilenced(invite)) return
+        if (callOwner == invite.owner && ringtone?.isPlaying == true) return
         stop()
 
         val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE) ?: return
@@ -401,25 +413,25 @@ private object IncomingRingtone {
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) next.isLooping = true
 
-        callKey = invite.key
+        callOwner = invite.owner
         ringtone = next
-        val task = Runnable { stop(invite.key) }
+        val task = Runnable { stop(invite.owner) }
         stopTask = task
         handler.postDelayed(
             task,
             Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0),
         )
-        runCatching { next.play() }.onFailure { stop(invite.key) }
+        runCatching { next.play() }.onFailure { stop(invite.owner) }
     }
 
     @Synchronized
-    fun stop(expectedCallKey: AccountCallKey? = null) {
-        if (expectedCallKey != null && callKey != expectedCallKey) return
+    fun stop(expectedOwner: AccountCallOwner? = null) {
+        if (expectedOwner != null && callOwner != expectedOwner) return
         stopTask?.let(handler::removeCallbacks)
         stopTask = null
         runCatching { ringtone?.stop() }
         ringtone = null
-        callKey = null
+        callOwner = null
     }
 }
 
@@ -472,10 +484,23 @@ internal fun missedContactPlaceholder(
     return roundedNotificationPhoto(square).also { square.recycle() }
 }
 
-class IncomingCallNotifier(
+class IncomingCallNotifier internal constructor(
     private val context: Context,
-    photoLoader: ContactPhotoNotificationLoader? = null,
+    photoLoader: ContactPhotoNotificationLoader?,
+    private val alertHandoff: IncomingCallAlertHandoff?,
 ) {
+    constructor(context: Context, photoLoader: ContactPhotoNotificationLoader? = null) : this(context, photoLoader, null)
+
+    private val alerts by lazy {
+        alertHandoff ?: IncomingCallAlertHandoff(
+            startVibration = { IncomingVibration.start(context, it) },
+            startRingtone = { IncomingRingtone.start(context, it) },
+            dismissNotification = ::dismissNotification,
+            isSilenced = { incomingCallSilenceStore(context).isSilenced(it) },
+            stopVibration = { IncomingVibration.stop(it) },
+            stopRingtone = { IncomingRingtone.stop(it) },
+        )
+    }
     private val photoLoader: ContactPhotoNotificationLoader by lazy {
         photoLoader ?: contactPhotoNotificationLoader(context)
     }
@@ -599,6 +624,12 @@ class IncomingCallNotifier(
                         ).build(),
                     )
             }
+        if (incomingCallSilenceStore(context).isSilenced(invite)) {
+            // The child of this silent group never alerts, including when the channel has sound.
+            builder.setGroup("incoming_call_silenced")
+                .setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
+                .setOnlyAlertOnce(true)
+        }
         return builder
     }
 
@@ -617,10 +648,10 @@ class IncomingCallNotifier(
         photoLoader.load(address, requestKey, revision) { loadedKey, capturedRevision, bitmap ->
             if (loadedKey != requestKey || bitmap == null) return@load
             if (capturedRevision != photoLoader.revision) return@load
-            val current = IncomingCallController().load(context)?.invite ?: return@load
-            if (current.owner != invite.owner || !current.expiresAt.isAfter(Instant.now())) return@load
-            val notification = incomingNotificationBuilder(current, mode, answer, reject, fullScreen, bitmap).build()
-            context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
+            IncomingCallController().presentSavedIncoming(context, invite) {
+                val notification = incomingNotificationBuilder(invite, mode, answer, reject, fullScreen, bitmap).build()
+                context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
+            }
         }
     }
 
@@ -1061,16 +1092,20 @@ class IncomingCallNotifier(
         IncomingRingtone.stop()
     }
 
+    fun silence(invite: IncomingInvite): Boolean =
+        IncomingCallController().withCurrentIncoming(context, invite) {
+            incomingCallSilenceStore(context).silence(invite)
+            alerts.silence(invite)
+        }
+
     fun fullScreenShown(invite: IncomingInvite) {
-        IncomingCallAlertHandoff(
-            startVibration = { IncomingVibration.start(context, it) },
-            startRingtone = { IncomingRingtone.start(context, it) },
-            dismissNotification = ::dismissNotification,
-        ).fullScreenShown(invite)
+        IncomingCallController().withCurrentIncoming(context, invite) {
+            alerts.fullScreenShown(invite)
+        }
     }
 
     fun fullScreenHidden(invite: IncomingInvite) {
-        IncomingRingtone.stop(invite.key)
+        IncomingRingtone.stop(invite.owner)
         show(invite)
     }
 

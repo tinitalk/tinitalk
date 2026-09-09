@@ -4,6 +4,7 @@ import com.google.gson.JsonParser
 import com.google.gson.JsonObject
 import org.tinitalk.call.SequencedSignalEvent
 import org.tinitalk.call.SignalClient
+import org.tinitalk.call.SignalSendResult
 import org.tinitalk.data.AuthReasonHeader
 import org.tinitalk.data.Session
 import org.tinitalk.data.SessionIdHeader
@@ -91,7 +92,14 @@ class SignalSocket(
     }
 
     override fun send(event: SignalEvent, onSettled: (() -> Unit)?) {
-        val queued = PendingEvent(event.id, event.encode(), onSettled, event.type, event.callId)
+        enqueue(PendingEvent(event.id, event.encode(), onSettled, null, event.type, event.callId))
+    }
+
+    override fun sendTracked(event: SignalEvent, onResult: (SignalSendResult) -> Unit) {
+        enqueue(PendingEvent(event.id, event.encode(), null, onResult, event.type, event.callId))
+    }
+
+    private fun enqueue(queued: PendingEvent) {
         var failedSocket: WebSocket? = null
         var failedAttempt: SocketAttempt? = null
         var failureCallbacks: SignalCallbacks? = null
@@ -115,7 +123,7 @@ class SignalSocket(
                 }
             }
         }
-        settled?.onSettled?.invoke()
+        settled?.complete(SignalSendResult.Unconfirmed)
         if (sent) return
         val failed = failedAttempt
         val currentCallbacks = failureCallbacks
@@ -281,7 +289,7 @@ class SignalSocket(
                 callbacks.onOpen(currentAttempt.generation)
             }
         }
-        settled.forEach { it.onSettled?.invoke() }
+        settled.forEach { it.complete(SignalSendResult.Unconfirmed) }
         if (flushFailed) {
             handleFailure(currentAttempt, webSocket, callbacks)
             webSocket.cancel()
@@ -316,6 +324,7 @@ class SignalSocket(
         }.getOrElse { ParsedSignal.Error(SignalFailure("invalid server event")) }
 
         var settled = emptyList<PendingEvent>()
+        var settlementResult = SignalSendResult.Acknowledged
         synchronized(pending) {
             if (!isCurrentLocked(currentAttempt, webSocket)) return
             when (result) {
@@ -325,13 +334,16 @@ class SignalSocket(
                     val failure = if (result.value.code == null && rejected?.type?.startsWith("rtc.sas.") == true) {
                         result.value.copy(code = "call_sas_invalid", callId = rejected.callId)
                     } else result.value
-                    result.value.eventId?.let { eventId -> settled = removePendingLocked(eventId) }
+                    result.value.eventId?.let { eventId ->
+                        settled = removePendingLocked(eventId)
+                        settlementResult = SignalSendResult.Rejected
+                    }
                     callbacks.onError(failure)
                 }
                 is ParsedSignal.Acknowledgement -> settled = removePendingLocked(result.eventId)
             }
         }
-        settled.forEach { it.onSettled?.invoke() }
+        settled.forEach { it.complete(settlementResult) }
     }
 
     private fun removePendingLocked(eventId: String): List<PendingEvent> {
@@ -423,9 +435,15 @@ class SignalSocket(
         val id: String,
         val raw: String,
         val onSettled: (() -> Unit)?,
+        val onResult: ((SignalSendResult) -> Unit)?,
         val type: String,
         val callId: String,
-    )
+    ) {
+        fun complete(result: SignalSendResult) {
+            onSettled?.invoke()
+            onResult?.invoke(result)
+        }
+    }
 
     private sealed interface ParsedSignal {
         data class Event(val value: SequencedSignalEvent) : ParsedSignal

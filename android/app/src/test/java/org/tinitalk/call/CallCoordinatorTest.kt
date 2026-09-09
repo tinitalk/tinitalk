@@ -198,6 +198,81 @@ class CallCoordinatorTest {
     }
 
     @Test
+    fun rejectWithReplySendsOnlyTheStableCodeAndReportsAcknowledgement() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("bob", signal, ids = FixedIds())
+        coordinator.onEvent(event("call.incoming", seq = 1))
+        var result: SignalSendResult? = null
+
+        val eventId = "018f7d51-3f90-7e63-b657-4a83a6a90003"
+        coordinator.reject(CallReplyCode.CannotTalk, eventId) { result = it }
+
+        val sent = signal.sent.last()
+        assertEquals(eventId, sent.id)
+        assertEquals("call.reject", sent.type)
+        assertEquals(setOf("reply_code"), sent.payload.keySet())
+        assertEquals("cannot_talk", sent.payload["reply_code"].asString)
+        assertEquals(null, result)
+        signal.acknowledge(sent.id)
+        assertEquals(SignalSendResult.Acknowledged, result)
+    }
+
+    @Test
+    fun ordinaryRejectCanReusePersistedEventId() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("bob", signal, ids = FixedIds())
+        coordinator.onEvent(event("call.incoming", seq = 1))
+        val eventId = "018f7d51-3f90-7e63-b657-4a83a6a90004"
+
+        coordinator.reject(eventId) {}
+
+        assertEquals(eventId, signal.sent.single().id)
+        assertEquals(0, signal.sent.single().payload.size())
+    }
+
+    @Test
+    fun rejectWithReplyReportsCorrelatedServerRejectionAsFailure() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("bob", signal, ids = FixedIds())
+        coordinator.onEvent(event("call.incoming", seq = 1))
+        var result: SignalSendResult? = null
+
+        coordinator.reject(CallReplyCode.WillCallBack) { result = it }
+        signal.reject(signal.sent.last().id)
+
+        assertEquals(SignalSendResult.Rejected, result)
+    }
+
+    @Test
+    fun replayedTerminalEventAfterLocalRejectIsIdempotent() {
+        val signal = FakeSignalClient()
+        val coordinator = CallCoordinator("bob", signal, ids = FixedIds())
+        val incoming = event("call.incoming", seq = 1)
+        coordinator.onEvent(incoming)
+        coordinator.reject(CallReplyCode.CallMeLater) {}
+
+        assertTrue(coordinator.onEvent(event("call.reject", seq = 2)))
+
+        assertEquals(CallPhase.Ended, coordinator.snapshot().phase)
+        assertEquals(2L, coordinator.snapshot().lastSeq)
+        assertEquals(listOf("call.reject"), signal.sent.map { it.type })
+    }
+
+    @Test
+    fun foreignTerminalEventCannotEndOrAdvanceCurrentCall() {
+        val coordinator = CallCoordinator("alice", FakeSignalClient(), ids = FixedIds())
+        coordinator.startCall("bob", callId = "current-call")
+        val foreign = SequencedSignalEvent(
+            SignalEvent("foreign-event", "foreign-call", "call.reject", 1787666400000, JsonObject()),
+            7,
+        )
+
+        assertFalse(coordinator.onEvent(foreign))
+
+        assertEquals(CallSnapshot(CallPhase.Connecting, "current-call", 0, AccountId("single-account")), coordinator.snapshot())
+    }
+
+    @Test
     fun endsCallAfterSignalingProtocolError() {
         val coordinator = CallCoordinator("alice", FakeSignalClient(), ids = FixedIds())
         coordinator.startCall("bob")
@@ -234,13 +309,21 @@ class CallCoordinatorTest {
 private class FakeSignalClient : SignalClient {
     val sent = mutableListOf<SignalEvent>()
     private val settlements = mutableMapOf<String, () -> Unit>()
+    private val results = mutableMapOf<String, (SignalSendResult) -> Unit>()
 
     override fun send(event: SignalEvent, onSettled: (() -> Unit)?) {
         sent += event
         onSettled?.let { settlements[event.id] = it }
     }
 
+    override fun sendTracked(event: SignalEvent, onResult: (SignalSendResult) -> Unit) {
+        sent += event
+        results[event.id] = onResult
+    }
+
     fun settle(eventId: String) = settlements.remove(eventId)?.invoke()
+    fun acknowledge(eventId: String) = results.remove(eventId)?.invoke(SignalSendResult.Acknowledged)
+    fun reject(eventId: String) = results.remove(eventId)?.invoke(SignalSendResult.Rejected)
 }
 
 private class FixedIds : EventIds {

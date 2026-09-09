@@ -19,6 +19,7 @@ import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.call.GlobalCallAdmission
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPhase
+import org.tinitalk.call.CallReplyCode
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.data.AccountId
@@ -26,6 +27,7 @@ import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
 import java.time.Instant
+import java.util.UUID
 
 class IncomingCallController internal constructor(
     private val telecomController: (Context) -> TelecomCallController = { context ->
@@ -44,22 +46,30 @@ class IncomingCallController internal constructor(
         admission,
     )
 
-    internal fun save(context: Context, invite: IncomingInvite, action: String? = null) =
+    internal fun save(
+        context: Context,
+        invite: IncomingInvite,
+        action: String? = null,
+        replyCode: CallReplyCode? = null,
+        terminalEventId: String? = null,
+    ): Boolean =
         synchronized(PresentationLock) {
             synchronized(PendingActionLock) {
-                prefs(context).edit {
-                    putString(ExtraAccountId, invite.accountId.value)
-                    putString(ExtraCallId, invite.callId)
-                    putString(ExtraServerUrl, invite.sessionBinding.serverUrl)
-                    putString(ExtraSessionLogin, invite.sessionBinding.login)
-                    putString(ExtraSessionId, invite.sessionBinding.sessionId)
-                    putString(ExtraConfigId, invite.sessionBinding.configId)
-                    putString(ExtraCaller, invite.caller)
-                    putString(ExtraCallerLogin, invite.callerLogin)
-                    putString(ExtraExpiresAt, invite.expiresAt.toString())
-                    putLong(ExtraLastSeq, invite.lastSeq)
-                    putString(ExtraAction, action)
-                }
+                prefs(context).edit()
+                    .putString(ExtraAccountId, invite.accountId.value)
+                    .putString(ExtraCallId, invite.callId)
+                    .putString(ExtraServerUrl, invite.sessionBinding.serverUrl)
+                    .putString(ExtraSessionLogin, invite.sessionBinding.login)
+                    .putString(ExtraSessionId, invite.sessionBinding.sessionId)
+                    .putString(ExtraConfigId, invite.sessionBinding.configId)
+                    .putString(ExtraCaller, invite.caller)
+                    .putString(ExtraCallerLogin, invite.callerLogin)
+                    .putString(ExtraExpiresAt, invite.expiresAt.toString())
+                    .putLong(ExtraLastSeq, invite.lastSeq)
+                    .putString(ExtraAction, action)
+                    .putString(ExtraReplyCode, replyCode?.wireValue)
+                    .putString(ExtraTerminalEventId, terminalEventId)
+                    .commit()
             }
         }
 
@@ -105,7 +115,8 @@ class IncomingCallController internal constructor(
             }
             rememberTerminal(context, owner)
             if (pendingCall?.invite?.owner == owner) {
-                prefs(context).edit { clear() }
+                val keepPendingReject = pendingCall.action == ActionReject
+                if (!keepPendingReject) prefs(context).edit { clear() }
                 if (releaseReserved) admission.releaseStaged(pendingCall.invite.owner)
             }
             clearIncomingRingingUi(owner)
@@ -164,7 +175,9 @@ class IncomingCallController internal constructor(
                 return@admission IncomingAdmissionResult.Invalid
             }
             val restored = load(context)
-            if (restored != null) admission.stage(restored.invite.owner)
+            if (restored != null && restored.action != ActionReject) {
+                admission.stage(restored.invite.owner)
+            }
             val attempt = admission.stage(invite.owner)
             when (attempt) {
                 is CallAdmissionAttempt.Busy -> {
@@ -183,8 +196,18 @@ class IncomingCallController internal constructor(
                 }
                 is CallAdmissionAttempt.Acquired -> Unit
             }
-            val action = restored?.takeIf { it.invite.owner == invite.owner }?.action
-            save(context, invite, action)
+            val restoredAction = restored?.takeIf { it.invite.owner == invite.owner }
+            if (!save(
+                    context,
+                    invite,
+                    restoredAction?.action,
+                    restoredAction?.replyCode,
+                    restoredAction?.terminalEventId,
+                )
+            ) {
+                admission.releaseStaged(invite.owner)
+                return@admission IncomingAdmissionResult.Invalid
+            }
             if (attempt is CallAdmissionAttempt.Existing) {
                 IncomingAdmissionResult.Duplicate
             } else {
@@ -376,6 +399,8 @@ class IncomingCallController internal constructor(
                 lastSeq = prefs.getLong(ExtraLastSeq, 0),
             ),
             prefs.getString(ExtraAction, null),
+            CallReplyCode.fromWire(prefs.getString(ExtraReplyCode, null)),
+            prefs.getString(ExtraTerminalEventId, null),
         )
     }
 
@@ -416,11 +441,17 @@ class IncomingCallController internal constructor(
     fun presentationIntent(context: Context, invite: IncomingInvite): Intent =
         intent(context, IncomingCallForegroundService::class.java, IncomingCallForegroundService.ActionShow, invite)
 
-    fun actionIntent(context: Context, action: String, invite: IncomingInvite): PendingIntent =
+    fun actionIntent(
+        context: Context,
+        action: String,
+        invite: IncomingInvite,
+        replyCode: CallReplyCode? = null,
+        terminalEventId: String? = null,
+    ): PendingIntent =
         PendingIntent.getBroadcast(
             context,
             (invite.key.localId() + action).hashCode(),
-            intent(context, CallActionReceiver::class.java, action, invite),
+            intent(context, CallActionReceiver::class.java, action, invite, replyCode, terminalEventId),
             pendingFlags(),
         )
 
@@ -457,19 +488,61 @@ class IncomingCallController internal constructor(
         )
     }
 
-    fun reject(context: Context, invite: IncomingInvite) = synchronized(PresentationLock) {
+    fun reject(context: Context, invite: IncomingInvite, replyCode: CallReplyCode? = null) = synchronized(PresentationLock) {
         if (!ownsIncoming(context, invite)) return@synchronized
+        val existing = load(context)?.takeIf { it.invite.owner == invite.owner && it.action == ActionReject }
+        val terminalEventId = existing?.terminalEventId ?: UUID.randomUUID().toString()
+        if (!save(context, invite, ActionReject, replyCode ?: existing?.replyCode, terminalEventId)) return@synchronized
         telecomController(context).reject(invite.key)
         rejectFromTelecom(context, invite)
     }
 
     fun rejectFromTelecom(context: Context, invite: IncomingInvite) = synchronized(PresentationLock) {
         if (!ownsIncoming(context, invite)) return@synchronized
+        val pending = load(context)?.takeIf { it.invite.owner == invite.owner }
+        val replyCode = pending?.replyCode
+        val terminalEventId = pending?.terminalEventId ?: UUID.randomUUID().toString()
+        if ((pending?.action != ActionReject || pending.terminalEventId == null) &&
+            !save(context, invite, ActionReject, replyCode, terminalEventId)
+        ) return@synchronized
         val alreadyTerminal = isTerminal(context, invite.owner)
         handoffIncoming(context, invite)
         if (alreadyTerminal) return@synchronized
-        startTerminalService(context, invite, CallForegroundService.ActionReject)
+        startTerminalService(context, invite, CallForegroundService.ActionReject, replyCode, terminalEventId)
     }
+
+    internal fun withCurrentIncoming(
+        context: Context,
+        invite: IncomingInvite,
+        action: () -> Unit,
+    ): Boolean = synchronized(PresentationLock) {
+        if (!ownsIncoming(context, invite)) return@synchronized false
+        action()
+        true
+    }
+
+    internal fun completePendingReject(context: Context, owner: AccountCallOwner): Boolean =
+        synchronized(PresentationLock) {
+            synchronized(PendingActionLock) {
+                val pending = load(context) ?: return@synchronized false
+                if (pending.invite.owner != owner || pending.action != ActionReject) return@synchronized false
+                prefs(context).edit().clear().commit()
+            }
+        }
+
+    internal fun resumePendingReject(context: Context, pending: PendingIncomingCall): Boolean =
+        synchronized(PresentationLock) {
+            val stored = load(context) ?: return@synchronized false
+            if (stored != pending || stored.action != ActionReject) return@synchronized false
+            if (admission.current()?.owner != stored.invite.owner) return@synchronized false
+            startTerminalService(
+                context,
+                stored.invite,
+                CallForegroundService.ActionReject,
+                stored.replyCode,
+                stored.terminalEventId,
+            )
+        }
 
     fun disconnectFromTelecom(context: Context, invite: IncomingInvite) = synchronized(PresentationLock) {
         val ownsAdmission = admission.current()?.owner == invite.owner
@@ -489,15 +562,21 @@ class IncomingCallController internal constructor(
         }
     }
 
-    private fun startTerminalService(context: Context, invite: IncomingInvite, action: String) {
-        runCatching {
-            CallForegroundService.start(
-                context,
-                intent(context, CallForegroundService::class.java, action, invite),
-            )
-        }.onFailure {
-            admission.releaseStaged(invite.owner)
-        }
+    private fun startTerminalService(
+        context: Context,
+        invite: IncomingInvite,
+        action: String,
+        replyCode: CallReplyCode? = null,
+        terminalEventId: String? = null,
+    ): Boolean = runCatching {
+        CallForegroundService.start(
+            context,
+            intent(context, CallForegroundService::class.java, action, invite, replyCode, terminalEventId),
+        )
+        true
+    }.getOrElse {
+        admission.releaseStaged(invite.owner)
+        false
     }
 
     companion object {
@@ -521,6 +600,8 @@ class IncomingCallController internal constructor(
         private const val ExtraExpiresAt = "expires_at"
         private const val ExtraLastSeq = "last_seq"
         private const val ExtraAction = "action"
+        internal const val ExtraReplyCode = "reply_code"
+        internal const val ExtraTerminalEventId = "terminal_event_id"
         private val PresentationLock = Any()
         private val PendingActionLock = Any()
 
@@ -547,6 +628,12 @@ class IncomingCallController internal constructor(
                 lastSeq = intent.getLongExtra(ExtraLastSeq, 0),
             )
         }
+
+        fun replyCodeFrom(intent: Intent?): CallReplyCode? =
+            CallReplyCode.fromWire(intent?.getStringExtra(ExtraReplyCode))
+
+        fun terminalEventIdFrom(intent: Intent?): String? =
+            intent?.getStringExtra(ExtraTerminalEventId)?.takeIf(String::isNotBlank)
 
         private fun prefs(context: Context) =
             context.getSharedPreferences(Store, Context.MODE_PRIVATE)
@@ -575,7 +662,14 @@ class IncomingCallController internal constructor(
                 ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
             }
 
-        private fun intent(context: Context, target: Class<*>, action: String, invite: IncomingInvite): Intent =
+        private fun intent(
+            context: Context,
+            target: Class<*>,
+            action: String,
+            invite: IncomingInvite,
+            replyCode: CallReplyCode? = null,
+            terminalEventId: String? = null,
+        ): Intent =
             Intent(context, target)
                 .setAction(action)
                 .setData("tinitalk://call/${Uri.encode(invite.owner.localId())}/${Uri.encode(action)}".toUri())
@@ -589,6 +683,8 @@ class IncomingCallController internal constructor(
                 .putExtra(ExtraCallerLogin, invite.callerLogin)
                 .putExtra(ExtraExpiresAt, invite.expiresAt.toString())
                 .putExtra(ExtraLastSeq, invite.lastSeq)
+                .putExtra(ExtraReplyCode, replyCode?.wireValue)
+                .putExtra(ExtraTerminalEventId, terminalEventId)
 
         private fun callActivityIntent(context: Context, action: String, invite: IncomingInvite): Intent =
             intent(context, CallActivity::class.java, action, invite)
@@ -659,7 +755,12 @@ internal object BusyCallTombstones {
     private data class Entry(val ownerId: String, val expiresAtMillis: Long)
 }
 
-data class PendingIncomingCall(val invite: IncomingInvite, val action: String?)
+data class PendingIncomingCall(
+    val invite: IncomingInvite,
+    val action: String?,
+    val replyCode: CallReplyCode? = null,
+    val terminalEventId: String? = null,
+)
 
 internal enum class IncomingAdmissionResult {
     Admitted,
