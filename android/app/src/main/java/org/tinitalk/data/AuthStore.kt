@@ -211,6 +211,15 @@ class AuthStore(
             ?.let { AccountRecord(accountId, it.toSession(), it.displayName) }
     }
 
+    // Presentation validity needs session identity, not access to the encrypted token.
+    fun matchesSessionIdentity(accountId: AccountId, url: String, login: String, sessionId: String?, configId: String?): Boolean =
+        synchronized(AccountStorageLock) {
+            readCollectionUnlocked().accounts.any {
+                it.id == accountId.value && sameServerUrl(it.url, url) && it.login == login &&
+                    it.sessionId == sessionId && it.configId == configId
+            }
+        }
+
     fun webPushConfig(accountId: AccountId): StoredWebPushConfig? = synchronized(AccountStorageLock) {
         readCollectionUnlocked().accounts.firstOrNull { it.id == accountId.value }?.webPushConfig
     }

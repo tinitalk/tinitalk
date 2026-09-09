@@ -89,6 +89,7 @@ data class CallHistoryItem(
     val reached: Boolean,
     @SerializedName("started_at") val startedAt: Long,
     @SerializedName("duration_seconds") val durationSeconds: Long,
+    @SerializedName("reply_code") val replyCode: String? = null,
 )
 data class UnreadMissedContact(
     @SerializedName("peer_login") val peerLogin: String,
@@ -124,6 +125,7 @@ data class AccountHistory(
     val reached: Boolean get() = item.reached
     val startedAt: Long get() = item.startedAt
     val durationSeconds: Long get() = item.durationSeconds
+    val replyCode: String? get() = item.replyCode
     val address: ContactAddress get() = ContactAddress.of(serverUrl, peerLogin)
     val key: AccountHistoryKey get() = AccountHistoryKey(accountId, id)
 }
