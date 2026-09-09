@@ -79,6 +79,193 @@ func TestEveryUnansweredIncomingCallIsUnreadMissed(t *testing.T) {
 	}
 }
 
+func TestFinishCallWithReplyStoresEveryKnownCodeForBothParticipants(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 9, 9, 10, 0, 0, 0, time.UTC)
+	codes := []string{"cannot_talk", "call_me_later", "will_call_back"}
+	for i, code := range codes {
+		callID := fmt.Sprintf("reply-%d", i)
+		if err := db.StartCall(callID, "alice", "bob", started.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.FinishCallWithReply(callID, CallOutcomeRejected, started.Add(time.Duration(i+1)*time.Minute), code); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, login := range []string{"alice", "bob"} {
+		page, err := db.CallHistory(login, 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) != len(codes) {
+			t.Fatalf("%s history items = %d, want %d", login, len(page.Items), len(codes))
+		}
+		for i, item := range page.Items {
+			wantCode := codes[len(codes)-1-i]
+			if item.ReplyCode != wantCode || item.Outcome != CallOutcomeRejected {
+				t.Fatalf("%s history item %d = %+v, want rejected with reply %q", login, i, item, wantCode)
+			}
+		}
+		filtered, err := db.CallHistoryForPeer(login, map[string]string{"alice": "bob", "bob": "alice"}[login], 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(filtered.Items) != len(codes) || filtered.Items[0].ReplyCode != "will_call_back" {
+			t.Fatalf("%s filtered history = %+v", login, filtered.Items)
+		}
+	}
+}
+
+func TestFinishCallWithReplyPersistsAcrossDatabaseReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range []string{"alice", "bob"} {
+		if _, err := db.AddUser(user, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := time.Date(2026, 9, 9, 11, 0, 0, 0, time.UTC)
+	if err := db.StartCall("reopen-reply", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCallWithReply("reopen-reply", CallOutcomeRejected, started.Add(time.Minute), "call_me_later"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	page, err := db.CallHistory("bob", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ReplyCode != "call_me_later" {
+		t.Fatalf("history after reopen = %+v", page.Items)
+	}
+}
+
+func TestFinishCallWithReplyRejectsInvalidCombinationsWithoutFinishingCall(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome CallOutcome
+		code    string
+	}{
+		{name: "unknown reply", outcome: CallOutcomeRejected, code: "unknown"},
+		{name: "reply on completed call", outcome: CallOutcomeCompleted, code: "cannot_talk"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := openCallHistoryTestDB(t)
+			defer db.Close()
+			started := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+			if err := db.StartCall("invalid-reply", "alice", "bob", started); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := db.FinishCallWithReply("invalid-reply", test.outcome, started.Add(time.Minute), test.code); err == nil {
+				t.Fatal("FinishCallWithReply error = nil, want rejection")
+			}
+
+			var outcome CallOutcome
+			var endedAt, replyCode any
+			if err := db.sql.QueryRow("SELECT outcome, ended_at, reply_code FROM call_history WHERE call_id = ?", "invalid-reply").Scan(&outcome, &endedAt, &replyCode); err != nil {
+				t.Fatal(err)
+			}
+			if outcome != CallOutcomePending || endedAt != nil || replyCode != nil {
+				t.Fatalf("call after rejected finish = outcome %d, ended_at %v, reply_code %v", outcome, endedAt, replyCode)
+			}
+		})
+	}
+}
+
+func TestFinishCallWithReplyDoesNotOverwriteStoredReply(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 9, 9, 13, 0, 0, 0, time.UTC)
+	if err := db.StartCall("stable-reply", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCallWithReply("stable-reply", CallOutcomeRejected, started.Add(time.Minute), "cannot_talk"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCallWithReply("stable-reply", CallOutcomeRejected, started.Add(2*time.Minute), "will_call_back"); err == nil {
+		t.Fatal("repeated FinishCallWithReply error = nil, want already-finished rejection")
+	}
+	page, err := db.CallHistory("alice", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ReplyCode != "cannot_talk" {
+		t.Fatalf("history after repeated finish = %+v", page.Items)
+	}
+}
+
+func TestFinishCallWithReplyStoresEmptyCodeAsNull(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 9, 9, 14, 0, 0, 0, time.UTC)
+	if err := db.StartCall("no-reply", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCallWithReply("no-reply", CallOutcomeRejected, started.Add(time.Minute), ""); err != nil {
+		t.Fatal(err)
+	}
+	var replyCode any
+	if err := db.sql.QueryRow("SELECT reply_code FROM call_history WHERE call_id = ?", "no-reply").Scan(&replyCode); err != nil {
+		t.Fatal(err)
+	}
+	if replyCode != nil {
+		t.Fatalf("stored empty reply = %v, want NULL", replyCode)
+	}
+	page, err := db.CallHistory("bob", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ReplyCode != "" {
+		t.Fatalf("legacy history reply = %+v, want empty", page.Items)
+	}
+}
+
+func TestFinishCallWithReplyRollsBackWhenDatabaseRejectsUpdate(t *testing.T) {
+	db := openCallHistoryTestDB(t)
+	defer db.Close()
+	started := time.Date(2026, 9, 9, 15, 0, 0, 0, time.UTC)
+	if err := db.StartCall("rollback-reply", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`
+		CREATE TRIGGER reject_call_reply AFTER UPDATE OF reply_code ON call_history
+		WHEN NEW.reply_code IS NOT NULL
+		BEGIN
+			SELECT RAISE(ABORT, 'reject reply');
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.FinishCallWithReply("rollback-reply", CallOutcomeRejected, started.Add(time.Minute), "cannot_talk"); err == nil {
+		t.Fatal("FinishCallWithReply error = nil, want trigger failure")
+	}
+	var outcome CallOutcome
+	var endedAt, replyCode any
+	if err := db.sql.QueryRow("SELECT outcome, ended_at, reply_code FROM call_history WHERE call_id = ?", "rollback-reply").Scan(&outcome, &endedAt, &replyCode); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != CallOutcomePending || endedAt != nil || replyCode != nil {
+		t.Fatalf("call after rollback = outcome %d, ended_at %v, reply_code %v", outcome, endedAt, replyCode)
+	}
+}
+
 func TestCallHistoryPagesNewestFirstAndCountsMissed(t *testing.T) {
 	db := openCallHistoryTestDB(t)
 	defer db.Close()

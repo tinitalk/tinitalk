@@ -69,6 +69,44 @@ func TestCallHistoryEndpointReturnsNewestAuthenticatedPage(t *testing.T) {
 	}
 }
 
+func TestCallHistoryEndpointIncludesReplyCodeOnlyWhenPresent(t *testing.T) {
+	db, tokens := testDB(t)
+	started := time.Date(2026, 9, 9, 10, 30, 0, 0, time.UTC)
+	if err := db.StartCall("without-reply", "alice", "bob", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCall("without-reply", state.CallOutcomeRejected, started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StartCall("with-reply", "alice", "bob", started.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishCallWithReply("with-reply", state.CallOutcomeRejected, started.Add(3*time.Minute), "will_call_back"); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(db, Options{AllowInsecureLoopback: true})
+
+	response := request(t, server, http.MethodGet, "/api/calls?peer=alice", nil, "bob", tokens["bob"])
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/calls status = %d, body %s", response.Code, response.Body.String())
+	}
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("history items = %d, want 2", len(page.Items))
+	}
+	if got := page.Items[0]["reply_code"]; got != "will_call_back" {
+		t.Fatalf("reply_code = %v, want will_call_back", got)
+	}
+	if _, ok := page.Items[1]["reply_code"]; ok {
+		t.Fatalf("legacy history item contains reply_code: %v", page.Items[1])
+	}
+}
+
 func TestCallHistoryReadEndpointClearsMissedCounter(t *testing.T) {
 	db, tokens := testDB(t)
 	recordMissedHistoryCall(t, db, "call-1", time.Date(2026, 8, 26, 10, 30, 0, 0, time.UTC))

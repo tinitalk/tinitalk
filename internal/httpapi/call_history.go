@@ -14,6 +14,7 @@ type callHistoryItem struct {
 	PeerName        string `json:"peer_name"`
 	Direction       string `json:"direction"`
 	Outcome         string `json:"outcome"`
+	ReplyCode       string `json:"reply_code,omitempty"`
 	Reached         bool   `json:"reached"`
 	StartedAt       int64  `json:"started_at"`
 	DurationSeconds int64  `json:"duration_seconds"`
@@ -84,6 +85,7 @@ func (s *Server) calls(w http.ResponseWriter, r *http.Request) {
 			PeerName:        item.PeerName,
 			Direction:       string(item.Direction),
 			Outcome:         callOutcomeName(item.Outcome),
+			ReplyCode:       item.ReplyCode,
 			Reached:         item.Reached,
 			StartedAt:       item.StartedAt.Unix(),
 			DurationSeconds: item.DurationSeconds,
