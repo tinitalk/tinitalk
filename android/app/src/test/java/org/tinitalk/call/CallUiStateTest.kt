@@ -12,6 +12,28 @@ import org.junit.Test
 class CallUiStateTest {
     private val accountId = AccountId("account-a")
     private fun key(callId: String) = AccountCallKey(accountId, callId)
+
+    @Test
+    fun outgoingTimeoutDistinguishesUnreachedPeerFromNoAnswer() {
+        for (direction in CallDirection.entries) {
+            for (phase in listOf(CallPhase.Connecting, CallPhase.Ringing)) {
+                val state = CallUiState(direction = direction, phase = phase)
+                val ended = state.onEnded(CallEndReason.TimedOut, 45_000L)
+                val expected = if (direction == CallDirection.Outgoing && phase == CallPhase.Connecting) {
+                    CallEndReason.Failed
+                } else CallEndReason.TimedOut
+
+                assertEquals("$direction/$phase", expected, ended.endReason)
+                assertEquals(CallPhase.Ended, ended.phase)
+                assertNull(ended.durationMillis(50_000L))
+                assertEquals(expected, ended.onEnded(CallEndReason.TimedOut, 46_000L).endReason)
+                assertEquals(CallEndReason.Cancelled,
+                    state.onEnded(CallEndReason.Cancelled, 44_000L)
+                        .onEnded(CallEndReason.TimedOut, 45_000L).endReason)
+            }
+        }
+    }
+
     @Test
     fun durationStartsOnFirstMediaConnectionAndKeepsItsAnchorAfterReconnect() {
         var state = CallUiState(phase = CallPhase.Active)

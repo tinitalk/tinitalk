@@ -30,6 +30,12 @@ const (
 	CallDirectionOutgoing CallDirection = "outgoing"
 )
 
+const (
+	CallReplyCodeCannotTalk   = "cannot_talk"
+	CallReplyCodeCallMeLater  = "call_me_later"
+	CallReplyCodeWillCallBack = "will_call_back"
+)
+
 type CallHistoryItem struct {
 	ID              int64
 	CallID          string
@@ -37,6 +43,7 @@ type CallHistoryItem struct {
 	PeerName        string
 	Direction       CallDirection
 	Outcome         CallOutcome
+	ReplyCode       string
 	Reached         bool
 	StartedAt       time.Time
 	DurationSeconds int64
@@ -175,8 +182,20 @@ func (db *DB) markCallStage(callID string, stage callStage) error {
 }
 
 func (db *DB) FinishCall(callID string, outcome CallOutcome, endedAt time.Time) error {
+	return db.FinishCallWithReply(callID, outcome, endedAt, "")
+}
+
+func (db *DB) FinishCallWithReply(callID string, outcome CallOutcome, endedAt time.Time, replyCode string) error {
 	if outcome == CallOutcomePending {
 		return errors.New("terminal call outcome is required")
+	}
+	if replyCode != "" {
+		if outcome != CallOutcomeRejected {
+			return errors.New("call reply requires rejected outcome")
+		}
+		if !validCallReplyCode(replyCode) {
+			return errors.New("unknown call reply code")
+		}
 	}
 	tx, err := db.sql.Begin()
 	if err != nil {
@@ -184,9 +203,9 @@ func (db *DB) FinishCall(callID string, outcome CallOutcome, endedAt time.Time) 
 	}
 	defer tx.Rollback()
 	result, err := tx.Exec(`
-		UPDATE call_history SET outcome = ?, ended_at = ?
+		UPDATE call_history SET outcome = ?, ended_at = ?, reply_code = NULLIF(?, '')
 		WHERE call_id = ? AND ended_at IS NULL
-	`, outcome, endedAt.Unix(), callID)
+	`, outcome, endedAt.Unix(), replyCode, callID)
 	if err != nil {
 		return err
 	}
@@ -202,6 +221,15 @@ func (db *DB) FinishCall(callID string, outcome CallOutcome, endedAt time.Time) 
 		}
 	}
 	return tx.Commit()
+}
+
+func validCallReplyCode(code string) bool {
+	switch code {
+	case CallReplyCodeCannotTalk, CallReplyCodeCallMeLater, CallReplyCodeWillCallBack:
+		return true
+	default:
+		return false
+	}
 }
 
 func (db *DB) RecoverCallHistory(endedAt time.Time) error {
@@ -315,7 +343,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 	rows, err := db.sql.Query(`
 		SELECT h.id, h.call_id, h.caller_id, peer.login,
 			COALESCE(NULLIF(personal.custom_name, ''), peer.login),
-			h.outcome, h.stage, h.started_at, h.connected_at, h.ended_at
+			h.outcome, h.reply_code, h.stage, h.started_at, h.connected_at, h.ended_at
 		FROM call_history h
 		JOIN users peer ON peer.id = CASE WHEN h.caller_id = ? THEN h.callee_id ELSE h.caller_id END
 		LEFT JOIN user_contacts personal
@@ -338,6 +366,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 		var callerID, startedAt, endedAt int64
 		var stage callStage
 		var connectedAt sql.NullInt64
+		var replyCode sql.NullString
 		if err := rows.Scan(
 			&item.ID,
 			&item.CallID,
@@ -345,12 +374,16 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 			&item.PeerLogin,
 			&item.PeerName,
 			&item.Outcome,
+			&replyCode,
 			&stage,
 			&startedAt,
 			&connectedAt,
 			&endedAt,
 		); err != nil {
 			return page, err
+		}
+		if replyCode.Valid {
+			item.ReplyCode = replyCode.String
 		}
 		if callerID == userID {
 			item.Direction = CallDirectionOutgoing

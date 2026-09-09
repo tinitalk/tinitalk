@@ -3,6 +3,7 @@ package org.tinitalk.data.signal
 import com.google.gson.JsonObject
 import org.tinitalk.data.Session
 import org.tinitalk.call.SequencedSignalEvent
+import org.tinitalk.call.SignalSendResult
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -444,6 +445,56 @@ class SignalSocketTest {
         replacement.listener.onMessage(replacement.webSocket, """{"ack":"${event.id}"}""")
         replacement.listener.onMessage(replacement.webSocket, """{"ack":"${event.id}"}""")
         assertEquals(1, settlements)
+        socket.close()
+        client.shutdown()
+    }
+
+    @Test
+    fun trackedSendDistinguishesAcknowledgementFromCorrelatedError() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val socket = SignalSocket(
+            client,
+            Session("https://talk.example.com", "alice", "token"),
+            socketFactory = factory,
+        )
+        socket.connect(onEvent = {})
+        val connection = factory.connections.single()
+        connection.listener.onOpen(connection.webSocket, response(connection.webSocket.request(), acknowledgesEvents = true))
+        val acknowledged = testEvent("call.reject")
+        val rejected = testEvent("call.reject").copy(id = "018f7d51-3f90-7e63-b657-4a83a6a90002")
+        val results = mutableListOf<SignalSendResult>()
+
+        socket.sendTracked(acknowledged, results::add)
+        connection.listener.onMessage(connection.webSocket, """{"ack":"${acknowledged.id}"}""")
+        socket.sendTracked(rejected, results::add)
+        connection.listener.onMessage(
+            connection.webSocket,
+            """{"error":"invalid reply","event_id":"${rejected.id}","call_id":"${rejected.callId}"}""",
+        )
+
+        assertEquals(listOf(SignalSendResult.Acknowledged, SignalSendResult.Rejected), results)
+        socket.close()
+        client.shutdown()
+    }
+
+    @Test
+    fun trackedSendOnLegacySocketIsUnconfirmedRatherThanAcknowledged() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val socket = SignalSocket(
+            client,
+            Session("https://talk.example.com", "alice", "token"),
+            socketFactory = factory,
+        )
+        socket.connect(onEvent = {})
+        val connection = factory.connections.single()
+        connection.listener.onOpen(connection.webSocket, response(connection.webSocket.request()))
+        var result: SignalSendResult? = null
+
+        socket.sendTracked(testEvent("call.reject")) { result = it }
+
+        assertEquals(SignalSendResult.Unconfirmed, result)
         socket.close()
         client.shutdown()
     }

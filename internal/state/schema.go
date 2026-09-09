@@ -59,6 +59,7 @@ CREATE TABLE call_history(
 	callee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	stage INTEGER NOT NULL DEFAULT 0,
 	outcome INTEGER NOT NULL DEFAULT 0,
+	reply_code TEXT,
 	started_at INTEGER NOT NULL,
 	connected_at INTEGER,
 	ended_at INTEGER,
@@ -100,7 +101,9 @@ CREATE TABLE account_sessions(
 
 // schemaMigrations contains one SQL script per schema version.
 // Index 0 migrates baseSchemaVersion to baseSchemaVersion+1.
-var schemaMigrations = []string{}
+var schemaMigrations = []string{
+	`ALTER TABLE call_history ADD COLUMN reply_code TEXT;`,
+}
 
 func currentSchemaVersion() int {
 	return baseSchemaVersion + len(schemaMigrations)

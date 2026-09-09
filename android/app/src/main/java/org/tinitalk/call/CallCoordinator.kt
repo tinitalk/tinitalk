@@ -9,6 +9,16 @@ data class SequencedSignalEvent(val event: SignalEvent, val seq: Long)
 
 interface SignalClient {
     fun send(event: SignalEvent, onSettled: (() -> Unit)? = null)
+
+    fun sendTracked(event: SignalEvent, onResult: (SignalSendResult) -> Unit) {
+        send(event) { onResult(SignalSendResult.Unconfirmed) }
+    }
+}
+
+enum class SignalSendResult {
+    Acknowledged,
+    Rejected,
+    Unconfirmed,
 }
 
 interface EventIds {
@@ -62,6 +72,19 @@ class CallCoordinator(
         sendTerminal("call.reject", onSettled)
     }
 
+    fun reject(eventId: String, onSettled: (() -> Unit)? = null) {
+        sendTerminal("call.reject", onSettled, eventId)
+    }
+
+    fun reject(
+        replyCode: CallReplyCode,
+        eventId: String? = null,
+        onResult: (SignalSendResult) -> Unit,
+    ) {
+        val payload = JsonObject().apply { addProperty("reply_code", replyCode.wireValue) }
+        sendTrackedTerminal("call.reject", payload, eventId, onResult)
+    }
+
     fun cancel(onSettled: (() -> Unit)? = null) {
         sendTerminal("call.cancel", onSettled)
     }
@@ -112,7 +135,17 @@ class CallCoordinator(
     }
 
     fun onEvent(incoming: SequencedSignalEvent): Boolean {
-        if (incoming.seq <= machine.snapshot().lastSeq) return false
+        val before = machine.snapshot()
+        if (incoming.seq <= before.lastSeq) return false
+        val adoptsCrossedCall = incoming.event.type == "call.accept" &&
+            (before.phase == CallPhase.Connecting || before.phase == CallPhase.Ringing) &&
+            incoming.event.payload["crossed"]?.asBoolean == true
+        if (before.callId != null && incoming.event.callId != before.callId && !adoptsCrossedCall) return false
+        if (before.phase == CallPhase.Ended) {
+            if (incoming.event.type !in TerminalEventTypes || incoming.event.callId != before.callId) return false
+            machine.recordSeq(incoming.seq)
+            return true
+        }
         machine.recordSeq(incoming.seq)
         when (incoming.event.type) {
             "call.incoming" -> machine.transition(CallPhase.Ringing, incoming.event.callId)
@@ -125,12 +158,31 @@ class CallCoordinator(
         return true
     }
 
-    private fun sendTerminal(type: String, onSettled: (() -> Unit)?) {
+    private fun sendTerminal(type: String, onSettled: (() -> Unit)?, eventId: String? = null) {
         val callId = requireNotNull(machine.snapshot().callId) { "no call" }
-        signal.send(event(callId, type, JsonObject()), onSettled)
+        signal.send(event(callId, type, JsonObject(), eventId), onSettled)
         machine.transition(CallPhase.Ended, callId)
     }
 
-    private fun event(callId: String, type: String, payload: JsonObject): SignalEvent =
-        SignalEvent(ids.nextEventId(), callId, type, ids.nowMillis(), payload)
+    private fun sendTrackedTerminal(
+        type: String,
+        payload: JsonObject,
+        eventId: String?,
+        onResult: (SignalSendResult) -> Unit,
+    ) {
+        val callId = requireNotNull(machine.snapshot().callId) { "no call" }
+        signal.sendTracked(event(callId, type, payload, eventId), onResult)
+        machine.transition(CallPhase.Ended, callId)
+    }
+
+    private fun event(
+        callId: String,
+        type: String,
+        payload: JsonObject,
+        eventId: String? = null,
+    ): SignalEvent = SignalEvent(eventId ?: ids.nextEventId(), callId, type, ids.nowMillis(), payload)
+
+    private companion object {
+        val TerminalEventTypes = setOf("call.reject", "call.cancel", "call.end", "call.expire")
+    }
 }

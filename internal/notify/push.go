@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"tinitalk/internal/protocol"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
@@ -16,7 +17,7 @@ var ErrTemporaryPushDelivery = errors.New("temporary WebPush delivery failure")
 const (
 	RequestTimeout        = 5 * time.Second
 	MaxConcurrentWebPush  = 8
-	callNotificationTTL   = 30 * time.Second
+	callNotificationTTL   = time.Duration(protocol.RingTimeoutSecs) * time.Second
 	missedNotificationTTL = 28 * 24 * time.Hour
 )
 
@@ -181,7 +182,8 @@ func WakeMessage(event signaling.DeliveredEvent, callerLogin, caller string, ttl
 			"caller":       caller,
 			"caller_login": callerLogin,
 			"last_seq":     strconv.FormatUint(event.Seq, 10),
-			"expires_at":   time.UnixMilli(event.SentAt).Add(ttl).UTC().Format(time.RFC3339),
+			"started_at":   time.UnixMilli(event.SentAt).UTC().Format(time.RFC3339Nano),
+			"expires_at":   time.UnixMilli(event.SentAt).Add(ttl).UTC().Format(time.RFC3339Nano),
 		},
 		suppress: event.TargetResolutionFailed,
 		ttl:      ttl,

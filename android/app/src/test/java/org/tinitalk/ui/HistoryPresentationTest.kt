@@ -1,6 +1,7 @@
 package org.tinitalk.ui
 
 import org.tinitalk.data.CallHistoryItem
+import org.tinitalk.R
 import java.time.Instant
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
@@ -10,6 +11,37 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HistoryPresentationTest {
+    @Test
+    fun replySummariesDescribeWhoWillCallAndPreserveDirection() {
+        val summaries = listOf(
+            Triple("cannot_talk", R.string.call_reply_history_cannot_talk, R.string.call_reply_history_sent_cannot_talk),
+            Triple("call_me_later", R.string.call_reply_history_call_me_later, R.string.call_reply_history_sent_call_me_later),
+            Triple("will_call_back", R.string.call_reply_history_will_call_back, R.string.call_reply_history_sent_will_call_back),
+        )
+        summaries.forEach { (code, received, sent) ->
+            val outgoing = item("outgoing", "rejected").copy(replyCode = code)
+            val incoming = item("incoming", "rejected").copy(replyCode = code)
+            assertEquals(received, historyReplySummaryRes(outgoing))
+            assertEquals(sent, historyReplySummaryRes(incoming))
+            assertEquals(HistoryCallIcon(HistoryCallDirection.Outgoing, HistoryCallMark.Rejected), historyCallIcon(outgoing))
+            assertEquals(HistoryCallIcon(HistoryCallDirection.Incoming, HistoryCallMark.Rejected), historyCallIcon(incoming))
+            assertFalse(isMissedIncoming(incoming))
+        }
+    }
+
+    @Test
+    fun absentFutureAndNonRejectionRepliesKeepOrdinaryHistoryPresentation() {
+        listOf(null, "", "future_reply").forEach { code ->
+            val rejected = item("outgoing", "rejected").copy(replyCode = code)
+            assertNull(historyReplySummaryRes(rejected))
+            assertEquals(HistoryCallMark.Rejected, historyCallIcon(rejected).mark)
+            assertEquals("Вызов отклонён", historyStatus(rejected))
+        }
+        val completed = item("incoming", "completed").copy(replyCode = "cannot_talk")
+        assertNull(historyReplySummaryRes(completed))
+        assertEquals(HistoryCallMark.Completed, historyCallIcon(completed).mark)
+    }
+
     @Test
     fun choosesRecognizableIconForEveryCallOutcome() {
         val passiveOutcomes = listOf(

@@ -59,6 +59,14 @@ class IncomingPushPayloadTest {
 
         assertEquals(account.id, IncomingPushPayload.parse(data, account, now)?.accountId)
         assertNull(IncomingPushPayload.parse(data, account, Instant.parse("2026-01-01T00:00:31Z")))
+
+        // Updated servers send the full ringing window, including milliseconds.
+        val extended = data + ("expires_at" to "2026-01-01T00:00:45.678Z")
+        assertEquals(
+            Instant.parse("2026-01-01T00:00:45.678Z"),
+            IncomingPushPayload.parse(extended, account, Instant.parse("2026-01-01T00:00:30Z"))?.expiresAt,
+        )
+        assertNull(IncomingPushPayload.parse(extended, account, Instant.parse("2026-01-01T00:00:45.678Z")))
     }
 
     @Test

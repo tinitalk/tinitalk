@@ -27,7 +27,7 @@ func TestHubRecordsCallHistoryOutcomes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(page.Items) != 1 || page.Items[0].Outcome != state.CallOutcomeCancelledAfterRinging || page.UnreadMissed != 1 {
+		if len(page.Items) != 1 || page.Items[0].Outcome != state.CallOutcomeCancelledAfterRinging || page.Items[0].ReplyCode != "" || page.UnreadMissed != 1 {
 			t.Fatalf("callee history = %+v", page)
 		}
 	})

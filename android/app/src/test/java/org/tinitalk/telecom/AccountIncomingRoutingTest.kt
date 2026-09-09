@@ -7,6 +7,7 @@ import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallSessionBinding
+import org.tinitalk.call.CallReplyCode
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.data.AccountId
 import org.tinitalk.push.IncomingInvite
@@ -51,6 +52,121 @@ class AccountIncomingRoutingTest {
         assertEquals(invite, IncomingCallController.inviteFrom(Shadows.shadowOf(pending).savedIntent))
 
         controller.finishTerminalPresentation(context, invite.owner) {}
+    }
+
+    @Test
+    fun selectedReplySurvivesPendingActionPersistenceAndIntentHandoff() {
+        val context = RuntimeEnvironment.getApplication()
+        val controller = IncomingCallController(admission = CallAdmissionHandoff(CallAdmission()))
+        val invite = invite("account-b", "reply-call")
+
+        controller.save(
+            context,
+            invite,
+            IncomingCallController.ActionReject,
+            CallReplyCode.CallMeLater,
+            "018f7d51-3f90-7e63-b657-4a83a6a90005",
+        )
+
+        val pending = requireNotNull(controller.load(context))
+        assertEquals(CallReplyCode.CallMeLater, pending.replyCode)
+        assertEquals("018f7d51-3f90-7e63-b657-4a83a6a90005", pending.terminalEventId)
+        val intent = controller.actionIntent(
+            context,
+            IncomingCallController.ActionReject,
+            invite,
+            CallReplyCode.CallMeLater,
+            pending.terminalEventId,
+        )
+        assertEquals(CallReplyCode.CallMeLater, IncomingCallController.replyCodeFrom(Shadows.shadowOf(intent).savedIntent))
+        assertEquals(pending.terminalEventId, IncomingCallController.terminalEventIdFrom(Shadows.shadowOf(intent).savedIntent))
+        controller.clear(context, invite.owner)
+    }
+
+    @Test
+    fun duplicateIncomingRefreshCannotEraseSelectedReply() {
+        val context = RuntimeEnvironment.getApplication()
+        val controller = IncomingCallController(admission = CallAdmissionHandoff(CallAdmission()))
+        val invite = invite("account-a", "reply-call")
+        assertEquals(IncomingAdmissionResult.Admitted, controller.admitIncoming(context, invite))
+        val eventId = "018f7d51-3f90-7e63-b657-4a83a6a90006"
+        controller.save(context, invite, IncomingCallController.ActionReject, CallReplyCode.WillCallBack, eventId)
+
+        assertEquals(IncomingAdmissionResult.Duplicate, controller.admitIncoming(context, invite))
+
+        val restored = requireNotNull(controller.load(context))
+        assertEquals(IncomingCallController.ActionReject, restored.action)
+        assertEquals(CallReplyCode.WillCallBack, restored.replyCode)
+        assertEquals(eventId, restored.terminalEventId)
+        controller.clear(context, invite.owner)
+    }
+
+    @Test
+    fun withCurrentIncomingRunsOnlyForTheExactOwner() {
+        val context = RuntimeEnvironment.getApplication()
+        val controller = IncomingCallController(admission = CallAdmissionHandoff(CallAdmission()))
+        val current = invite("account-a", "same-call")
+        val otherAccount = invite("account-b", "same-call")
+        assertEquals(IncomingAdmissionResult.Admitted, controller.admitIncoming(context, current))
+        var actions = 0
+
+        assertTrue(controller.withCurrentIncoming(context, current) { actions++ })
+        assertEquals(false, controller.withCurrentIncoming(context, otherAccount) { actions++ })
+
+        assertEquals(1, actions)
+        controller.clear(context, current.owner)
+    }
+
+    @Test
+    fun terminalHandoffRetainsReplyUntilTerminalAttemptCompletes() {
+        val context = RuntimeEnvironment.getApplication()
+        val admission = CallAdmissionHandoff(CallAdmission())
+        val controller = IncomingCallController(admission = admission)
+        val invite = invite("account-a", "reply-call")
+        assertEquals(IncomingAdmissionResult.Admitted, controller.admitIncoming(context, invite))
+        val eventId = "018f7d51-3f90-7e63-b657-4a83a6a90007"
+        assertTrue(controller.save(context, invite, IncomingCallController.ActionReject, CallReplyCode.CannotTalk, eventId))
+
+        assertTrue(controller.handoffTerminalPresentation(context, invite.owner) {})
+        assertTrue(controller.finishTerminalPresentation(context, invite.owner) {})
+
+        val retained = requireNotNull(controller.load(context))
+        assertEquals(invite.owner, retained.invite.owner)
+        assertEquals(IncomingCallController.ActionReject, retained.action)
+        assertEquals(CallReplyCode.CannotTalk, retained.replyCode)
+        assertEquals(eventId, retained.terminalEventId)
+        assertTrue(controller.completePendingReject(context, invite.owner))
+        assertEquals(null, controller.load(context))
+        admission.releaseStaged(invite.owner)
+    }
+
+    @Test
+    fun retainedRejectDoesNotBlockANewInviteAndItsLateCompletionCannotClearTheReplacement() {
+        val context = RuntimeEnvironment.getApplication()
+        val admission = CallAdmissionHandoff(CallAdmission())
+        val controller = IncomingCallController(admission = admission)
+        val rejected = invite("account-a", "call-a")
+        val replacement = invite("account-b", "call-b")
+        assertEquals(IncomingAdmissionResult.Admitted, controller.admitIncoming(context, rejected))
+        assertTrue(
+            controller.save(
+                context,
+                rejected,
+                IncomingCallController.ActionReject,
+                CallReplyCode.CallMeLater,
+                "018f7d51-3f90-7e63-b657-4a83a6a90008",
+            ),
+        )
+        assertTrue(controller.handoffTerminalPresentation(context, rejected.owner) {})
+        val terminalLease = requireNotNull(admission.take(rejected.owner))
+        assertTrue(admission.release(terminalLease))
+
+        assertEquals(IncomingAdmissionResult.Admitted, controller.admitIncoming(context, replacement))
+        assertEquals(replacement.owner, controller.load(context)?.invite?.owner)
+
+        assertEquals(false, controller.completePendingReject(context, rejected.owner))
+        assertEquals(replacement.owner, controller.load(context)?.invite?.owner)
+        controller.finishTerminalPresentation(context, replacement.owner) {}
     }
 
     @Test

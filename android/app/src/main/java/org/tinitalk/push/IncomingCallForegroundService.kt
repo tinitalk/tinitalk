@@ -37,6 +37,24 @@ class IncomingCallForegroundService : Service() {
             expire(invite, startId)
             return START_NOT_STICKY
         }
+        if (intent?.action == ActionHideNotification) {
+            if (!IncomingCallScreenState.isShowing(invite.owner)) {
+                if (presentedOwner == null) stopSelfResult(startId)
+                return START_NOT_STICKY
+            }
+            if (presentedOwner == invite.owner) {
+                // The full-screen UI takes over alerts, but call.ringing may still be in flight.
+                // Keep its socket and the original invite expiry alive until delivery/termination.
+                detachForeground(removeNotification = true)
+                getSystemService(NotificationManager::class.java).cancel(IncomingCallNotifier.NotificationId)
+            } else if (presentedOwner == null) {
+                if (incoming.ownsIncoming(this, invite)) {
+                    getSystemService(NotificationManager::class.java).cancel(IncomingCallNotifier.NotificationId)
+                }
+                stopSelfResult(startId)
+            }
+            return START_NOT_STICKY
+        }
 
         val notifier = IncomingCallNotifier(this)
         val mode = currentIncomingCallPresentation(this)
@@ -154,6 +172,7 @@ class IncomingCallForegroundService : Service() {
 
     companion object {
         internal const val ActionShow = "org.tinitalk.action.SHOW_INCOMING_CALL"
+        internal const val ActionHideNotification = "org.tinitalk.action.HIDE_INCOMING_CALL_NOTIFICATION"
 
         fun show(context: Context, invite: IncomingInvite): Boolean = runCatching {
             ContextCompat.startForegroundService(
@@ -164,6 +183,13 @@ class IncomingCallForegroundService : Service() {
 
         fun stop(context: Context) {
             context.stopService(Intent(context, IncomingCallForegroundService::class.java))
+        }
+
+        fun hideNotification(context: Context, invite: IncomingInvite) {
+            runCatching {
+                context.startService(IncomingCallController().presentationIntent(context, invite)
+                    .setAction(ActionHideNotification))
+            }
         }
     }
 }

@@ -72,7 +72,7 @@ class SignalEventTest {
 
     @Test
     fun decodesValidFixtures() {
-        listOf("call_start.json", "call_resume.json", "rtc_ice.json").forEach { name ->
+        listOf("call_start.json", "call_resume.json", "rtc_ice.json", "call_reject_reply.json").forEach { name ->
             val event = SignalEvent.decode(readFixture(name))
             assertTrue("$name id", event.id.isNotBlank())
             assertTrue("$name call id", event.callId.isNotBlank())

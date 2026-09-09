@@ -33,6 +33,7 @@ type CallHistoryStore interface {
 	MarkCallAccepted(callID string) error
 	MarkCallConnected(callID string, connectedAt time.Time) error
 	FinishCall(callID string, outcome state.CallOutcome, endedAt time.Time) error
+	FinishCallWithReply(callID string, outcome state.CallOutcome, endedAt time.Time, replyCode string) error
 }
 
 type SessionStore interface {
@@ -421,6 +422,14 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	now := h.now()
 	if h.history != nil {
 		switch event.Type {
+		case "call.reject":
+			replyCode, err := protocol.ParseCallReplyCode(event.Payload)
+			if err != nil {
+				return err
+			}
+			if err := h.history.FinishCallWithReply(c.id, state.CallOutcomeRejected, now, replyCode); err != nil {
+				return err
+			}
 		case "call.ringing":
 			if err := h.history.MarkCallRinging(c.id); err != nil {
 				return err
@@ -801,7 +810,7 @@ func (h *Hub) Sweep() int {
 		if c.state != callRinging {
 			continue
 		}
-		if now.Sub(c.startedAt) <= time.Duration(protocol.RingTimeoutSecs)*time.Second {
+		if now.Sub(c.startedAt) < time.Duration(protocol.RingTimeoutSecs)*time.Second {
 			continue
 		}
 		event := protocol.Event{

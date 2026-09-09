@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_reply_cannot_talk">Не могу говорить</string>
+    <string name="call_reply_call_me_later">Перезвоните мне позднее</string>
+    <string name="call_reply_will_call_back">Я вам перезвоню</string>
+    <string name="call_reply_result_cannot_talk">сейчас не может говорить</string>
+    <string name="call_reply_result_call_me_later">просит перезвонить позже</string>
+    <string name="call_reply_result_will_call_back">обещает перезвонить позже</string>
+    <string name="call_reply_history_cannot_talk">Не могли говорить</string>
+    <string name="call_reply_history_call_me_later">Просили перезвонить позже</string>
+    <string name="call_reply_history_will_call_back">Обещали перезвонить</string>
+    <string name="call_reply_history_sent_cannot_talk">Вы не могли говорить</string>
+    <string name="call_reply_history_sent_call_me_later">Вы просили перезвонить позже</string>
+    <string name="call_reply_history_sent_will_call_back">Вы обещали перезвонить</string>
+    <string name="call_reply_sheet_title">Ответить сообщением</string>
+    <string name="call_reply_open">Открыть варианты ответа</string>
+    <string name="call_reply_close">Закрыть варианты ответа</string>
+    <string name="call_reply_select">Отклонить звонок с ответом: %1$s</string>
+    <string name="call_reply_result_title">Ответ на звонок</string>
+    <string name="call_reply_send_failed">Не удалось отправить ответ</string>
+    <string name="call_reply_send_unconfirmed">Не удалось подтвердить отправку ответа</string>
+    <string name="call_reply_sending">Отправляем ответ…</string>
+    <string name="call_reply_sent">Ответ отправлен</string>
+</resources>

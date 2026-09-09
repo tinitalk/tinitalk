@@ -252,6 +252,8 @@ internal fun HistoryRow(
 ) {
     val name = contactDisplayName(item.peerName)
     val direction = if (item.direction == "incoming") "Входящий" else "Исходящий"
+    val status = historyReplySummaryRes(item)?.let { androidx.compose.ui.res.stringResource(it) }
+        ?: historyStatus(item)
     val missed = isMissedIncoming(item)
     val successful = item.outcome == "completed"
     val statusColor = when {
@@ -264,7 +266,7 @@ internal fun HistoryRow(
         modifier = Modifier
             .fillMaxWidth()
             .semantics {
-                contentDescription = "${if (showPeer) name else direction}, ${historyStatus(item)}, ${historyTime(item.startedAt)}"
+                contentDescription = "${if (showPeer) name else direction}, $status, ${historyTime(item.startedAt)}"
             }
             .then(
                 if (onClick == null) Modifier else Modifier
@@ -305,7 +307,7 @@ internal fun HistoryRow(
                     HistoryCallIcon(historyCallIcon(item), statusColor)
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        historyStatus(item),
+                        status,
                         color = statusColor,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 2,

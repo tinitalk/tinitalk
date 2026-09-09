@@ -12,6 +12,59 @@ import org.junit.Test
 
 class CallToneModeTest {
     @Test
+    fun rejectionUsesBusyToneAndNoAnswerUsesCongestionForCaller() {
+        for ((reason, tone) in listOf(
+            CallEndReason.Rejected to CallToneMode.Busy,
+            CallEndReason.TimedOut to CallToneMode.Congestion,
+        )) {
+            assertEquals(tone, callToneMode(CallUiState(
+                direction = CallDirection.Outgoing, phase = CallPhase.Ended, endReason = reason,
+            )))
+        }
+    }
+
+    @Test
+    fun rejectedOrMissedIncomingCallIsSilent() {
+        for (reason in listOf(CallEndReason.Rejected, CallEndReason.TimedOut, CallEndReason.Failed,
+            CallEndReason.ConnectionLost, CallEndReason.NotInContacts)) {
+            assertEquals(CallToneMode.Silent, callToneMode(CallUiState(
+                direction = CallDirection.Incoming, phase = CallPhase.Ended, endReason = reason,
+            )))
+        }
+    }
+
+    @Test
+    fun completedConversationKeepsEndToneForBothDirections() {
+        for (direction in CallDirection.entries) {
+            for (reason in listOf(CallEndReason.LocalHangup, CallEndReason.RemoteHangup, CallEndReason.Rejected,
+                CallEndReason.TimedOut, CallEndReason.Failed, CallEndReason.ConnectionLost, CallEndReason.NotInContacts)) {
+                assertEquals(CallToneMode.Ended, callToneMode(CallUiState(
+                    direction = direction, phase = CallPhase.Ended,
+                    connectedAtElapsedMs = 1L, endReason = reason,
+                )))
+            }
+        }
+    }
+
+    @Test
+    fun failedOutgoingAttemptUsesCongestionToneOnlyOnceItEnds() {
+        for (reason in listOf(CallEndReason.Failed, CallEndReason.ConnectionLost, CallEndReason.NotInContacts)) {
+            val connecting = CallUiState(direction = CallDirection.Outgoing, phase = CallPhase.Connecting)
+            assertEquals(CallToneMode.Reaching, callToneMode(connecting))
+            assertEquals(CallToneMode.Congestion, callToneMode(connecting.onEnded(reason, 1L)))
+        }
+    }
+
+    @Test
+    fun cancellingOwnAttemptDoesNotSoundBusy() {
+        for (reason in listOf(CallEndReason.Cancelled, CallEndReason.LocalHangup)) {
+            assertEquals(CallToneMode.Silent, callToneMode(CallUiState(
+                direction = CallDirection.Outgoing, phase = CallPhase.Ended, endReason = reason,
+            )))
+        }
+    }
+
+    @Test
     fun securityExchangeRejectionDoesNotEndCall() {
         for (code in listOf("call_sas_timeout", "call_sas_invalid", "call_sas_unavailable")) {
             assertNull(signalingFailureEndReason(SignalFailure("security exchange rejected", code = code, callId = "call-1"), "call-1"))

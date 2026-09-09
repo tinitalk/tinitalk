@@ -22,6 +22,11 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.widget.Toast
+import org.tinitalk.call.CallReplyResultStore
+import org.tinitalk.call.callReplyResult
+import org.tinitalk.call.SignalSendResult
+import org.tinitalk.push.CallReplyNotifier
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import org.tinitalk.BuildConfig
@@ -650,7 +655,19 @@ class CallForegroundService : Service() {
                 handler.post {
                     if (socket !== newSocket || finishing) return@post
                     try {
+                        val beforeEvent = CallUiStateStore.snapshot()
                         if (newCoordinator.onEvent(incoming)) {
+                            val reply = callReplyResult(
+                                beforeEvent, incoming.event.type,
+                                AccountCallKey(owner.key.accountId, incoming.event.callId),
+                                incoming.event.payload["reply_code"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString,
+                            )?.takeIf {
+                                resolvePinnedCallSession(auth, owner.key.accountId, owner.sessionBinding) != null
+                            }?.copy(sessionBinding = owner.sessionBinding)
+                            if (reply != null) {
+                                CallReplyResultStore(this@CallForegroundService).save(reply)
+                                CallReplyNotifier(this@CallForegroundService).showUnlessDisplayed(reply)
+                            }
                             val snapshot = newCoordinator.snapshot()
                             routeMediaCallback(onFailure = ::failCurrentMedia) {
                                 it.onSignalEvent(snapshot, incoming.event)
@@ -694,7 +711,9 @@ class CallForegroundService : Service() {
                         }
                     }
                     publish(incoming.event.endReason())
-                    if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallUnlessAwaitingTerminalSignal()
+                    if (newCoordinator.snapshot().phase == CallPhase.Ended) {
+                        finishCallUnlessAwaitingTerminalSignal()
+                    }
                 }
             },
             onOpen = { connectionGeneration ->
@@ -732,7 +751,7 @@ class CallForegroundService : Service() {
                     newCoordinator.fail()
                     publish(reason)
                     if (reason == CallEndReason.Busy || reason == CallEndReason.NotInContacts) {
-                        finishCallAfter(BusyToneDelayMillis)
+                        finishCallAfter(CallFailureToneDurationMillis)
                     } else {
                         finishCallSoon()
                     }
@@ -781,16 +800,36 @@ class CallForegroundService : Service() {
         var endReason: CallEndReason? = null
         var awaitingTerminalSignal = false
         var acceptedIncomingOwner: AccountCallOwner? = null
-        fun terminalSettlement(): () -> Unit {
+        fun terminalSettlement(pendingRejectOwner: AccountCallOwner? = null): () -> Unit {
             awaitingTerminalSignal = true
             val expectedGeneration = runtimeGeneration
             return terminalSignalGate.begin {
+                pendingRejectOwner?.let { IncomingCallController().completePendingReject(this, it) }
                 handler.post { finishCallSoon(expectedGeneration) }
+            }
+        }
+        fun replySettlement(pendingRejectOwner: AccountCallOwner): (SignalSendResult) -> Unit {
+            awaitingTerminalSignal = true
+            val expectedGeneration = runtimeGeneration
+            return terminalSignalGate.beginTracked { outcome ->
+                IncomingCallController().completePendingReject(this, pendingRejectOwner)
+                val message = when (outcome) {
+                    SignalSendResult.Acknowledged -> R.string.call_reply_sent
+                    SignalSendResult.Rejected -> R.string.call_reply_send_failed
+                    else -> R.string.call_reply_send_unconfirmed
+                }
+                handler.post {
+                    if (runtimeGeneration == expectedGeneration) {
+                        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                        finishCallSoon(expectedGeneration)
+                    }
+                }
             }
         }
         when (intent.action) {
             ActionStart -> {
                 if (call.snapshot().phase != CallPhase.Idle) return
+                CallReplyResultStore(this).clearForNewCall(requestOwner.key)
                 connectionHealthClassifier.reset()
                 CallServiceState.publish(call.snapshot())
                 CallUiStateStore.reset()
@@ -820,6 +859,7 @@ class CallForegroundService : Service() {
             }
             ActionAnswer -> {
                 invite ?: return
+                CallReplyResultStore(this).clearForNewCall(invite.key)
                 if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callKey != invite.key) return
                 if (call.snapshot().phase == CallPhase.Idle &&
                     IncomingCallController().isTerminal(this, invite.owner)
@@ -854,6 +894,7 @@ class CallForegroundService : Service() {
             ActionReject -> {
                 invite ?: return
                 if (call.snapshot().phase != CallPhase.Idle && call.snapshot().callKey != invite.key) return
+                if (call.snapshot().phase != CallPhase.Idle && call.snapshot().phase != CallPhase.Ringing) return
                 telecomCallKey = invite.key
                 CallUiStateStore.begin(
                     invite.key,
@@ -869,9 +910,17 @@ class CallForegroundService : Service() {
                 )
                 call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
                 call.resume()
-                if (call.snapshot().phase == CallPhase.Ringing) call.reject(terminalSettlement())
+                if (call.snapshot().phase == CallPhase.Ringing) {
+                    val replyCode = IncomingCallController.replyCodeFrom(intent)
+                    val eventId = IncomingCallController.terminalEventIdFrom(intent)
+                    if (replyCode == null) {
+                        val settled = terminalSettlement(invite.owner)
+                        if (eventId == null) call.reject(settled) else call.reject(eventId, settled)
+                    } else {
+                        call.reject(replyCode, eventId, replySettlement(invite.owner))
+                    }
+                }
                 endReason = CallEndReason.Rejected
-                IncomingCallController().clear(this, invite.owner)
             }
             ActionDisconnect -> {
                 if (invite != null) {
@@ -1053,7 +1102,15 @@ class CallForegroundService : Service() {
     }
 
     private fun finishCallSoon(expectedGeneration: Long = runtimeGeneration) {
-        finishCallAfter(FinishToneDelayMillis, expectedGeneration)
+        val state = CallUiStateStore.snapshot()
+        val mode = callToneMode(state)
+        val delayMillis = if (state.callKey == callOwner?.key &&
+            (mode == CallToneMode.Busy || mode == CallToneMode.Congestion)) {
+            CallFailureToneDurationMillis
+        } else {
+            FinishToneDelayMillis
+        }
+        finishCallAfter(delayMillis, expectedGeneration)
     }
 
     private fun finishCallUnlessAwaitingTerminalSignal() {
@@ -1383,7 +1440,6 @@ class CallForegroundService : Service() {
         const val NotificationId = 10
         private const val TerminalSignalTimeoutMillis = 20_000L
         private const val FinishToneDelayMillis = 450L
-        private const val BusyToneDelayMillis = 2_200L
         private const val EndedStateLifetimeMillis = 1_000L
         private const val CallLogTag = "TiniTalkCall"
         private val TelecomScopedActions = setOf(ActionTelecomActive, ActionTelecomInactive, ActionSelectEndpoint)

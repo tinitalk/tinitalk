@@ -47,6 +47,38 @@ A stop only releases the matching presenter's share ID. Resume sends the current
 screen state after replay. Grants alone must never start capture without a live,
 locally approved Android projection request. Older clients receive no screen events.
 
+## Rejection replies
+
+Servers advertising `call_reply_v1` in `/healthz.features` accept an optional
+`reply_code` in the existing `call.reject` payload. The only supported values are
+`cannot_talk`, `call_me_later`, and `will_call_back`. An absent field preserves the
+ordinary `{}` rejection. An explicitly empty, null, non-string, or unknown code
+is invalid. The usual callee, ringing-state, and call ownership checks apply.
+The `reply_code` key is case-sensitive; unrelated payload fields do not override it.
+
+The server stores the code atomically with outcome `rejected` before acknowledging
+or relaying the event. A database failure leaves the call available for retry.
+Retries use the original event ID; deduplication and resume replay preserve the
+original payload. Both general and contact call history expose optional
+`reply_code` to both participants, including after a server restart. Old rows
+omit it. Only the stable code is transmitted and persisted; clients localize it.
+
+Clients show reply controls only after confirming this feature on the incoming
+call's account server. Unknown support hides the controls. Peer client versions
+do not gate them: older clients still receive ordinary `call.reject`, while new
+clients show the localized reply. New clients treat absent or unrecognized reply
+codes as ordinary rejection. HTTP API 4 and WebSocket protocol 2 remain unchanged.
+Deploy the supporting server before updating clients.
+
+## Incoming push timestamps
+
+The `incoming_call` push includes `started_at` and `expires_at` as UTC RFC 3339
+timestamps with optional fractional seconds. Both use the server's call start,
+not the caller's clock. `started_at` is additive: older clients ignore it and
+new clients accept its absence from older servers. Clients must not infer the
+start by subtracting a fixed ringing duration from `expires_at`. Until call
+history is available, a missing start uses the time the missed call was observed.
+
 ## Call security code
 
 The optional `call_sas_v1` health feature protects a call against an active

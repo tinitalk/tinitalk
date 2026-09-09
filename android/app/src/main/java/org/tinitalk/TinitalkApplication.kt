@@ -119,6 +119,11 @@ class TinitalkApplication : Application() {
             resolvePinnedCallSession(authStore, owner.key.accountId, owner.sessionBinding) != null
         }
         val invite = reclaimed?.let { key -> incoming.load(this)?.invite?.takeIf { it.key == key } } ?: return
+        val pending = incoming.load(this)
+        if (pending?.action == IncomingCallController.ActionReject) {
+            incoming.resumePendingReject(this, pending)
+            return
+        }
         if (IncomingCallForegroundService.show(this, invite)) return
 
         val mode = currentIncomingCallPresentation(this)
@@ -135,6 +140,8 @@ class TinitalkApplication : Application() {
 
     private fun stopCallsForRemovedSession(event: AuthSessionEvent) {
         val binding = CallSessionBinding.from(event.session)
+        org.tinitalk.call.CallReplyResultStore(this).clearForSession(event.accountId, binding)
+        org.tinitalk.push.CallReplyNotifier(this).clearForSession(event.accountId, binding)
         val incoming = IncomingCallController()
         val accountId = event.accountId
             ?: incoming.load(this)?.invite?.owner?.takeIf { it.sessionBinding == binding }?.key?.accountId

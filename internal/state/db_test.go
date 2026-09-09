@@ -61,7 +61,7 @@ func TestOpenRejectsLegacySchemaWithoutModifyingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Open(path); err == nil || err.Error() != "database schema 8 is unsupported; expected 9" {
+	if _, err := Open(path); err == nil || err.Error() != "database schema 8 is unsupported; expected 10" {
 		t.Fatalf("Open legacy schema error = %v", err)
 	}
 	legacy, err := sql.Open("sqlite", path)
@@ -82,6 +82,97 @@ func TestOpenRejectsLegacySchemaWithoutModifyingIt(t *testing.T) {
 	}
 	if journalMode != "wal" {
 		t.Fatalf("journal mode after rejected open = %q, want wal", journalMode)
+	}
+}
+
+func TestFreshSchemaIncludesNullableCallReplyCode(t *testing.T) {
+	db := testStateDB(t)
+	columns, err := db.sql.Query("PRAGMA table_info(call_history)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer columns.Close()
+	found := false
+	for columns.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := columns.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		if name == "reply_code" {
+			found = true
+			if columnType != "TEXT" || notNull != 0 {
+				t.Fatalf("reply_code type/nullability = %q/%d, want TEXT/nullable", columnType, notNull)
+			}
+		}
+	}
+	if err := columns.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("fresh call_history schema has no reply_code column")
+	}
+}
+
+func TestOpenMigratesSchemaNineCallHistoryWithoutLosingRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySchema := `
+		CREATE TABLE users(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			login TEXT NOT NULL UNIQUE,
+			display_name TEXT NOT NULL,
+			disabled INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL DEFAULT (unixepoch())
+		);
+		CREATE TABLE call_history(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			call_id TEXT NOT NULL UNIQUE,
+			caller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			callee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			stage INTEGER NOT NULL DEFAULT 0,
+			outcome INTEGER NOT NULL DEFAULT 0,
+			started_at INTEGER NOT NULL,
+			connected_at INTEGER,
+			ended_at INTEGER,
+			CHECK(caller_id <> callee_id)
+		);
+		INSERT INTO users(id, login, display_name) VALUES(1, 'alice', 'Alice'), (2, 'bob', 'Bob');
+		INSERT INTO call_history(call_id, caller_id, callee_id, stage, outcome, started_at, ended_at)
+		VALUES('legacy-call', 1, 2, 1, 4, 100, 120);
+		PRAGMA user_version = 9;
+	`
+	if _, err := legacy.Exec(legacySchema); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.sql.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 10 {
+		t.Fatalf("schema version = %d, want 10", version)
+	}
+	var callID string
+	var replyCode sql.NullString
+	if err := db.sql.QueryRow("SELECT call_id, reply_code FROM call_history").Scan(&callID, &replyCode); err != nil {
+		t.Fatal(err)
+	}
+	if callID != "legacy-call" || replyCode.Valid {
+		t.Fatalf("migrated call = %q, reply %+v; want preserved row with NULL reply", callID, replyCode)
 	}
 }
 

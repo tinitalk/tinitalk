@@ -1573,25 +1573,3 @@ private fun audioEndpointIcon(endpoint: AudioEndpoint?): Int = when (endpoint?.t
     CallEndpointCompat.TYPE_EARPIECE -> R.drawable.ic_phone_in_talk
     else -> R.drawable.ic_call
 }
-
-@Composable
-fun EndedCallScreen(
-    peerName: String,
-    reason: CallEndReason?,
-    contactAddress: ContactAddress? = null,
-    fallbackLogin: String = peerName,
-) {
-    CallScreenSurface(
-        status = when (reason) {
-            CallEndReason.Busy -> "Занято"
-            CallEndReason.NotInContacts -> "Вас ещё не добавили в контакты"
-            else -> "Звонок завершён"
-        },
-        peerName = peerName,
-        contactAddress = contactAddress,
-        fallbackLogin = fallbackLogin,
-        prominentAvatar = true,
-    ) {
-        Spacer(Modifier.height(18.dp))
-    }
-}
