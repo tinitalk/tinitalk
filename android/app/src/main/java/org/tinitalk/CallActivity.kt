@@ -19,6 +19,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,10 +33,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalAccessibilityManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.core.view.WindowCompat
 import androidx.core.content.ContextCompat
+import androidx.core.os.BundleCompat
 import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.call.CallDirection
+import org.tinitalk.call.CallReplySupport
+import org.tinitalk.call.CallReplyCode
+import org.tinitalk.call.CallReplyResult
+import org.tinitalk.call.CallReplyResultStore
+import org.tinitalk.call.CallScreenVisibility
 import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.AccountCallOwner
 import org.tinitalk.call.CallSessionBinding
@@ -51,18 +61,25 @@ import org.tinitalk.call.CallVideoState
 import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ConnectionHealth
 import org.tinitalk.call.resolvePinnedCallSession
+import org.tinitalk.call.restoreEndedCallState
+import org.tinitalk.call.restoreEndedCallBinding
+import org.tinitalk.call.saveEndedState
+import org.tinitalk.call.GlobalCallAdmission
 import org.tinitalk.call.shouldDismissIncomingOverlay
 import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.AccountUnreadState
 import org.tinitalk.data.AuthStore
+import org.tinitalk.data.AuthSessionEvent
+import org.tinitalk.data.AuthSessionEvents
 import org.tinitalk.data.CallHistoryEvents
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.ContactRepository
 import org.tinitalk.data.normalizeServerUrl
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.Session
+import org.tinitalk.data.UrlConnectionApiClient
 import org.tinitalk.ui.LocalContactPhotoReader
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
@@ -85,6 +102,8 @@ import org.tinitalk.ui.theme.TiniTalkTheme
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class CallActivity : ComponentActivity() {
     private val incomingController = IncomingCallController()
@@ -92,10 +111,29 @@ class CallActivity : ComponentActivity() {
     private lateinit var proximityController: ProximityController
     private lateinit var network: NetworkAvailability
     private var activityStarted = false
+    private var activityResumed = false
+    private val visibilityToken = Any()
     private val cameraForegroundPublicationGate = CameraForegroundPublicationGate()
     private lateinit var cameraPermissionRouter: CameraPermissionActionRouter
     private lateinit var cameraForegroundLifecycle: CallActivityCameraForeground
     private val actionGate = CallScreenActionGate()
+    private val replySupport = CallReplySupport()
+    private var replySupported by mutableStateOf(false)
+    private var replyResult by mutableStateOf<CallReplyResult?>(null)
+    private var callSessionBinding: CallSessionBinding? = null
+    private val replySessionObserver: (AuthSessionEvent) -> Unit = { event ->
+        runOnUiThread {
+            val result = replyResult
+            if (result != null && (event.accountId == null || event.accountId == result.key.accountId) &&
+                result.sessionBinding == CallSessionBinding.from(event.session)) dismissReplyResult()
+            val state = visibleCallState()
+            if (state.phase == CallPhase.Ended && (event.accountId == null || event.accountId == state.accountId) &&
+                callSessionBinding?.matches(event.session) == true) {
+                callState = CallUiState()
+                finish()
+            }
+        }
+    }
     private var callState by mutableStateOf(CallUiStateStore.snapshot())
     private var videoState by mutableStateOf(VideoCallStateStore.snapshot())
     private var renderedVideoCallKey: AccountCallKey? = null
@@ -152,11 +190,24 @@ class CallActivity : ComponentActivity() {
 
     private val callObserver: (CallUiState) -> Unit = { state ->
         runOnUiThread {
-            if (state.phase != CallPhase.Idle && state.phase != CallPhase.Ended) {
+            if (state.phase != CallPhase.Idle) {
                 pendingOutgoingStart = false
             }
             actionGate.onCallState(state)
-            callState = state
+            if (state.phase != CallPhase.Idle && state.callKey != callState.callKey) callSessionBinding = null
+            // The service releases its state before the ended screen's reading time is over.
+            callState = when {
+                state.phase != CallPhase.Idle -> state
+                callState.phase == CallPhase.Ended -> callState
+                callState.phase == CallPhase.Ringing && incomingInvite?.let { invite ->
+                    invite.key == callState.callKey && incomingController.isTerminal(this, invite.owner)
+                } == true -> callState.onEnded(CallEndReason.Cancelled, SystemClock.elapsedRealtime())
+                else -> state
+            }
+            bindCallSession()
+            refreshReplyResult()
+            validateEndedCallSession()
+            publishVisibleCall()
             if (state.callKey != renderedVideoCallKey || state.phase != CallPhase.Active) {
                 renderedVideoCallKey = null
                 renderedVideoVisible = false
@@ -180,17 +231,24 @@ class CallActivity : ComponentActivity() {
     private val inviteMonitor = object : Runnable {
         override fun run() {
             val invite = incomingInvite ?: return
+            if (callState.callKey == invite.key && callState.phase != CallPhase.Ringing) return
             if (!isCurrentIncoming(invite)) {
-                finish()
+                finishIncomingPresentation(invite)
                 return
             }
-            if (callState.callKey == invite.key && callState.phase != CallPhase.Ringing) return
             handler.postDelayed(this, InviteCheckIntervalMillis)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (callState.phase == CallPhase.Idle) {
+            val savedEnded = savedInstanceState?.getBundle(StateEndedCall)
+            restoreEndedCallState(savedEnded)?.let {
+                callState = it
+                callSessionBinding = restoreEndedCallBinding(savedEnded)
+            }
+        }
         WindowCompat.setDecorFitsSystemWindows(window, false)
         proximityController = ProximityController(this)
         network = networkAvailability()
@@ -238,7 +296,17 @@ class CallActivity : ComponentActivity() {
                     WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
             )
         }
-        applyIntent(intent)
+        val restoredIntent = savedInstanceState?.let {
+            BundleCompat.getParcelable(it, StateOutgoingCallIntent, Intent::class.java)
+        } ?: intent
+        val restoredIncoming = IncomingCallController.inviteFrom(restoredIntent)
+        if (callState.phase == CallPhase.Idle && restoredIncoming != null &&
+            savedInstanceState?.getString(StatePresentedIncomingOwner) == restoredIncoming.owner.localId()) {
+            // Cancellation can arrive between saving the ringing screen and recreating it.
+            incomingInvite = restoredIncoming
+            if (!isCurrentIncoming(restoredIncoming)) finishIncomingPresentation(restoredIncoming)
+        }
+        if (!isFinishing && applyIntent(restoredIntent)) setIntent(restoredIntent)
         CallUiStateStore.observe(callObserver)
         VideoCallStateStore.observe(videoObserver)
         network.observe(networkObserver)
@@ -254,6 +322,34 @@ class CallActivity : ComponentActivity() {
                 }
 
                 val visibleState = visibleCallState()
+                BackHandler(replyResult != null) { dismissReplyResult() }
+                LaunchedEffect(incomingInvite?.owner, visibleState.phase) {
+                    replySupported = false
+                    val owner = incomingInvite?.owner
+                    if (owner == null || visibleState.phase != CallPhase.Ringing) {
+                        replySupport.clear()
+                        return@LaunchedEffect
+                    }
+                    val request = replySupport.begin(owner)
+                    val auth = AuthStore(SharedPreferencesKeyValueStore(this@CallActivity), AndroidKeystoreTokenCipher())
+                    val info = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val session = resolvePinnedCallSession(auth, owner.key.accountId, owner.sessionBinding)
+                                ?: return@runCatching null
+                            UrlConnectionApiClient(session.url, session.login, session.token, session.sessionId).serverInfo()
+                        }.getOrNull()
+                    }
+                    if (incomingInvite?.owner == owner && visibleCallState().phase == CallPhase.Ringing &&
+                        incomingInvite?.let(::isCurrentIncoming) == true &&
+                        resolvePinnedCallSession(auth, owner.key.accountId, owner.sessionBinding) != null &&
+                        replySupport.complete(request, info)
+                    ) {
+                        replySupported = replySupport.isSupported(owner)
+                        if (info?.service == "tinitalk" && info.status == "ok" && info.apiVersion == 4) {
+                            auth.updateFeatures(owner.sessionBinding.serverUrl, info.features)
+                        }
+                    }
+                }
                 val peerName = visibleState.peer?.displayName
                     ?.takeIf { it.isNotBlank() }
                     ?: incomingInvite?.caller?.takeIf { it.isNotBlank() }
@@ -271,6 +367,9 @@ class CallActivity : ComponentActivity() {
                         visibleState.endReason,
                         contactAddress,
                         fallbackLogin,
+                        reply = replyResult?.code,
+                        direction = visibleState.direction,
+                        durationText = durationText.takeIf { visibleState.connectedAtElapsedMs != null },
                     )
                     visibleState.phase == CallPhase.Active -> ActiveCallScreen(
                         peerName = peerName,
@@ -307,10 +406,15 @@ class CallActivity : ComponentActivity() {
                             EmptyCallSurface()
                         } else {
                             IncomingCallScreen(
-                                callId = invite.callId,
+                                callId = invite.owner.localId(),
                                 caller = peerName,
                                 contactAddress = contactAddress,
                                 fallbackLogin = fallbackLogin,
+                                replySupported = replySupported,
+                                onReply = { reject(invite, it) },
+                                onReplySheetExpanded = {
+                                    if (isCurrentIncoming(invite)) IncomingCallNotifier(this).silence(invite)
+                                },
                                 onAnswer = { answer(invite) },
                                 onReject = { reject(invite) },
                             )
@@ -337,19 +441,23 @@ class CallActivity : ComponentActivity() {
                     else -> EmptyCallSurface()
                 }
 
-                LaunchedEffect(visibleState.callId, visibleState.phase) {
+                val accessibilityManager = LocalAccessibilityManager.current
+                val endedScreenMillis = remember(visibleState.callKey, accessibilityManager) {
+                    accessibilityManager?.calculateRecommendedTimeoutMillis(
+                        EndedScreenMillis, containsIcons = true, containsText = true,
+                    )?.coerceAtLeast(EndedScreenMillis) ?: EndedScreenMillis
+                }
+                LaunchedEffect(visibleState.callKey, visibleState.phase, replyResult, endedScreenMillis) {
+                    val displayedReply = replyResult
                     when (visibleState.phase) {
                         CallPhase.Ended -> {
-                            delay(
-                                if (visibleState.endReason == CallEndReason.Busy ||
-                                    visibleState.endReason == CallEndReason.NotInContacts
-                                ) {
-                                    BusyScreenMillis
-                                } else {
-                                    EndedScreenMillis
-                                },
-                            )
-                            finish()
+                            lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                                delay(endedScreenMillis)
+                                if (replyResult == displayedReply && visibleCallState().callKey == visibleState.callKey &&
+                                    visibleCallState().phase == CallPhase.Ended) {
+                                    if (displayedReply != null) dismissReplyResult() else finish()
+                                }
+                            }
                         }
                         CallPhase.Idle -> {
                             delay(IdleGraceMillis)
@@ -365,11 +473,18 @@ class CallActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        activityStarted = true
-        incomingInvite?.takeUnless(::isCurrentIncoming)?.let {
+        val hadReply = replyResult != null
+        refreshReplyResult()
+        validateEndedCallSession()
+        if (isFinishing) return
+        if (hadReply && replyResult == null && (callState.phase == CallPhase.Idle || callState.phase == CallPhase.Ended)) {
             finish()
             return
         }
+        AuthSessionEvents.observe(replySessionObserver)
+        activityStarted = true
+        incomingInvite?.takeUnless(::isCurrentIncoming)?.let(::finishIncomingPresentation)
+        if (isFinishing) return
         showIncomingCallFullScreen()
         updateProximity()
         handler.removeCallbacks(inviteMonitor)
@@ -378,15 +493,20 @@ class CallActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        activityResumed = true
+        publishVisibleCall()
         cameraForegroundLifecycle.onResume()
     }
 
     override fun onPause() {
+        activityResumed = false
+        publishVisibleCall()
         cameraForegroundLifecycle.onPause()
         super.onPause()
     }
 
     override fun onStop() {
+        AuthSessionEvents.removeObserver(replySessionObserver)
         activityStarted = false
         if (!isChangingConfigurations) restoreIncomingCallNotification()
         updateProximity()
@@ -397,10 +517,14 @@ class CallActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (applyIntent(intent)) setIntent(intent)
+        publishVisibleCall()
         showIncomingCallFullScreen()
+        handler.removeCallbacks(inviteMonitor)
+        if (activityStarted && incomingInvite != null) handler.post(inviteMonitor)
     }
 
     override fun onDestroy() {
+        CallScreenVisibility.update(visibilityToken, null)
         handler.removeCallbacks(inviteMonitor)
         proximityController.close()
         CallUiStateStore.removeObserver(callObserver)
@@ -411,6 +535,14 @@ class CallActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        val displayed = visibleCallState()
+        displayed.saveEndedState(callSessionBinding)?.let { outState.putBundle(StateEndedCall, it) }
+        if (displayed.phase == CallPhase.Ringing) {
+            incomingInvite?.takeIf { it.key == displayed.callKey }?.let {
+                outState.putString(StatePresentedIncomingOwner, it.owner.localId())
+            }
+        }
+        if (outgoingCallKey != null) outState.putParcelable(StateOutgoingCallIntent, Intent(intent))
         pendingScreenCallKey?.let { key ->
             outState.putString("screen_permission_account", key.accountId.value)
             outState.putString("screen_permission_call", key.callId)
@@ -439,11 +571,12 @@ class CallActivity : ComponentActivity() {
     private fun applyIntent(intent: Intent?): Boolean {
         val invite = IncomingCallController.inviteFrom(intent)
         if (invite != null) {
-            if (!incomingController.ownsIncoming(this, invite)) {
+            val endedCallMatches = callState.callKey == invite.key && callState.phase == CallPhase.Ended
+            if (!endedCallMatches && !incomingController.ownsIncoming(this, invite)) {
                 if (callState.phase == CallPhase.Idle || callState.phase == CallPhase.Ended) finish()
                 return false
             }
-            val answerRequested = intent?.action == IncomingCallController.ActionAnswer
+            val answerRequested = !endedCallMatches && intent?.action == IncomingCallController.ActionAnswer
             val answerClaim = if (answerRequested) {
                 val liveCall = callState.phase != CallPhase.Idle && callState.phase != CallPhase.Ended
                 when {
@@ -459,7 +592,9 @@ class CallActivity : ComponentActivity() {
                 return false
             }
             if (answerRequested) intent.action = IncomingCallController.ActionIncoming
-            if (incomingInvite?.key != invite.key) actionGate.reset()
+            if (incomingInvite?.owner != invite.owner) actionGate.reset()
+            CallReplyResultStore(this).clearForNewCall(invite.key)
+            replyResult = null
             incomingInvite = invite
             outgoingCallKey = null
             outgoingLogin = null
@@ -468,6 +603,19 @@ class CallActivity : ComponentActivity() {
             pendingOutgoingStart = false
             if (answerClaim == IncomingAnswerClaim.Claimed) answer(invite)
             return true
+        }
+        // Ongoing-call banners/notifications may only carry the Activity target.
+        // Pin the displayed outgoing call before its shared state is cleared at termination.
+        if (intent != null && !intent.hasExtra(ExtraOutgoingLogin) && callState.direction == CallDirection.Outgoing) {
+            val key = callState.callKey
+            val peer = callState.peer
+            if (key != null && peer?.login != null) {
+                intent.putExtra(ExtraOutgoingAccountId, key.accountId.value)
+                    .putExtra(ExtraOutgoingCallId, key.callId)
+                    .putExtra(ExtraOutgoingLogin, peer.login)
+                    .putExtra(ExtraOutgoingName, peer.displayName)
+                    .putExtra(ExtraOutgoingServerUrl, peer.contactAddress?.serverUrl)
+            }
         }
         val login = intent?.getStringExtra(ExtraOutgoingLogin) ?: return false
         val accountId = intent.getStringExtra(ExtraOutgoingAccountId)
@@ -523,12 +671,13 @@ class CallActivity : ComponentActivity() {
             return true
         }
         if (outgoingCallKey != key) actionGate.reset()
+        CallReplyResultStore(this).clearForNewCall(key)
         outgoingCallKey = key
         outgoingLogin = login
         outgoingName = intent.getStringExtra(ExtraOutgoingName).orEmpty().ifBlank { login }
         outgoingContactAddress = contactAddress
         incomingInvite = null
-        pendingOutgoingStart = true
+        pendingOutgoingStart = callState.callKey != key || callState.phase == CallPhase.Idle
         if (redial) {
             when (val started = requireNotNull(redialStart)) {
                 OutgoingCallStartResult.Offline,
@@ -560,6 +709,7 @@ class CallActivity : ComponentActivity() {
                 }
             }
         }
+        refreshReplyResult()
         return true
     }
 
@@ -609,6 +759,11 @@ class CallActivity : ComponentActivity() {
     }
 
     private fun visibleCallState(): CallUiState {
+        replyResult?.takeIf { it.key == outgoingCallKey }?.let { result ->
+            return CallUiState(accountId = result.key.accountId, callId = result.key.callId,
+                peer = result.peer, direction = CallDirection.Outgoing, phase = CallPhase.Ended,
+                endReason = CallEndReason.Rejected)
+        }
         val invite = incomingInvite
         if (invite != null && callState.callKey != invite.key) {
             return CallUiState(
@@ -643,9 +798,63 @@ class CallActivity : ComponentActivity() {
         incomingController.answer(this, invite)
     }
 
-    private fun reject(invite: IncomingInvite) {
+    private fun reject(invite: IncomingInvite, replyCode: CallReplyCode? = null) {
+        if (!isCurrentIncoming(invite) || visibleCallState().phase != CallPhase.Ringing ||
+            (replyCode != null && !replySupported)) return
         if (!actionGate.lock(CallScreenAction.Reject, invite.key)) return
-        incomingController.reject(this, invite)
+        incomingController.reject(this, invite, replyCode)
+    }
+
+    private fun refreshReplyResult() {
+        val key = outgoingCallKey
+        val stored = CallReplyResultStore(this).load()?.takeIf { it.key == key }
+        val liveOtherCall = callState.phase != CallPhase.Idle && callState.phase != CallPhase.Ended && callState.callKey != key
+        replyResult = stored?.takeUnless { liveOtherCall }?.takeIf { result ->
+            val binding = result.sessionBinding
+            binding == null || resolvePinnedCallSession(
+                AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher()),
+                result.key.accountId, binding,
+            ) != null
+        }
+        if (replyResult != null) pendingOutgoingStart = false
+    }
+
+    private fun bindCallSession() {
+        val key = callState.callKey ?: return
+        if (callSessionBinding != null) return
+        callSessionBinding = incomingInvite?.takeIf { it.key == key }?.sessionBinding
+            ?: GlobalCallAdmission.current()?.owner?.takeIf { it.key == key }?.sessionBinding
+            ?: runCatching {
+                AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+                    .get(key.accountId)?.session?.let(CallSessionBinding::from)
+            }.getOrNull()
+    }
+
+    private fun validateEndedCallSession() {
+        val state = visibleCallState().takeIf { it.phase == CallPhase.Ended } ?: return
+        val key = state.callKey ?: return
+        val binding = callSessionBinding ?: return
+        val auth = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+        if (!auth.matchesSessionIdentity(key.accountId, binding.serverUrl, binding.login, binding.sessionId, binding.configId)) {
+            callState = CallUiState()
+            finish()
+        }
+    }
+
+    private fun dismissReplyResult() {
+        replyResult?.let { CallReplyResultStore(this).clear(it.key) }
+        replyResult = null
+        finish()
+        publishVisibleCall()
+    }
+
+    private fun publishVisibleCall() {
+        val state = visibleCallState()
+        val key = state.callKey?.takeIf {
+            activityResumed && !isFinishing && state.direction == CallDirection.Outgoing &&
+                state.phase != CallPhase.Idle && it == outgoingCallKey
+        }
+        CallScreenVisibility.update(visibilityToken, key)
     }
 
     private fun endCall(state: CallUiState) {
@@ -739,9 +948,34 @@ class CallActivity : ComponentActivity() {
         if (stillRinging) IncomingCallNotifier(this).fullScreenHidden(invite)
     }
 
+    private fun finishIncomingPresentation(invite: IncomingInvite) {
+        val liveOtherCall = callState.phase != CallPhase.Idle && callState.phase != CallPhase.Ended &&
+            callState.callKey != invite.key
+        if (liveOtherCall) return
+        val displayed = visibleCallState()
+        if (displayed.callKey != invite.key || displayed.phase != CallPhase.Ringing) return
+        val expired = !invite.expiresAt.isAfter(Instant.now())
+        if (!expired && !incomingController.isTerminal(this, invite.owner)) {
+            finish()
+            return
+        }
+        // Before answer, ringing exists only in this Activity, not in the call runtime.
+        // Retain that peer locally so cancellation/expiry gets the common ended screen.
+        callState = displayed.onEnded(
+            if (expired) CallEndReason.TimedOut else CallEndReason.Cancelled,
+            SystemClock.elapsedRealtime(),
+        )
+        callSessionBinding = invite.sessionBinding
+        validateEndedCallSession()
+        publishVisibleCall()
+        updateProximity()
+        cameraForegroundLifecycle.onCallStateChanged()
+    }
+
     private fun isCurrentIncoming(invite: IncomingInvite): Boolean {
-        val activeCallMatches = callState.callKey == invite.key && callState.phase == CallPhase.Active
-        if (activeCallMatches) return true
+        val displayedCallMatches = callState.callKey == invite.key &&
+            (callState.phase == CallPhase.Active || callState.phase == CallPhase.Ended)
+        if (displayedCallMatches) return true
         if (!invite.expiresAt.isAfter(Instant.now()) || incomingController.isTerminal(this, invite.owner)) {
             return false
         }
@@ -756,6 +990,9 @@ class CallActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val StateOutgoingCallIntent = "outgoing_call_intent"
+        private const val StateEndedCall = "ended_call_state"
+        private const val StatePresentedIncomingOwner = "presented_incoming_owner"
         private const val ExtraOutgoingLogin = "outgoing_login"
         private const val ExtraOutgoingName = "outgoing_name"
         private const val ExtraOutgoingAccountId = "outgoing_account_id"
@@ -770,8 +1007,7 @@ class CallActivity : ComponentActivity() {
         private const val StatePendingCameraAccountId = "pending_camera_account_id"
         private const val InviteCheckIntervalMillis = 500L
         private const val IdleGraceMillis = 1_000L
-        private const val EndedScreenMillis = 900L
-        private const val BusyScreenMillis = 2_200L
+        private const val EndedScreenMillis = 3_000L
 
         fun outgoingIntent(
             context: Context,

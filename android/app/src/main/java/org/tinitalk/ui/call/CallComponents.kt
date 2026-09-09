@@ -7,6 +7,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +18,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,6 +63,8 @@ internal fun CallScreenSurface(
     statusAccessory: (@Composable () -> Unit)? = null,
     pulsingAvatar: Boolean = false,
     prominentAvatar: Boolean = false,
+    keepFooterVisible: Boolean = false,
+    scrollable: Boolean = false,
     footer: @Composable ColumnScope.() -> Unit,
 ) {
     val compact = LocalDensity.current.fontScale >= 1.5f
@@ -86,6 +91,58 @@ internal fun CallScreenSurface(
         1f
     }
 
+    val header: @Composable (Dp) -> Unit = { fittedAvatarSize ->
+        Text(
+            text = status,
+            color = statusColor,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(headerSpacing),
+            contentAlignment = Alignment.Center,
+        ) {
+            statusAccessory?.invoke()
+        }
+        Box(
+            modifier = Modifier
+                .size(fittedAvatarSize)
+                .testTag("call-peer-avatar")
+                .graphicsLayer(scaleX = avatarScale, scaleY = avatarScale),
+        ) {
+            ContactAvatar(
+                address = contactAddress,
+                displayName = peerName,
+                fallbackLogin = fallbackLogin,
+                size = fittedAvatarSize,
+                borderWidth = 0.dp,
+            )
+        }
+        Spacer(Modifier.height(if (compact) 12.dp else 20.dp))
+        Text(
+            text = peerName,
+            color = Color.White,
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (detail != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = detail,
+                color = Color.White.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+        detailAccessory?.invoke()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -96,60 +153,32 @@ internal fun CallScreenSurface(
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = verticalPadding),
+                .padding(horizontal = 20.dp, vertical = verticalPadding)
+                .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                text = status,
-                color = statusColor,
-                style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(headerSpacing),
-                contentAlignment = Alignment.Center,
-            ) {
-                statusAccessory?.invoke()
+            if (keepFooterVisible) {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                    val textHeight = with(LocalDensity.current) {
+                        MaterialTheme.typography.titleMedium.lineHeight.toDp() * 2 +
+                            MaterialTheme.typography.headlineLarge.lineHeight.toDp() * 2
+                    }
+                    val fittedAvatar = minOf(avatarSize,
+                        (maxHeight - headerSpacing - (if (compact) 12.dp else 20.dp) - textHeight)
+                            .coerceAtLeast(48.dp))
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        header(fittedAvatar)
+                    }
+                }
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    footer()
+                }
+            } else {
+                header(avatarSize)
+                Spacer(Modifier.weight(1f))
+                footer()
             }
-            Box(
-                modifier = Modifier
-                    .size(avatarSize)
-                    .testTag("call-peer-avatar")
-                    .graphicsLayer(scaleX = avatarScale, scaleY = avatarScale),
-            ) {
-                ContactAvatar(
-                    address = contactAddress,
-                    displayName = peerName,
-                    fallbackLogin = fallbackLogin,
-                    size = avatarSize,
-                    borderWidth = 0.dp,
-                )
-            }
-            Spacer(Modifier.height(if (compact) 12.dp else 20.dp))
-            Text(
-                text = peerName,
-                color = Color.White,
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (detail != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = detail,
-                    color = Color.White.copy(alpha = 0.78f),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-            detailAccessory?.invoke()
-            Spacer(Modifier.weight(1f))
-            footer()
         }
     }
 }
