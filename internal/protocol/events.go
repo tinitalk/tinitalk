@@ -100,6 +100,9 @@ func (e Event) Validate() error {
 
 func (e Event) validatePayload() error {
 	switch e.Type {
+	case "call.reject":
+		_, err := ParseCallReplyCode(e.Payload)
+		return err
 	case "call.start":
 		var payload struct {
 			CalleeID       string `json:"callee_id"`
@@ -201,6 +204,29 @@ func (e Event) validatePayload() error {
 		}
 	}
 	return nil
+}
+
+// ParseCallReplyCode reads the exact wire field, ignoring unrelated payload keys.
+// Validation and persistence must agree with clients' case-sensitive lookup.
+func ParseCallReplyCode(rawPayload json.RawMessage) (string, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		return "", err
+	}
+	raw, present := payload["reply_code"]
+	if !present {
+		return "", nil
+	}
+	var code string
+	if err := json.Unmarshal(raw, &code); err != nil {
+		return "", errors.New("reply_code must be a supported string")
+	}
+	switch code {
+	case "cannot_talk", "call_me_later", "will_call_back":
+		return code, nil
+	default:
+		return "", errors.New("unsupported reply_code")
+	}
 }
 
 func isBase64URL32(value string) bool {

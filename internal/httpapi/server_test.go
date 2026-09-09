@@ -121,7 +121,7 @@ func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 4 || health.Commit != "01234567" {
 		t.Fatalf("health = %+v, want tinitalk, ok, API version 4, commit 01234567", health)
 	}
-	want := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1"}
+	want := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1"}
 	if fmt.Sprint(health.Features) != fmt.Sprint(want) {
 		t.Fatalf("health features = %v, want %v", health.Features, want)
 	}
