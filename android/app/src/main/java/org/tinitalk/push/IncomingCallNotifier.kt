@@ -324,7 +324,7 @@ internal class IncomingCallForegroundPresentation(
 internal class IncomingCallAlertHandoff(
     private val startVibration: (IncomingInvite) -> Unit,
     private val startRingtone: (IncomingInvite) -> Unit,
-    private val dismissNotification: () -> Unit,
+    private val dismissNotification: (IncomingInvite) -> Unit,
     private val isSilenced: (IncomingInvite) -> Boolean,
     private val stopVibration: (AccountCallOwner) -> Unit,
     private val stopRingtone: (AccountCallOwner) -> Unit,
@@ -334,7 +334,7 @@ internal class IncomingCallAlertHandoff(
             startVibration(invite)
             startRingtone(invite)
         }
-        dismissNotification()
+        dismissNotification(invite)
     }
 
     fun silence(invite: IncomingInvite) {
@@ -495,7 +495,7 @@ class IncomingCallNotifier internal constructor(
         alertHandoff ?: IncomingCallAlertHandoff(
             startVibration = { IncomingVibration.start(context, it) },
             startRingtone = { IncomingRingtone.start(context, it) },
-            dismissNotification = ::dismissNotification,
+            dismissNotification = { IncomingCallForegroundService.hideNotification(context, it) },
             isSilenced = { incomingCallSilenceStore(context).isSilenced(it) },
             stopVibration = { IncomingVibration.stop(it) },
             stopRingtone = { IncomingRingtone.stop(it) },
@@ -1087,6 +1087,7 @@ class IncomingCallNotifier internal constructor(
             ?.let { login -> ContactAddress.of(invite.sessionBinding.serverUrl, login) }
 
     fun cancel() {
+        IncomingCallScreenState.hidden()
         dismissNotification()
         IncomingVibration.stop()
         IncomingRingtone.stop()
@@ -1100,11 +1101,13 @@ class IncomingCallNotifier internal constructor(
 
     fun fullScreenShown(invite: IncomingInvite) {
         IncomingCallController().withCurrentIncoming(context, invite) {
+            IncomingCallScreenState.shown(invite.owner)
             alerts.fullScreenShown(invite)
         }
     }
 
     fun fullScreenHidden(invite: IncomingInvite) {
+        IncomingCallScreenState.hidden(invite.owner)
         IncomingRingtone.stop(invite.owner)
         show(invite)
     }
