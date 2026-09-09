@@ -1,6 +1,8 @@
 package org.tinitalk.ui
 
 import org.tinitalk.data.CallHistoryItem
+import org.tinitalk.call.CallReplyCode
+import androidx.annotation.StringRes
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -69,6 +71,13 @@ fun historyCallIcon(item: CallHistoryItem): HistoryCallIcon {
 
 fun isMissedIncoming(item: CallHistoryItem): Boolean =
     item.direction == "incoming" && (item.outcome in NoAnswerOutcomes || item.outcome == "busy")
+
+@StringRes
+fun historyReplySummaryRes(item: CallHistoryItem): Int? {
+    if (item.outcome != "rejected") return null
+    val reply = CallReplyCode.fromWire(item.replyCode) ?: return null
+    return if (item.direction == "incoming") reply.sentHistoryRes else reply.receivedHistoryRes
+}
 
 fun historyStatus(item: CallHistoryItem): String {
     if (item.outcome == "completed") return "Разговор · ${historyDuration(item.durationSeconds)}"
