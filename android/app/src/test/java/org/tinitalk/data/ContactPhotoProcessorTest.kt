@@ -1,5 +1,6 @@
 package org.tinitalk.data
 
+import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -8,9 +9,9 @@ import androidx.test.core.app.ApplicationProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.zip.CRC32
+import javax.imageio.ImageIO
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -21,7 +22,8 @@ import org.robolectric.annotation.Config
 import androidx.exifinterface.media.ExifInterface
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35])
+// The processor does not need TinitalkApplication, whose asynchronous startup purge shares its draft directory.
+@Config(sdk = [35], application = Application::class)
 class ContactPhotoProcessorTest {
     @get:Rule
     val temp = TemporaryFolder()
@@ -129,12 +131,32 @@ class ContactPhotoProcessorTest {
 
     @Test
     fun animatedInputUsesStaticFirstFrame() {
-        val source = temp.newFile("static.gif").apply { writeBytes(minimalGifBytes()) }
+        val source = temp.newFile("animated.gif").apply { writeBytes(twoFrameGifBytes()) }
 
-        val draft = processor().importDraft(Uri.fromFile(source)).valueOrThrow()
+        // Independently check the fixture: selecting the second frame must produce a different color.
+        ImageIO.createImageInputStream(source).use { input ->
+            val reader = ImageIO.getImageReadersByFormatName("gif").next()
+            try {
+                reader.input = input
+                assertEquals(2, reader.getNumImages(true))
+                assertEquals(Color.RED, reader.read(0).getRGB(0, 0))
+                assertEquals(Color.BLUE, reader.read(1).getRGB(0, 0))
+            } finally {
+                reader.dispose()
+            }
+        }
 
-        assertEquals(1, draft.preview.width)
-        assertEquals(1, draft.preview.height)
+        val processor = processor()
+        val draft = processor.importDraft(Uri.fromFile(source)).valueOrThrow()
+        assertTrue(source.delete())
+        val rendered = processor.render(draft, NormalizedCropSquare(0f, 0f, 1f)).valueOrThrow()
+
+        assertEquals(2, draft.preview.width)
+        assertEquals(2, draft.preview.height)
+        assertEquals(Color.RED, draft.preview.getPixel(0, 0))
+        assertEquals(ContactPhotoOutputPixels, rendered.width)
+        assertEquals(ContactPhotoOutputPixels, rendered.height)
+        assertEquals(Color.RED, rendered.getPixel(256, 256))
     }
 
     @Test
@@ -169,8 +191,10 @@ class ContactPhotoProcessorTest {
 
     private fun processor() = ContactPhotoProcessor(context)
 
-    private fun <T> ContactPhotoResult<T>.valueOrThrow(): T =
-        (this as ContactPhotoResult.Success<T>).value
+    private fun <T> ContactPhotoResult<T>.valueOrThrow(): T = when (this) {
+        is ContactPhotoResult.Success -> value
+        is ContactPhotoResult.Failure -> throw AssertionError("Photo processing failed: $reason", cause)
+    }
 
     private fun ContactPhotoResult<*>.failureOrNull(): ContactPhotoFailure? =
         (this as? ContactPhotoResult.Failure)?.reason
@@ -246,7 +270,10 @@ class ContactPhotoProcessorTest {
         write(value and 0xff)
     }
 
-    private fun minimalGifBytes(): ByteArray =
-        java.util.Base64.getDecoder().decode("R0lGODlhAQABAPAAAP8AAAAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==")
+    // GIF89a, two 2x2 frames (red, then blue), 100 ms each.
+    private fun twoFrameGifBytes(): ByteArray =
+        java.util.Base64.getDecoder().decode(
+            "R0lGODlhAgACAIAAAP8AAAAA/yH5BAQKAAAALAAAAAACAAIAAAIEBEEQBQAh+QQECgAAACwAAAAAAgACAAACBAzDMAUAOw==",
+        )
 
 }
