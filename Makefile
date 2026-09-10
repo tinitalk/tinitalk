@@ -11,7 +11,7 @@ SHELL := cmd.exe
 .SHELLFLAGS := /C
 NULL_DEVICE := NUL
 CREATE_DIST = if not exist dist mkdir dist
-BUILD_SERVER = set CGO_ENABLED=0&& set GOOS=linux&& set GOARCH=$(GOARCH)&& go build -trimpath -buildvcs=false -ldflags "-s -w -X tinitalk/internal/httpapi.serverCommit=$(SERVER_COMMIT)" -o dist/tinitalk-linux-$(GOARCH) ./cmd/tinitalk
+BUILD_SERVER = set CGO_ENABLED=0&& set GOOS=linux&& set GOARCH=$(GOARCH)&& go build -trimpath -buildvcs=false -ldflags "-w -X tinitalk/internal/httpapi.serverCommit=$(SERVER_COMMIT)" -o dist/tinitalk-linux-$(GOARCH) ./cmd/tinitalk
 BUILD_CLIENT = cd android && gradlew.bat $(GRADLE_FLAGS) testDebugUnitTest assembleDebug $(DEBUG_CLIENT_GRADLE_ARGS)
 BUILD_CLIENT_MIN = cd android && gradlew.bat $(GRADLE_FLAGS) testDebugUnitTest verifyWebRtcJniMin $(MIN_CLIENT_GRADLE_ARGS)
 BUILD_CLIENT_RELEASE = cd android && gradlew.bat $(GRADLE_FLAGS) testDebugUnitTest exportReleaseApk $(MIN_CLIENT_GRADLE_ARGS)
@@ -23,7 +23,7 @@ else
 SHELL := /bin/sh
 NULL_DEVICE := /dev/null
 CREATE_DIST = mkdir -p dist
-BUILD_SERVER = CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -buildvcs=false -ldflags "-s -w -X tinitalk/internal/httpapi.serverCommit=$(SERVER_COMMIT)" -o dist/tinitalk-linux-$(GOARCH) ./cmd/tinitalk
+BUILD_SERVER = CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -buildvcs=false -ldflags "-w -X tinitalk/internal/httpapi.serverCommit=$(SERVER_COMMIT)" -o dist/tinitalk-linux-$(GOARCH) ./cmd/tinitalk
 COPY_CLIENT = cp android/app/build/outputs/apk/debug/app-debug.apk dist/tinitalk-debug.apk
 COPY_CLIENT_MIN = cp android/app/build/outputs/apk/min/app-min.apk dist/tinitalk-min.apk
 CLEAN_DIST = rm -rf dist
