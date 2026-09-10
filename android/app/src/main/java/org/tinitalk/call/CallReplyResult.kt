@@ -1,6 +1,7 @@
 package org.tinitalk.call
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.core.content.edit
 import org.json.JSONObject
 import org.tinitalk.data.AccountId
@@ -11,6 +12,7 @@ data class CallReplyResult(
     val peer: CallPeer,
     val code: CallReplyCode,
     val sessionBinding: CallSessionBinding? = null,
+    val endedAtElapsedMs: Long = SystemClock.elapsedRealtime(),
 )
 
 internal fun callReplyResult(
@@ -37,6 +39,7 @@ internal class CallReplyResultStore(context: Context) {
             put("login", result.peer.login)
             put("server", result.peer.contactAddress?.serverUrl)
             put("reply_code", result.code.wireValue)
+            put("ended_elapsed", result.endedAtElapsedMs)
             result.sessionBinding?.let {
                 put("binding_server", it.serverUrl)
                 put("binding_login", it.login)
@@ -58,7 +61,8 @@ internal class CallReplyResultStore(context: Context) {
         ) else null
         CallReplyResult(key, CallPeer(json.getString("name"), login,
             if (server != null && login != null) ContactAddress.of(server, login) else null),
-            CallReplyCode.fromWire(json.getString("reply_code")) ?: return null, binding)
+            CallReplyCode.fromWire(json.getString("reply_code")) ?: return null, binding,
+            json.optLong("ended_elapsed", 0L))
     }.getOrNull()
 
     fun clear(key: AccountCallKey? = null) {

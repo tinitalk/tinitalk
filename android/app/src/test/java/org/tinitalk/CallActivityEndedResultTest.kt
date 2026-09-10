@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import java.time.Instant
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Before
@@ -22,6 +23,7 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import org.robolectric.shadows.ShadowSystemClock
 import org.tinitalk.call.*
 import org.tinitalk.data.*
 import org.tinitalk.media.MediaConnectionState
@@ -98,10 +100,10 @@ class CallActivityEndedResultTest {
                 compose.onNodeWithText("Ждём ответа…").assertDoesNotExist()
                 compose.onNodeWithText("00:00").assertDoesNotExist()
                 CallUiStateStore.reset(key)
-                compose.mainClock.advanceTimeBy(2_000)
+                advanceTimeBy(2_000)
                 assertFalse("$phase closed early", activity.get().isFinishing)
                 compose.onNodeWithText(title).assertIsDisplayed()
-                compose.mainClock.advanceTimeBy(1_200)
+                advanceTimeBy(1_200)
                 compose.waitForIdle()
                 assertTrue("$phase did not close", activity.get().isFinishing)
             } finally { activity.pause().stop().destroy() }
@@ -115,13 +117,13 @@ class CallActivityEndedResultTest {
             endConversation(reason, direction)
             compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
             assertEquals(timerBounds, compose.onNodeWithText("01:05").assertIsDisplayed().fetchSemanticsNode().boundsInRoot)
-            compose.mainClock.advanceTimeBy(1_000)
+            advanceTimeBy(1_000)
             CallUiStateStore.reset(key)
-            compose.mainClock.advanceTimeBy(1_000)
+            advanceTimeBy(1_000)
             assertFalse(activity.get().isFinishing)
             compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
             compose.onNodeWithText("01:05").assertIsDisplayed()
-            compose.mainClock.advanceTimeBy(1_200)
+            advanceTimeBy(1_200)
             compose.waitForIdle()
             assertTrue(activity.get().isFinishing)
         } finally { activity.pause().stop().destroy() }
@@ -138,30 +140,115 @@ class CallActivityEndedResultTest {
         try {
             compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
             compose.onNodeWithText("01:05").assertIsDisplayed()
-            compose.mainClock.advanceTimeBy(2_000)
+            advanceTimeBy(2_000)
             assertFalse(recreated.get().isFinishing)
-            compose.mainClock.advanceTimeBy(1_200)
+            advanceTimeBy(1_200)
             compose.waitForIdle()
             assertTrue(recreated.get().isFinishing)
         } finally { recreated.pause().stop().destroy() }
     }
 
-    @Test fun incomingResultGetsThreeSecondsAfterReturningFromBackground() {
-        val activity = startConversation(CallDirection.Incoming)
+    @Test fun incomingResultDoesNotReappearAfterHoursLocked() = checkResultAfterLock(CallDirection.Incoming)
+    @Test fun outgoingResultDoesNotReappearAfterHoursLocked() = checkResultAfterLock(CallDirection.Outgoing)
+
+    private fun checkResultAfterLock(direction: CallDirection) {
+        val activity = startConversation(direction)
         try {
-            endConversation(CallEndReason.LocalHangup, CallDirection.Incoming)
+            endConversation(CallEndReason.LocalHangup, direction)
             activity.pause().stop()
             CallUiStateStore.reset(key)
-            compose.mainClock.advanceTimeBy(10_000)
-            assertFalse(activity.get().isFinishing)
+            ShadowSystemClock.simulateDeepSleep(Duration.ofHours(2))
+            activity.start().resume()
+            assertTrue("Expired result must close before the screen becomes visible", activity.get().isFinishing)
+            activity.visible()
+        } finally { activity.pause().stop().destroy() }
+    }
+
+    @Test fun completedCallInBackgroundDoesNotReappearAfterHoursLocked() {
+        val activity = startConversation(CallDirection.Incoming)
+        try {
+            activity.pause().stop()
+            endConversation(CallEndReason.RemoteHangup, CallDirection.Incoming)
+            CallUiStateStore.reset(key)
+            ShadowSystemClock.simulateDeepSleep(Duration.ofHours(2))
+            activity.start().resume()
+            assertTrue(activity.get().isFinishing)
+            activity.visible()
+        } finally { activity.pause().stop().destroy() }
+    }
+
+    @Test fun expiredResultCannotBeRestoredAfterProcessRecreation() {
+        val activity = startConversation(CallDirection.Incoming)
+        val originalIntent = Intent(activity.get().intent)
+        endConversation(CallEndReason.RemoteHangup, CallDirection.Incoming)
+        CallUiStateStore.reset(key)
+        val saved = Bundle()
+        activity.pause().saveInstanceState(saved).stop().destroy()
+        ShadowSystemClock.simulateDeepSleep(Duration.ofHours(2))
+        val recreated = Robolectric.buildActivity(CallActivity::class.java, originalIntent).create(saved).start()
+        try {
+            assertTrue("Saved result must retain its original deadline", recreated.get().isFinishing)
+            recreated.resume().visible()
+        } finally { recreated.pause().stop().destroy() }
+    }
+
+    @Test fun briefBackgroundVisitDoesNotRestartEndedTimer() {
+        val activity = startConversation(CallDirection.Incoming)
+        try {
+            endConversation(CallEndReason.RemoteHangup, CallDirection.Incoming)
+            advanceTimeBy(1_000)
+            activity.pause().stop()
+            ShadowSystemClock.simulateDeepSleep(Duration.ofMillis(500))
             activity.start().resume().visible()
-            compose.onNodeWithText("01:05").assertIsDisplayed()
-            compose.mainClock.advanceTimeBy(2_000)
+            advanceTimeBy(500)
             assertFalse(activity.get().isFinishing)
-            compose.mainClock.advanceTimeBy(1_200)
+            advanceTimeBy(1_200)
             compose.waitForIdle()
             assertTrue(activity.get().isFinishing)
         } finally { activity.pause().stop().destroy() }
+    }
+
+    @Test fun endedScreenClosesWhileActivityIsStopped() {
+        val activity = startConversation(CallDirection.Outgoing)
+        try {
+            endConversation(CallEndReason.RemoteHangup, CallDirection.Outgoing)
+            activity.pause().stop()
+            advanceTimeBy(3_200)
+            compose.waitForIdle()
+            assertTrue(activity.get().isFinishing)
+        } finally { activity.destroy() }
+    }
+
+    @Test fun nextIncomingAfterDeepSleepSurvivesStartBeforeNewIntent() {
+        val activity = startConversation(CallDirection.Outgoing)
+        var next = invite.copy(callId = "next-after-sleep")
+        try {
+            endConversation(CallEndReason.LocalHangup, CallDirection.Outgoing)
+            activity.pause().stop()
+            CallUiStateStore.reset(key)
+            ShadowSystemClock.simulateDeepSleep(Duration.ofHours(2))
+            next = next.copy(expiresAt = Instant.now().plusSeconds(30))
+            incoming.admitIncoming(context, next)
+            assertEquals(CallPhase.Idle, CallUiStateStore.snapshot().phase)
+
+            // Android can start a stopped singleTop Activity before delivering its queued intent.
+            activity.start()
+            assertFalse("The previous result must not close a pending new call", activity.get().isFinishing)
+            // Avoid the capability request's Android Keystore when applying the incoming intent.
+            auth.remove(key.accountId)
+            val nextIntent = Shadows.shadowOf(
+                incoming.activityIntent(context, IncomingCallController.ActionIncoming, next),
+            ).savedIntent
+            activity.newIntent(nextIntent).resume().visible()
+            compose.onNodeWithText("Входящий звонок").assertIsDisplayed()
+            compose.runOnIdle { auth.upsert(session) }
+            advanceTimeBy(4_000)
+            assertFalse(activity.get().isFinishing)
+            compose.onNodeWithText("Входящий звонок").assertIsDisplayed()
+        } finally {
+            incoming.finishTerminalPresentation(context, next.owner) {}
+            activity.pause().stop().destroy()
+        }
     }
 
     @Test fun nextCallReplacesResultWithoutBeingClosedByOldTimer() {
@@ -169,13 +256,13 @@ class CallActivityEndedResultTest {
         try {
             endConversation(CallEndReason.LocalHangup, CallDirection.Outgoing)
             CallUiStateStore.reset(key)
-            compose.mainClock.advanceTimeBy(2_000)
+            advanceTimeBy(2_000)
             val next = AccountCallKey(key.accountId, "next-call")
             CallUiStateStore.begin(next, peer, CallDirection.Outgoing, CallPhase.Ringing)
             activity.newIntent(outgoingIntent(next))
             compose.onNodeWithText("Звонок завершён").assertDoesNotExist()
             compose.onNodeWithText("01:05").assertDoesNotExist()
-            compose.mainClock.advanceTimeBy(6_000)
+            advanceTimeBy(6_000)
             assertFalse(activity.get().isFinishing)
             assertEquals(next, CallUiStateStore.snapshot().callKey)
         } finally { activity.pause().stop().destroy() }
@@ -224,9 +311,9 @@ class CallActivityEndedResultTest {
             }
             compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
             compose.onNodeWithText("00:00").assertDoesNotExist()
-            compose.mainClock.advanceTimeBy(2_000)
+            advanceTimeBy(2_000)
             assertFalse(activity.get().isFinishing)
-            compose.mainClock.advanceTimeBy(1_200)
+            advanceTimeBy(1_200)
             compose.waitForIdle()
             assertTrue(activity.get().isFinishing)
         } finally { activity.pause().stop().destroy() }
@@ -275,6 +362,21 @@ class CallActivityEndedResultTest {
     @Test fun incomingCancelledAfterSaveSurvivesRecreation() = checkPendingIncomingRestoration()
 
     @Test fun incomingExpiredAfterSaveSurvivesRecreation() = checkPendingIncomingRestoration(expired = true)
+
+    @Test fun incomingExpiredHoursAgoDoesNotCreateANewEndedScreen() {
+        val activity = startUnacceptedIncoming()
+        val saved = Bundle()
+        activity.pause().saveInstanceState(saved).stop().destroy()
+        val oldIntent = Shadows.shadowOf(incoming.activityIntent(
+            context, IncomingCallController.ActionIncoming,
+            invite.copy(expiresAt = Instant.now().minusSeconds(7_200)),
+        )).savedIntent
+        val recreated = Robolectric.buildActivity(CallActivity::class.java, oldIntent).create(saved).start()
+        try {
+            assertTrue("An old invitation must not get a fresh ended timestamp", recreated.get().isFinishing)
+            recreated.resume().visible()
+        } finally { recreated.pause().stop().destroy() }
+    }
 
     private fun checkPendingIncomingRestoration(cancelBeforeSave: Boolean = false, expired: Boolean = false) {
         val activity = startUnacceptedIncoming()
@@ -327,7 +429,7 @@ class CallActivityEndedResultTest {
             CallUiStateStore.begin(next, peer, CallDirection.Outgoing, CallPhase.Ringing)
             activity.newIntent(outgoingIntent(next))
             compose.onNodeWithText("Ждём ответа…").assertIsDisplayed()
-            compose.mainClock.advanceTimeBy(4_000)
+            advanceTimeBy(4_000)
             ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS)
             assertFalse(activity.get().isFinishing)
             assertEquals(next, CallUiStateStore.snapshot().callKey)
@@ -351,7 +453,7 @@ class CallActivityEndedResultTest {
             activity.newIntent(nextIntent)
             compose.onNodeWithText("Входящий звонок").assertIsDisplayed()
             compose.runOnIdle { auth.upsert(session) }
-            compose.mainClock.advanceTimeBy(4_000)
+            advanceTimeBy(4_000)
             assertFalse(activity.get().isFinishing)
             compose.runOnIdle { incoming.finishTerminalPresentation(context, next.owner) {} }
             ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS)
@@ -382,9 +484,9 @@ class CallActivityEndedResultTest {
         compose.onNodeWithText("Bob").assertIsDisplayed()
         compose.onNodeWithText("00:00").assertDoesNotExist()
         assertEquals("Presentation must not create a call runtime", CallPhase.Idle, CallUiStateStore.snapshot().phase)
-        compose.mainClock.advanceTimeBy(2_000)
+        advanceTimeBy(2_000)
         assertFalse(activity.get().isFinishing)
-        compose.mainClock.advanceTimeBy(1_200)
+        advanceTimeBy(1_200)
         compose.waitForIdle()
         assertTrue(activity.get().isFinishing)
     }
@@ -405,10 +507,10 @@ class CallActivityEndedResultTest {
                 compose.onNodeWithText(title).assertIsDisplayed()
                 compose.onNodeWithText("00:00").assertDoesNotExist()
                 CallUiStateStore.reset(key)
-                compose.mainClock.advanceTimeBy(2_000)
+                advanceTimeBy(2_000)
                 assertFalse("$reason closed early", activity.get().isFinishing)
                 compose.onNodeWithText(title).assertIsDisplayed()
-                compose.mainClock.advanceTimeBy(1_200)
+                advanceTimeBy(1_200)
                 compose.waitForIdle()
                 assertTrue("$reason did not close", activity.get().isFinishing)
             } finally { activity.pause().stop().destroy() }
@@ -433,6 +535,11 @@ class CallActivityEndedResultTest {
             CallUiStateStore.sync(CallSnapshot(CallPhase.Ended, key.callId, 1, key.accountId), reason)
             if (direction == CallDirection.Incoming) incoming.finishTerminalPresentation(context, invite.owner) {}
         }
+    }
+
+    private fun advanceTimeBy(millis: Long) {
+        ShadowLooper.idleMainLooper(millis, TimeUnit.MILLISECONDS)
+        compose.waitForIdle()
     }
 
     private fun outgoingIntent(callKey: AccountCallKey = key): Intent = CallActivity.outgoingIntent(

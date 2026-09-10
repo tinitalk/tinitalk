@@ -3,6 +3,8 @@ package org.tinitalk
 import android.content.Intent
 import android.os.Bundle
 import android.os.Looper
+import java.time.Duration
+import java.util.concurrent.TimeUnit
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import org.junit.After
@@ -16,6 +18,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowSystemClock
 import org.tinitalk.call.*
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountPeerKey
@@ -30,6 +33,11 @@ class CallActivityReplyResultTest {
     private val key = AccountCallKey(AccountId("reply-account"), "reply-call")
     private val peer = CallPeer("Bob", "bob", ContactAddress.of("https://reply.example", "bob"))
 
+    private fun advanceTimeBy(millis: Long) {
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(millis, TimeUnit.MILLISECONDS)
+        composeRule.waitForIdle()
+    }
+
     @After fun cleanup() {
         CallReplyResultStore(context).clear()
         CallUiStateStore.reset()
@@ -43,39 +51,33 @@ class CallActivityReplyResultTest {
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
         composeRule.onNodeWithText("просит перезвонить позже").assertExists()
         CallUiStateStore.reset()
-        composeRule.mainClock.advanceTimeBy(2_000)
+        advanceTimeBy(2_000)
         assertFalse(activity.get().isFinishing)
         val saved = Bundle()
         activity.pause().saveInstanceState(saved).stop().destroy()
         val recreated = Robolectric.buildActivity(CallActivity::class.java, intent).create(saved).start().resume().visible()
         composeRule.onNodeWithText("просит перезвонить позже").assertExists()
-        composeRule.mainClock.advanceTimeBy(2_000)
+        advanceTimeBy(500)
         assertFalse(recreated.get().isFinishing)
-        composeRule.mainClock.advanceTimeBy(1_200)
+        advanceTimeBy(700)
         composeRule.waitForIdle()
         assertTrue(recreated.get().isFinishing)
         assertNull(CallReplyResultStore(context).load())
         recreated.pause().stop().destroy()
     }
 
-    @Test fun backgroundDoesNotConsumeReplyReadingTime() {
+    @Test fun replyDoesNotReappearAfterHoursLocked() {
         CallReplyResultStore(context).save(CallReplyResult(key, peer, CallReplyCode.CannotTalk))
         val intent = CallActivity.outgoingIntent(context, AccountPeerKey(key.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", key)
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
         try {
             composeRule.onNodeWithText("сейчас не может говорить").assertExists()
             activity.pause().stop()
-            composeRule.mainClock.advanceTimeBy(10_000)
-            assertFalse(activity.get().isFinishing)
-            assertNotNull(CallReplyResultStore(context).load())
-            activity.start().resume().visible()
-            composeRule.onNodeWithText("сейчас не может говорить").assertExists()
-            composeRule.mainClock.advanceTimeBy(2_000)
-            assertFalse(activity.get().isFinishing)
-            composeRule.mainClock.advanceTimeBy(1_200)
-            composeRule.waitForIdle()
+            ShadowSystemClock.simulateDeepSleep(Duration.ofHours(2))
+            activity.start().resume()
             assertTrue(activity.get().isFinishing)
             assertNull(CallReplyResultStore(context).load())
+            activity.visible()
         } finally { activity.pause().stop().destroy() }
     }
 
@@ -91,18 +93,30 @@ class CallActivityReplyResultTest {
         } finally { activity.pause().stop().destroy() }
     }
 
+    @Test fun oldStoredReplyDoesNotOpenAFreshEndedScreen() {
+        CallReplyResultStore(context).save(CallReplyResult(key, peer, CallReplyCode.CannotTalk))
+        ShadowSystemClock.simulateDeepSleep(Duration.ofHours(2))
+        val intent = CallActivity.outgoingIntent(context, AccountPeerKey(key.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", key)
+        val activity = Robolectric.buildActivity(CallActivity::class.java, intent).create().start()
+        try {
+            assertTrue(activity.get().isFinishing)
+            assertNull(CallReplyResultStore(context).load())
+            activity.resume().visible()
+        } finally { activity.pause().stop().destroy() }
+    }
+
     @Test fun replyTimeoutCannotCloseANewCallInTheSameActivity() {
         CallReplyResultStore(context).save(CallReplyResult(key, peer, CallReplyCode.CannotTalk))
         val intent = CallActivity.outgoingIntent(context, AccountPeerKey(key.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", key)
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
         try {
             composeRule.onNodeWithText("сейчас не может говорить").assertExists()
-            composeRule.mainClock.advanceTimeBy(2_000)
+            advanceTimeBy(2_000)
             val next = AccountCallKey(key.accountId, "next-call")
             CallUiStateStore.begin(next, peer, CallDirection.Outgoing, CallPhase.Ringing)
             activity.newIntent(CallActivity.outgoingIntent(context, AccountPeerKey(next.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", next))
             composeRule.onNodeWithText("сейчас не может говорить").assertDoesNotExist()
-            composeRule.mainClock.advanceTimeBy(6_000)
+            advanceTimeBy(6_000)
             composeRule.waitForIdle()
             assertFalse(activity.get().isFinishing)
             assertEquals(next, CallUiStateStore.snapshot().callKey)
@@ -116,9 +130,9 @@ class CallActivityReplyResultTest {
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
         try {
             composeRule.onNodeWithText("Звонок отклонён").assertExists()
-            composeRule.mainClock.advanceTimeBy(2_000)
+            advanceTimeBy(2_000)
             assertFalse(activity.get().isFinishing)
-            composeRule.mainClock.advanceTimeBy(1_200)
+            advanceTimeBy(1_200)
             composeRule.waitForIdle()
             assertTrue(activity.get().isFinishing)
         } finally { activity.pause().stop().destroy() }
@@ -139,7 +153,7 @@ class CallActivityReplyResultTest {
         activity.pause().saveInstanceState(saved).stop().destroy()
         val recreated = Robolectric.buildActivity(CallActivity::class.java, originalIntent).create(saved).start().resume().visible()
         try {
-            composeRule.mainClock.advanceTimeBy(2_000)
+            advanceTimeBy(2_000)
             assertFalse(recreated.get().isFinishing)
             composeRule.onNodeWithText("просит перезвонить позже").assertExists()
         } finally { recreated.pause().stop().destroy() }

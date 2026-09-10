@@ -130,9 +130,7 @@ data class CallUiState(
 
     fun onEnded(reason: CallEndReason, nowElapsedMs: Long): CallUiState = copy(
         phase = CallPhase.Ended,
-        endedAtElapsedMs = connectedAtElapsedMs?.let { connectedAt ->
-            endedAtElapsedMs ?: nowElapsedMs.coerceAtLeast(connectedAt)
-        },
+        endedAtElapsedMs = endedAtElapsedMs ?: nowElapsedMs.coerceAtLeast(connectedAtElapsedMs ?: 0L),
         connectionHealth = ConnectionHealth.None,
         transportRoute = CallTransportRoute.Unknown,
         endReason = endReason ?: if (

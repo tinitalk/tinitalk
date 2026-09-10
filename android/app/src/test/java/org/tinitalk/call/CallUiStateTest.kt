@@ -26,6 +26,8 @@ class CallUiStateTest {
                 assertEquals("$direction/$phase", expected, ended.endReason)
                 assertEquals(CallPhase.Ended, ended.phase)
                 assertNull(ended.durationMillis(50_000L))
+                assertEquals(45_000L, ended.endedAtElapsedMs)
+                assertEquals(45_000L, ended.onEnded(CallEndReason.TimedOut, 46_000L).endedAtElapsedMs)
                 assertEquals(expected, ended.onEnded(CallEndReason.TimedOut, 46_000L).endReason)
                 assertEquals(CallEndReason.Cancelled,
                     state.onEnded(CallEndReason.Cancelled, 44_000L)

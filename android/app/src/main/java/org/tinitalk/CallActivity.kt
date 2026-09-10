@@ -15,6 +15,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,9 +34,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.platform.LocalAccessibilityManager
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.repeatOnLifecycle
 import androidx.core.view.WindowCompat
 import androidx.core.content.ContextCompat
 import androidx.core.os.BundleCompat
@@ -207,6 +205,7 @@ class CallActivity : ComponentActivity() {
             bindCallSession()
             refreshReplyResult()
             validateEndedCallSession()
+            updateEndedScreenTimeout()
             publishVisibleCall()
             if (state.callKey != renderedVideoCallKey || state.phase != CallPhase.Active) {
                 renderedVideoCallKey = null
@@ -227,6 +226,8 @@ class CallActivity : ComponentActivity() {
             updateProximity()
         }
     }
+
+    private val endedScreenTimeout = Runnable { updateEndedScreenTimeout() }
 
     private val inviteMonitor = object : Runnable {
         override fun run() {
@@ -441,29 +442,10 @@ class CallActivity : ComponentActivity() {
                     else -> EmptyCallSurface()
                 }
 
-                val accessibilityManager = LocalAccessibilityManager.current
-                val endedScreenMillis = remember(visibleState.callKey, accessibilityManager) {
-                    accessibilityManager?.calculateRecommendedTimeoutMillis(
-                        EndedScreenMillis, containsIcons = true, containsText = true,
-                    )?.coerceAtLeast(EndedScreenMillis) ?: EndedScreenMillis
-                }
-                LaunchedEffect(visibleState.callKey, visibleState.phase, replyResult, endedScreenMillis) {
-                    val displayedReply = replyResult
-                    when (visibleState.phase) {
-                        CallPhase.Ended -> {
-                            lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                                delay(endedScreenMillis)
-                                if (replyResult == displayedReply && visibleCallState().callKey == visibleState.callKey &&
-                                    visibleCallState().phase == CallPhase.Ended) {
-                                    if (displayedReply != null) dismissReplyResult() else finish()
-                                }
-                            }
-                        }
-                        CallPhase.Idle -> {
-                            delay(IdleGraceMillis)
-                            if (visibleCallState().phase == CallPhase.Idle) finish()
-                        }
-                        else -> Unit
+                LaunchedEffect(visibleState.callKey, visibleState.phase) {
+                    if (visibleState.phase == CallPhase.Idle) {
+                        delay(IdleGraceMillis)
+                        if (visibleCallState().phase == CallPhase.Idle) finish()
                     }
                 }
                 }
@@ -493,6 +475,9 @@ class CallActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Handler delays do not include deep sleep; recalculate from elapsed time on wake.
+        // Wait until onResume: onStart may run before a queued onNewIntent replaces the old call.
+        updateEndedScreenTimeout()
         activityResumed = true
         publishVisibleCall()
         cameraForegroundLifecycle.onResume()
@@ -517,6 +502,7 @@ class CallActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (applyIntent(intent)) setIntent(intent)
+        updateEndedScreenTimeout()
         publishVisibleCall()
         showIncomingCallFullScreen()
         handler.removeCallbacks(inviteMonitor)
@@ -526,6 +512,7 @@ class CallActivity : ComponentActivity() {
     override fun onDestroy() {
         CallScreenVisibility.update(visibilityToken, null)
         handler.removeCallbacks(inviteMonitor)
+        handler.removeCallbacks(endedScreenTimeout)
         proximityController.close()
         CallUiStateStore.removeObserver(callObserver)
         VideoCallStateStore.removeObserver(videoObserver)
@@ -762,6 +749,7 @@ class CallActivity : ComponentActivity() {
         replyResult?.takeIf { it.key == outgoingCallKey }?.let { result ->
             return CallUiState(accountId = result.key.accountId, callId = result.key.callId,
                 peer = result.peer, direction = CallDirection.Outgoing, phase = CallPhase.Ended,
+                endedAtElapsedMs = result.endedAtElapsedMs,
                 endReason = CallEndReason.Rejected)
         }
         val invite = incomingInvite
@@ -838,6 +826,33 @@ class CallActivity : ComponentActivity() {
         if (!auth.matchesSessionIdentity(key.accountId, binding.serverUrl, binding.login, binding.sessionId, binding.configId)) {
             callState = CallUiState()
             finish()
+        }
+    }
+
+    private fun endedScreenTimeoutMillis(): Long = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        getSystemService(AccessibilityManager::class.java).getRecommendedTimeoutMillis(
+            EndedScreenMillis.toInt(), AccessibilityManager.FLAG_CONTENT_ICONS or AccessibilityManager.FLAG_CONTENT_TEXT,
+        ).toLong().coerceAtLeast(EndedScreenMillis)
+    } else EndedScreenMillis
+
+    private fun endedScreenRemainingMillis(state: CallUiState, timeoutMillis: Long): Long {
+        val endedAt = state.endedAtElapsedMs ?: return 0L
+        val elapsed = SystemClock.elapsedRealtime() - endedAt
+        // A future timestamp (for example after a reboot) cannot start a new reading period.
+        return if (elapsed < 0L) 0L else (timeoutMillis - elapsed).coerceAtLeast(0L)
+    }
+
+    private fun updateEndedScreenTimeout() {
+        handler.removeCallbacks(endedScreenTimeout)
+        if (isFinishing) return
+        val state = visibleCallState()
+        if (state.phase != CallPhase.Ended) return
+        val remainingMillis = endedScreenRemainingMillis(state, endedScreenTimeoutMillis())
+        if (remainingMillis == 0L) {
+            if (replyResult != null) dismissReplyResult() else finish()
+        } else {
+            // This timer keeps running when Compose stops rendering in the background.
+            handler.postDelayed(endedScreenTimeout, remainingMillis)
         }
     }
 
@@ -955,6 +970,10 @@ class CallActivity : ComponentActivity() {
         val displayed = visibleCallState()
         if (displayed.callKey != invite.key || displayed.phase != CallPhase.Ringing) return
         val expired = !invite.expiresAt.isAfter(Instant.now())
+        if (expired && java.time.Duration.between(invite.expiresAt, Instant.now()).toMillis() >= endedScreenTimeoutMillis()) {
+            finish()
+            return
+        }
         if (!expired && !incomingController.isTerminal(this, invite.owner)) {
             finish()
             return
@@ -967,6 +986,7 @@ class CallActivity : ComponentActivity() {
         )
         callSessionBinding = invite.sessionBinding
         validateEndedCallSession()
+        updateEndedScreenTimeout()
         publishVisibleCall()
         updateProximity()
         cameraForegroundLifecycle.onCallStateChanged()
