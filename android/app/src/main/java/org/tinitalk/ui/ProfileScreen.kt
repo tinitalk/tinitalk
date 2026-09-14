@@ -91,7 +91,7 @@ internal fun ProfileScreen(
                     )
                 }
                 item {
-                    Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("Добавить") }
+                    AddListButton(onClick = onAdd, enabled = true, modifier = Modifier.fillMaxWidth())
                 }
             }
         }

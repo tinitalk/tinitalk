@@ -206,7 +206,8 @@ class CallForegroundService : Service() {
     )
     private val callUiObserver: (CallUiState) -> Unit = { state ->
         handler.post {
-            if (!finishing && !callResourcesReleased && state.callKey == callOwner?.key && ownsRuntime()) {
+            if (!finishing && !callResourcesReleased && state.callKey == callOwner?.key && ownsRuntime()
+                && state == CallUiStateStore.snapshot()) {
                 callTones.update(state)
                 if (state.phase != CallPhase.Idle) {
                     getSystemService(NotificationManager::class.java).notify(NotificationId, notification(state))
@@ -1047,7 +1048,10 @@ class CallForegroundService : Service() {
             }
         }
         if (call.snapshot().phase == CallPhase.Ended) {
-            if (awaitingTerminalSignal) releaseCallResources() else finishCallUnlessAwaitingTerminalSignal()
+            if (awaitingTerminalSignal) {
+                if (callToneMode(CallUiStateStore.snapshot()) == CallToneMode.Silent) releaseCallResources()
+                else finishCallSoon()
+            } else finishCallUnlessAwaitingTerminalSignal()
         }
     }
 
@@ -1102,7 +1106,13 @@ class CallForegroundService : Service() {
     }
 
     private fun finishCallSoon(expectedGeneration: Long = runtimeGeneration) {
+        if (finishing || expectedGeneration != runtimeGeneration) return
         val state = CallUiStateStore.snapshot()
+        if (!callResourcesReleased && state.callKey == callOwner?.key && ownsRuntime()) {
+            // Stop voice immediately, retaining Telecom routing for the terminal tone.
+            releaseCallMedia()
+            callTones.update(state)
+        }
         val mode = callToneMode(state)
         val delayMillis = if (state.callKey == callOwner?.key &&
             (mode == CallToneMode.Busy || mode == CallToneMode.Congestion)) {
@@ -1123,9 +1133,16 @@ class CallForegroundService : Service() {
 
     private fun finishCall(expectedGeneration: Long = runtimeGeneration) {
         if (finishing || expectedGeneration != runtimeGeneration) return
+        val remaining = callTones.remainingTerminalToneMillis()
+        if (remaining > 0) {
+            finishCallAfter(remaining, expectedGeneration)
+            return
+        }
+        releaseCallResources()
+        // Deliver the terminal event even after local media and Telecom are gone.
+        if (terminalSignalGate.isWaiting()) return
         finishing = true
         terminalSignalGate.close()
-        releaseCallResources()
         stopSelf()
     }
 
@@ -1141,16 +1158,21 @@ class CallForegroundService : Service() {
         val lease = admissionLease
         val ownsSharedState = lease != null && GlobalCallAdmission.owns(lease)
         if (ownsSharedState) CallAudioState.reset()
-        val currentMedia = media
-        val currentDispatcher = mediaDispatcher
-        media = null
-        mediaDispatcher = null
         if (ownsSharedState) {
             VideoCallStateStore.reset()
             endSystemCall(callKey)
         }
         lease?.let(GlobalCallAdmission::release)
         admissionLease = null
+        releaseCallMedia()
+    }
+
+    private fun releaseCallMedia() {
+        stopStatsPolling()
+        val currentMedia = media
+        val currentDispatcher = mediaDispatcher
+        media = null
+        mediaDispatcher = null
         if (currentMedia != null) {
             val cleanupDispatcher = currentDispatcher ?: CallMediaDispatcher()
             cleanupDispatcher.dispatch {

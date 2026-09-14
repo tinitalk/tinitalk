@@ -1005,7 +1005,7 @@ private fun ContactsPage(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                AddContactListButton(
+                AddListButton(
                     onClick = onAddContact,
                     enabled = internetAvailable,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
@@ -1030,7 +1030,7 @@ private fun ContactsPage(
                     ) { onContactSelected(contact) }
                 }
                 item(key = "add-contact") {
-                    AddContactListButton(
+                    AddListButton(
                         onClick = onAddContact,
                         enabled = internetAvailable,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -1042,7 +1042,7 @@ private fun ContactsPage(
 }
 
 @Composable
-private fun AddContactListButton(
+internal fun AddListButton(
     onClick: () -> Unit,
     enabled: Boolean,
     modifier: Modifier = Modifier,

@@ -1,6 +1,8 @@
 package org.tinitalk.telecom
 
 import android.os.Looper
+import android.media.ToneGenerator
+import org.robolectric.shadows.ShadowToneGenerator
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Test
@@ -12,6 +14,7 @@ import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 import org.tinitalk.call.*
+import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.data.AccountId
 import java.time.Duration
 
@@ -69,6 +72,71 @@ class CallForegroundServiceToneTest {
                 CallUiStateStore.reset()
                 CallReplyResultStore(context).clear()
             }
+        }
+    }
+
+    @Test
+    fun localHangupPlaysBeforeReleasingRoutingAndStillWaitsForTerminalDelivery() {
+        val controller = Robolectric.buildService(CallForegroundService::class.java).create()
+        val service = controller.get()
+        try {
+            GlobalCallAdmission.stage(owner)
+            val lease = requireNotNull(GlobalCallAdmission.take(owner))
+            leases += lease
+            ReflectionHelpers.setField(service, "callOwner", owner)
+            ReflectionHelpers.setField(service, "admissionLease", lease)
+            CallUiStateStore.begin(owner.key, peer, CallDirection.Outgoing, CallPhase.Active)
+            CallUiStateStore.onMediaConnection(MediaConnectionState.Connected)
+            CallUiStateStore.sync(CallSnapshot(CallPhase.Ended, owner.key.callId, 1, owner.key.accountId), CallEndReason.LocalHangup)
+            val gate = ReflectionHelpers.getField<TerminalSignalGate>(service, "terminalSignalGate")
+            val settle = gate.begin {
+                ReflectionHelpers.callInstanceMethod<Void>(service, "finishCallUnlessAwaitingTerminalSignal")
+            }
+            val count = ShadowToneGenerator.getPlayedTones().size
+            ReflectionHelpers.callInstanceMethod<Void>(service, "finishCallSoon",
+                ReflectionHelpers.ClassParameter.from(Long::class.javaPrimitiveType, 0L))
+            assertEquals(count + 1, ShadowToneGenerator.getPlayedTones().size)
+            assertEquals(ToneGenerator.TONE_PROP_ACK, ShadowToneGenerator.getPlayedTones().last().type())
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(399))
+            assertTrue(GlobalCallAdmission.owns(lease))
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(51))
+            assertNull(GlobalCallAdmission.current())
+            assertFalse(Shadows.shadowOf(service).isStoppedBySelf)
+            settle()
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(450))
+            assertTrue(Shadows.shadowOf(service).isStoppedBySelf)
+            assertEquals(count + 1, ShadowToneGenerator.getPlayedTones().size)
+        } finally {
+            controller.destroy()
+        }
+    }
+
+    @Test
+    fun remoteHangupKeepsRoutingUntilLateStartedToneFinishes() {
+        val controller = Robolectric.buildService(CallForegroundService::class.java).create()
+        val service = controller.get()
+        try {
+            GlobalCallAdmission.stage(owner)
+            val lease = requireNotNull(GlobalCallAdmission.take(owner))
+            leases += lease
+            ReflectionHelpers.setField(service, "callOwner", owner)
+            ReflectionHelpers.setField(service, "admissionLease", lease)
+            CallUiStateStore.begin(owner.key, peer, CallDirection.Incoming, CallPhase.Active)
+            CallUiStateStore.onMediaConnection(MediaConnectionState.Connected)
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            // Teardown was scheduled before the terminal state reached the player.
+            ReflectionHelpers.callInstanceMethod<Void>(service, "finishCallAfter",
+                ReflectionHelpers.ClassParameter.from(Long::class.javaPrimitiveType, 450L),
+                ReflectionHelpers.ClassParameter.from(Long::class.javaPrimitiveType, 0L))
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300))
+            CallUiStateStore.sync(CallSnapshot(CallPhase.Ended, owner.key.callId, 1, owner.key.accountId), CallEndReason.RemoteHangup)
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(150))
+            assertTrue(GlobalCallAdmission.owns(lease))
+            assertFalse(Shadows.shadowOf(service).isStoppedBySelf)
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(250))
+            assertTrue(Shadows.shadowOf(service).isStoppedBySelf)
+        } finally {
+            controller.destroy()
         }
     }
 

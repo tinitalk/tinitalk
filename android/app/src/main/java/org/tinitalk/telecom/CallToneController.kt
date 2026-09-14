@@ -3,6 +3,7 @@ package org.tinitalk.telecom
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Handler
+import android.os.SystemClock
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallPhase
@@ -33,6 +34,7 @@ internal fun callToneMode(state: CallUiState): CallToneMode = when {
 
 class CallToneController(private val handler: Handler) : Closeable {
     private val tone = runCatching { ToneGenerator(AudioManager.STREAM_VOICE_CALL, ToneVolume) }.getOrNull()
+    private var terminalToneUntil = 0L
     private var mode = CallToneMode.Silent
     private val pulseTone = object : Runnable {
         override fun run() {
@@ -49,6 +51,7 @@ class CallToneController(private val handler: Handler) : Closeable {
         handler.removeCallbacks(pulseTone)
         runCatching { tone?.stopTone() }
         mode = next
+        terminalToneUntil = 0L
         when (next) {
             CallToneMode.Reaching, CallToneMode.Reconnecting -> handler.post(pulseTone)
             CallToneMode.Ringing -> runCatching { tone?.startTone(ToneGenerator.TONE_SUP_RINGTONE) }
@@ -56,14 +59,24 @@ class CallToneController(private val handler: Handler) : Closeable {
                 val toneType = if (next == CallToneMode.Busy) {
                     ToneGenerator.TONE_SUP_BUSY
                 } else ToneGenerator.TONE_SUP_CONGESTION
-                tone?.startTone(toneType, CallFailureToneDurationMillis.toInt())
+                startTerminalTone(toneType, CallFailureToneDurationMillis.toInt())
             }
-            CallToneMode.Ended -> runCatching { tone?.startTone(ToneGenerator.TONE_PROP_ACK, EndToneMillis) }
+            CallToneMode.Ended -> runCatching { startTerminalTone(ToneGenerator.TONE_PROP_ACK, EndToneMillis) }
             CallToneMode.Silent -> Unit
         }
     }
 
+    private fun startTerminalTone(type: Int, durationMillis: Int) {
+        if (tone?.startTone(type, durationMillis) == true) {
+            terminalToneUntil = SystemClock.uptimeMillis() + durationMillis
+        }
+    }
+
+    internal fun remainingTerminalToneMillis(): Long =
+        (terminalToneUntil - SystemClock.uptimeMillis()).coerceAtLeast(0L)
+
     override fun close() {
+        terminalToneUntil = 0L
         mode = CallToneMode.Silent
         handler.removeCallbacks(pulseTone)
         runCatching { tone?.stopTone() }
