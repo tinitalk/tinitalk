@@ -250,7 +250,19 @@ class CallActivity : ComponentActivity() {
                 callSessionBinding = restoreEndedCallBinding(savedEnded)
             }
         }
+        // Apply the theme first: creating decor later would restore its default
+        // navigation contrast scrim over our transparent video background.
+        window.decorView
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        // Call content draws behind navigation; an OS scrim would remain over
+        // fullscreen video even after the in-app controls fade away.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            @Suppress("DEPRECATION")
+            window.navigationBarDividerColor = android.graphics.Color.TRANSPARENT
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
         proximityController = ProximityController(this)
         network = networkAvailability()
         pendingScreenCallKey = savedInstanceState?.getString("screen_permission_account")?.let { account ->
