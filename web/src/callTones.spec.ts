@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as ts from 'typescript';
+import appSource from './app.ts?raw';
 import { CallToneController, callToneMode, type CallToneEndReason, type CallToneState } from './callTones';
 
 const outgoing = (phase: CallToneState['phase'], extra: Partial<CallToneState> = {}): CallToneState => ({
@@ -521,4 +523,38 @@ describe('status tone timing', () => {
     expect(context.sources[1].start).toHaveBeenCalledWith(expectedStart);
   });
 
+  it.each(['ended', 'busy', 'congestion'] as const)('lets %s finish when the real ended screen dismisses itself', async mode => {
+    const { context, tones } = audioHarness();
+    // Execute the app's actual dismiss/timeout and render-time audio branches,
+    // without mounting the unrelated contact/video DOM.
+    const source = ts.createSourceFile('app.ts', appSource, ts.ScriptTarget.ES2022, true);
+    const functions = source.statements.filter(ts.isFunctionDeclaration);
+    const declarations = functions.filter(f => ['dismissEndedCall', 'showEndedCall'].includes(f.name?.text ?? ''));
+    const render = functions.find(f => f.name?.text === 'renderCall')!;
+    const code = ts.transpileModule(declarations.map(f => f.getText(source)).join('\n') +
+      `\nfunction renderCall() { ${render.body!.statements[0].getText(source)} }`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const app = new Function('callTones', 'setTimeout', 'clearTimeout', `
+      let endedCallTimer, endedCall, current;
+      ${code}
+      return { showEndedCall, dismissEndedCall, renderCall };
+    `)(tones, setTimeout, clearTimeout);
+    context.state = 'suspended';
+    let resume!: () => void;
+    context.resume.mockImplementation(() => new Promise<void>(resolve => {
+      resume = () => { context.state = 'running'; resolve(); };
+    }));
+    tones.updateMode(mode);
+    app.showEndedCall({});
+    await vi.advanceTimersByTimeAsync(2850);
+    resume();
+    await vi.advanceTimersByTimeAsync(0);
+    const last = context.oscillators.at(-1)!;
+    await vi.advanceTimersByTimeAsync(150);
+    app.renderCall();
+    expect(last.disconnect).not.toHaveBeenCalled();
+    expect(context.state).toBe('running');
+    last.onended!();
+    expect(context.state).toBe('suspended');
+  });
 });

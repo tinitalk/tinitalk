@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { canUpdateApplication, inspectUpdates, readWorkerVersion, updateStatus, waitForWorker, type UpdateReport } from './updates';
 import type { Account } from './model';
+import * as ts from 'typescript';
+import appSource from './app.ts?raw';
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -20,6 +22,60 @@ function ready(): UpdateReport {
 
 it('reads the running worker, not the version promised by its URL', async () => {
   expect(await readWorkerVersion(worker('old-code'), 'push')).toEqual({ version: 'old-code', state: 'activated' });
+});
+
+it('does not require an obsolete push worker for a revoked account', async () => {
+  const shell = { scope: 'https://web.example/', active: worker(manifest.shell, 'shell'), waiting: null, installing: null };
+  vi.stubGlobal('navigator', { serviceWorker: { getRegistrations: async () => [shell], controller: shell.active } });
+  vi.stubGlobal('fetch', async () => Response.json(manifest));
+  const report = await inspectUpdates('https://web.example/', [{ ...owner, sessionReplaced: true }], manifest.build);
+  expect(updateStatus(report).kind).toBe('ready');
+});
+
+it('activates a pending shell update even when a retained account has been revoked', async () => {
+  const source = ts.createSourceFile('app.ts', appSource, ts.ScriptTarget.ES2022, true);
+  const node = source.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'updateWebApplication')!;
+  const code = ts.transpileModule(node.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const waiting = Object.assign(new EventTarget(), { state: 'installed', postMessage: () => { waiting.state = 'activated'; } });
+  const shell = { waiting, update: async () => {} };
+  const refreshed: string[] = [];
+  const reload = vi.fn();
+  const run = new Function('shell', 'refreshed', 'reload', 'waitForWorker', `
+    const list = [{id:'active', pushConfigId:'configured'}, {id:'revoked', pushConfigId:'configured', sessionReplaced:true}];
+    const base = 'https://web.example/', webBuild = 'latest', fetchBuildVersions = async () => ({build:'latest'});
+    const navigator = {serviceWorker:{register:async () => shell}}, location = {reload}, route = {name:'about'};
+    const notifications = new Map(), pushEnabled = async () => true, renderApp = () => {};
+    const updatePushWorker = async account => { if(account.sessionReplaced) throw new Error('401'); refreshed.push(account.id); };
+    const enablePush = updatePushWorker;
+    let shellRegistration, updatingApp = false, updateError = '', current = null;
+    ${code}
+    return updateWebApplication();
+  `);
+  await run(shell, refreshed, reload, waitForWorker);
+  expect(waiting.state).toBe('activated');
+  expect(reload).toHaveBeenCalledOnce();
+  expect(refreshed).toEqual(['active']);
+});
+
+it.each(['permission denied', 'server offline'])('updates installed workers independently of push subscription: %s', async reason => {
+  const source = ts.createSourceFile('app.ts', appSource, ts.ScriptTarget.ES2022, true);
+  const node = source.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'updateWebApplication')!;
+  const code = ts.transpileModule(node.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const waiting = Object.assign(new EventTarget(), { state: 'installed', postMessage: () => { waiting.state = 'activated'; } });
+  const shell = { waiting, update: async () => {} };
+  const reload = vi.fn(), updatePushWorker = vi.fn(async () => {}), enablePush = vi.fn(async () => { throw new Error(reason); });
+  await new Function('shell', 'reload', 'updatePushWorker', 'enablePush', 'waitForWorker', `
+    const list = [{id:'a', pushConfigId:'configured'}], base = 'https://web.example/', webBuild = 'latest';
+    const fetchBuildVersions = async () => ({build:'latest'}), navigator = {serviceWorker:{register:async () => shell}};
+    const location = {reload}, route = {name:'about'}, notifications = new Map(), pushEnabled = async () => false, renderApp = () => {};
+    let shellRegistration, updatingApp = false, updateError = '', current = null;
+    ${code}
+    return updateWebApplication();
+  `)(shell, reload, updatePushWorker, enablePush, waitForWorker);
+  expect(waiting.state).toBe('activated');
+  expect(updatePushWorker).toHaveBeenCalledOnce();
+  expect(enablePush).not.toHaveBeenCalled();
+  expect(reload).toHaveBeenCalledOnce();
 });
 
 it('does not present a legacy unresponsive worker as up to date', async () => {
@@ -56,6 +112,16 @@ it('offers application update only when deployed code is newer than running code
   expect(canUpdateApplication(oldPage)).toBe(true);
   const oldWorker = ready(); oldWorker.workers[1].active!.version = 'old-push';
   expect(canUpdateApplication(oldWorker)).toBe(true);
+});
+
+it('offers worker recovery when deployment is known but a running worker reports no version', () => {
+  const unknown = ready(); unknown.workers[1].active!.version = null;
+  expect(updateStatus(unknown).kind).toBe('unknown');
+  expect(canUpdateApplication(unknown)).toBe(true);
+  unknown.error = 'Нет сети';
+  expect(canUpdateApplication(unknown)).toBe(false);
+  unknown.error = undefined; unknown.latest = undefined;
+  expect(canUpdateApplication(unknown)).toBe(false);
 });
 
 it('checks only this installation and its accounts; a root registration cannot stand in for a missing push worker', async () => {
