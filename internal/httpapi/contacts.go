@@ -157,7 +157,7 @@ func (s *Server) contact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) notifyContactChanged(recipient, contact string) {
-	if s.options.ContactNotifier == nil {
+	if s.options.ContactNotifier == nil && s.hub == nil {
 		return
 	}
 	// Only invalidate an existing entry; this must never act as a contact invitation.
@@ -168,7 +168,12 @@ func (s *Server) notifyContactChanged(recipient, contact string) {
 	if err != nil {
 		return
 	}
-	go s.options.ContactNotifier.ContactChanged(recipient, contact, session)
+	if s.hub != nil {
+		s.hub.ContactChanged(recipient, contact, session.SessionID)
+	}
+	if s.options.ContactNotifier != nil {
+		go s.options.ContactNotifier.ContactChanged(recipient, contact, session)
+	}
 }
 
 func contactJSON(contact state.Contact) contactResponse {

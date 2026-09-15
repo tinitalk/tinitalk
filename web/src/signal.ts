@@ -28,9 +28,10 @@ export class SignalConnection {
   private async open(): Promise<void> {
     this.changed('Подключение…');
     try {
-      const result = await api<{ ticket: string; foreground_call_notifications?: boolean }>(this.account, '/api/browser/socket-ticket', 'POST', {});
+      const result = await api<{ ticket: string; foreground_call_notifications?: boolean; contact_changes?: boolean }>(this.account, '/api/browser/socket-ticket', 'POST', {});
       if (this.stopped) return;
       const url = new URL('/api/browser/socket', this.account.server);
+      if (result.contact_changes) url.searchParams.set('contact_changes', '1');
       this.foregroundCallNotifications = result.foreground_call_notifications === true;
       if (this.foregroundCallNotifications) url.searchParams.set('foreground_call_notifications', '1');
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';

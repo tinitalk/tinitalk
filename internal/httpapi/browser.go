@@ -97,7 +97,7 @@ func (s *Server) issueBrowserTicket(w http.ResponseWriter, r *http.Request) {
 	key := base64.RawURLEncoding.EncodeToString(bytes[:])
 	s.tickets.items[key] = browserTicket{origin, r.Header.Get("Authorization"), session.DeviceID, session.SessionID, now.Add(30 * time.Second)}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, map[string]any{"ticket": key, "foreground_call_notifications": true})
+	writeJSON(w, map[string]any{"ticket": key, "foreground_call_notifications": true, "contact_changes": true})
 }
 
 func (s *Server) browserSocket(w http.ResponseWriter, r *http.Request) {

@@ -102,7 +102,17 @@ const contactsByAccount = new Map<string, Contact[]>();
 const historyByAccount = new Map<string, HistoryItem[]>();
 const unreadMissedByContact = new Map<string, number>();
 const unreadMissedCountByAccount = new Map<string, number>();
+const unreadVersions = new WeakMap<Account, number>();
+const unreadReads = new WeakMap<Account, Promise<void>>();
 const contactHistory = new Map<string, HistoryItem[]>();
+const historyCursors = new Map<string, number>();
+const historyErrors = new Set<string>();
+const contactHistoryCursors = new Map<string, number>();
+const contactHistoryErrors = new Set<string>();
+let historyVisibleLimit = 50;
+let loadingMoreHistory = false;
+let historyObserver: IntersectionObserver | undefined;
+let contactHistoryGeneration = 0;
 let historyRevision = 0;
 const contactPhotosByKey = new Map<string, string>();
 const pendingNotificationActions = new Map<string, NotificationCallAction>();
@@ -303,8 +313,8 @@ function allContacts(): AccountContact[] {
 }
 
 function allHistory(): AccountHistory[] {
-  return list.flatMap(account => (historyByAccount.get(account.id) ?? []).map(item => ({ ...item, account })))
-    .sort((a, b) => b.started_at - a.started_at || b.id - a.id);
+  return list.filter(account => !account.sessionReplaced).flatMap(account => (historyByAccount.get(account.id) ?? []).map(item => ({ ...item, account })))
+    .sort((a, b) => b.started_at - a.started_at || list.indexOf(a.account) - list.indexOf(b.account) || b.id - a.id);
 }
 
 function findContact(accountId: string, login: string): AccountContact | undefined {
@@ -453,6 +463,15 @@ function renderApp(): void {
   // Background refreshes must not replace the form the user is editing.
   // Navigation changes the key and naturally discards the old form and token.
   if (screen.dataset.viewKey === viewKey && ['login', 'add-account', 'add-contact'].includes(route.name)) return;
+  if (screen.dataset.viewKey !== viewKey) {
+    contactHistoryGeneration++;
+    if (route.name === 'contact') {
+      const key = accountKey(route.accountId, route.login);
+      contactHistory.delete(key);
+      contactHistoryCursors.delete(key);
+      contactHistoryErrors.delete(key);
+    }
+  }
   const view = route.name === 'login' ? credentialsScreen('login', loginAccount)
     : route.name === 'add-account' ? credentialsScreen('add-account')
       : route.name === 'add-contact' ? addContactScreen()
@@ -460,8 +479,21 @@ function renderApp(): void {
           : route.name === 'about' ? aboutScreen()
             : route.name === 'contact' ? contactScreen(route.accountId, route.login)
               : homeScreen();
+  const scrollTop = screen.dataset.viewKey === viewKey ? screen.querySelector<HTMLElement>('.home-content, .contact-screen')?.scrollTop ?? 0 : 0;
+  historyObserver?.disconnect();
   screen.replaceChildren(view);
   screen.dataset.viewKey = viewKey;
+  const scroller = screen.querySelector<HTMLElement>('.home-content, .contact-screen');
+  if (scroller) scroller.scrollTop = scrollTop;
+  const sentinel = screen.querySelector<HTMLElement>('[data-history-more]');
+  if (sentinel && scroller) {
+    historyObserver = new IntersectionObserver(entries => {
+      if (!sentinel.isConnected || document.hidden || current || !entries.some(entry => entry.isIntersecting)) return;
+      historyObserver?.disconnect();
+      sentinel.click();
+    }, { root: scroller });
+    historyObserver.observe(sentinel);
+  }
 }
 
 function navigate(next: Route): void {
@@ -804,12 +836,12 @@ function contactRow(contact: AccountContact, showServer: boolean): HTMLElement {
 
 function historyPage(): HTMLElement {
   const page = element('section', 'page-list');
-  const rows = allHistory();
+  const rows = allHistory().slice(0, historyVisibleLimit);
   if (loadingHistory && rows.length === 0) {
     page.append(loadingBlock());
     return page;
   }
-  if (!rows.length) {
+  if (!rows.length && !historyErrors.size) {
     const empty = element('div', 'empty-state');
     const clock = element('span', 'empty-icon', '◷');
     empty.append(clock, element('h2', '', 'История звонков пока пуста'), element('p', '', 'Здесь появятся входящие и исходящие звонки.'));
@@ -817,7 +849,19 @@ function historyPage(): HTMLElement {
     return page;
   }
   page.append(historyRows(rows, true));
+  if (loadingMoreHistory) page.append(loadingBlock());
+  else if (!loadingHistory) {
+    const more = allHistory().length > historyVisibleLimit || list.some(a => !a.sessionReplaced && !historyErrors.has(a.id) && (historyCursors.get(a.id) ?? 0) > 0);
+    if (more) page.append(historyMoreButton(() => loadMoreHistory()));
+    if (historyErrors.size) page.append(actionButton('Не удалось загрузить историю. Повторить', () => loadMoreHistory(true), 'text-action'));
+  }
   return page;
+}
+
+function historyMoreButton(action: () => Promise<void>): HTMLElement {
+  const button = actionButton('Загрузить ещё', action, 'text-action');
+  button.dataset.historyMore = 'true';
+  return button;
 }
 
 function historyRows(rows: (HistoryItem | AccountHistory)[], showPeer: boolean): HTMLElement {
@@ -1186,13 +1230,17 @@ function contactScreen(accountId: string, login: string): HTMLElement {
   const rows = contactHistory.get(accountKey(accountId, login));
   const key = accountKey(accountId, login);
   if (!rows) {
-    body.append(loadingBlock());
-    if (!loadingContactHistory.has(key)) void loadContactHistory(contact, true).catch(failure);
+    if (!contactHistoryErrors.has(key)) body.append(loadingBlock());
+    if (!loadingContactHistory.has(key) && !contactHistoryErrors.has(key)) void loadContactHistory(contact, true).catch(failure);
   } else if (!rows.length) {
     body.append(contactHistoryMessage('Звонков с этим контактом пока не было'));
   } else {
     body.append(historyRows(rows, false));
   }
+  if (contactHistoryErrors.has(key)) {
+    body.append(actionButton('Не удалось загрузить историю. Повторить', () => loadContactHistory(contact, true, Boolean(rows && contactHistoryCursors.get(key))), 'text-action'));
+  } else if (rows && loadingContactHistory.has(key)) body.append(loadingBlock());
+  else if (rows && (contactHistoryCursors.get(key) ?? 0) > 0) body.append(historyMoreButton(() => loadContactHistory(contact, false, true)));
   return appPage(body, { title: 'Контакт', back: () => goBack({ name: 'home' }), menu });
 }
 
@@ -2066,16 +2114,16 @@ async function refreshAll(markHistoryRead: boolean): Promise<void> {
   await Promise.all([refreshContacts(), refreshHistory(markHistoryRead)]);
 }
 
-const contactRefreshes = new Map<string, { dirty: boolean; promise: Promise<void> }>();
+const contactRefreshes = new Map<Account, { dirty: boolean; promise: Promise<void> }>();
 
 function refreshAccountContacts(account: Account): Promise<void> {
-  const pending = contactRefreshes.get(account.id);
+  const pending = contactRefreshes.get(account);
   if (pending) {
     pending.dirty = true;
     return pending.promise;
   }
   const state = { dirty: false, promise: Promise.resolve() };
-  contactRefreshes.set(account.id, state);
+  contactRefreshes.set(account, state);
   state.promise = (async () => {
     do {
       state.dirty = false;
@@ -2088,7 +2136,7 @@ function refreshAccountContacts(account: Account): Promise<void> {
         if (contact) current.peer = contactDisplayName(contact);
       }
     } while (state.dirty);
-  })().finally(() => contactRefreshes.delete(account.id));
+  })().finally(() => contactRefreshes.delete(account));
   return state.promise;
 }
 
@@ -2098,9 +2146,7 @@ async function refreshContacts(options: { renderStart?: boolean; renderEnd?: boo
   loadingContacts = true;
   if (renderStart) renderApp();
   const results = await Promise.allSettled(list.filter(account => !account.sessionReplaced).map(async account => {
-    const contacts = await api<Contact[]>(account, '/api/contacts');
-    // The session may have been replaced or removed while the request was in flight.
-    if (!account.sessionReplaced && list.includes(account)) contactsByAccount.set(account.id, contacts);
+    await refreshAccountContacts(account);
   }));
   loadingContacts = false;
   const failed = results.find(result => result.status === 'rejected') as PromiseRejectedResult | undefined;
@@ -2113,39 +2159,124 @@ async function refreshHistory(markRead: boolean, options: { renderStart?: boolea
   const renderEnd = options.renderEnd ?? true;
   const revision = ++historyRevision;
   contactHistory.clear();
+  contactHistoryCursors.clear();
+  contactHistoryErrors.clear();
+  historyErrors.clear();
+  historyVisibleLimit = 50;
+  loadingMoreHistory = false;
   loadingHistory = true;
   if (renderStart) renderApp();
-  const results = await Promise.allSettled(list.filter(account => !account.sessionReplaced).map(async account => {
+  const targets = list.filter(account => !account.sessionReplaced);
+  for (const account of targets) historyCursors.set(account.id, 0);
+  const results = await Promise.allSettled(targets.map(async account => {
+    const pendingRead = unreadReads.get(account);
+    if (pendingRead) await pendingRead.catch(() => undefined);
+    const unreadVersion = unreadVersions.get(account) ?? 0;
     const page = await api<HistoryPage>(account, '/api/calls?limit=50');
     if (revision !== historyRevision || account.sessionReplaced || !list.includes(account)) return;
     historyByAccount.set(account.id, page.items);
-    applyUnread(account, page);
-    if (markRead && page.latest_id > 0) applyUnreadState(account, await api(account, '/api/calls/read', 'PUT', { through_id: page.latest_id }));
+    historyCursors.set(account.id, page.next_before);
+    applyUnread(account, page, unreadVersion);
+    if (markRead && page.latest_id > 0 && historyReadVisible()) {
+      await markHistoryRead(account, page.latest_id);
+    }
   }));
+  if (revision !== historyRevision) return;
+  targets.forEach((account, index) => {
+    if (!account.sessionReplaced && list.includes(account) && results[index]?.status === 'rejected') historyErrors.add(account.id);
+  });
   loadingHistory = false;
   const failed = results.find(result => result.status === 'rejected') as PromiseRejectedResult | undefined;
   if (failed) failure(failed.reason);
   if (renderEnd) renderApp();
 }
 
-async function loadContactHistory(contact: AccountContact, markRead: boolean): Promise<void> {
-  const key = accountKey(contact.account.id, contact.login);
+function historyReadVisible(accountId?: string, login?: string): boolean {
+  return !document.hidden && !current && (accountId === undefined
+    ? route.name === 'home' && tab === 'history'
+    : route.name === 'contact' && route.accountId === accountId && route.login === login);
+}
+
+function mergeHistoryItems(previous: HistoryItem[], items: HistoryItem[]): HistoryItem[] {
+  return [...new Map([...previous, ...items].map(item => [item.id, item])).values()];
+}
+
+async function loadMoreHistory(retry = false): Promise<void> {
+  if (loadingHistory || loadingMoreHistory) return;
   const revision = historyRevision;
+  loadingMoreHistory = true;
+  if (!retry) historyVisibleLimit += 50;
+  const targets = list.filter(account => !account.sessionReplaced && (retry
+    ? historyErrors.has(account.id)
+    : !historyErrors.has(account.id) && (historyCursors.get(account.id) ?? 0) > 0));
+  renderApp();
+  await Promise.all(targets.map(async account => {
+    const before = historyCursors.get(account.id) ?? 0;
+    try {
+      const pendingRead = unreadReads.get(account);
+      if (pendingRead) await pendingRead.catch(() => undefined);
+      const unreadVersion = unreadVersions.get(account) ?? 0;
+      const page = await api<HistoryPage>(account, `/api/calls?limit=50&before=${before}`);
+      if (revision !== historyRevision || account.sessionReplaced || !list.includes(account)) return;
+      historyByAccount.set(account.id, before ? mergeHistoryItems(historyByAccount.get(account.id) ?? [], page.items) : page.items);
+      historyCursors.set(account.id, page.next_before);
+      historyErrors.delete(account.id);
+      applyUnread(account, page, unreadVersion);
+    } catch {
+      if (revision === historyRevision && !account.sessionReplaced && list.includes(account)) historyErrors.add(account.id);
+    }
+  }));
+  if (revision === historyRevision) { loadingMoreHistory = false; renderApp(); }
+}
+
+async function loadContactHistory(contact: AccountContact, markRead: boolean, append = false): Promise<void> {
+  const key = accountKey(contact.account.id, contact.login);
+  if (loadingContactHistory.has(key)) return;
+  const before = append ? contactHistoryCursors.get(key) ?? 0 : 0;
+  if (append && !before) return;
+  const revision = historyRevision;
+  const generation = contactHistoryGeneration;
   loadingContactHistory.add(key);
+  contactHistoryErrors.delete(key);
+  if (append) renderApp();
   try {
-    const page = await api<HistoryPage>(contact.account, `/api/calls?peer=${encodeURIComponent(contact.login)}&limit=50`);
-    if (revision !== historyRevision || contact.account.sessionReplaced || !list.includes(contact.account)) return;
-    contactHistory.set(key, page.items);
-    applyUnread(contact.account, page);
-    if (markRead && page.latest_id > 0) applyUnreadState(contact.account, await api(contact.account, '/api/calls/read', 'PUT', { through_id: page.latest_id, peer_login: contact.login }));
+    const pendingRead = unreadReads.get(contact.account);
+    if (pendingRead) await pendingRead.catch(() => undefined);
+    const unreadVersion = unreadVersions.get(contact.account) ?? 0;
+    const page = await api<HistoryPage>(contact.account, `/api/calls?peer=${encodeURIComponent(contact.login)}&limit=50&before=${before}`);
+    if (revision !== historyRevision || generation !== contactHistoryGeneration || contact.account.sessionReplaced || !list.includes(contact.account)) return;
+    contactHistory.set(key, append ? mergeHistoryItems(contactHistory.get(key) ?? [], page.items) : page.items);
+    contactHistoryCursors.set(key, page.next_before);
+    applyUnread(contact.account, page, unreadVersion);
+    if (markRead && page.latest_id > 0 && historyReadVisible(contact.account.id, contact.login)) {
+      await markHistoryRead(contact.account, page.latest_id, contact.login);
+    }
+  } catch {
+    if (revision === historyRevision && generation === contactHistoryGeneration && !contact.account.sessionReplaced && list.includes(contact.account)) contactHistoryErrors.add(key);
   } finally {
     loadingContactHistory.delete(key);
     // A stale in-flight request must release its slot before rendering can reload it.
-    if (contactHistory.has(key) || revision !== historyRevision) renderApp();
+    renderApp();
   }
 }
 
-function applyUnread(account: Account, page: HistoryPage): void {
+function markHistoryRead(account: Account, throughId: number, peerLogin?: string): Promise<void> {
+  // Read responses contain account-wide counters, so their writes must stay ordered.
+  const pending = (unreadReads.get(account) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+    if (account.sessionReplaced || !list.includes(account)) return;
+    const read = await api<HistoryPage>(account, '/api/calls/read', 'PUT', {
+      through_id: throughId, ...(peerLogin ? { peer_login: peerLogin } : {}),
+    });
+    if (account.sessionReplaced || !list.includes(account)) return;
+    unreadVersions.set(account, (unreadVersions.get(account) ?? 0) + 1);
+    applyUnreadState(account, read);
+  });
+  unreadReads.set(account, pending);
+  return pending;
+}
+
+function applyUnread(account: Account, page: HistoryPage, version: number): void {
+  if (version !== (unreadVersions.get(account) ?? 0)) return;
   applyUnreadState(account, { unread_missed_count: page.unread_missed_count, unread_missed: page.unread_missed });
 }
 
@@ -3285,6 +3416,11 @@ function incomingReplySheet(): HTMLElement {
 
 async function receive(account: Account, event: SignalEvent): Promise<void> {
   if (account.sessionReplaced || removingAccounts.has(account) || !list.includes(account)) return;
+  if (event.type === 'contact.changed') {
+    // HTTP must not block the socket's call event queue.
+    void refreshAccountContacts(account).then(() => renderApp()).catch(() => undefined);
+    return;
+  }
   if (event.type === 'call.incoming' && !current) {
     if (Date.now() > event.sent_at + 45000) return;
     const login = String(event.payload.caller_login || '');

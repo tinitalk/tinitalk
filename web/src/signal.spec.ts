@@ -62,6 +62,24 @@ it('does not send visibility messages to an older family server', async () => {
 });
 
 vi.mock('./api', () => ({ api: vi.fn(), APIError: class extends Error {} }));
+it('negotiates contact changes and delivers them outside a call', async () => {
+  vi.stubGlobal('WebSocket', FakeSocket);
+  vi.mocked(api).mockResolvedValue({ ticket: 'ticket', contact_changes: true });
+  const account: Account = { id: 'a', server: 'https://family.example', login: 'alice', token: 'test', name: 'Alice', deviceId: 'a', sessionId: 's' };
+  const receive = vi.fn().mockResolvedValue(undefined);
+  const connection = new SignalConnection(account, receive, vi.fn(), vi.fn(), () => null);
+  const opening = connection.connect();
+  await Promise.resolve();
+  const socket = FakeSocket.instances.at(-1)!;
+  expect(socket.url.searchParams.get('contact_changes')).toBe('1');
+  socket.open();
+  await opening;
+  const event = { type: 'contact.changed', call_id: '', payload: { contact_login: 'bob' } };
+  socket.onmessage?.({ data: JSON.stringify(event) });
+  await Promise.resolve();
+  expect(receive).toHaveBeenCalledWith(event);
+  connection.stop();
+});
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); vi.clearAllMocks(); });
 
 it('retries again after an online event interrupts the previous reconnect timer', async () => {
