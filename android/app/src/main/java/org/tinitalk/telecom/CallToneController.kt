@@ -4,6 +4,7 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Handler
 import android.os.SystemClock
+import android.util.Log
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallPhase
@@ -13,7 +14,9 @@ import java.io.Closeable
 
 internal enum class CallToneMode { Silent, Reaching, Ringing, Reconnecting, Busy, Congestion, Ended }
 
-internal const val CallFailureToneDurationMillis = 2_200L
+// End on the last complete beep: three 500/500 ms busy pulses, six 200/200 ms error pulses.
+internal fun callFailureToneDurationMillis(mode: CallToneMode): Long =
+    if (mode == CallToneMode.Busy) 2_500L else 2_200L
 
 internal fun callToneMode(state: CallUiState): CallToneMode = when {
     state.phase == CallPhase.Ended && state.endReason == CallEndReason.Busy -> CallToneMode.Busy
@@ -33,52 +36,112 @@ internal fun callToneMode(state: CallUiState): CallToneMode = when {
 }
 
 class CallToneController(private val handler: Handler) : Closeable {
-    private val tone = runCatching { ToneGenerator(AudioManager.STREAM_VOICE_CALL, ToneVolume) }.getOrNull()
+    private var tone = createGenerator(ToneVolume)
     private var terminalToneUntil = 0L
     private var mode = CallToneMode.Silent
-    private val pulseTone = object : Runnable {
-        override fun run() {
-            if (mode != CallToneMode.Reaching && mode != CallToneMode.Reconnecting) return
-            runCatching { tone?.startTone(ToneGenerator.TONE_PROP_PROMPT, PulseToneMillis) }
-            handler.postDelayed(this, PulseToneIntervalMillis)
-        }
-    }
+    private var closed = false
+    private var generation = 0L
+    private var pulseTone: Runnable? = null
+    private var retryTone: Runnable? = null
 
+    @Synchronized
     fun update(state: CallUiState) {
         val next = callToneMode(state)
+        if (closed) return
         if (next == mode) return
 
-        handler.removeCallbacks(pulseTone)
+        cancelScheduled()
         runCatching { tone?.stopTone() }
         mode = next
         terminalToneUntil = 0L
         when (next) {
-            CallToneMode.Reaching, CallToneMode.Reconnecting -> handler.post(pulseTone)
-            CallToneMode.Ringing -> runCatching { tone?.startTone(ToneGenerator.TONE_SUP_RINGTONE) }
-            CallToneMode.Busy, CallToneMode.Congestion -> runCatching {
+            CallToneMode.Reaching -> schedulePulses(0L)
+            // Remote media can disconnect before call.end arrives. Warn only if the
+            // interruption persists, so an ordinary hangup does not start a loud prompt.
+            CallToneMode.Reconnecting -> schedulePulses(ReconnectWarningDelayMillis)
+            CallToneMode.Ringing -> startTone(ToneGenerator.TONE_SUP_RINGTONE)
+            CallToneMode.Busy, CallToneMode.Congestion -> {
                 val toneType = if (next == CallToneMode.Busy) {
                     ToneGenerator.TONE_SUP_BUSY
                 } else ToneGenerator.TONE_SUP_CONGESTION
-                startTerminalTone(toneType, CallFailureToneDurationMillis.toInt())
+                startTone(toneType, callFailureToneDurationMillis(next).toInt(), terminal = true)
             }
-            CallToneMode.Ended -> runCatching { startTerminalTone(ToneGenerator.TONE_PROP_ACK, EndToneMillis) }
+            CallToneMode.Ended -> startTone(ToneGenerator.TONE_PROP_ACK, EndToneMillis, terminal = true)
             CallToneMode.Silent -> Unit
         }
     }
 
-    private fun startTerminalTone(type: Int, durationMillis: Int) {
-        if (tone?.startTone(type, durationMillis) == true) {
-            terminalToneUntil = SystemClock.uptimeMillis() + durationMillis
-        }
+    @Synchronized
+    fun stopProgressTone() {
+        if (mode != CallToneMode.Reaching && mode != CallToneMode.Ringing && mode != CallToneMode.Reconnecting) return
+        cancelScheduled()
+        runCatching { tone?.stopTone() }
+        mode = CallToneMode.Silent
     }
 
+    private fun schedulePulses(delayMillis: Long) {
+        val expectedGeneration = generation
+        pulseTone = object : Runnable {
+            override fun run() = synchronized(this@CallToneController) {
+                if (closed || generation != expectedGeneration) return@synchronized
+                startTone(ToneGenerator.TONE_PROP_PROMPT, PulseToneMillis)
+                handler.postDelayed(this, PulseToneIntervalMillis)
+                Unit
+            }
+        }.also { handler.postDelayed(it, delayMillis) }
+    }
+
+    private fun createGenerator(volume: Int): ToneGenerator? =
+        runCatching { ToneGenerator(AudioManager.STREAM_VOICE_CALL, volume) }
+            .onFailure { Log.w("TiniTalkTones", "Cannot create tone generator", it) }.getOrNull()
+
+    private fun startTone(type: Int, durationMillis: Int = -1, terminal: Boolean = false, retry: Boolean = false) {
+        val generator = tone
+        val started = runCatching { generator?.startTone(type, durationMillis) == true }
+            .onFailure { Log.w("TiniTalkTones", "Tone $type start failed", it) }.getOrDefault(false)
+        if (started) {
+            if (terminal) terminalToneUntil = SystemClock.uptimeMillis() + durationMillis
+            return
+        }
+        Log.w("TiniTalkTones", "Tone $type did not start${if (retry) " after retry" else "; retrying"}")
+        if (retry) {
+            if (terminal) terminalToneUntil = 0L
+            return
+        }
+        // One bounded retry with a fresh generator. Keep the route alive while it is pending.
+        if (terminal) terminalToneUntil = SystemClock.uptimeMillis() + RetryDelayMillis + durationMillis
+        val expectedGeneration = generation
+        retryTone = Runnable {
+            synchronized(this) {
+                if (closed || generation != expectedGeneration) return@synchronized
+                retryTone = null
+                if (terminal && SystemClock.uptimeMillis() >= terminalToneUntil) return@synchronized
+                runCatching { generator?.release() }
+                tone = createGenerator(ToneVolume)
+                startTone(type, durationMillis, terminal, retry = true)
+            }
+        }.also { handler.postDelayed(it, RetryDelayMillis) }
+    }
+
+    private fun cancelScheduled() {
+        generation++
+        pulseTone?.let(handler::removeCallbacks)
+        retryTone?.let(handler::removeCallbacks)
+        pulseTone = null
+        retryTone = null
+    }
+
+    @Synchronized
     internal fun remainingTerminalToneMillis(): Long =
         (terminalToneUntil - SystemClock.uptimeMillis()).coerceAtLeast(0L)
 
+    @Synchronized
     override fun close() {
+        if (closed) return
+        closed = true
         terminalToneUntil = 0L
         mode = CallToneMode.Silent
-        handler.removeCallbacks(pulseTone)
+        cancelScheduled()
         runCatching { tone?.stopTone() }
         runCatching { tone?.release() }
     }
@@ -87,6 +150,8 @@ class CallToneController(private val handler: Handler) : Closeable {
         const val ToneVolume = 80
         const val PulseToneMillis = 180
         const val PulseToneIntervalMillis = 4_000L
+        const val ReconnectWarningDelayMillis = 1_000L
         const val EndToneMillis = 400
+        const val RetryDelayMillis = 100L
     }
 }

@@ -130,6 +130,7 @@ class ForegroundCallController(
     private val cameraDetachWaiters = ArrayDeque<() -> Unit>()
     private val cameraReleaseWaiters = ArrayDeque<() -> Unit>()
     private var cameraTransitionGeneration = 0L
+    private var ending = false
     private var closing = false
     private var closed = false
     private val closeWaiters = ArrayDeque<() -> Unit>()
@@ -140,6 +141,7 @@ class ForegroundCallController(
 
     @Synchronized
     fun onSignalEvent(snapshot: CallSnapshot, event: SignalEvent) {
+        if (ending || closing || closed) return
         val parties = sasParties
         if (parties != null && parties.callId != event.callId) {
             // A crossed call may adopt the server's canonical ID before SAS starts.
@@ -207,7 +209,7 @@ class ForegroundCallController(
                     pendingIce.addLast(event.callId to candidate)
                 }
             }
-            "call.reject", "call.cancel", "call.end", "call.expire" -> close()
+            "call.reject", "call.cancel", "call.end", "call.expire" -> prepareForCallEnd()
         }
     }
 
@@ -231,6 +233,7 @@ class ForegroundCallController(
 
     @Synchronized
     fun setActive(active: Boolean) {
+        if (ending || closing || closed) return
         this.active = active
         session?.setActive(active)
     }
@@ -381,6 +384,19 @@ class ForegroundCallController(
         current.getStats { stats ->
             if (isCurrentSession(current)) onResult(stats)
         }
+    }
+
+    /** Silence both directions without tearing down the output used by the terminal tone. */
+    @Synchronized
+    fun prepareForCallEnd() {
+        if (ending || closing || closed) return
+        active = false
+        session?.setActive(false)
+        ending = true
+        // Capture stops immediately; its asynchronous disposal must not delay the end signal.
+        stopScreen(videoState.callId)
+        cameraTransitionGeneration++
+        requestCameraStop(session)
     }
 
     @Synchronized
@@ -612,7 +628,7 @@ class ForegroundCallController(
     }
 
     private fun cameraEligible(nextCallId: String): Boolean =
-        videoState.callId == nextCallId &&
+        !ending && !closing && !closed && videoState.callId == nextCallId &&
             !videoState.screen.active && !screenStopping &&
             videoState.allowed &&
             videoState.requested &&
@@ -761,6 +777,7 @@ class ForegroundCallController(
 
     @Synchronized
     fun onSignalConnected() {
+        if (ending || closing || closed) return
         if (restartRetryTask == null) pendingRestart?.let { signal.send(it) }
         if (restartRequestRetryTask == null) pendingRestartRequest?.let { signal.send(it) }
         sendVideoState(videoState.callId, capturingVideoCallId == videoState.callId)
@@ -769,7 +786,7 @@ class ForegroundCallController(
     private fun sendVideoState(nextCallId: String?, enabled: Boolean) {
         val currentCallId = callId ?: return
         if (
-            closing || closed ||
+            ending || closing || closed ||
             nextCallId != currentCallId ||
             configuredCallId != currentCallId ||
             !videoAllowed || !videoState.allowed

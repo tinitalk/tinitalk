@@ -18,6 +18,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
@@ -195,6 +196,9 @@ class CallForegroundService : Service() {
     private var contactPhotoRevisionJob: Job? = null
     private val foregroundLock = Any()
     private lateinit var callTones: CallToneController
+    private lateinit var toneThread: HandlerThread
+    private var endingMedia: ForegroundCallController? = null
+    private var endAudioReady = false
     private val connectionHealthClassifier = ConnectionHealthClassifier()
     private val terminalSignalGate = TerminalSignalGate(
         timeoutMillis = TerminalSignalTimeoutMillis,
@@ -208,7 +212,8 @@ class CallForegroundService : Service() {
         handler.post {
             if (!finishing && !callResourcesReleased && state.callKey == callOwner?.key && ownsRuntime()
                 && state == CallUiStateStore.snapshot()) {
-                callTones.update(state)
+                if (state.phase == CallPhase.Ended) finishCallSoon()
+                else callTones.update(state)
                 if (state.phase != CallPhase.Idle) {
                     getSystemService(NotificationManager::class.java).notify(NotificationId, notification(state))
                 }
@@ -281,7 +286,8 @@ class CallForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        callTones = CallToneController(handler)
+        toneThread = HandlerThread("TiniTalkCallTones").apply { start() }
+        callTones = CallToneController(Handler(toneThread.looper))
         ContextCompat.registerReceiver(this, screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
         CallUiStateStore.observe(callUiObserver)
         contactPhotoRevisionJob = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
@@ -394,6 +400,7 @@ class CallForegroundService : Service() {
         contactPhotoRevisionJob = null
         CallUiStateStore.removeObserver(callUiObserver)
         callTones.close()
+        toneThread.quitSafely()
         terminalSignalGate.close()
         stopStatsPolling()
         callNetworkLock?.close()
@@ -752,7 +759,7 @@ class CallForegroundService : Service() {
                     newCoordinator.fail()
                     publish(reason)
                     if (reason == CallEndReason.Busy || reason == CallEndReason.NotInContacts) {
-                        finishCallAfter(CallFailureToneDurationMillis)
+                        finishCallAfter(callFailureToneDurationMillis(callToneMode(CallUiStateStore.snapshot())))
                     } else {
                         finishCallSoon()
                     }
@@ -797,6 +804,12 @@ class CallForegroundService : Service() {
     private fun handle(intent: Intent) {
         val call = coordinator ?: return
         val requestOwner = ownerFrom(intent) ?: return
+        if (call.snapshot().phase == CallPhase.Ended) {
+            // Repeated hangups and queued Telecom callbacks must share the normal
+            // tone/cleanup sequence, not stop the service halfway through it.
+            finishCallSoon()
+            return
+        }
         val invite = IncomingCallController.inviteFrom(intent)
         var endReason: CallEndReason? = null
         var awaitingTerminalSignal = false
@@ -1109,14 +1122,41 @@ class CallForegroundService : Service() {
         if (finishing || expectedGeneration != runtimeGeneration) return
         val state = CallUiStateStore.snapshot()
         if (!callResourcesReleased && state.callKey == callOwner?.key && ownsRuntime()) {
-            // Stop voice immediately, retaining Telecom routing for the terminal tone.
-            releaseCallMedia()
+            // Cancel loud progress tones before any asynchronous media work.
+            callTones.stopProgressTone()
+            stopStatsPolling()
+            // Silence voice first; keep its audio output alive until the short signal finishes.
+            val currentMedia = media
+            if (currentMedia != null) {
+                if (endingMedia !== currentMedia) {
+                    endingMedia = currentMedia
+                    endAudioReady = false
+                    val submitted = mediaDispatcher?.dispatch {
+                        val result = runCatching { currentMedia.prepareForCallEnd() }
+                        handler.post {
+                            if (finishing || expectedGeneration != runtimeGeneration || media !== currentMedia) return@post
+                            endAudioReady = true
+                            if (result.isFailure) {
+                                Log.e(CallLogTag, "failed to silence ended call", result.exceptionOrNull())
+                                releaseCallResources()
+                                finishCall(expectedGeneration)
+                            } else finishCallSoon(expectedGeneration)
+                        }
+                    } == true
+                    if (!submitted) {
+                        releaseCallResources()
+                        finishCall(expectedGeneration)
+                    }
+                    return
+                }
+                if (!endAudioReady) return
+            }
             callTones.update(state)
         }
         val mode = callToneMode(state)
         val delayMillis = if (state.callKey == callOwner?.key &&
             (mode == CallToneMode.Busy || mode == CallToneMode.Congestion)) {
-            CallFailureToneDurationMillis
+            callFailureToneDurationMillis(mode)
         } else {
             FinishToneDelayMillis
         }
@@ -1133,6 +1173,11 @@ class CallForegroundService : Service() {
 
     private fun finishCall(expectedGeneration: Long = runtimeGeneration) {
         if (finishing || expectedGeneration != runtimeGeneration) return
+        if (media != null && CallUiStateStore.snapshot().phase == CallPhase.Ended &&
+            (endingMedia !== media || !endAudioReady)) {
+            finishCallSoon(expectedGeneration)
+            return
+        }
         val remaining = callTones.remainingTerminalToneMillis()
         if (remaining > 0) {
             finishCallAfter(remaining, expectedGeneration)

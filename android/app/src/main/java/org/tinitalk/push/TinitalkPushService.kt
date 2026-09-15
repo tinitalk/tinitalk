@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import org.tinitalk.call.AccountCallOwner
+import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.CallAudioState
 import org.tinitalk.call.CallPhase
 import org.tinitalk.call.CallServiceState
@@ -76,7 +77,12 @@ class TinitalkPushService : PushService() {
     private fun authStore() = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
 }
 
-internal class IncomingPushHandler(private val context: android.content.Context) {
+internal class IncomingPushHandler(
+    private val context: android.content.Context,
+    private val disconnectSystemCall: (AccountCallKey) -> Unit = {
+        TelecomCallController(AndroidTelecomRegistrar(context)).cancel(it)
+    },
+) {
     fun handle(account: AccountRecord, data: Map<String, String>) {
         val session = account.session
         val deviceId = DeviceIdentity.id(context)
@@ -181,15 +187,17 @@ internal class IncomingPushHandler(private val context: android.content.Context)
         val latest = cancellation.missedFallback(pending, snapshot, now)
         val remoteEndQueued = cancellation.shouldRouteRemoteEnd(pending?.key, snapshot) &&
             runCatching { CallForegroundService.remoteEnded(context, owner) }.isSuccess
-        if (pending != null && !pending.expiresAt.isAfter(now)) incoming.pruneExpiredPending(context, now)
         if (cancellation.shouldDismiss(pending?.key, snapshot)) {
-            TelecomCallController(AndroidTelecomRegistrar(context)).cancel(cancellation.key)
             if (remoteEndQueued) {
+                // The call service owns audio until its terminal tone finishes.
+                // A simultaneous push must not disconnect Telecom underneath it.
                 incoming.handoffTerminalPresentation(context, owner, notifier::cancel)
             } else {
+                disconnectSystemCall(cancellation.key)
                 incoming.finishTerminalPresentation(context, owner, notifier::cancel)
             }
         }
+        if (pending != null && !pending.expiresAt.isAfter(now)) incoming.pruneExpiredPending(context, now)
         if (cancellation.shouldRefreshMissedCount()) scheduleMissedCountRefresh(notifier, latest, account)
     }
 

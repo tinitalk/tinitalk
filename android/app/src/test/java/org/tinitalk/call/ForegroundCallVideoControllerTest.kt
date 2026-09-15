@@ -378,7 +378,7 @@ class ForegroundCallVideoControllerTest {
     }
 
     @Test
-    fun callEndClosesMediaAfterLogicalCameraDetach() {
+    fun callEndDetachesCameraButRetainsAudioUntilOwnerCloses() {
         val session = FakeCameraMediaSession(deferRelease = true)
         val controller = controller(session) {}
         configureVideoSession(controller)
@@ -390,8 +390,13 @@ class ForegroundCallVideoControllerTest {
             event(CurrentCall, "call.end", JsonObject()),
         )
 
-        assertTrue(session.closed)
+        assertEquals(1, session.stops)
+        assertFalse(session.closed)
         session.completeCameraRelease()
+        assertEquals(1, session.starts)
+        assertFalse(session.closed)
+        controller.close()
+        assertTrue(session.closed)
     }
 
     @Test

@@ -341,7 +341,7 @@ class ForegroundCallControllerTest {
     }
 
     @Test
-    fun terminalEventClosesMediaSession() {
+    fun terminalEventSilencesMediaBeforeOwnerClosesIt() {
         val signal = CapturingSignalClient()
         val media = FakeMediaSession()
         val controller = ForegroundCallController(signal, { _, _, _, _, _ -> media }, ids)
@@ -350,6 +350,11 @@ class ForegroundCallControllerTest {
 
         controller.onSignalEvent(CallSnapshot(CallPhase.Ended, callId, 2), event("call.end"))
 
+        assertEquals(false, media.activity.last())
+        assertEquals(false, media.closed)
+        controller.setActive(true)
+        assertEquals(false, media.activity.last())
+        controller.close()
         assertTrue(media.closed)
     }
 
