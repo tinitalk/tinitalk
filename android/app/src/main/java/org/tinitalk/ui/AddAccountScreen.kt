@@ -199,7 +199,7 @@ internal fun AccountCredentialsForm(
         token,
         { token = it },
         Modifier.fillMaxWidth(),
-        label = { Text("Токен") },
+        label = { Text("Пароль") },
         trailingIcon = if (token.isEmpty()) {
             { PasteButton(enabled = !loading) { paste { token = it } } }
         } else {

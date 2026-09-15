@@ -15,7 +15,7 @@ class AccountAdditionHandoffTest {
             configId = "config-b",
             contacts = AccountContactPage(AccountId("account-b"), emptyList()),
         )
-        val failure = AccountAdditionOutcome.Failed("Неверный логин или токен")
+        val failure = AccountAdditionOutcome.Failed("Неверный логин или пароль")
         var previousActivitySignals = 0
         val previousActivityObserver: () -> Unit = { previousActivitySignals++ }
         handoff.observe(previousActivityObserver)

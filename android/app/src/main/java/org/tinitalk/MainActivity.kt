@@ -981,7 +981,7 @@ class MainActivity : ComponentActivity() {
             is ApiException -> if (
                 error.code == 401 && error.authReason == SessionReplacedReason
             ) SessionReplacedMessage else when (error.code) {
-                401 -> "Неверный логин или токен"
+                401 -> "Неверный логин или пароль"
                 404 -> "Сервер TiniTalk не найден"
                 else -> "Сервер вернул ошибку ${error.code}"
             }
@@ -1571,7 +1571,7 @@ private fun userErrorMessage(error: Throwable): String = when (error) {
         CompatibilityProblem.AppOutdated -> "Приложение TiniTalk устарело. Установите новую версию"
         CompatibilityProblem.Unavailable -> "Сервер TiniTalk временно недоступен"
     }
-    is ApiException -> if (error.code == 401) "Неверный логин или токен" else "Сервер вернул ошибку ${error.code}"
+    is ApiException -> if (error.code == 401) "Неверный логин или пароль" else "Сервер вернул ошибку ${error.code}"
     else -> "Не удалось подключиться к серверу"
 }
 
