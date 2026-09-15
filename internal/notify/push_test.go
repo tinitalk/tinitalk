@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -199,6 +200,58 @@ func TestContactChangePushIsBoundToCurrentSessionAndContainsNoCall(t *testing.T)
 	if data["type"] != "contact_changed" || data["contact_login"] != "alice" || data["target_login"] != "bob" ||
 		data["target_session_id"] != "bob-session" || data["target_device_id"] != "phone" || data["call_id"] != "" {
 		t.Fatalf("contact push data = %+v", data)
+	}
+}
+
+func TestBrowserSubscriptionDoesNotReceiveSilentContactChange(t *testing.T) {
+	sender := &fakeWebPushSender{}
+	phone := notifyTarget("web")
+	var subscription map[string]any
+	if err := json.Unmarshal([]byte(phone.Subscription), &subscription); err != nil {
+		t.Fatal(err)
+	}
+	subscription["client_type"] = "web"
+	raw, err := json.Marshal(subscription)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phone.Subscription = string(raw)
+	notifier := NewPushNotifier(&fakePushTargetStore{targets: []state.Device{{DeviceID: "web", PushTarget: phone}}}, sender)
+	notifier.ContactChanged("bob", "alice", state.AccountSession{DeviceID: "web", SessionID: "session"})
+	if sender.calls != 0 {
+		t.Fatalf("browser received silent contact push: %d", sender.calls)
+	}
+}
+
+func TestAppleSubscriptionsReceiveIncomingButNoBackgroundSyncOrCancellation(t *testing.T) {
+	for _, clientType := range []string{"", "web"} {
+		t.Run("client="+clientType, func(t *testing.T) {
+			target := notifyTarget("apple")
+			var subscription map[string]any
+			if err := json.Unmarshal([]byte(target.Subscription), &subscription); err != nil {
+				t.Fatal(err)
+			}
+			subscription["endpoint"] = "https://web.push.apple.com/token"
+			subscription["client_type"] = clientType
+			raw, _ := json.Marshal(subscription)
+			target.Subscription = string(raw)
+			sender := &fakeWebPushSender{}
+			notifier := NewPushNotifier(&fakePushTargetStore{targets: []state.Device{{DeviceID: "phone", PushTarget: target}}}, sender)
+			event := signaling.DeliveredEvent{Event: protocol.Event{CallID: "call-1", Type: "call.cancel"}}
+			notifier.CancelCall("bob", event)
+			notifier.ContactChanged("bob", "alice", state.AccountSession{DeviceID: "phone", SessionID: "session"})
+			if sender.calls != 0 {
+				t.Fatalf("Apple received %d invisible pushes", sender.calls)
+			}
+			notifier.IncomingCall("alice", "bob", event)
+			if sender.calls != 1 || sender.last.Data["type"] != "incoming_call" {
+				t.Fatalf("incoming call lost: %+v", sender.requests)
+			}
+			notifier.SessionReplaced("bob", "session", []state.Device{{DeviceID: "phone", PushTarget: target}})
+			if sender.calls != 2 || sender.last.Data["type"] != "session_replaced" {
+				t.Fatalf("visible session replacement lost: %+v", sender.requests)
+			}
+		})
 	}
 }
 

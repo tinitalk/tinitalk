@@ -46,6 +46,7 @@ type call struct {
 	lastRestartRequest   time.Time
 	offlineSince         map[string]time.Time
 	state                callState
+	pushChanged          chan struct{}
 	supportsCrossCall    bool
 	callerSupportsVideo  bool
 	calleeSupportsVideo  bool

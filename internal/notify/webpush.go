@@ -2,7 +2,6 @@ package notify
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -28,7 +27,7 @@ func (s HTTPWebPushSender) Send(request WebPushRequest) error {
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(request.Data)
+	payload, err := webPushPayload(subscription, request.Data)
 	if err != nil {
 		return err
 	}

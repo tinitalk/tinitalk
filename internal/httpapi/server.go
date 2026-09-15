@@ -37,6 +37,7 @@ type Server struct {
 	mux            *http.ServeMux
 	socketTiming   socketTiming
 	sessionClaimMu sync.Mutex
+	tickets        browserTickets
 }
 
 type socketTiming struct {
@@ -68,6 +69,7 @@ func NewServer(db *state.DB, options Options) http.Handler {
 		sessionNotify: options.SessionNotifier,
 		options:       options,
 		mux:           http.NewServeMux(),
+		tickets:       browserTickets{items: make(map[string]browserTicket)},
 		socketTiming:  defaultSocketTiming,
 	}
 	s.routes()
@@ -75,11 +77,18 @@ func NewServer(db *state.DB, options Options) http.Handler {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.browserCORS(w, r) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	s.mux.ServeHTTP(w, r)
 }
 
 func (s *Server) routes() {
+	s.mux.Handle("/api/browser/session", s.requireBasicAuth(http.HandlerFunc(s.session)))
+	s.mux.Handle("/api/browser/socket-ticket", s.requireAuth(http.HandlerFunc(s.issueBrowserTicket)))
+	s.mux.HandleFunc("/api/browser/socket", s.browserSocket)
 	s.mux.HandleFunc("/healthz", s.health)
 	s.mux.Handle("/api/webpush-config", s.requireBasicAuth(http.HandlerFunc(s.webPushConfig)))
 	s.mux.Handle("/api/session", s.requireBasicAuth(http.HandlerFunc(s.session)))
@@ -91,13 +100,15 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /api/contacts/{login}", s.requireAuth(http.HandlerFunc(s.contact)))
 	s.mux.Handle("PUT /api/contacts/{login}/name", s.requireAuth(http.HandlerFunc(s.contactName)))
 	s.mux.Handle("/api/device", s.requireAuth(http.HandlerFunc(s.device)))
+	s.mux.Handle("GET /api/active-call", s.requireAuth(http.HandlerFunc(s.activeCall)))
 	s.mux.Handle("/api/calls", s.requireAuth(http.HandlerFunc(s.calls)))
 	s.mux.Handle("/api/calls/read", s.requireAuth(http.HandlerFunc(s.readCalls)))
+	s.mux.Handle("POST /api/calls/{callID}/reject", s.requireAuth(http.HandlerFunc(s.rejectCall)))
 	s.mux.Handle("/api/socket", s.requireAuth(http.HandlerFunc(s.socket)))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	features := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1"}
+	features := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1", "browser_v1"}
 	writeJSON(w, struct {
 		Service    string   `json:"service"`
 		Status     string   `json:"status"`

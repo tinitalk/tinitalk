@@ -79,7 +79,7 @@ func TestNewHTTPServerWiresWebPushConfiguration(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("WebPush config status = %d, body %s", response.Code, response.Body.String())
 	}
-	var got map[string]string
+	var got map[string]any
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
