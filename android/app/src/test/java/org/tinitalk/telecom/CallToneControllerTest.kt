@@ -31,6 +31,7 @@ class CallToneControllerTest {
         RecordingCallToneShadow.failuresRemaining = 0
         RecordingCallToneShadow.throwOnStart = false
         RecordingCallToneShadow.attempts = 0
+        RecordingCallToneShadow.playedVolumes.clear()
     }
 
     private val rejected = CallUiState(
@@ -196,6 +197,51 @@ class CallToneControllerTest {
         assertEquals(playedBeforeClose, ShadowToneGenerator.getPlayedTones().size)
     }
 
+    @Test
+    fun outputChangeAdjustsRingbackAndFailedEndToneRetryKeepsSpeakerVolume() {
+        val controller = CallToneController(Handler(Looper.getMainLooper()))
+        val ringing = CallUiState(direction = CallDirection.Outgoing, phase = CallPhase.Ringing)
+        val speaker = AudioEndpoint("speaker", "Speaker", androidx.core.telecom.CallEndpointCompat.TYPE_SPEAKER)
+        try {
+            controller.update(ringing)
+            controller.update(ringing.copy(currentAudioEndpoint = speaker))
+            assertEquals(listOf(80, 40), RecordingCallToneShadow.playedVolumes)
+            RecordingCallToneShadow.failuresRemaining = 1
+            controller.update(rejected.copy(connectedAtElapsedMs = 1L, endReason = CallEndReason.RemoteHangup,
+                currentAudioEndpoint = speaker))
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
+            assertEquals(listOf(80, 40, 40), RecordingCallToneShadow.playedVolumes)
+            controller.update(rejected.copy(connectedAtElapsedMs = 1L, endReason = CallEndReason.RemoteHangup))
+            assertEquals("Repeated terminal updates must not restart the signal", 3, RecordingCallToneShadow.playedVolumes.size)
+        } finally { controller.close() }
+    }
+
+    @Test
+    fun allSignalsUseTheSameVolumeForTheConfirmedOutput() {
+        val states = listOf(
+            CallUiState(direction = CallDirection.Outgoing, phase = CallPhase.Connecting),
+            CallUiState(direction = CallDirection.Outgoing, phase = CallPhase.Ringing),
+            CallUiState(phase = CallPhase.Active, connectionHealth = ConnectionHealth.Reconnecting),
+            rejected,
+            rejected.copy(endReason = CallEndReason.Failed),
+            rejected.copy(connectedAtElapsedMs = 1L, endReason = CallEndReason.RemoteHangup),
+        )
+        for (type in listOf(androidx.core.telecom.CallEndpointCompat.TYPE_SPEAKER,
+            androidx.core.telecom.CallEndpointCompat.TYPE_EARPIECE,
+            androidx.core.telecom.CallEndpointCompat.TYPE_BLUETOOTH)) {
+            for (state in states) {
+                val controller = CallToneController(Handler(Looper.getMainLooper()))
+                try {
+                    val before = RecordingCallToneShadow.playedVolumes.size
+                    controller.update(state.copy(currentAudioEndpoint = AudioEndpoint("output", "Output", type)))
+                    Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(1))
+                    assertEquals(listOf(if (type == androidx.core.telecom.CallEndpointCompat.TYPE_SPEAKER) 40 else 80),
+                        RecordingCallToneShadow.playedVolumes.drop(before))
+                } finally { controller.close() }
+            }
+        }
+    }
+
     private fun CallToneController.toneShadow(): RecordingCallToneShadow =
         Shadow.extract(ReflectionHelpers.getField<ToneGenerator>(this, "tone"))
 }
@@ -206,6 +252,7 @@ class RecordingCallToneShadow : ShadowToneGenerator() {
         var failuresRemaining = 0
         var throwOnStart = false
         var attempts = 0
+        val playedVolumes = mutableListOf<Int>()
     }
     var streamType = -1
     var volume = -1
@@ -226,6 +273,7 @@ class RecordingCallToneShadow : ShadowToneGenerator() {
             if (throwOnStart) throw IllegalStateException("Audio output unavailable")
             return false
         }
+        playedVolumes += volume
         return super.startTone(toneType, durationMs)
     }
 

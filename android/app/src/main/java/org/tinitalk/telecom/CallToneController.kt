@@ -5,6 +5,7 @@ import android.media.ToneGenerator
 import android.os.Handler
 import android.os.SystemClock
 import android.util.Log
+import androidx.core.telecom.CallEndpointCompat
 import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallPhase
@@ -37,6 +38,8 @@ internal fun callToneMode(state: CallUiState): CallToneMode = when {
 
 class CallToneController(private val handler: Handler) : Closeable {
     private var tone = createGenerator(ToneVolume)
+    private var speakerTone = createGenerator(SpeakerToneVolume)
+    private var useSpeaker = false
     private var terminalToneUntil = 0L
     private var mode = CallToneMode.Silent
     private var closed = false
@@ -48,10 +51,16 @@ class CallToneController(private val handler: Handler) : Closeable {
     fun update(state: CallUiState) {
         val next = callToneMode(state)
         if (closed) return
-        if (next == mode) return
+        val speaker = state.currentAudioEndpoint?.let { it.type == CallEndpointCompat.TYPE_SPEAKER } ?: useSpeaker
+        val outputChanged = speaker != useSpeaker
+        useSpeaker = speaker
+        // Ringback is continuous. Short pulses pick up the output on their next start;
+        // a terminal signal must never restart because of a late endpoint callback.
+        if (next == mode && !(outputChanged && next == CallToneMode.Ringing)) return
 
         cancelScheduled()
         runCatching { tone?.stopTone() }
+        runCatching { speakerTone?.stopTone() }
         mode = next
         terminalToneUntil = 0L
         when (next) {
@@ -76,6 +85,7 @@ class CallToneController(private val handler: Handler) : Closeable {
         if (mode != CallToneMode.Reaching && mode != CallToneMode.Ringing && mode != CallToneMode.Reconnecting) return
         cancelScheduled()
         runCatching { tone?.stopTone() }
+        runCatching { speakerTone?.stopTone() }
         mode = CallToneMode.Silent
     }
 
@@ -96,7 +106,8 @@ class CallToneController(private val handler: Handler) : Closeable {
             .onFailure { Log.w("TiniTalkTones", "Cannot create tone generator", it) }.getOrNull()
 
     private fun startTone(type: Int, durationMillis: Int = -1, terminal: Boolean = false, retry: Boolean = false) {
-        val generator = tone
+        val speaker = useSpeaker
+        val generator = if (speaker) speakerTone else tone
         val started = runCatching { generator?.startTone(type, durationMillis) == true }
             .onFailure { Log.w("TiniTalkTones", "Tone $type start failed", it) }.getOrDefault(false)
         if (started) {
@@ -117,7 +128,7 @@ class CallToneController(private val handler: Handler) : Closeable {
                 retryTone = null
                 if (terminal && SystemClock.uptimeMillis() >= terminalToneUntil) return@synchronized
                 runCatching { generator?.release() }
-                tone = createGenerator(ToneVolume)
+                if (speaker) speakerTone = createGenerator(SpeakerToneVolume) else tone = createGenerator(ToneVolume)
                 startTone(type, durationMillis, terminal, retry = true)
             }
         }.also { handler.postDelayed(it, RetryDelayMillis) }
@@ -143,11 +154,14 @@ class CallToneController(private val handler: Handler) : Closeable {
         mode = CallToneMode.Silent
         cancelScheduled()
         runCatching { tone?.stopTone() }
+        runCatching { speakerTone?.stopTone() }
         runCatching { tone?.release() }
+        runCatching { speakerTone?.release() }
     }
 
     private companion object {
         const val ToneVolume = 80
+        const val SpeakerToneVolume = 40
         const val PulseToneMillis = 180
         const val PulseToneIntervalMillis = 4_000L
         const val ReconnectWarningDelayMillis = 1_000L
