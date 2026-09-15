@@ -114,8 +114,8 @@ fun historyDayLabel(
     val date = Instant.ofEpochSecond(startedAt).atZone(zone).toLocalDate()
     val today = now.atZone(zone).toLocalDate()
     return when (date) {
-        today -> "Сегодня"
-        today.minusDays(1) -> "Вчера"
+        today -> "сегодня"
+        today.minusDays(1) -> "вчера"
         else -> date.format(
             DateTimeFormatter.ofPattern(
                 if (date.year == today.year) "d MMMM" else "d MMMM yyyy",

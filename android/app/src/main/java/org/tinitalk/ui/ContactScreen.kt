@@ -19,8 +19,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -49,8 +48,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -58,7 +55,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import org.tinitalk.R
 import org.tinitalk.call.CallUiState
 import org.tinitalk.data.ContactAddress
@@ -102,6 +98,7 @@ fun ContactScreen(
     var contactMenuVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var removeContactVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var unavailableCallVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
+    val listState = rememberSaveable(identityKey, saver = LazyListState.Saver) { LazyListState() }
     LaunchedEffect(identityKey) { onRefreshShortcuts() }
     LaunchedEffect(contact.canCall) {
         if (contact.canCall != false) unavailableCallVisible = false
@@ -137,157 +134,167 @@ fun ContactScreen(
                     }
                 },
             )
-            Column(
+            CollapsingContactLayout(
+                name = name,
+                address = contactAddress,
+                login = contact.login,
+                listState = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
                     .navigationBarsPadding(),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CompositionLocalProvider(LocalRippleConfiguration provides null) {
-                        IconButton(
-                            onClick = onBack,
-                            modifier = Modifier.size(48.dp),
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_arrow_back),
-                                contentDescription = "Назад",
-                            )
+                toolbar = { titleModifier ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CompositionLocalProvider(LocalRippleConfiguration provides null) {
+                            IconButton(
+                                onClick = onBack,
+                                modifier = Modifier.size(48.dp),
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_arrow_back),
+                                    contentDescription = "Назад",
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "Контакт",
+                            modifier = Modifier.weight(1f).then(titleModifier),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Box {
+                            IconButton(
+                                onClick = {
+                                    onRefreshShortcuts()
+                                    contactMenuVisible = true
+                                },
+                                modifier = Modifier.size(48.dp),
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_more_vert),
+                                    contentDescription = "Действия контакта $name",
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = contactMenuVisible,
+                                onDismissRequest = { contactMenuVisible = false },
+                                modifier = Modifier.widthIn(min = 260.dp),
+                            ) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "Переименовать",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_edit),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(24.dp),
+                                        )
+                                    },
+                                    enabled = internetAvailable,
+                                    modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-rename"),
+                                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                                    onClick = {
+                                        contactMenuVisible = false
+                                        onRenameHandled()
+                                        renameVisible = true
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "Изменить фото",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_photo_camera),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(24.dp),
+                                        )
+                                    },
+                                    enabled = photoTarget != null && !photoState.busy,
+                                    modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-photo"),
+                                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                                    onClick = {
+                                        contactMenuVisible = false
+                                        photoActionsVisible = true
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (shortcutPinned == true) "Уже на главном экране" else "На главный экран",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            painterResource(if (shortcutPinned == true) R.drawable.ic_server_available else R.drawable.ic_add_to_home),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(24.dp),
+                                            tint = if (shortcutPinned == true) CallAnswerGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    },
+                                    enabled = !removing,
+                                    modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-shortcut"),
+                                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                                    onClick = {
+                                        contactMenuVisible = false
+                                        onPinContact()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "Удалить контакт",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = CallRejectRed,
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_delete),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(24.dp),
+                                            tint = CallRejectRed,
+                                        )
+                                    },
+                                    enabled = internetAvailable && !photoState.busy,
+                                    modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-delete"),
+                                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                                    onClick = {
+                                        contactMenuVisible = false
+                                        onRemoveContactDismissed()
+                                        removeContactVisible = true
+                                    },
+                                )
+                            }
                         }
                     }
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "Контакт",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Box {
-                        IconButton(
-                            onClick = {
-                                onRefreshShortcuts()
-                                contactMenuVisible = true
-                            },
-                            modifier = Modifier.size(48.dp),
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_more_vert),
-                                contentDescription = "Действия контакта $name",
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = contactMenuVisible,
-                            onDismissRequest = { contactMenuVisible = false },
-                            modifier = Modifier.widthIn(min = 260.dp),
-                        ) {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "Переименовать",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_edit),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(24.dp),
-                                    )
-                                },
-                                enabled = internetAvailable,
-                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-rename"),
-                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
-                                onClick = {
-                                    contactMenuVisible = false
-                                    onRenameHandled()
-                                    renameVisible = true
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "Изменить фото",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_photo_camera),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(24.dp),
-                                    )
-                                },
-                                enabled = photoTarget != null && !photoState.busy,
-                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-photo"),
-                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
-                                onClick = {
-                                    contactMenuVisible = false
-                                    photoActionsVisible = true
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (shortcutPinned == true) "Уже на главном экране" else "На главный экран",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        painterResource(if (shortcutPinned == true) R.drawable.ic_server_available else R.drawable.ic_add_to_home),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(24.dp),
-                                        tint = if (shortcutPinned == true) CallAnswerGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                },
-                                enabled = !removing,
-                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-shortcut"),
-                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
-                                onClick = {
-                                    contactMenuVisible = false
-                                    onPinContact()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "Удалить контакт",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = CallRejectRed,
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_delete),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(24.dp),
-                                        tint = CallRejectRed,
-                                    )
-                                },
-                                enabled = internetAvailable && !photoState.busy,
-                                modifier = Modifier.heightIn(min = 58.dp).testTag("contact-menu-delete"),
-                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
-                                onClick = {
-                                    contactMenuVisible = false
-                                    onRemoveContactDismissed()
-                                    removeContactVisible = true
-                                },
-                            )
-                        }
-                    }
-                }
-
+                },
+            ) { identityHeight, flingBehavior ->
                 LazyColumn(
+                    flingBehavior = flingBehavior,
+                    state = listState,
                     modifier = Modifier
                         .fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 22.dp),
+                    contentPadding = PaddingValues(
+                        start = 20.dp, top = ContactProfileTopPadding, end = 20.dp,
+                        bottom = if (history.items.isEmpty()) 22.dp else 84.dp,
+                    ),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -296,66 +303,7 @@ fun ContactScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            ContactAvatar(
-                                address = contactAddress,
-                                displayName = name,
-                                fallbackLogin = contact.login,
-                                size = 208.dp,
-                                modifier = Modifier.testTag("contact-profile-avatar"),
-                                borderWidth = 2.dp,
-                                shadowElevation = 8.dp,
-                                showRefreshProgress = true,
-                            )
-                            photoTarget?.let { target ->
-                                if (photoActionsVisible) {
-                                    ContactPhotoActionSheet(
-                                        hasPhoto = photoState.hasPhoto,
-                                        busy = photoState.busy,
-                                        onGallery = {
-                                            photoActionsVisible = false
-                                            onChoosePhotoSource(target, ContactPhotoSource.Gallery)
-                                        },
-                                        onFiles = {
-                                            photoActionsVisible = false
-                                            onChoosePhotoSource(target, ContactPhotoSource.Files)
-                                        },
-                                        onRemove = {
-                                            photoActionsVisible = false
-                                            onRemovePhoto(target)
-                                        },
-                                        onDismiss = { photoActionsVisible = false },
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(22.dp))
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .widthIn(max = 420.dp)
-                                    .heightIn(min = 56.dp)
-                                    .semantics {
-                                        contentDescription = "Имя контакта: $name"
-                                    },
-                                shape = RoundedCornerShape(18.dp),
-                                color = Color.Transparent,
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = name,
-                                        modifier = Modifier.weight(1f, fill = false),
-                                        style = MaterialTheme.typography.headlineMedium,
-                                        fontSize = 28.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        textAlign = TextAlign.Center,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
+                            Spacer(Modifier.height(identityHeight))
                             Text(
                                 buildAnnotatedString {
                                     withStyle(
@@ -467,25 +415,14 @@ fun ContactScreen(
                             item(key = "contact-history-empty") {
                                 ContactHistoryMessage("Звонков с этим контактом пока не было")
                             }
-                        else -> itemsIndexed(
-                            items = history.items,
-                            key = { _, item -> "contact-history-${item.id}" },
-                        ) { index, item ->
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                val day = historyDayLabel(item.startedAt, now, zone)
-                                if (index == 0 || day != historyDayLabel(history.items[index - 1].startedAt, now, zone)) {
-                                    Text(
-                                        text = day,
-                                        modifier = Modifier.padding(
-                                            start = 4.dp,
-                                            top = if (index == 0) 2.dp else 12.dp,
-                                            bottom = 8.dp,
-                                        ),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
+                        else -> history.items.forEachIndexed { index, item ->
+                            val day = historyDayLabel(item.startedAt, now, zone)
+                            if (index == 0 || day != historyDayLabel(history.items[index - 1].startedAt, now, zone)) {
+                                stickyHeader(key = "contact-history-day-$day") { headerIndex ->
+                                    HistoryDayHeader(day, listState, headerIndex)
                                 }
+                            }
+                            item(key = "contact-history-${item.id}") {
                                 HistoryRow(item, showPeer = false)
                                 if (shouldLoadMoreHistory(
                                         index = index,
@@ -514,6 +451,26 @@ fun ContactScreen(
                 }
             }
         }
+    }
+
+    if (photoActionsVisible && photoTarget != null) {
+        ContactPhotoActionSheet(
+            hasPhoto = photoState.hasPhoto,
+            busy = photoState.busy,
+            onGallery = {
+                photoActionsVisible = false
+                onChoosePhotoSource(photoTarget, ContactPhotoSource.Gallery)
+            },
+            onFiles = {
+                photoActionsVisible = false
+                onChoosePhotoSource(photoTarget, ContactPhotoSource.Files)
+            },
+            onRemove = {
+                photoActionsVisible = false
+                onRemovePhoto(photoTarget)
+            },
+            onDismiss = { photoActionsVisible = false },
+        )
     }
 
     if (renameVisible) {

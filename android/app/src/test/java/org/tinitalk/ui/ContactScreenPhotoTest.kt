@@ -16,11 +16,25 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.Contact
+import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.ContactPhotoDraft
 import org.tinitalk.data.ContactPhotoReader
@@ -31,6 +45,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,6 +64,131 @@ class ContactScreenPhotoTest {
     private val address = ContactAddress.of("https://example.com", "alex")
     private val target = ContactPhotoEditTarget(AccountId("account-1"), address, "Алексей")
     private val contact = Contact(login = "alex", displayName = "Алексей")
+
+    @Test
+    @Config(qualifiers = "w360dp-h800dp")
+    fun scrollingPinsIdentityAndReturnButtonRestoresTheProfile() {
+        render {
+            ContactScreen(
+                contact = contact,
+                contactAddress = address,
+                photoTarget = target,
+                photoState = ContactPhotoEditorState(target = target),
+                nameUpdate = ContactNameUpdateState(),
+                history = ContactHistoryState(
+                    loaded = true,
+                    items = List(30) { index ->
+                        CallHistoryItem(
+                            id = (index + 1).toLong(), peerLogin = "alex", peerName = "Алексей",
+                            direction = "incoming", outcome = "completed", reached = true,
+                            startedAt = 1_788_400_000L - index * 60, durationSeconds = 30,
+                        )
+                    },
+                ),
+                ongoingCall = null,
+                onBack = {}, onCall = {}, onOpenCall = {}, onRename = {},
+                onRenameHandled = {}, onLoadMoreHistory = {}, onRetryHistory = {},
+            )
+        }
+        val expanded = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
+        saveHeaderPreview("expanded")
+        composeRule.onNodeWithContentDescription("В начало").assertDoesNotExist()
+        composeRule.onNode(hasScrollAction()).performTouchInput {
+            swipeUp(startY = centerY, endY = centerY - 150f, durationMillis = 1_000)
+        }
+        saveHeaderPreview("snapped")
+        composeRule.onNodeWithContentDescription("В начало").assertIsDisplayed()
+        val snapped = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
+        assertTrue("A short drag should fully collapse the header", snapped.width < expanded.width / 2)
+        composeRule.onNode(hasScrollAction()).performTouchInput {
+            swipeDown(startY = centerY, endY = centerY + 80f, durationMillis = 1_000)
+        }
+        composeRule.onNodeWithContentDescription("В начало").assertDoesNotExist()
+        val reopened = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
+        assertEquals("A reverse drag should fully expand the header", expanded.width, reopened.width, 1f)
+        composeRule.onNode(hasScrollAction()).performScrollToIndex(10)
+
+        saveHeaderPreview("collapsed")
+        composeRule.onNodeWithTag("contact-profile-avatar").assertIsDisplayed()
+        val collapsed = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
+        assertTrue("Avatar should fit in the toolbar: $expanded -> $collapsed", collapsed.width < expanded.width / 2)
+        assertTrue(collapsed.top < expanded.top)
+        val day = historyDayLabel(1_788_400_000L)
+        composeRule.onNodeWithText(day).assertIsDisplayed()
+        val dayBounds = composeRule.onNodeWithText(day).fetchSemanticsNode().boundsInRoot
+        val listBounds = composeRule.onNode(hasScrollAction()).fetchSemanticsNode().boundsInRoot
+        assertEquals(listBounds.center.x, dayBounds.center.x, 1f)
+        composeRule.onNode(hasScrollAction()).performScrollToIndex(15)
+        assertEquals(dayBounds.top, composeRule.onNodeWithText(day).fetchSemanticsNode().boundsInRoot.top, 1f)
+        composeRule.onNodeWithText("Алексей").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("В начало").assertIsDisplayed()
+
+        // The photo sheet must still work after the large profile item leaves the list.
+        composeRule.onNodeWithContentDescription("Действия контакта Алексей").performClick()
+        composeRule.onNodeWithText("Изменить фото").performClick()
+        composeRule.onNodeWithText("Выбрать из галереи").assertIsDisplayed().performClick()
+
+        composeRule.onNodeWithContentDescription("В начало").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("В начало").assertDoesNotExist()
+        val restored = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
+        assertEquals(expanded.top, restored.top, 1f)
+        assertEquals(expanded.width, restored.width, 1f)
+        composeRule.onNodeWithText("Позвонить").assertIsDisplayed()
+        composeRule.onNode(hasScrollAction()).performTouchInput {
+            swipeUp(startY = centerY, endY = centerY - 150f, durationMillis = 80)
+        }
+        composeRule.onNodeWithText("Позвонить").assertIsNotDisplayed()
+    }
+
+    private fun saveHeaderPreview(name: String) {
+        val image = composeRule.onRoot().captureToImage().asAndroidBitmap()
+        val directory = File("build/outputs/contact-header").apply { mkdirs() }
+        File(directory, "$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    @Test
+    @Config(qualifiers = "w320dp-h720dp")
+    fun longNameWithLargeTextStaysBetweenBackAndMenuWhenCollapsed() {
+        val name = "Александра Константинопольская"
+        var backPressed = false
+        render {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 2f)) {
+                ContactScreen(
+                    contact = contact.copy(displayName = name),
+                    contactAddress = address,
+                    nameUpdate = ContactNameUpdateState(),
+                    history = ContactHistoryState(
+                        loaded = true,
+                        items = List(12) { index ->
+                            CallHistoryItem(
+                                id = (index + 1).toLong(), peerLogin = "alex", peerName = name,
+                                direction = "incoming", outcome = "completed", reached = true,
+                                startedAt = 1_788_400_000L - index * 60, durationSeconds = 30,
+                            )
+                        },
+                    ),
+                    ongoingCall = null,
+                    onBack = { backPressed = true }, onCall = {}, onOpenCall = {}, onRename = {},
+                    onRenameHandled = {}, onLoadMoreHistory = {}, onRetryHistory = {},
+                )
+            }
+        }
+        saveHeaderPreview("large-text-expanded")
+        composeRule.onNode(hasScrollAction()).performScrollToIndex(6)
+        saveHeaderPreview("large-text-collapsed")
+        val avatar = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
+        val label = composeRule.onNodeWithText(name).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val menu = composeRule.onNodeWithContentDescription("Действия контакта $name").fetchSemanticsNode().boundsInRoot
+        assertTrue("Name must clear the avatar", label.left >= avatar.right)
+        assertTrue("Name must clear the menu", label.right <= menu.left)
+        composeRule.onNodeWithContentDescription("Действия контакта $name").performClick()
+        composeRule.onNodeWithText("Переименовать").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Отмена").performClick()
+        composeRule.onNodeWithContentDescription("Назад").performClick()
+        assertTrue(backPressed)
+    }
 
     @Test
     fun shortcutMenuUpdatesFromSystemStateAndStillAllowsExplicitRepeatAction() {

@@ -1,5 +1,8 @@
 package org.tinitalk.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,7 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,21 +30,25 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -60,6 +67,7 @@ import org.tinitalk.ui.theme.CallAnswerGreen
 import org.tinitalk.ui.theme.CallRejectRed
 import java.time.Instant
 import java.time.ZoneId
+import kotlinx.coroutines.launch
 
 internal fun shouldScrollToNewest(previousFirstKey: String?, currentFirstKey: String?): Boolean =
     previousFirstKey != null && currentFirstKey != null && previousFirstKey != currentFirstKey
@@ -83,6 +91,10 @@ fun HistoryScreen(
     val now = Instant.now()
     val zone = ZoneId.systemDefault()
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val showScrollToTop by remember {
+        derivedStateOf { listState.firstVisibleItemIndex > 1 }
+    }
     var previousFirstKey by remember { mutableStateOf<String?>(null) }
     var unavailableDialogVisible by remember { mutableStateOf(false) }
     LaunchedEffect(unavailableServers) {
@@ -113,23 +125,19 @@ fun HistoryScreen(
                         start = 16.dp,
                         top = 10.dp,
                         end = 16.dp,
-                        bottom = if (unavailableServers.isEmpty()) 10.dp else 78.dp,
+                        bottom = if (unavailableServers.isEmpty()) 80.dp else 150.dp,
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    itemsIndexed(items, key = { index, accountHistory -> itemKeys.getOrNull(index) ?: accountHistory.id }) { index, accountHistory ->
+                    items.forEachIndexed { index, accountHistory ->
                         val item = accountHistory.item
-                        Column {
-                            val day = historyDayLabel(item.startedAt, now, zone)
-                            if (index == 0 || day != historyDayLabel(items[index - 1].startedAt, now, zone)) {
-                                Text(
-                                    text = day,
-                                    modifier = Modifier.padding(start = 4.dp, top = if (index == 0) 4.dp else 14.dp, bottom = 8.dp),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
+                        val day = historyDayLabel(item.startedAt, now, zone)
+                        if (index == 0 || day != historyDayLabel(items[index - 1].startedAt, now, zone)) {
+                            stickyHeader(key = "history-day-$day") { headerIndex ->
+                                HistoryDayHeader(day, listState, headerIndex)
                             }
+                        }
+                        item(key = itemKeys.getOrNull(index) ?: accountHistory.id) {
                             HistoryRow(
                                 item = item,
                                 contactAddress = accountHistory.address,
@@ -160,6 +168,32 @@ fun HistoryScreen(
                 }
             }
         }
+        AnimatedVisibility(
+            visible = items.isNotEmpty() && showScrollToTop,
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(bottom = if (unavailableServers.isEmpty()) 16.dp else 88.dp),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shadowElevation = 6.dp,
+            ) {
+                IconButton(
+                    onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_chevron_right),
+                        contentDescription = "В начало",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(26.dp).graphicsLayer { rotationZ = -90f },
+                    )
+                }
+            }
+        }
         if (unavailableServers.isNotEmpty()) {
             HistoryIncompleteBanner(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 10.dp),
@@ -171,6 +205,34 @@ fun HistoryScreen(
         HistoryUnavailableDialog(
             servers = unavailableServers,
             onDismiss = { unavailableDialogVisible = false },
+        )
+    }
+}
+
+@Composable
+internal fun HistoryDayHeader(day: String, listState: LazyListState, headerIndex: Int) {
+    val pinned by remember(listState, headerIndex) {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            layout.visibleItemsInfo.any {
+                it.index == headerIndex && it.offset <= -layout.beforeContentPadding
+            }
+        }
+    }
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            day,
+            modifier = Modifier
+                .clip(shape)
+                .background(if (pinned) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f) else Color.Transparent)
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
         )
     }
 }

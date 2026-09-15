@@ -150,8 +150,8 @@ class HistoryPresentationTest {
         val zone = ZoneId.of("Europe/Moscow")
         val now = Instant.parse("2026-08-26T12:00:00Z")
 
-        assertEquals("Сегодня", historyDayLabel(Instant.parse("2026-08-26T09:15:00Z").epochSecond, now, zone))
-        assertEquals("Вчера", historyDayLabel(Instant.parse("2026-08-25T20:05:00Z").epochSecond, now, zone))
+        assertEquals("сегодня", historyDayLabel(Instant.parse("2026-08-26T09:15:00Z").epochSecond, now, zone))
+        assertEquals("вчера", historyDayLabel(Instant.parse("2026-08-25T20:05:00Z").epochSecond, now, zone))
         assertEquals("20 августа", historyDayLabel(Instant.parse("2026-08-20T09:00:00Z").epochSecond, now, zone))
         assertEquals("12:15", historyTime(Instant.parse("2026-08-26T09:15:00Z").epochSecond, zone))
     }

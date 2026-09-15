@@ -1,15 +1,14 @@
 package org.tinitalk.ui
 
 import android.graphics.Bitmap
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ProvidableCompositionLocal
@@ -23,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -134,21 +134,20 @@ fun ContactAvatar(
             )
         } else {
             val color = contactAvatarColors[contactColorIndex(fallbackLogin.orEmpty(), contactAvatarColors.size)]
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                shape = CircleShape,
-                color = color,
-                border = BorderStroke(borderWidth, BrandGold.copy(alpha = 0.42f)),
-                shadowElevation = shadowElevation,
+            // Decorative only: Surface intercepts gestures when the avatar overlays a list.
+            Box(
+                modifier = Modifier.fillMaxSize()
+                    .shadow(shadowElevation, CircleShape)
+                    .background(color, CircleShape)
+                    .border(borderWidth, BrandGold.copy(alpha = 0.42f), CircleShape),
+                contentAlignment = Alignment.Center,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        contactInitial(displayName, fallbackLogin.orEmpty()),
-                        color = Color(0xFFF6E8C0),
-                        fontSize = contactAvatarInitialFontSizeSp(size.value, density.fontScale).sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
+                Text(
+                    contactInitial(displayName, fallbackLogin.orEmpty()),
+                    color = Color(0xFFF6E8C0),
+                    fontSize = contactAvatarInitialFontSizeSp(size.value, density.fontScale).sp,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
         if (refreshing) {
