@@ -1082,6 +1082,7 @@ class MainActivity : ComponentActivity() {
                 (application as TinitalkApplication).contactPhotoStore.remove(contact.address)
             }.onSuccess {
                 runOnUiThread {
+                    org.tinitalk.data.FavoriteContactsStore(this).setFavorite(key, false)
                     contactPhotoEditorViewModel.state.target
                         ?.takeIf { it.accountId == key.accountId && it.address == contact.address }
                         ?.let(contactPhotoEditorViewModel::onTargetHidden)
@@ -1191,11 +1192,10 @@ class MainActivity : ComponentActivity() {
                     screenState = screenState.copy(accounts = remaining.toAccountSummaries())
                     return@runOnUiThread
                 }
+                pruneRemovedAccount(accountId, remaining)
                 if (remaining.isEmpty()) {
                     resetToLogin()
-                    return@runOnUiThread
                 }
-                pruneRemovedAccount(accountId, remaining)
             }
         }.start()
     }
@@ -1213,6 +1213,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun pruneRemovedAccount(accountId: AccountId, remaining: List<org.tinitalk.data.AccountRecord>) {
+        org.tinitalk.data.FavoriteContactsStore(this).removeAccount(accountId)
         if (contactHistoryAccountId == accountId) {
             contactHistoryGeneration++
             contactHistoryRefreshGate.clear()

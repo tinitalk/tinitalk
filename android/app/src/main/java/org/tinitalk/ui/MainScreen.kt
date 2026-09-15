@@ -1,6 +1,9 @@
 package org.tinitalk.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -53,12 +56,15 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -68,9 +74,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -96,6 +107,8 @@ import org.tinitalk.data.AccountId
 import org.tinitalk.data.normalizeServerUrl
 import java.net.URI
 import org.tinitalk.data.AccountPeerKey
+import org.tinitalk.data.FavoriteContactsStore
+import android.content.SharedPreferences
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.CallUnreadState
 import org.tinitalk.data.Contact
@@ -717,14 +730,32 @@ private fun HomeScreen(
 ) {
     val pagerState = rememberPagerState(pageCount = { 2 })
     val contactsListState = rememberLazyListState()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val favoritesListState = rememberLazyListState()
+    val context = LocalContext.current
+    val favoritesStore = remember(context) { FavoriteContactsStore(context) }
+    var favoriteKeys by remember(favoritesStore) { mutableStateOf(favoritesStore.load()) }
+    var showFavorites by rememberSaveable { mutableStateOf(true) }
+    DisposableEffect(favoritesStore) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+            favoriteKeys = favoritesStore.load()
+        }
+        favoritesStore.preferences.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { favoritesStore.preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     val scope = rememberCoroutineScope()
     var selectedContactAccountId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedContactLogin by rememberSaveable { mutableStateOf<String?>(null) }
     val selectedContactKey = selectedContactAccountId?.let { accountId ->
         selectedContactLogin?.let { login -> AccountPeerKey(AccountId(accountId), login) }
     }
+    val snackbarHostState = remember(selectedContactKey) { SnackbarHostState() }
+    val snackbarScope = androidx.compose.runtime.key(selectedContactKey) { rememberCoroutineScope() }
     val visibleContacts = state.accountContacts
+    val latestVisibleContacts by androidx.compose.runtime.rememberUpdatedState(visibleContacts)
+    val favoriteContacts = remember(favoriteKeys, visibleContacts) {
+        val byKey = visibleContacts.associateBy { it.peerKey }
+        favoriteKeys.mapNotNull(byKey::get)
+    }
     val selectedAccountContact = visibleContacts.firstOrNull { it.peerKey == selectedContactKey }
     val selectedPhotoTarget = selectedAccountContact?.let { contact ->
         ContactPhotoEditTarget(
@@ -786,7 +817,7 @@ private fun HomeScreen(
     }
     LaunchedEffect(state.contactsRefreshErrorMessage) {
         state.contactsRefreshErrorMessage?.let { message ->
-            scope.launch { snackbarHostState.showSnackbar(message) }
+            snackbarScope.launch { snackbarHostState.showSnackbar(message) }
             onContactsRefreshMessageHandled()
         }
     }
@@ -795,7 +826,7 @@ private fun HomeScreen(
     }
     LaunchedEffect(contactPhotoEditorState.message) {
         contactPhotoEditorState.message?.let { message ->
-            scope.launch { snackbarHostState.showSnackbar(message) }
+            snackbarScope.launch { snackbarHostState.showSnackbar(message) }
             onContactPhotoMessageShown()
         }
     }
@@ -813,19 +844,26 @@ private fun HomeScreen(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     ) { page ->
                         if (page == 0) {
-                            ContactsPage(
-                                contacts = visibleContacts,
-                                latestUnreadMissedByContact = state.latestUnreadMissedByAccountContact,
-                                internetAvailable = state.networkAvailable,
-                                listState = contactsListState,
-                                refreshing = state.contactsRefreshing,
-                                onRefresh = onRefreshContacts,
-                                onAddContact = onOpenAddContact,
-                                onContactSelected = {
-                                    selectedContactAccountId = it.accountId.value
-                                    selectedContactLogin = it.login
-                                },
-                            )
+                            Column(Modifier.fillMaxSize()) {
+                                if (favoriteContacts.isNotEmpty()) {
+                                    FavoriteContactTabs(showFavorites) { showFavorites = it }
+                                }
+                                ContactsPage(
+                                    contacts = if (showFavorites && favoriteContacts.isNotEmpty()) favoriteContacts else visibleContacts,
+                                    favoriteKeys = favoriteKeys,
+                                    latestUnreadMissedByContact = state.latestUnreadMissedByAccountContact,
+                                    internetAvailable = state.networkAvailable,
+                                    listState = if (showFavorites && favoriteContacts.isNotEmpty()) favoritesListState else contactsListState,
+                                    refreshing = state.contactsRefreshing,
+                                    onRefresh = onRefreshContacts,
+                                    onAddContact = onOpenAddContact,
+                                    onReorder = if (showFavorites && favoriteContacts.isNotEmpty()) favoritesStore::reorder else null,
+                                    onContactSelected = {
+                                        selectedContactAccountId = it.accountId.value
+                                        selectedContactLogin = it.login
+                                    },
+                                )
+                            }
                         } else {
                             HistoryScreen(
                                 items = historyWindow.items,
@@ -842,7 +880,7 @@ private fun HomeScreen(
                                 onContactSelected = { peer ->
                                     val contact = visibleContacts.firstOrNull { it.peerKey == peer }
                                     if (contact == null) {
-                                        scope.launch {
+                                        snackbarScope.launch {
                                             snackbarHostState.showSnackbar("Контакт больше недоступен")
                                         }
                                     } else {
@@ -908,6 +946,23 @@ private fun HomeScreen(
         selectedAccountContact?.let { contact ->
             ContactScreen(
                 contact = contact.contact,
+                favorite = contact.peerKey in favoriteKeys,
+                onToggleFavorite = {
+                    val position = favoriteKeys.indexOf(contact.peerKey)
+                    val adding = position < 0
+                    favoritesStore.setFavorite(contact.peerKey, adding)
+                    favoriteKeys = favoritesStore.load()
+                    if (adding && favoriteKeys.size == 1) showFavorites = true
+                    if (!adding) snackbarScope.launch {
+                        snackbarHostState.currentSnackbarData?.dismiss()
+                        val result = snackbarHostState.showSnackbar("Убрано из избранных", actionLabel = "Отменить")
+                        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed &&
+                            latestVisibleContacts.any { it.peerKey == contact.peerKey } &&
+                            favoritesStore.load().none { it == contact.peerKey }) {
+                            favoritesStore.setFavorite(contact.peerKey, true, position)
+                        }
+                    }
+                },
                 contactAddress = contact.address,
                 identityKey = accountScopedKey(contact.accountId, contact.login),
                 accountServerUrl = contact.serverUrl.takeIf {
@@ -958,17 +1013,53 @@ private fun HomeScreen(
                 onDone = onConfirmContactPhotoCrop,
             )
         }
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
-        )
+        androidx.compose.runtime.key(snackbarHostState) {
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+            ) { data ->
+                ContactSnackbar(data)
+            }
+        }
     }
+}
+
+@Composable
+private fun ContactSnackbar(data: SnackbarData) {
+    val remaining = remember(data) { Animatable(1f) }
+    val accent = MaterialTheme.colorScheme.primary
+    LaunchedEffect(data) {
+        // This is a countdown: system animation speed must not change its duration.
+        withContext(object : MotionDurationScale { override val scaleFactor = 1f }) {
+            remaining.animateTo(0f, tween(3_000, easing = LinearEasing))
+        }
+        data.dismiss()
+    }
+    Snackbar(
+        snackbarData = data,
+        modifier = Modifier.clip(CircleShape)
+            .drawWithContent {
+                drawContent()
+                val start = 28.dp.toPx()
+                val end = size.width - start
+                val y = size.height - 5.dp.toPx()
+                if (remaining.value > 0f) {
+                    drawLine(accent.copy(alpha = 0.8f), Offset(start, y),
+                        Offset(start + (end - start) * remaining.value, y), 2.dp.toPx(), StrokeCap.Round)
+                }
+            },
+        shape = CircleShape,
+        containerColor = Color(0xFF45474C).copy(alpha = 0.88f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        actionColor = accent,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ContactsPage(
     contacts: List<AccountContact>,
+    favoriteKeys: List<AccountPeerKey>,
     latestUnreadMissedByContact: Map<AccountPeerKey, Long>,
     internetAvailable: Boolean,
     listState: LazyListState,
@@ -976,6 +1067,7 @@ private fun ContactsPage(
     onRefresh: () -> Unit,
     onAddContact: () -> Unit,
     onContactSelected: (AccountContact) -> Unit,
+    onReorder: ((List<AccountPeerKey>) -> Unit)? = null,
 ) {
     val contactsWithServerSubtitle = remember(contacts) { contactsRequiringServerSubtitle(contacts) }
     PullToRefreshBox(
@@ -1011,6 +1103,20 @@ private fun ContactsPage(
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
                 )
             }
+        } else if (onReorder != null) {
+            ReorderableFavoriteContacts(
+                contacts = contacts,
+                listState = listState,
+                onReorder = onReorder,
+            ) { contact, rowModifier ->
+                ContactRow(
+                    contact = contact,
+                    serverHostname = if (contact.peerKey in contactsWithServerSubtitle) serverHostname(contact.serverUrl) else null,
+                    latestUnreadMissedAt = latestUnreadMissedByContact[contact.peerKey],
+                    onOpen = onContactSelected,
+                    modifier = rowModifier,
+                )
+            }
         } else {
             LazyColumn(
                 state = listState,
@@ -1021,6 +1127,7 @@ private fun ContactsPage(
                 items(contacts, key = { contact -> accountScopedKey(contact.accountId, contact.login) }) { contact ->
                     ContactRow(
                         contact,
+                        showFavoriteBadge = contact.peerKey in favoriteKeys,
                         serverHostname = if (contact.peerKey in contactsWithServerSubtitle) {
                             serverHostname(contact.serverUrl)
                         } else {
@@ -1118,6 +1225,8 @@ private fun ContactRow(
     contact: AccountContact,
     serverHostname: String?,
     latestUnreadMissedAt: Long?,
+    modifier: Modifier = Modifier,
+    showFavoriteBadge: Boolean = false,
     onOpen: (AccountContact) -> Unit,
 ) {
     val name = contactDisplayName(contact.displayName)
@@ -1131,8 +1240,8 @@ private fun ContactRow(
     val avatarSize = rowHeight - avatarInset * 2
     Surface(
         onClick = { onOpen(contact) },
-        modifier = Modifier.fillMaxWidth().semantics {
-            contentDescription = listOfNotNull("Открыть контакт: $name", detailsSubtitle, missedSubtitle)
+        modifier = modifier.fillMaxWidth().semantics {
+            contentDescription = listOfNotNull("Открыть контакт: $name", "В избранном".takeIf { showFavoriteBadge }, detailsSubtitle, missedSubtitle)
                 .joinToString(". ")
         },
         shape = RoundedCornerShape(rowHeight / 2),
@@ -1146,13 +1255,31 @@ private fun ContactRow(
                 .padding(start = avatarInset, top = avatarInset, end = 14.dp, bottom = avatarInset),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ContactAvatar(
-                address = contact.address,
-                displayName = name,
-                fallbackLogin = contact.login,
-                size = avatarSize,
-                borderWidth = 1.dp,
-            )
+            Box(Modifier.size(avatarSize)) {
+                ContactAvatar(
+                    address = contact.address,
+                    displayName = name,
+                    fallbackLogin = contact.login,
+                    size = avatarSize,
+                    borderWidth = 1.dp,
+                )
+                if (showFavoriteBadge) {
+                    Surface(
+                        modifier = Modifier.align(Alignment.BottomEnd).size(18.dp),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surface,
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_star),
+                                contentDescription = null,
+                                tint = BrandGold,
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(

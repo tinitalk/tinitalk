@@ -93,7 +93,7 @@ internal fun CollapsingContactLayout(
             name, expandedStyle, maxLines = 2, overflow = TextOverflow.Ellipsis,
             constraints = Constraints(maxWidth = with(density) { (maxWidth - 64.dp).roundToPx().coerceAtLeast(1) }),
         )
-        val compactNameWidth = with(density) { (maxWidth - 168.dp).roundToPx().coerceAtLeast(1) }
+        val compactNameWidth = with(density) { (maxWidth - 216.dp).roundToPx().coerceAtLeast(1) }
         val compactName = measurer.measure(
             name, compactStyle, maxLines = 1, overflow = TextOverflow.Ellipsis,
             constraints = Constraints(maxWidth = compactNameWidth),

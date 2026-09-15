@@ -92,6 +92,8 @@ fun ContactScreen(
     onPinContact: () -> Unit = {},
     shortcutPinned: Boolean? = null,
     onRefreshShortcuts: () -> Unit = {},
+    favorite: Boolean = false,
+    onToggleFavorite: () -> Unit = {},
 ) {
     var renameVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
     var photoActionsVisible by rememberSaveable(identityKey) { mutableStateOf(false) }
@@ -166,6 +168,13 @@ fun ContactScreen(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
                         )
+                        IconButton(onClick = onToggleFavorite, modifier = Modifier.size(48.dp)) {
+                            Icon(
+                                painterResource(if (favorite) R.drawable.ic_star else R.drawable.ic_star_outline),
+                                contentDescription = if (favorite) "Убрать из избранных" else "Добавить в избранные",
+                                tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Box {
                             IconButton(
                                 onClick = {
