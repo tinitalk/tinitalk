@@ -1,6 +1,7 @@
 import { accountScope, type Account } from './model';
 
 export const webBuild = import.meta.env.VITE_WEB_BUILD_ID || 'dev';
+export const webCommit = import.meta.env.VITE_WEB_COMMIT || 'unknown';
 export type BuildVersions = { build: string; shell: string; push: string };
 export type WorkerVersion = { version: string | null; state: ServiceWorkerState };
 export type WorkerReport = {

@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import { build } from 'esbuild';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 
 async function versionedWorker(entry: string, define: Record<string, string> = {}) {
   // Hash the bundled code with a fixed version placeholder to avoid hashing a
@@ -21,13 +23,21 @@ export default defineConfig(async ({ command }) => {
   // Embed the worker's content version in the application before Vite builds it.
   // This also makes a push-only change update the app bundle and shell cache ID.
   const builtAt = new Date().toISOString();
+  let commit = 'unknown';
+  try {
+    commit = execFileSync('git', ['-c', `safe.directory=${resolve('..')}`, 'rev-parse', '--short=8', 'HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { /* Source archives may not include Git metadata. */ }
   const pushWorker = command === 'build' ? await versionedWorker('src/push-worker.ts') : undefined;
   return {
     base: './',
-    define: pushWorker ? {
-      'import.meta.env.VITE_PUSH_WORKER_VERSION': JSON.stringify(pushWorker.version),
-      'import.meta.env.VITE_WEB_BUILD_ID': JSON.stringify(builtAt),
-    } : {},
+    define: {
+      'import.meta.env.VITE_WEB_COMMIT': JSON.stringify(commit),
+      ...(pushWorker ? {
+        'import.meta.env.VITE_PUSH_WORKER_VERSION': JSON.stringify(pushWorker.version),
+        'import.meta.env.VITE_WEB_BUILD_ID': JSON.stringify(builtAt),
+      } : {}),
+    },
     plugins: [{
       name: 'tinitalk-workers',
       apply: 'build',

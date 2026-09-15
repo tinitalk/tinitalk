@@ -30,6 +30,7 @@ it.each(['add-account', 'login', 'add-contact'])('keeps entered values on backgr
   const names = ['renderApp', 'credentialsScreen', 'credentialsReady', 'addContactScreen', 'element'];
   const code = ts.transpileModule(source.statements.filter(n => ts.isFunctionDeclaration(n) && names.includes(n.name!.text)).map(n => n.getText(source)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const app = new Function('Node', 'routeName', `
+    const webCommit = '12345678';
     const owner = {id:'a', login:'alice', server:'https://family.example', sessionReplaced:routeName === 'login'};
     const list = [owner], screen = new Node('screen'), document = {createElement: tag => new Node(tag)};
     let route = routeName === 'login' ? {name:'login', accountId:'a'} : {name:routeName}, tab = 'contacts';

@@ -21,7 +21,7 @@ import { IncomingCallVisibility } from './incomingVisibility';
 import { AudioCall, type CallSecurityState, type CallTransportRoute, type CallVideoState } from './media';
 import { securityEmoji, type CallSecurityFailureReason, type CallSecurityUnavailableReason } from './sas';
 import { CallToneController, type CallToneEndReason, type CallToneState } from './callTones';
-import { buildTime, canUpdateApplication, fetchBuildVersions, inspectUpdates, updateStatus, waitForWorker, webBuild, type UpdateReport } from './updates';
+import { buildTime, canUpdateApplication, fetchBuildVersions, inspectUpdates, updateStatus, waitForWorker, webBuild, webCommit, type UpdateReport } from './updates';
 import { microphoneControlIcon } from './callControls';
 
 const base = new URL('./', document.baseURI).href;
@@ -941,7 +941,7 @@ function aboutScreen(): HTMLElement {
   const entries = aboutServerEntries();
   for (const { account } of entries) ensureAboutServerDetails(account);
   if (!updateReport && !checkingUpdates && !updateError) void checkAppUpdates(false);
-  body.append(aboutApplicationCard(entries));
+  body.append(aboutApplicationCard());
   for (const entry of entries) {
     body.append(aboutInfoCard('Сервер', [
       ['Адрес', serverAddress(entry.server)],
@@ -954,9 +954,9 @@ function aboutScreen(): HTMLElement {
   return appPage(body, { title: 'О программе', back: () => goBack({ name: 'home' }), className: 'about-app-page' });
 }
 
-function aboutApplicationCard(entries: { account: Account; server: string; state: AboutServerState }[]): HTMLElement {
+function aboutApplicationCard(): HTMLElement {
   const card = aboutInfoCard('Приложение', [], [
-    ['Версия', `web-версия · ${aboutServerCommit(entries)}`],
+    ['Версия', `web-версия · ${webCommit}`],
     ['Собрано', buildTime(webBuild)],
   ]);
   card.append(aboutUpdateStatusRow());
@@ -1045,13 +1045,6 @@ function aboutServerEntries(): { server: string; account: Account; state: AboutS
     account,
     state: aboutServers.get(server) ?? { loading: false },
   }));
-}
-
-function aboutServerCommit(entries: { state: AboutServerState }[]): string {
-  const commits = Array.from(new Set(entries.map(entry => entry.state.details?.commit?.trim()).filter(Boolean) as string[]));
-  if (commits.length === 1) return commits[0];
-  if (commits.length > 1) return 'Несколько серверов';
-  return entries.some(entry => entry.state.loading) ? 'Проверяем…' : 'Не указан';
 }
 
 function aboutInfoCard(title: string, values: [string, string][] = [], inlineValues: [string, string][] = []): HTMLElement {
@@ -1925,7 +1918,7 @@ function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTM
     });
   };
   if (standalone) {
-    page.append(form, element('p', 'version', 'web'));
+    page.append(form, element('p', 'version', `v ${webCommit}`));
     return page;
   }
   const body = element('main', 'form-page');
