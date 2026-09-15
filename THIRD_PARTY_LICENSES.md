@@ -63,7 +63,8 @@ listed in `CallSecurityEmoji.kt`. Its internal family name is
 Its TTF metadata includes the full upstream license text (OFL 1.1 and the
 Twemoji CC BY 4.0 notice), copyright and attribution, source links, and a
 description of the subset and name changes. These notices are bundled with the
-font inside the APK. Bouncy Castle's MIT license is included in the APK as
+font inside the APK and the web distribution. Both clients bundle the same font
+for consistent security-code artwork. Bouncy Castle's MIT license is included in the APK as
 `META-INF/LICENSE.md`.
 
 UnifiedPush embedded FCM distributor 3.1.0 has conflicting upstream license
