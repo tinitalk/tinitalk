@@ -1,4 +1,5 @@
-﻿import type { SignalEvent } from './model';
+﻿import { OperationError } from './userErrors';
+import type { SignalEvent } from './model';
 import {
   CallSASHandshake,
   type CallSecurityFailureReason,
@@ -30,6 +31,7 @@ type AudioCallOptions = {
   security?: (state: CallSecurityState) => void;
   transportRoute?: (route: CallTransportRoute) => void;
   video?: (state: CallVideoState) => void;
+  playbackBlocked?: (blocked: boolean) => void;
 };
 
 const securityCodeTimeoutMs = 30_000;
@@ -88,12 +90,13 @@ export class AudioCall {
     private failed: (error: Error) => void,
     private options: AudioCallOptions = {},
   ) {
-    this.playback = new CallAudioPlayback(audio);
+    this.playback = new CallAudioPlayback(audio, blocked => this.options.playbackBlocked?.(blocked));
   }
 
   async capture(): Promise<void> {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error('Микрофон недоступен. Откройте приложение по HTTPS.');
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    if (this.stream?.getAudioTracks().some(track => track.readyState === 'live')) return;
+    if (!navigator.mediaDevices?.getUserMedia) throw new OperationError('microphone', new Error('HTTPS required'));
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false }).catch(error => { throw new OperationError('microphone', error); });
     if (this.closed) { stream.getTracks().forEach(t => t.stop()); return; }
     this.stream = stream;
     this.mute(this.muted);
@@ -109,6 +112,8 @@ export class AudioCall {
     // No await before the native output-selection API in the button's gesture.
     return this.playback.setOutputDevice(id);
   }
+
+  resumeAudio(): Promise<void> { return this.playback.resume(); }
 
   videoState(): CallVideoState {
     return {
@@ -320,9 +325,8 @@ export class AudioCall {
       if (track.kind === 'video') {
         this.publishVideo();
       } else {
-        void this.playback.attach(stream).catch(() => {
-          if (!this.closed) this.status('Нажмите «Включить звук»');
-        });
+        // Playback reports its own persistent recovery action, independent of transport status.
+        void this.playback.attach(stream).catch(() => undefined);
       }
     };
     peer.onconnectionstatechange = () => {
@@ -420,7 +424,7 @@ export class AudioCall {
     }
     if (!navigator.mediaDevices?.getUserMedia) {
       await this.cameraFailed('Камера недоступна. Откройте приложение по HTTPS.');
-      return;
+      throw new OperationError('camera', new Error('HTTPS required'));
     }
     const sender = this.videoSender;
     let stream: MediaStream | undefined;
@@ -454,7 +458,8 @@ export class AudioCall {
       await this.refreshCameraAvailability();
     } catch (error) {
       if (this.cameraUpdateCurrent(revision)) {
-        await this.cameraFailed(error instanceof Error && error.message ? error.message : 'Не удалось включить камеру');
+        await this.cameraFailed('Не удалось включить камеру');
+        throw error instanceof OperationError ? error : new OperationError('camera', error);
       }
     } finally {
       // Unpublished captures still own the camera, including failed attachments
@@ -590,12 +595,12 @@ export class AudioCall {
   }
 
   private async openCameraStream(facing: CallVideoFacing): Promise<MediaStream> {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера недоступна. Откройте приложение по HTTPS.');
+    if (!navigator.mediaDevices?.getUserMedia) throw new OperationError('camera', new Error('HTTPS required'));
     try {
       return await navigator.mediaDevices.getUserMedia({ audio: false, video: cameraConstraints(facing, true) });
     } catch (error) {
-      if (!isOverconstrained(error)) throw error;
-      return navigator.mediaDevices.getUserMedia({ audio: false, video: cameraConstraints(facing, false) });
+      if (!isOverconstrained(error)) throw new OperationError('camera', error);
+      return navigator.mediaDevices.getUserMedia({ audio: false, video: cameraConstraints(facing, false) }).catch(error => { throw new OperationError('camera', error); });
     }
   }
 }

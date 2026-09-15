@@ -1,3 +1,4 @@
+import { OperationError } from './userErrors';
 import { api, APIError } from './api';
 import type { Account, SignalEvent } from './model';
 
@@ -38,7 +39,7 @@ export class SignalConnection {
       const socket = new WebSocket(url, ['tinitalk.browser.v1', `ticket.${result.ticket}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => { socket.close(); reject(new Error('Сервер не отвечает')); }, 12000);
+        const timeout = setTimeout(() => { socket.close(); reject(new OperationError('network', new Error('Сервер не отвечает'))); }, 12000);
         socket.onopen = () => {
           clearTimeout(timeout);
           if (this.stopped || socket !== this.socket) { socket.close(); resolve(); return; }
@@ -52,9 +53,9 @@ export class SignalConnection {
           if (active) this.send(active.id, 'call.resume', { last_seq: active.seq });
           resolve();
         };
-        socket.onerror = () => { clearTimeout(timeout); reject(new Error('Не удалось подключиться к серверу')); };
+        socket.onerror = () => { clearTimeout(timeout); reject(new OperationError('network', new Error('Не удалось подключиться к серверу'))); };
         socket.onclose = () => {
-          clearTimeout(timeout); reject(new Error('Соединение закрыто'));
+          clearTimeout(timeout); reject(new OperationError('network', new Error('Соединение закрыто')));
           if (socket !== this.socket) return;
           this.socket = undefined;
           this.changed(this.stopped ? 'Вход завершён' : 'Нет связи');

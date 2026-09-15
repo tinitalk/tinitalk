@@ -1,3 +1,4 @@
+import { OperationError } from './userErrors';
 import type { Account } from './model';
 
 export class APIError extends Error {
@@ -14,7 +15,7 @@ export async function api<T>(account: Account, path: string, method = 'GET', bod
     method, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(12000),
     headers: { Authorization: `Basic ${auth}`, 'X-TiniTalk-Session-ID': sessionId, 'X-TiniTalk-Device-ID': account.deviceId, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  }).catch(error => { throw new OperationError('network', error); });
   if (!response.ok) {
     const replaced = response.status === 401 && response.headers.get('X-TiniTalk-Auth-Reason') === 'session_replaced';
     if (replaced) sessionReplacedHandler?.(account, sessionId);

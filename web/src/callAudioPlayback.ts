@@ -4,7 +4,7 @@ export class CallAudioPlayback {
   private selection?: Promise<void>;
   private closed = false;
 
-  constructor(private media: HTMLMediaElement) {}
+  constructor(private media: HTMLMediaElement, private blocked?: (value: boolean) => void) {}
 
   async attach(stream: MediaStream): Promise<void> {
     if (this.closed) return;
@@ -36,7 +36,14 @@ export class CallAudioPlayback {
   }
 
   async resume(): Promise<void> {
-    if (!this.closed && this.media.srcObject) await this.media.play();
+    if (this.closed || !this.media.srcObject) return;
+    try {
+      await this.media.play();
+      if (!this.closed) this.blocked?.(false);
+    } catch (error) {
+      if (!this.closed) this.blocked?.(true);
+      throw error;
+    }
   }
 
   close(): void {

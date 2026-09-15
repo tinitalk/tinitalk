@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { api, APIError, setSessionReplacedHandler } from './api';
+import { OperationError } from './userErrors';
 import type { Account } from './model';
 
 const account = (): Account => ({ id: 'family', server: 'https://family.example', login: 'alice', token: 'test', name: 'Alice', deviceId: 'phone', sessionId: 'old-session' });
@@ -17,10 +18,13 @@ it('reports a replaced session from any authenticated API request', async () => 
 it('does not treat network failures or ordinary authentication errors as a replacement', async () => {
   const replaced = vi.fn();
   setSessionReplacedHandler(replaced);
-  vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new TypeError('offline'))
+  const offline = new TypeError('offline');
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(offline)
     .mockResolvedValueOnce(new Response('', { status: 401 }))
     .mockResolvedValueOnce(new Response('', { status: 503, headers: { 'X-TiniTalk-Auth-Reason': 'session_replaced' } })));
-  await expect(api(account(), '/api/contacts')).rejects.toThrow('offline');
+  const failedRequest = api(account(), '/api/contacts');
+  await expect(failedRequest).rejects.toBeInstanceOf(OperationError);
+  await expect(failedRequest).rejects.toMatchObject({ context: 'network', cause: offline });
   await expect(api(account(), '/api/contacts')).rejects.toBeInstanceOf(APIError);
   await expect(api(account(), '/api/contacts')).rejects.toBeInstanceOf(APIError);
   expect(replaced).not.toHaveBeenCalled();

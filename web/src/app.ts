@@ -1,3 +1,4 @@
+import { explainError } from './userErrors';
 import './style.css';
 import { showInstallationScreen } from './installScreen';
 import {
@@ -61,6 +62,7 @@ type ActiveCall = {
   video: CallVideoState;
   media: AudioCall;
   muted: boolean;
+  audioBlocked?: boolean;
   connectedAt?: number;
   expiry?: ReturnType<typeof setTimeout>;
   incomingExpiresAt?: number;
@@ -265,9 +267,22 @@ function notice(message: string): void {
   if (message) noticeTimer = setTimeout(() => notice(''), 4_000);
 }
 
-function failure(error: unknown): void {
+function failure(error: unknown, retry?: () => void | Promise<void>): void {
   if (error instanceof APIError && error.replaced) return;
-  notice(error instanceof Error ? error.message : String(error));
+  const explanation = explainError(error, navigator);
+  if (explanation) {
+    notice('');
+    closeActiveOverlay();
+    const modal = dialog(explanation.title);
+    modal.body.append(element('p', '', explanation.message));
+    modal.actions.append(actionButton('Закрыть', () => modal.close(), 'secondary'));
+    if (retry) modal.actions.append(actionButton(explanation.retryLabel ?? 'Повторить', async () => {
+      await closeDialog(modal, 'remove');
+      try { await retry(); } catch (nextError) { failure(nextError, retry); }
+    }, 'primary'));
+    return;
+  }
+  notice(error instanceof Error ? error.message : 'Не удалось выполнить действие.');
 }
 
 function contactDisplayName(contact: Pick<Contact, 'display_name' | 'login'>): string {
@@ -2494,6 +2509,11 @@ function createCall(account: Account, id: string, peer: string, peerLogin: strin
         value.video = state;
         renderCall();
       },
+      playbackBlocked: blocked => {
+        if (current !== value || value.audioBlocked === blocked) return;
+        value.audioBlocked = blocked;
+        renderCall();
+      },
     });
   return value;
 }
@@ -2642,8 +2662,10 @@ async function outgoing(account: Account, contact: Contact): Promise<void> {
       finishCurrentCall('Нет ответа', true, '', 'timed_out');
     }, 47000);
   } catch (error) {
-    if (current === call) endLocal();
-    throw error;
+    if (current === call) {
+      endLocal();
+      failure(error, () => outgoing(account, contact));
+    }
   }
 }
 
@@ -2666,6 +2688,8 @@ async function accept(): Promise<void> {
     connections.get(call.account.id)!.send(call.id, 'call.accept', { supports_video: true, supports_call_sas: true });
     void closeCallNotification(call.account.id, call.id, base).catch(() => undefined);
     renderCall();
+  } catch (error) {
+    if (current === call) failure(error, () => current === call ? accept() : undefined);
   } finally {
     call.answering = false;
     if (current === call) renderCall();
@@ -2699,13 +2723,15 @@ function endLocal(keepTerminal = false): void {
 
 async function toggleCamera(call: ActiveCall): Promise<void> {
   if (current !== call || !call.accepted) return;
-  await call.media.setVideoRequested(!call.video.requested);
+  try { await call.media.setVideoRequested(!call.video.requested); }
+  catch (error) { if (current === call) failure(error, () => toggleCamera(call)); }
   if (current === call) renderCall();
 }
 
 async function switchCamera(call: ActiveCall): Promise<void> {
   if (current !== call || !call.video.sending || !call.video.canSwitchCamera) return;
-  await call.media.switchCamera();
+  try { await call.media.switchCamera(); }
+  catch (error) { if (current === call) failure(error, () => toggleCamera(call)); }
   if (current === call) renderCall();
 }
 
@@ -2767,6 +2793,18 @@ function applyVideoControlsVisibility(): void {
   positionLocalPreview(screen?.querySelector<HTMLElement>('.local-video-preview') ?? null);
 }
 
+function audioRecoveryButton(call: ActiveCall): HTMLButtonElement {
+  const button = element('button', 'primary call-audio-retry', 'Включить звук');
+  button.type = 'button';
+  button.onclick = () => {
+    if (current !== call) return;
+    button.disabled = true;
+    // Invoke play directly in the gesture; keep the action if the browser still refuses.
+    void call.media.resumeAudio().catch(() => undefined).finally(() => { button.disabled = false; });
+  };
+  return button;
+}
+
 function renderCall(): void {
   if (current) callTones.update(callToneState(current));
   else if (!endedCall) callTones.idle();
@@ -2793,6 +2831,7 @@ function renderCall(): void {
   }
   const call = current;
   const incomingPending = call.incoming && !call.accepted;
+  if (call.audioBlocked) callContent.append(audioRecoveryButton(call));
   if (videoModeActive(call)) {
     const videoScreen = videoCallScreen(call);
     callContent.append(videoScreen);

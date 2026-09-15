@@ -4,6 +4,24 @@ import type { SignalEvent } from './model';
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
+it('keeps blocked voice playback actionable after transport connects and resumes on a gesture', async () => {
+  const blocked = vi.fn();
+  const h = await receivingCall(false, blocked);
+  h.player.play.mockRejectedValueOnce(new DOMException('blocked', 'NotAllowedError'));
+  h.incoming(track('audio'));
+  await vi.waitFor(() => expect(blocked).toHaveBeenLastCalledWith(true));
+  const stream = h.player.srcObject;
+  h.peer.connectionState = 'connected';
+  h.peer.onconnectionstatechange!();
+  expect(blocked).toHaveBeenLastCalledWith(true);
+  h.player.play.mockClear();
+  const resumed = h.call.resumeAudio();
+  expect(h.player.play).toHaveBeenCalledOnce();
+  await resumed;
+  expect(blocked).toHaveBeenLastCalledWith(false);
+  expect(h.player.srcObject).toBe(stream);
+});
+
 it('applies mute selected while microphone capture is pending', async () => {
   const track = { enabled: true, stop: vi.fn() };
   let resolve!: (stream: unknown) => void;
@@ -523,11 +541,11 @@ it('releases the captured camera if attaching it to WebRTC fails', async () => {
     if (next === back) throw new Error('Camera attachment failed');
     sender.track = next;
   });
-  await call.switchCamera();
+  await expect(call.switchCamera()).rejects.toMatchObject({ context: 'camera' });
 
   expect(back.readyState).toBe('ended');
   expect(sender.track).toBeNull();
-  expect(video).toHaveBeenLastCalledWith(expect.objectContaining({ requested: false, sending: false, failure: 'Camera attachment failed' }));
+  expect(video).toHaveBeenLastCalledWith(expect.objectContaining({ requested: false, sending: false, failure: 'Не удалось включить камеру' }));
 });
 
 it('serializes rapid camera switches and sends only the most recently requested camera', async () => {
@@ -608,7 +626,7 @@ async function cameraCall() {
   return { call, sender, front, back, microphone, getUserMedia, send, video };
 }
 
-async function receivingCall(caller = false) {
+async function receivingCall(caller = false, playbackBlocked = (_blocked: boolean) => {}) {
   class RemoteStream {
     private tracks: MediaStreamTrack[] = [];
     constructor(tracks: MediaStreamTrack[] = []) { this.tracks = [...tracks]; }
@@ -627,7 +645,7 @@ async function receivingCall(caller = false) {
   vi.stubGlobal('RTCPeerConnection', class { constructor() { return peer; } });
   const player = { srcObject: null as MediaProvider | null, pause: vi.fn(), play: vi.fn(async () => undefined) };
   const send = vi.fn(), failed = vi.fn();
-  const call = new AudioCall(caller, player as unknown as HTMLVideoElement, send, vi.fn(), failed);
+  const call = new AudioCall(caller, player as unknown as HTMLVideoElement, send, vi.fn(), failed, { playbackBlocked });
   onTestFinished(() => call.close());
   await call.capture();
   await call.receive({ id: 'config', call_id: 'call', type: 'rtc.config', sent_at: Date.now(), payload: { video_allowed: !caller, ice_servers: [] } });
