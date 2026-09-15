@@ -344,6 +344,7 @@ class CallActivity : ComponentActivity() {
                         return@LaunchedEffect
                     }
                     val request = replySupport.begin(owner)
+                    val binding = owner.sessionBinding
                     val auth = AuthStore(SharedPreferencesKeyValueStore(this@CallActivity), AndroidKeystoreTokenCipher())
                     val info = withContext(Dispatchers.IO) {
                         runCatching {
@@ -354,7 +355,9 @@ class CallActivity : ComponentActivity() {
                     }
                     if (incomingInvite?.owner == owner && visibleCallState().phase == CallPhase.Ringing &&
                         incomingInvite?.let(::isCurrentIncoming) == true &&
-                        resolvePinnedCallSession(auth, owner.key.accountId, owner.sessionBinding) != null &&
+                        auth.matchesSessionIdentity(
+                            owner.key.accountId, binding.serverUrl, binding.login, binding.sessionId, binding.configId,
+                        ) &&
                         replySupport.complete(request, info)
                     ) {
                         replySupported = replySupport.isSupported(owner)
