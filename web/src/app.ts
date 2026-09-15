@@ -1879,7 +1879,7 @@ function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTM
     form.append(header);
   }
   form.append(inputField('Логин', 'login', 'text', true));
-  form.append(inputField('Токен', 'token', 'password', true));
+  form.append(inputField('Пароль', 'token', 'password', true));
   const server = inputField('Адрес сервера', 'server', 'text', true, 'talk.example.com');
   const serverStatus = element('small', 'supporting-text', 'Введите адрес сервера');
   server.append(serverStatus);
@@ -2049,7 +2049,7 @@ async function submitAccount(form: HTMLFormElement, mode: 'login' | 'add-account
   const server = normalizeServer(String(data.get('server')));
   const login = String(data.get('login')).trim();
   const token = String(data.get('token')).trim();
-  if (!login || !token) throw new Error('Заполните логин и токен.');
+  if (!login || !token) throw new Error('Заполните логин и пароль.');
   const previous = accountForLogin(list, server, login);
   const loginStillValid = () => !previous || (list.includes(previous) && !removingAccounts.has(previous));
   if (!loginStillValid()) return;
