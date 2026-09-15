@@ -27,6 +27,8 @@
 *.sqlite3-wal
 
 /dist/
+/web/dist/
+/web/node_modules/
 *.apk
 *.aab
 *.keystore

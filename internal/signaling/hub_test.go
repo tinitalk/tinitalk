@@ -40,6 +40,43 @@ func TestHubRoutesAcceptRejectAndRejectsThirdParty(t *testing.T) {
 	}
 }
 
+func TestHubCancelsAfterAcceptanceWithoutLeavingAnActiveCall(t *testing.T) {
+	hub := NewHub(NoopNotifier{})
+	alice := hub.Connect("alice")
+	bob := hub.Connect("bob")
+	start := event(uuid(9401), uuid(9402), "call.start", map[string]any{"callee_id": "bob"})
+	if err := hub.Handle("alice", start); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob)
+	if err := hub.Handle("bob", event(uuid(9403), start.CallID, "call.accept", map[string]any{})); err != nil {
+		t.Fatal(err)
+	}
+	// The caller has not consumed call.accept yet and still sends call.cancel.
+	if err := hub.Handle("bob", event(uuid(9404), start.CallID, "call.cancel", map[string]any{})); err == nil {
+		t.Fatal("callee must not cancel caller's invite")
+	}
+	cancel := event(uuid(9405), start.CallID, "call.cancel", map[string]any{})
+	if err := hub.Handle("alice", cancel); err != nil {
+		t.Fatal(err)
+	}
+	_ = next(t, bob) // ICE configuration queued at acceptance.
+	if got := next(t, bob); got.Type != "call.end" {
+		t.Fatalf("terminal event = %s", got.Type)
+	}
+	for _, user := range []string{"alice", "bob"} {
+		if _, err := hub.ActiveCall(user); err == nil {
+			t.Fatalf("%s remains busy", user)
+		}
+	}
+	if err := hub.Handle("alice", cancel); err != nil {
+		t.Fatalf("duplicate cancellation: %v", err)
+	}
+	if got := next(t, alice); got.Type != "call.accept" {
+		t.Fatalf("delayed caller event = %s", got.Type)
+	}
+}
+
 func TestHubReportsBusyCallee(t *testing.T) {
 	hub := NewHub(NoopNotifier{})
 	alice := hub.Connect("alice")

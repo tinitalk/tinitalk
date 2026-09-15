@@ -18,11 +18,11 @@ func TestWebPushConfigReturnsServerVAPIDIdentity(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("WebPush config status = %d, body %s", response.Code, response.Body.String())
 	}
-	var got map[string]string
+	var got map[string]any
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got["vapid_public_key"] != "public-vapid-key" || got["config_id"] != "sha256:webpush" {
+	if len(got) != 3 || got["vapid_public_key"] != "public-vapid-key" || got["config_id"] != "sha256:webpush" || got["declarative_web_push"] != true {
 		t.Fatalf("WebPush config = %#v", got)
 	}
 }

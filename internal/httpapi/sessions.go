@@ -27,11 +27,14 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, ok := request.pushTarget()
+	if r.URL.Path == "/api/browser/session" && request.DeviceID != "" && request.WebPushSubscription == nil && request.ConfigID == nil {
+		ok = true
+	}
 	if !ok {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if target.ConfigID != s.options.WebPushConfigID {
+	if target != nil && target.ConfigID != s.options.WebPushConfigID {
 		http.Error(w, "stale WebPush configuration", http.StatusConflict)
 		return
 	}

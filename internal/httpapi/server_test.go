@@ -121,7 +121,7 @@ func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 4 || health.Commit != "01234567" {
 		t.Fatalf("health = %+v, want tinitalk, ok, API version 4, commit 01234567", health)
 	}
-	want := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1"}
+	want := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1", "browser_v1"}
 	if fmt.Sprint(health.Features) != fmt.Sprint(want) {
 		t.Fatalf("health features = %v, want %v", health.Features, want)
 	}
@@ -423,6 +423,36 @@ func TestSocketRoutesCallEvents(t *testing.T) {
 	}
 	if failure["error"] != "call not found" || failure["call_id"] != missingCallID {
 		t.Fatalf("failure = %+v", failure)
+	}
+}
+
+func TestActiveCallEndpointReturnsCurrentCallID(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	handler := NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	if got := request(t, handler, http.MethodGet, "/api/active-call", nil, "bob", tokens["bob"]); got.Code != http.StatusNoContent {
+		t.Fatalf("active call before start = %d, body %s", got.Code, got.Body.String())
+	}
+	alice := dialDeviceSocket(t, server.URL, "alice", tokens["alice"], "android-alice")
+	defer alice.Close()
+	callID := "018f7d51-40a1-7bb5-a2d0-7e47f9180401"
+	writeSocketEvent(t, alice, "018f7d51-3f90-7e63-b657-4a83a6a90401", callID, "call.start", map[string]any{"callee_id": "bob"})
+
+	response := request(t, handler, http.MethodGet, "/api/active-call", nil, "bob", tokens["bob"])
+	if response.Code != http.StatusOK {
+		t.Fatalf("active call status = %d, body %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		CallID string `json:"call_id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.CallID != callID {
+		t.Fatalf("active call id = %q, want %q", body.CallID, callID)
 	}
 }
 

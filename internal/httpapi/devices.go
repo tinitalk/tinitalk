@@ -131,6 +131,12 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	}
 	acknowledgesEvents := r.Header.Get(signalAckHeader) == signalAckVersion
 	responseHeader := http.Header{signalProtocolHeader: []string{signalProtocolVersion}}
+	if r.URL.Path == "/api/browser/socket" {
+		responseHeader.Set("Sec-WebSocket-Protocol", browserProtocol)
+		if r.URL.Query().Get("foreground_call_notifications") == "1" {
+			s.hub.EnableForegroundCallNotifications(client)
+		}
+	}
 	if acknowledgesEvents {
 		responseHeader.Set(signalAckHeader, signalAckVersion)
 	}

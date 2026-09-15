@@ -8,10 +8,12 @@ func (s *Server) webPushConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, struct {
-		VAPIDPublicKey string `json:"vapid_public_key"`
-		ConfigID       string `json:"config_id"`
+		VAPIDPublicKey     string `json:"vapid_public_key"`
+		ConfigID           string `json:"config_id"`
+		DeclarativeWebPush bool   `json:"declarative_web_push"`
 	}{
-		VAPIDPublicKey: s.options.WebPushPublicKey,
-		ConfigID:       s.options.WebPushConfigID,
+		VAPIDPublicKey:     s.options.WebPushPublicKey,
+		ConfigID:           s.options.WebPushConfigID,
+		DeclarativeWebPush: true,
 	})
 }

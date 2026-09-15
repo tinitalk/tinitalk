@@ -235,6 +235,9 @@ func (h *Hub) disconnectLocked(client *Client) {
 	}
 	wasOnline := client.online
 	client.closed = true
+	if c := h.calls[h.activeByUser[client.user]]; c != nil && c.callee == client.user {
+		c.notifyPushWaiters()
+	}
 	delete(h.clients[client.user], client)
 	if len(h.clients[client.user]) == 0 {
 		delete(h.clients, client.user)
@@ -314,6 +317,9 @@ func (h *Hub) HandleClient(client *Client, event protocol.Event) error {
 }
 
 func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, client *Client, event protocol.Event) error {
+	if event.Type == "call.visibility" {
+		return h.callVisibility(client, event)
+	}
 	if event.Type == "call.start" {
 		return h.start(sender, senderDeviceID, event)
 	}
@@ -367,6 +373,11 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	}
 	if c.devicesBound() && isDeviceBoundEvent(event.Type) && c.deviceID(sender) != senderDeviceID {
 		return errors.New("event is not from the active call device")
+	}
+	// Acceptance may reach the server before the caller sees it. The caller's
+	// cancellation still ends the call, using its authoritative current state.
+	if event.Type == "call.cancel" && sender == c.caller && c.state == callActive {
+		event.Type = "call.end"
 	}
 	if err := c.validateTransition(sender, event.Type); err != nil {
 		return err
@@ -470,6 +481,7 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	}
 	if event.Type == "call.accept" {
 		c.state = callActive
+		c.notifyPushWaiters()
 		for _, participant := range []string{c.caller, c.callee} {
 			if !h.hasOnlineCallClient(c, participant) {
 				c.offlineSince[participant] = h.now()
@@ -681,6 +693,12 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	incoming := event
 	incoming.Type = "call.incoming"
 	incoming.SentAt = now.UnixMilli()
+	// Foreground browser clients may receive signaling before the push arrives.
+	// Supply authoritative identity rather than trusting a caller-supplied name.
+	var incomingPayload map[string]any
+	_ = json.Unmarshal(incoming.Payload, &incomingPayload)
+	incomingPayload["caller_login"] = sender
+	incoming.Payload, _ = json.Marshal(incomingPayload)
 	delivered := h.next(c, incoming, payload.CalleeID)
 	h.deliver(payload.CalleeID, delivered)
 	h.enqueueNotification(notification{caller: sender, callee: payload.CalleeID, event: delivered})
@@ -721,6 +739,7 @@ func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Even
 	h.callAliases[source.CallID] = c.id
 	c.aliases = append(c.aliases, source.CallID)
 	c.state = callActive
+	c.notifyPushWaiters()
 	for _, participant := range []string{c.caller, c.callee} {
 		if !h.hasOnlineCallClient(c, participant) {
 			c.offlineSince[participant] = h.now()
@@ -1095,6 +1114,7 @@ func (h *Hub) end(c *call) {
 		return
 	}
 	c.state = callEnded
+	c.notifyPushWaiters()
 	c.clearScreen()
 	c.endedAt = h.now()
 	delete(h.activeByUser, c.caller)
@@ -1190,10 +1210,21 @@ func endsCall(eventType string) bool {
 }
 
 func (h *Hub) ActiveCall(user string) (string, error) {
+	return h.ActiveCallForDevice(user, "")
+}
+
+func (h *Hub) ActiveCallForDevice(user, deviceID string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	callID, ok := h.activeByUser[user]
 	if !ok {
+		return "", fmt.Errorf("active call not found")
+	}
+	c := h.calls[callID]
+	if c == nil || c.state == callEnded {
+		return "", fmt.Errorf("active call not found")
+	}
+	if deviceID != "" && c.devicesBound() && c.deviceID(user) != deviceID {
 		return "", fmt.Errorf("active call not found")
 	}
 	return callID, nil

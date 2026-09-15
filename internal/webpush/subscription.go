@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"regexp"
 	"strings"
 
 	webpushlib "github.com/ergochat/webpush-go/v2"
 )
 
 type Subscription struct {
-	Endpoint string `json:"endpoint"`
-	Keys     Keys   `json:"keys"`
+	ClientType string `json:"client_type,omitempty"`
+	WebAppURL  string `json:"web_app_url,omitempty"`
+	Endpoint   string `json:"endpoint"`
+	Keys       Keys   `json:"keys"`
 }
 
 type Keys struct {
@@ -27,8 +30,16 @@ func ParseSubscription(raw []byte) (Subscription, string, error) {
 	if err := decoder.Decode(&subscription); err != nil {
 		return Subscription{}, "", err
 	}
+	if subscription.ClientType != "" && subscription.ClientType != "web" {
+		return Subscription{}, "", errors.New("unsupported push client")
+	}
 	if err := validateEndpoint(subscription.Endpoint); err != nil {
 		return Subscription{}, "", err
+	}
+	if subscription.WebAppURL != "" {
+		if subscription.ClientType != "web" || !validWebAppURL(subscription.WebAppURL) {
+			return Subscription{}, "", errors.New("invalid WebPush web app URL")
+		}
 	}
 	if len(subscription.Keys.Auth) > 64 || len(subscription.Keys.P256DH) > 256 {
 		return Subscription{}, "", errors.New("WebPush subscription keys are too long")
@@ -57,6 +68,15 @@ func validateEndpoint(endpoint string) error {
 			return nil
 		}
 	}
+	if parsed.Port() == "" && parsed.Path != "" && parsed.Path != "/" {
+		host := parsed.Hostname()
+		if strings.HasSuffix(host, ".push.apple.com") || host == "updates.push.services.mozilla.com" {
+			return nil
+		}
+		if host == "fcm.googleapis.com" && strings.HasPrefix(parsed.EscapedPath(), "/wp/") {
+			return nil
+		}
+	}
 	if parsed.Host == "fcm.distributor.unifiedpush.org" && parsed.EscapedPath() == "/wpfcm" {
 		query := parsed.Query()
 		if len(query) == 1 && len(query["t"]) == 1 && query.Get("t") != "" {
@@ -64,4 +84,34 @@ func validateEndpoint(endpoint string) error {
 		}
 	}
 	return errors.New("unsupported WebPush endpoint")
+}
+
+func IsBrowserSubscription(raw string) bool {
+	var subscription Subscription
+	return json.Unmarshal([]byte(raw), &subscription) == nil && subscription.ClientType == "web"
+}
+
+// Apple Web Push requires a visible notification for every delivered push,
+// including subscriptions created before client_type was added.
+func IsAppleSubscription(raw string) bool {
+	var subscription Subscription
+	if json.Unmarshal([]byte(raw), &subscription) != nil {
+		return false
+	}
+	endpoint, err := url.Parse(subscription.Endpoint)
+	return err == nil && endpoint.Scheme == "https" && strings.HasSuffix(endpoint.Hostname(), ".push.apple.com")
+}
+
+var browserAccountID = regexp.MustCompile(`^[a-zA-Z0-9-]{1,128}$`)
+
+func validWebAppURL(value string) bool {
+	if len(value) > 2048 {
+		return false
+	}
+	appURL, err := url.Parse(value)
+	if err != nil || appURL.Scheme != "https" || appURL.Hostname() == "" || appURL.User != nil || appURL.RawQuery != "" || appURL.ForceQuery {
+		return false
+	}
+	fragment, err := url.ParseQuery(appURL.Fragment)
+	return err == nil && len(fragment) == 1 && len(fragment["account"]) == 1 && browserAccountID.MatchString(fragment.Get("account"))
 }

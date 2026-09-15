@@ -1,6 +1,9 @@
 package signaling
 
-import "tinitalk/internal/protocol"
+import (
+	"time"
+	"tinitalk/internal/protocol"
+)
 
 type DeliveredEvent struct {
 	protocol.Event
@@ -12,13 +15,16 @@ type DeliveredEvent struct {
 }
 
 type Client struct {
-	user                 string
-	deviceID             string
-	sessionID            string
-	inbox                chan DeliveredEvent
-	closed               bool
-	online               bool
-	awaitingResumeCallID string
+	user                        string
+	deviceID                    string
+	sessionID                   string
+	inbox                       chan DeliveredEvent
+	closed                      bool
+	online                      bool
+	awaitingResumeCallID        string
+	foregroundCallNotifications bool
+	visibleCallID               string
+	visibleCallUntil            time.Time
 }
 
 func (c *Client) TryNext() (DeliveredEvent, bool) {

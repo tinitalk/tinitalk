@@ -9,6 +9,7 @@ import (
 	"tinitalk/internal/protocol"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
+	"tinitalk/internal/webpush"
 )
 
 var ErrInvalidPushSubscription = errors.New("invalid WebPush subscription")
@@ -33,6 +34,11 @@ type WebPushSender interface {
 	Send(request WebPushRequest) error
 }
 
+type IncomingCallGate interface {
+	WaitIncomingPush(user, deviceID, sessionID, callID string) bool
+	IncomingPushPending(user, sessionID, callID string) bool
+}
+
 type DBPushTargetStore struct {
 	DB *state.DB
 }
@@ -50,11 +56,15 @@ func (s DBPushTargetStore) ContactDisplayName(owner, contact string) (string, er
 }
 
 type PushNotifier struct {
-	store       PushTargetStore
-	sender      WebPushSender
-	retryDelays []time.Duration
-	sendSlots   chan struct{}
+	store        PushTargetStore
+	sender       WebPushSender
+	retryDelays  []time.Duration
+	sendSlots    chan struct{}
+	incomingGate IncomingCallGate
 }
+
+// SetIncomingCallGate is configured before serving requests.
+func (n *PushNotifier) SetIncomingCallGate(gate IncomingCallGate) { n.incomingGate = gate }
 
 func NewPushNotifier(store PushTargetStore, sender WebPushSender) *PushNotifier {
 	return &PushNotifier{
@@ -130,16 +140,45 @@ func (n *PushNotifier) send(callee string, message PushMessage) {
 				targeted.Data["target_device_id"] = device.DeviceID
 			}
 		}
-		err := n.sendTarget(device.PushTarget, targeted)
-		if errors.Is(err, ErrInvalidPushSubscription) {
-			_ = n.store.DisablePushTarget(device.PushTarget)
-		} else if err != nil {
-			log.Printf("WebPush delivery failed after retries (type=%s)", targeted.Data["type"])
+		if n.incomingGate != nil && targeted.Data["type"] == "incoming_call" &&
+			(webpush.IsBrowserSubscription(device.PushTarget.Subscription) || webpush.IsAppleSubscription(device.PushTarget.Subscription)) {
+			// Do not hold up the hub's cancellation queue or other push targets.
+			go n.sendBrowserIncoming(callee, device, targeted)
+		} else {
+			n.deliverTarget(device.PushTarget, targeted)
 		}
 	}
 }
 
+func (n *PushNotifier) sendBrowserIncoming(user string, device state.Device, message PushMessage) {
+	if !n.incomingGate.WaitIncomingPush(user, device.DeviceID, message.Data["target_session_id"], message.Data["call_id"]) {
+		return
+	}
+	message.stillIncoming = func() bool {
+		return n.incomingGate.IncomingPushPending(user, message.Data["target_session_id"], message.Data["call_id"])
+	}
+	n.deliverTarget(device.PushTarget, message)
+}
+
+func (n *PushNotifier) deliverTarget(target state.PushTarget, message PushMessage) {
+	err := n.sendTarget(target, message)
+	if errors.Is(err, ErrInvalidPushSubscription) {
+		_ = n.store.DisablePushTarget(target)
+	} else if err != nil {
+		log.Printf("WebPush delivery failed after retries (type=%s)", message.Data["type"])
+	}
+}
+
 func (n *PushNotifier) sendTarget(target state.PushTarget, message PushMessage) error {
+	// Browser push must have a visible result. Contacts are refreshed on opening
+	// the client; do not send the native client's silent sync trigger to the web.
+	apple := webpush.IsAppleSubscription(target.Subscription)
+	if apple && message.Data["type"] != "incoming_call" && message.Data["type"] != "session_replaced" {
+		return nil
+	}
+	if webpush.IsBrowserSubscription(target.Subscription) && message.Data["type"] == "contact_changed" {
+		return nil
+	}
 	n.sendSlots <- struct{}{}
 	defer func() { <-n.sendSlots }()
 
@@ -151,13 +190,28 @@ func (n *PushNotifier) sendTarget(target state.PushTarget, message PushMessage) 
 		Data:         cloneData(message.Data),
 		TTL:          message.ttl,
 	}
-	err := n.sender.Send(request)
+	send := func() error {
+		if message.stillIncoming != nil {
+			if !message.stillIncoming() {
+				return nil
+			}
+			// Waiting for capacity and retries cannot extend the ringing window.
+			if expires, err := time.Parse(time.RFC3339Nano, message.Data["expires_at"]); err == nil {
+				request.TTL = min(message.ttl, time.Until(expires))
+				if request.TTL <= 0 {
+					return nil
+				}
+			}
+		}
+		return n.sender.Send(request)
+	}
+	err := send()
 	for _, delay := range n.retryDelays {
 		if !errors.Is(err, ErrTemporaryPushDelivery) {
 			break
 		}
 		time.Sleep(delay)
-		err = n.sender.Send(request)
+		err = send()
 	}
 	return err
 }
@@ -169,9 +223,10 @@ type WebPushRequest struct {
 }
 
 type PushMessage struct {
-	Data     map[string]string
-	suppress bool
-	ttl      time.Duration
+	Data          map[string]string
+	suppress      bool
+	ttl           time.Duration
+	stillIncoming func() bool
 }
 
 func WakeMessage(event signaling.DeliveredEvent, callerLogin, caller string, ttl time.Duration) PushMessage {

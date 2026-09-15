@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"tinitalk/internal/turnserver"
+	webui "tinitalk/web"
 )
 
 const (
@@ -21,6 +22,7 @@ const (
 )
 
 type serveOptions struct {
+	webDir                    string
 	addr                      string
 	allowLoopback             bool
 	tlsCert                   string
@@ -37,6 +39,7 @@ type serveOptions struct {
 
 func parseServeOptions(args []string) (serveOptions, error) {
 	options := serveOptions{
+		webDir:                    webui.DefaultDirectory,
 		addr:                      ":8080",
 		turnAddr:                  ":3478",
 		turnTLSAddr:               ":5349",
@@ -48,6 +51,12 @@ func parseServeOptions(args []string) (serveOptions, error) {
 	perUserLimitSet := false
 	for len(args) > 0 {
 		switch args[0] {
+		case "--web-dir":
+			if len(args) < 2 || args[1] == "" {
+				return options, errors.New("--web-dir requires a directory or embedded")
+			}
+			options.webDir = args[1]
+			args = args[2:]
 		case "--addr":
 			if len(args) < 2 {
 				return options, errors.New("--addr requires a value")

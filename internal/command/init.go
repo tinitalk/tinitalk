@@ -20,6 +20,7 @@ import (
 	"tinitalk/internal/state"
 	"tinitalk/internal/tlscert"
 	"tinitalk/internal/turnserver"
+	webui "tinitalk/web"
 )
 
 func run(w io.Writer, args []string) (string, error) {
@@ -136,6 +137,9 @@ func runServe(args []string) error {
 		contactNotifier = pushNotifier
 	}
 	hub := signaling.NewHub(notifier)
+	if pushNotifier, ok := notifier.(*notify.PushNotifier); ok {
+		pushNotifier.SetIncomingCallGate(hub)
+	}
 	hub.SetCallHistoryStore(db)
 	var tlsConfig *tls.Config
 	if options.tlsCert != "" {
@@ -177,6 +181,13 @@ func runServe(args []string) error {
 		ICEConfigProvider:     iceConfig,
 		TLSConfig:             tlsConfig,
 	})
+	if options.webDir != "" {
+		static, err := webui.Handler(options.webDir)
+		if err != nil {
+			return fmt.Errorf("load web client: %w", err)
+		}
+		server.Handler = webui.WithAPI(static, server.Handler)
+	}
 	go hub.Run(ctx)
 	serverDone := make(chan error, 1)
 	go func() {

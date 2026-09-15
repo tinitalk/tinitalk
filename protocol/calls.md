@@ -2,6 +2,106 @@
 
 The current HTTP API version is `4`; the WebSocket signaling protocol version is `2`.
 
+## Browser transport (additive `browser_v1` feature)
+
+Browser HTTP requests use explicit Basic Authorization, `credentials: omit`,
+`X-TiniTalk-Device-ID`, and (after login) `X-TiniTalk-Session-ID`. HTTPS origins
+are accepted without a central allowlist. Loopback HTTP origins require
+`AllowInsecureLoopback`. CORS does not enable cookies; API requests carrying
+Origin must include the explicit device header, except the ticket-authenticated
+browser WebSocket handshake. OPTIONS is anonymous; API authorization still applies.
+
+`POST /api/browser/session` accepts `{ "device_id": "..." }` without requiring
+push permission first. It returns `{ "session_id": "..." }` and retains the
+existing one-active-device semantics. The native `/api/session` contract is unchanged.
+
+`POST /api/browser/socket-ticket` requires current session, matching device ID,
+and Origin. It returns `{ "ticket": "..." }`. This random ticket expires after
+30 seconds, is single-use, and is bound to the exact Origin, credentials and
+session. Authentication and session validity are checked again when consumed.
+
+Connect to `/api/browser/socket` with WebSocket subprotocols
+`["tinitalk.browser.v1", "ticket.<ticket>"]`. The server selects
+`tinitalk.browser.v1` and enables protocol v2 and event acknowledgements.
+Do not put credentials or tickets in URLs or log handshake authorization headers.
+
+Browser push registrations use the existing `/api/webpush-config` and
+`PUT /api/device`. Subscription JSON includes `client_type: "web"` alongside
+`endpoint` and `keys`. Each account uses its own registration and server VAPID
+key. The server omits silent `contact_changed` pushes for these subscriptions;
+call pushes are visible notifications. Native subscriptions omit `client_type`.
+
+`GET /api/webpush-config` advertises `declarative_web_push: true`. After its
+updated account worker is active, an Apple browser subscription may include
+`web_app_url`, for example `https://web.example/#account=<local-account-id>`.
+This HTTPS URL belongs to the web installation, which may be hosted separately
+from the account's family server. It contains only the local account identifier;
+credentials and actions are not allowed. Older servers are sent the original
+subscription shape, and existing subscriptions are reused when adding metadata.
+
+Apple endpoints receive only `incoming_call` and the visible `session_replaced`
+message. In particular, `call_cancel` and `contact_changed` are not sent to them,
+including legacy subscriptions without `client_type`. A pending Apple push must
+produce a visible notification even if its call has expired, the local account
+is unavailable, or the application is already visible. In the latter cases the
+worker uses a quiet notification, without presenting an actionable stale call.
+
+Updated Apple subscriptions receive Declarative Web Push JSON:
+`{ "web_push": 8030, "notification": { "title": "...", "body": "...",
+"navigate": "https://web.example/#account=...&call=...", "tag": "account:call",
+"silent": false, "data": { "accountId": "...", "callId": "...",
+"sessionId": "...", "tinitalk": { ...original push fields... } } } }`.
+WebKit exposes the proposed notification through `PushEvent.notification` with
+`event.data === null`; older engines receive the JSON through `event.data`.
+The worker handles both shapes. The OS can show and navigate the fallback even
+if worker execution fails. Legacy Apple subscriptions keep receiving flat JSON.
+
+Apple web notifications have no Answer/Reject buttons. A tap opens the incoming
+call screen; the client checks `/api/active-call` before replaying that call,
+including when no inbox record exists. Accepting or ending the call in the app
+closes its notification and queues a terminal inbox record in the account worker
+to prevent a delayed invite from restoring it. With the PWA closed, an Apple
+notification can remain after ringing ends; no invisible cancellation push or
+second missed-call notification is sent. Push TTL bounds delivery storage, not
+the lifetime of an already displayed notification. Real iOS device validation
+is still required for OS delivery, sound and multi-account registrations.
+
+`GET /api/active-call` lets a freshly opened browser client recover an active
+call without depending on a notification deep link. It returns `204` when there
+is no active call for the authenticated account and `{ "call_id": "..." }` when
+the current session/device may resume one with `call.resume`.
+
+`POST /api/calls/{call_id}/reject` (empty body) declines an incoming call from a
+notification without opening the app or creating a WebSocket connection. It
+requires Basic Authorization, the current managed session and its matching
+device ID. Only the callee may reject a known call (`403` otherwise); invalid
+call IDs return `400`, and stale/missing sessions or wrong devices return `401`.
+Success returns `204`. Unknown, expired, ended or already accepted calls are
+safe no-ops, so retries and old notifications cannot interrupt a conversation.
+The state check and rejection are atomic with acceptance. A rejection updates
+history, delivers `call.reject` to both participants (including replay), and
+cancels the incoming push. The worker closes the notification without focusing
+or opening a window, retries network/server failures once, and stores a local
+`call_cancel` only after acknowledgement. It never replaces a failed background
+request with an app launch or another notification. Deploy the server endpoint
+alongside the updated worker; older servers do not support this action.
+
+On Android Chromium before M153, notification action buttons can collide
+([Chromium issue 534387021](https://crbug.com/534387021)). The web worker uses a
+single Reject button on those browsers and explicitly labels the notification
+body as Answer. It stores that default action in the notification data, so a body
+tap answers only notifications shown in this mode. Other browsers, including
+Windows Chrome, retain both buttons where actions are supported. Apple WebKit
+uses the body to open the call screen. Ambiguous clicks on older two-button
+notifications on affected browsers open the incoming call screen without
+automatically accepting or rejecting the call.
+
+`call.incoming.payload.caller_login` contains the server-authenticated caller
+login, overriding any caller-supplied value. It is available before a push arrives.
+The initial browser client advertises video, SAS and crossed calls as unsupported.
+
+## Event envelope
+
 All signaling messages use one JSON envelope:
 
 ```json
