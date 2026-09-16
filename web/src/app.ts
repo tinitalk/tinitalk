@@ -1,5 +1,7 @@
 import { explainError } from './userErrors';
 import './style.css';
+import { Favorites } from './favorites';
+import { bindHistoryScroll } from './historyScroll';
 import { showInstallationScreen } from './installScreen';
 import {
   accountForLogin,
@@ -117,6 +119,12 @@ let historyObserver: IntersectionObserver | undefined;
 let contactHistoryGeneration = 0;
 let historyRevision = 0;
 const contactPhotosByKey = new Map<string, string>();
+const favorites = new Favorites({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) });
+let showFavorites = true;
+let contactGesture = false;
+let deferredRender = false;
+const viewScroll = new Map<string, number>();
+let disposeView = () => {};
 const pendingNotificationActions = new Map<string, NotificationCallAction>();
 let resolveAccountsReady!: () => void;
 const accountsReady = new Promise<void>(resolve => { resolveAccountsReady = resolve; });
@@ -257,14 +265,18 @@ function iconButton(label: string, iconName: keyof typeof iconPaths, action: () 
   return btn;
 }
 
-function notice(message: string): void {
+function notice(message: string, undo?: () => void): void {
   const box = document.querySelector<HTMLParagraphElement>('#notice')!;
   clearTimeout(noticeTimer);
   noticeTimer = undefined;
   box.textContent = message;
   box.hidden = !message;
   box.onclick = message ? () => notice('') : null;
-  if (message) noticeTimer = setTimeout(() => notice(''), 4_000);
+  if (message) {
+    if (undo) box.append(actionButton('Отменить', () => { undo(); notice(''); }, 'notice-undo'));
+    box.append(element('span', 'notice-progress'));
+    noticeTimer = setTimeout(() => notice(''), 3_000);
+  }
 }
 
 function failure(error: unknown, retry?: () => void | Promise<void>): void {
@@ -458,6 +470,7 @@ async function resumeActiveCall(account: Account): Promise<void> {
 
 function renderApp(): void {
   renderCall();
+  if (contactGesture) { deferredRender = true; return; }
   if (!list.length && route.name !== 'login') {
     route = { name: 'login' };
     writeAppHistory('replace');
@@ -475,6 +488,24 @@ function renderApp(): void {
     writeAppHistory('replace');
   }
   const viewKey = JSON.stringify(route) + ':' + tab;
+  if (screen.dataset.viewKey === viewKey && route.name === 'contact') {
+    const key = accountKey(route.accountId, route.login);
+    const contact = findContact(route.accountId, route.login);
+    // Keep the measured, scrollable card while a background invalidation reloads
+    // its history. An empty loading placeholder would clamp scrollTop to zero.
+    if (contact && !contact.account.sessionReplaced && !contactHistory.has(key) && !contactHistoryErrors.has(key)) {
+      if (!loadingContactHistory.has(key)) void loadContactHistory(contact, true).catch(failure);
+      return;
+    }
+  }
+  if (screen.dataset.viewKey === viewKey && screen.querySelector('[data-interacting="true"]')) {
+    deferredRender = true;
+    return;
+  }
+  const scrollKey = viewKey + (route.name === 'home' && tab === 'contacts' ? ':' + showFavorites : '');
+  const oldScroller = screen.querySelector<HTMLElement>('.home-content, .contact-screen');
+  if (oldScroller && screen.dataset.scrollKey) viewScroll.set(screen.dataset.scrollKey, oldScroller.scrollTop);
+  if (screen.dataset.viewKey !== viewKey) notice('');
   // Background refreshes must not replace the form the user is editing.
   // Navigation changes the key and naturally discards the old form and token.
   if (screen.dataset.viewKey === viewKey && ['login', 'add-account', 'add-contact'].includes(route.name)) return;
@@ -487,6 +518,8 @@ function renderApp(): void {
       contactHistoryErrors.delete(key);
     }
   }
+  disposeView();
+  disposeView = () => {};
   const view = route.name === 'login' ? credentialsScreen('login', loginAccount)
     : route.name === 'add-account' ? credentialsScreen('add-account')
       : route.name === 'add-contact' ? addContactScreen()
@@ -494,11 +527,13 @@ function renderApp(): void {
           : route.name === 'about' ? aboutScreen()
             : route.name === 'contact' ? contactScreen(route.accountId, route.login)
               : homeScreen();
-  const scrollTop = screen.dataset.viewKey === viewKey ? screen.querySelector<HTMLElement>('.home-content, .contact-screen')?.scrollTop ?? 0 : 0;
+  const scrollTop = viewScroll.get(scrollKey) ?? 0;
   historyObserver?.disconnect();
   screen.replaceChildren(view);
   screen.dataset.viewKey = viewKey;
+  screen.dataset.scrollKey = scrollKey;
   const scroller = screen.querySelector<HTMLElement>('.home-content, .contact-screen');
+  if (scroller) wireHistoryScroll(scroller);
   if (scroller) scroller.scrollTop = scrollTop;
   const sentinel = screen.querySelector<HTMLElement>('[data-history-more]');
   if (sentinel && scroller) {
@@ -712,6 +747,25 @@ function homeScreen(): HTMLElement {
   nav.append(navItem('Контакты', 'contacts', tab === 'contacts', () => switchHomeTab('contacts')));
   nav.append(navItem('История', 'history', tab === 'history', () => switchHomeTab('history'), unreadCount()));
   const wrap = element('div', 'home-wrap');
+  if (tab === 'contacts' && allContacts().some(c => favorites.keys.includes(accountKey(c.account.id, c.login)))) {
+    const tabs = element('div', `favorite-tabs ${showFavorites ? '' : 'all-selected'}`);
+    const previousTabs = screen.querySelector('.favorite-tabs');
+    if (previousTabs && previousTabs.classList.contains('all-selected') !== !showFavorites) {
+      const targetAll = !showFavorites;
+      tabs.classList.toggle('all-selected', !targetAll);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (tabs.isConnected) tabs.classList.toggle('all-selected', targetAll);
+      }));
+    }
+    tabs.setAttribute('role', 'tablist');
+    for (const [index, label] of ['Избранные', 'Все'].entries()) {
+      const button = actionButton(label, () => { showFavorites = index === 0; renderApp(); }, 'favorite-tab');
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(showFavorites === (index === 0)));
+      tabs.append(button);
+    }
+    wrap.append(tabs);
+  }
   wrap.append(content, nav);
   return appPage(wrap);
 }
@@ -815,7 +869,11 @@ function contactsPage(): HTMLElement {
     page.append(loadingBlock());
     return page;
   }
-  const contacts = allContacts();
+  const all = allContacts();
+  const byKey = new Map(all.map(c => [accountKey(c.account.id, c.login), c]));
+  const starred = favorites.keys.flatMap(key => byKey.has(key) ? [byKey.get(key)!] : []);
+  const favoriteMode = showFavorites && starred.length > 0;
+  const contacts = favoriteMode ? starred : all;
   if (!contacts.length) {
     const empty = element('div', 'empty-state');
     empty.append(element('h2', '', 'Контактов пока нет'), element('p', '', 'Добавьте первый контакт.'));
@@ -825,10 +883,157 @@ function contactsPage(): HTMLElement {
   }
   const duplicates = contactsRequiringServerSubtitle(contacts);
   const listEl = element('div', 'material-list');
-  for (const contact of contacts) listEl.append(contactRow(contact, duplicates.has(accountKey(contact.account.id, contact.login))));
+  for (const contact of contacts) {
+    const row = contactRow(contact, duplicates.has(accountKey(contact.account.id, contact.login)));
+    row.dataset.peer = accountKey(contact.account.id, contact.login);
+    if (!favoriteMode && favorites.keys.includes(row.dataset.peer)) {
+      const badge = element('span', 'favorite-badge');
+      badge.append(favoriteStar());
+      row.querySelector('.contact-avatar')?.append(badge);
+    }
+    listEl.append(row);
+  }
+  if (favoriteMode) wireFavoriteDrag(listEl);
   const add = actionButton('＋ Добавить', () => navigate({ name: 'add-contact' }), 'text-action list-add');
-  page.append(listEl, add);
+  page.append(listEl);
+  if (!favoriteMode) page.append(add);
   return page;
+}
+
+function favoriteStar(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = '<path d="M12 2.5 15.3 7.7 21.4 9.3 17.5 14.1 17.8 20.5 12 18.2 6.2 20.5 6.5 14.1 2.6 9.3 8.7 7.7Z" fill="currentColor"/>';
+  return svg;
+}
+
+function wireFavoriteDrag(listEl: HTMLElement): void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let dragged: HTMLElement | undefined;
+  let ghost: HTMLElement | undefined;
+  let pointer = -1, startX = 0, startY = 0, latestY = 0, offset = 0, frame = 0;
+  let original: HTMLElement[] = [];
+  let suppressClick = false;
+  const finish = (save: boolean) => {
+    clearTimeout(timer);
+    cancelAnimationFrame(frame);
+    contactGesture = false;
+    if (!dragged) {
+      if (deferredRender) { deferredRender = false; setTimeout(renderApp, 0); }
+      return;
+    }
+    const row = dragged;
+    dragged = undefined;
+    ghost?.remove(); ghost = undefined;
+    row.classList.remove('drag-placeholder');
+    if (!save) listEl.replaceChildren(...original);
+    try {
+      if (save) favorites.reorder(Array.from(listEl.children, child => (child as HTMLElement).dataset.peer!));
+    } catch (error) { listEl.replaceChildren(...original); failure(error); }
+    if (deferredRender) { deferredRender = false; renderApp(); }
+  };
+  const tick = () => {
+    if (!dragged || !ghost || !listEl.isConnected) { finish(false); return; }
+    ghost.style.top = `${latestY - offset}px`;
+    const scroller = listEl.closest<HTMLElement>('.home-content')!;
+    const bounds = scroller.getBoundingClientRect();
+    const edge = 48;
+    scroller.scrollTop += latestY < bounds.top + edge ? -8 : latestY > bounds.bottom - edge ? 8 : 0;
+    const siblings = Array.from(listEl.children) as HTMLElement[];
+    // Hit testing must use layout positions, not the animated visual positions:
+    // otherwise a moving neighbour repeatedly reverses the reorder.
+    const firstOffset = siblings[0]?.offsetTop ?? 0;
+    const listTop = listEl.getBoundingClientRect().top;
+    const target = siblings.find(row => row !== dragged && latestY < listTop + row.offsetTop - firstOffset + row.offsetHeight / 2);
+    const next = target ?? null;
+    if (dragged.nextElementSibling !== next) {
+      const before = new Map(siblings.map(row => [row, row.getBoundingClientRect().top]));
+      listEl.insertBefore(dragged, next);
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) for (const row of siblings) {
+        if (row !== dragged) {
+          const delta = before.get(row)! - row.getBoundingClientRect().top;
+          if (delta) row.animate([{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }], { duration: 160 });
+        }
+      }
+    }
+    frame = requestAnimationFrame(tick);
+  };
+  listEl.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    const row = (event.target as Element).closest<HTMLElement>('[data-peer]');
+    if (!row) return;
+    contactGesture = true;
+    suppressClick = false;
+    pointer = event.pointerId; startX = event.clientX; startY = latestY = event.clientY;
+    timer = setTimeout(() => {
+      if (!row.isConnected) return;
+      dragged = row; contactGesture = true; suppressClick = true;
+      original = Array.from(listEl.children) as HTMLElement[];
+      const rect = row.getBoundingClientRect(); offset = startY - rect.top;
+      ghost = row.cloneNode(true) as HTMLElement;
+      ghost.classList.add('drag-floating'); ghost.setAttribute('aria-hidden', 'true');
+      ghost.style.width = `${rect.width}px`; ghost.style.left = `${rect.left}px`;
+      document.body.append(ghost);
+      row.classList.add('drag-placeholder');
+      listEl.setPointerCapture(pointer);
+      frame = requestAnimationFrame(tick);
+    }, 350);
+  });
+  listEl.addEventListener('pointermove', event => {
+    if (event.pointerId !== pointer) return;
+    latestY = event.clientY;
+    if (!dragged && Math.hypot(event.clientX - startX, event.clientY - startY) > 8) clearTimeout(timer);
+    if (dragged) event.preventDefault();
+  });
+  // Native scrolling stays available until the long press claims the gesture.
+  listEl.addEventListener('touchmove', event => {
+    if (dragged && event.touches.length === 1) {
+      latestY = event.touches[0].clientY;
+      event.preventDefault();
+      event.stopPropagation(); // Do not also start pull-to-refresh beneath a dragged row.
+    }
+  }, { passive: false });
+  listEl.addEventListener('pointerup', () => finish(true));
+  listEl.addEventListener('pointercancel', () => finish(false));
+  listEl.addEventListener('lostpointercapture', () => finish(false));
+  const released = (event: PointerEvent) => { if (event.pointerId === pointer) finish(event.type === 'pointerup'); };
+  const blurred = () => finish(false);
+  window.addEventListener('pointerup', released);
+  window.addEventListener('pointercancel', released);
+  window.addEventListener('blur', blurred);
+  const previousDispose = disposeView;
+  disposeView = () => {
+    previousDispose(); clearTimeout(timer); cancelAnimationFrame(frame); ghost?.remove();
+    window.removeEventListener('pointerup', released); window.removeEventListener('pointercancel', released); window.removeEventListener('blur', blurred);
+  };
+  listEl.addEventListener('contextmenu', event => event.preventDefault());
+  listEl.addEventListener('click', event => { if (suppressClick) { event.preventDefault(); event.stopPropagation(); suppressClick = false; } }, true);
+  listEl.addEventListener('keydown', event => {
+    if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    const row = (event.target as Element).closest<HTMLElement>('[data-peer]');
+    if (!row) return;
+    event.preventDefault();
+    const adjacent = event.key === 'ArrowUp' ? row.previousElementSibling : row.nextElementSibling;
+    if (!adjacent) return;
+    listEl.insertBefore(row, event.key === 'ArrowUp' ? adjacent : adjacent.nextElementSibling);
+    try { favorites.reorder(Array.from(listEl.children, child => (child as HTMLElement).dataset.peer!)); } catch (error) { failure(error); renderApp(); }
+    row.focus();
+  });
+  for (const row of listEl.children) row.setAttribute('aria-description', 'Удерживайте для перемещения. С клавиатуры: Alt и стрелки вверх или вниз.');
+}
+
+function wireHistoryScroll(scroller: HTMLElement): void {
+  const page = scroller.closest<HTMLElement>('.app-page')!;
+  const contact = page.classList.contains('collapsing-contact');
+  if (!contact && !scroller.querySelector('.history-list')) return;
+  const up = iconButton('В начало', 'chevron', () => {}, 'scroll-top');
+  page.append(up);
+  const cleanup = bindHistoryScroll(scroller, up, () => {
+    if (deferredRender) { deferredRender = false; renderApp(); }
+  });
+  const previousDispose = disposeView;
+  disposeView = () => { previousDispose(); cleanup(); };
 }
 
 function contactRow(contact: AccountContact, showServer: boolean): HTMLElement {
@@ -881,11 +1086,17 @@ function historyMoreButton(action: () => Promise<void>): HTMLElement {
 
 function historyRows(rows: (HistoryItem | AccountHistory)[], showPeer: boolean): HTMLElement {
   const listEl = element('div', 'history-list');
+  let group: HTMLElement;
   rows.forEach((item, index) => {
     const day = historyDayLabel(item.started_at);
     const previous = rows[index - 1];
-    if (!previous || historyDayLabel(previous.started_at) !== day) listEl.append(element('h3', 'day-label', day));
-    listEl.append(historyRow(item, showPeer));
+    if (!previous || historyDayLabel(previous.started_at) !== day) {
+      group = element('section', 'history-day');
+      const heading = element('h3', 'day-label');
+      heading.append(element('span', '', day));
+      group.append(heading); listEl.append(group);
+    }
+    group.append(historyRow(item, showPeer));
   });
   return listEl;
 }
@@ -1194,6 +1405,7 @@ async function removeAccount(account: Account): Promise<void> {
     connections.get(account.id)?.stop();
     connections.delete(account.id);
     await deleteAccount(account.id);
+    favorites.removeAccount(account.id);
     await prunePushes(account.id);
     await deletePhotosForAccount(account.id);
     const index = list.indexOf(account);
@@ -1227,6 +1439,20 @@ function contactScreen(accountId: string, login: string): HTMLElement {
   }
   const name = contactDisplayName(contact);
   const menu = contactMenu(contact);
+  const star = actionButton('', () => {
+    const key = accountKey(accountId, login);
+    const position = favorites.keys.indexOf(key);
+    favorites.set(key, position < 0);
+    renderApp();
+    if (position >= 0) notice('Убрано из избранных', () => { favorites.set(key, true, position); renderApp(); });
+  }, 'favorite-toggle');
+  const starred = favorites.keys.includes(accountKey(accountId, login));
+  star.append(favoriteStar());
+  star.classList.toggle('selected', starred);
+  star.setAttribute('aria-label', starred ? 'Убрать из избранных' : 'Добавить в избранные');
+  star.setAttribute('aria-pressed', String(starred));
+  const actions = element('div', 'contact-top-actions');
+  actions.append(star, menu);
   const body = element('main', 'contact-screen');
   body.append(avatar(name, contact.login, 'profile-avatar', photoForContact(contact)));
   body.append(element('h2', 'profile-name', name));
@@ -1249,7 +1475,12 @@ function contactScreen(accountId: string, login: string): HTMLElement {
     body.append(actionButton('Не удалось загрузить историю. Повторить', () => loadContactHistory(contact, true, Boolean(rows && contactHistoryCursors.get(key))), 'text-action'));
   } else if (rows && loadingContactHistory.has(key)) body.append(loadingBlock());
   else if (rows && (contactHistoryCursors.get(key) ?? 0) > 0) body.append(historyMoreButton(() => loadContactHistory(contact, false, true)));
-  return appPage(body, { title: 'Контакт', back: () => goBack({ name: 'home' }), menu });
+  const page = appPage(body, { title: '', back: () => goBack({ name: 'home' }), menu: actions });
+  page.classList.add('collapsing-contact');
+  const compact = element('div', 'compact-contact');
+  compact.append(avatar(name, contact.login, 'compact-avatar', photoForContact(contact)), element('strong', '', name));
+  page.querySelector('.top-bar h1')?.replaceWith(compact);
+  return page;
 }
 
 function contactMenu(contact: AccountContact): HTMLElement {
@@ -2332,6 +2563,7 @@ function deleteDialog(contact: AccountContact): void {
   modal.actions.append(actionButton('Отмена', () => closeDialog(modal), 'secondary'));
   modal.actions.append(actionButton('Удалить', async () => {
     await api(contact.account, `/api/contacts/${encodeURIComponent(contact.login)}`, 'DELETE');
+    favorites.removeContact(accountKey(contact.account.id, contact.login));
     const key = contactPhotoKey(contact.account.id, contact.login);
     await deleteContactPhoto(key);
     contactPhotosByKey.delete(key);
@@ -2436,8 +2668,9 @@ function historyDayLabel(startedAt: number): string {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const day = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  if (day === today) return 'Сегодня';
-  if (day === today - 86400_000) return 'Вчера';
+  if (day === today) return 'сегодня';
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+  if (day === yesterday) return 'вчера';
   return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) });
 }
 

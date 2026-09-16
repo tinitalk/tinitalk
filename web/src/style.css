@@ -406,7 +406,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   margin-top: 8px;
 }
 
-.day-label, .section-title {
+.section-title {
   margin: 16px 4px 8px;
   color: var(--primary);
   font-size: .9rem;
@@ -1002,6 +1002,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   flex-direction: column;
   align-items: center;
 }
+.contact-scroll-space { flex: 0 0 auto; width: 1px; height: 0; pointer-events: none; }
+.contact-screen > .text-action { margin-top: 16px; }
 .profile-avatar {
   width: 208px;
   height: 208px;
@@ -1010,6 +1012,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   box-shadow: 0 8px 22px #0002;
 }
 .profile-name {
+  flex-shrink: 0;
   min-width: 0;
   max-width: 420px;
   margin: 22px 0 3px;
@@ -1039,6 +1042,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   color: var(--on-surface);
   font-size: 1.22rem;
   margin-top: 28px;
+  margin-left: 0;
+  margin-right: 0;
 }
 .history-message {
   padding: 20px;
@@ -1336,6 +1341,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 #notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   position: fixed;
   left: 16px;
   right: 16px;
@@ -1344,9 +1352,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   margin: 0 auto;
   max-width: 520px;
   padding: 14px 16px;
-  border-radius: 18px;
-  border: 1px solid color-mix(in srgb, var(--outline) 64%, transparent);
-  background: var(--surface-container-high);
+  border-radius: 999px;
+  border: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, #657083 85%, transparent);
   color: var(--on-surface);
   box-shadow: 0 12px 30px #0003;
   cursor: pointer;
@@ -1358,6 +1367,47 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   height: var(--app-height);
   z-index: 40;
 }
+
+.notice-undo { flex-shrink: 0; margin-left: auto; color: var(--primary); background: none; border: 0; padding: 4px 10px; font: inherit; }
+.notice-progress { position: absolute; height: 2px; bottom: 0; left: 20px; right: 20px; background: var(--primary); transform-origin: left; animation: notice-time 3s linear forwards; }
+@keyframes notice-time { to { transform: scaleX(0); } }
+.favorite-tabs { position: relative; display: flex; flex: 0 0 38px; }
+.favorite-tabs::after { content: ''; position: absolute; bottom: 2px; left: calc(25% - 16px); width: 32px; height: 2px; background: var(--primary); border-radius: 2px; transition: left 250ms ease; }
+.favorite-tabs.all-selected::after { left: calc(75% - 16px); }
+.favorite-tab { flex: 1; padding: 6px; background: none; border: 0; color: var(--on-variant); font: inherit; font-size: .9rem; cursor: pointer; }
+.favorite-tab[aria-selected=true] { color: var(--primary); }
+.contact-avatar { position: relative; overflow: visible; }
+.contact-avatar img { border-radius: 50%; }
+.favorite-badge { position: absolute; bottom: 0; right: 0; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-container-high); color: var(--primary); }
+.favorite-badge svg { width: 14px; height: 14px; }
+.contact-top-actions { display: flex; align-items: center; }
+.favorite-toggle { display: grid; place-items: center; width: 44px; height: 44px; border: 0; background: none; color: var(--on-variant); cursor: pointer; }
+.favorite-toggle svg { width: 26px; height: 26px; }
+.favorite-toggle:not(.selected) path { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.favorite-toggle.selected { color: var(--primary); }
+.drag-placeholder { opacity: .25; }
+.drag-floating { position: fixed; z-index: 100; pointer-events: none; transform: scale(1.025); box-shadow: 0 8px 24px #0005; }
+.material-list { user-select: none; -webkit-touch-callout: none; }
+.app-page { position: relative; }
+.day-label { position: sticky; top: 0; z-index: 2; margin: 10px 0 6px; padding: 5px 0; text-align: center; font-size: .82rem; font-weight: 500; color: var(--on-variant); pointer-events: none; }
+.day-label span { display: inline-block; padding: 5px 12px; border-radius: 999px; }
+.day-label.pinned span { background: color-mix(in srgb, var(--surface-container-high) 88%, transparent); }
+.contact-screen .day-label { top: -22px; }
+.history-day { display: flow-root; min-width: 0; }
+.history-day .history-row { margin-bottom: 8px; }
+.scroll-top { position: absolute; z-index: 5; bottom: max(8px, env(safe-area-inset-bottom)); left: calc(50% - 24px); width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--outline-variant); background: var(--surface); color: var(--on-surface); box-shadow: 0 3px 12px #0003; cursor: pointer; }
+.scroll-top .icon { width: 26px; height: 26px; transform: rotate(-90deg); }
+.scroll-top[hidden] { display: none; }
+.compact-contact { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; visibility: hidden; }
+.compact-contact strong { flex: 1; min-width: 0; font-size: 1.25rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.compact-contact strong, .morph-name-compact { font-weight: 800; line-height: 1.18; }
+.compact-avatar { width: 40px; height: 40px; flex: 0 0 40px; font-size: 1.25rem; }
+.collapsing-contact .profile-avatar, .collapsing-contact .profile-name { visibility: hidden; }
+.collapsing-contact .profile-name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.contact-morph { position: absolute; left: 0; top: 0; z-index: 4; pointer-events: none; margin: 0; min-width: 0; max-width: none; visibility: visible !important; transform-origin: 0 0; will-change: transform, opacity; }
+.contact-morph.morph-name-expanded { white-space: normal; text-overflow: clip; }
+.collapsing-contact .popup-menu { z-index: 6; }
+.morph-name-compact { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 1.25rem; }
 #call-content {
   position: relative;
   z-index: 1;

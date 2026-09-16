@@ -34,7 +34,9 @@ it.each(['add-account', 'login', 'add-contact'])('keeps entered values on backgr
     const owner = {id:'a', login:'alice', server:'https://family.example', sessionReplaced:routeName === 'login'};
     const list = [owner], screen = new Node('screen'), document = {createElement: tag => new Node(tag)};
     let route = routeName === 'login' ? {name:'login', accountId:'a'} : {name:routeName}, tab = 'contacts';
-    let contactHistoryGeneration = 0, historyObserver, accountSubmission;
+    let contactHistoryGeneration = 0, historyObserver, accountSubmission, contactGesture = false, deferredRender = false, showFavorites = true;
+    const viewScroll = new Map(), notice = () => {}, wireHistoryScroll = () => {};
+    let disposeView = () => {};
     const contactHistory = new Map(), contactHistoryCursors = new Map(), contactHistoryErrors = new Map();
     const renderCall = () => {}, closeActiveOverlay = () => {}, writeAppHistory = () => {};
     const appPage = body => body, appMark = () => new Node('mark');

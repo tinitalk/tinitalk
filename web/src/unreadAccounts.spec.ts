@@ -8,6 +8,7 @@ const code = ts.transpileModule(source.statements.filter(node => ts.isFunctionDe
 
 it.each(['remove', 'revoke'])('clears missed calls for an account on %s without clearing another account', async action => {
   const app = new Function(`
+    const favorites = {removeAccount() {}};
     const account = {id: 'a', sessionId: 'session'}, list = [account, {id: 'b'}];
     const unreadMissedCountByAccount = new Map([['a', 3], ['b', 2]]);
     const unreadMissedByContact = new Map([['a:alice', 1], ['b:bob', 2]]);
@@ -30,6 +31,7 @@ it('does not admit incoming or outgoing calls during account removal', async () 
   const disablePush = () => new Promise<void>(resolve => { finish = resolve; });
   const createCall = vi.fn(() => { throw new Error('must not create a call'); });
   const app = new Function('disablePush', 'createCall', `
+    const favorites = {removeAccount() {}};
     const account = {id:'a'}, list = [account], removingAccounts = new Set();
     const connections = new Map(), contactsByAccount = new Map(), historyByAccount = new Map(), states = new Map(), notifications = new Map();
     const unreadMissedCountByAccount = new Map(), unreadMissedByContact = new Map();
@@ -59,6 +61,7 @@ it.each(['claim', 'save'])('does not replace another account when removed during
   const connectAccount = vi.fn();
   const deleteAccount = vi.fn(async () => {});
   const app = new Function('api', 'saveAccount', 'connectAccount', 'deleteAccount', `
+    const favorites = {removeAccount() {}};
     const account = {id:'a', sessionId:'old', sessionReplaced:true}, other = {id:'b'}, list = [account, other], removingAccounts = new Set();
     const connections = new Map(), contactsByAccount = new Map(), historyByAccount = new Map(), states = new Map(), notifications = new Map();
     const unreadMissedCountByAccount = new Map(), unreadMissedByContact = new Map();
