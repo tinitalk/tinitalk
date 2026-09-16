@@ -11,8 +11,6 @@ import org.tinitalk.data.Contact
 import org.tinitalk.data.UnreadMissedContact
 import org.tinitalk.data.AccountUnreadState
 import org.tinitalk.data.Session
-import org.tinitalk.acceptsAccountUnreadUpdate
-import org.tinitalk.markEachAccountHistoryPage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
