@@ -1,4 +1,4 @@
-package org.tinitalk.push
+package org.tinitalk.missed
 
 import org.tinitalk.data.AccountId
 import androidx.test.core.app.ApplicationProvider
@@ -12,23 +12,17 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
-class MissedBadgeCounterTest {
-    @Test
-    fun missedRedialRequiresItsAccountIdentity() {
-        assertTrue(shouldOfferMissedRedial("sam", true))
-        assertFalse(shouldOfferMissedRedial("sam", false))
-    }
-
+class MissedCallsStateTest {
     @Test
     fun persistedCountsHydrateOnlyActiveAccounts() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val preferences = context.getSharedPreferences("badge-test", android.content.Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
-        val store = AccountMissedBadgeStore(preferences)
+        val store = MissedCallsPreferences(preferences)
         val a = AccountId("persist-a")
         val b = AccountId("persist-b")
         store.save(mapOf(a to 2, b to 4))
-        val counter = AccountMissedBadgeCounter()
+        val counter = MissedCallsCounter()
         assertEquals(4, counter.sync(listOf(b), store.load()))
         assertEquals(mapOf(b to 4), counter.snapshot())
     }
@@ -38,7 +32,7 @@ class MissedBadgeCounterTest {
         val a = AccountId("persist-a")
         val b = AccountId("persist-b")
         val saved = mutableListOf<Map<AccountId, Int>>()
-        val updater = AccountMissedBadgeUpdater(AccountMissedBadgeCounter()) {}
+        val updater = MissedCallsState(MissedCallsCounter()) {}
 
         assertEquals(4, updater.syncPersisted(listOf(b), { mapOf(a to 9, b to 4) }, saved::add))
 
@@ -50,7 +44,7 @@ class MissedBadgeCounterTest {
     fun accountCountsAggregateAndStaleOrRemovedAccountCannotResurrect() {
         val a = AccountId("a")
         val b = AccountId("b")
-        val counter = AccountMissedBadgeCounter()
+        val counter = MissedCallsCounter()
         counter.sync(listOf(a, b))
         val staleA = counter.beginRefresh(a)
         val freshA = counter.beginRefresh(a)
@@ -68,7 +62,7 @@ class MissedBadgeCounterTest {
     @Test
     fun autoMarkTokenSupersedesHistoryFetchAndYieldsToALaterPush() {
         val account = AccountId("a")
-        val counter = AccountMissedBadgeCounter()
+        val counter = MissedCallsCounter()
         counter.sync(listOf(account))
         val historyFetch = counter.beginRefresh(account)
         val autoMark = counter.beginRefresh(account)
@@ -85,7 +79,7 @@ class MissedBadgeCounterTest {
         val b = AccountId("b")
         val pending = ArrayDeque<() -> Unit>()
         val published = mutableListOf<Int>()
-        val updater = AccountMissedBadgeUpdater(AccountMissedBadgeCounter()) { pending.addLast(it) }
+        val updater = MissedCallsState(MissedCallsCounter()) { pending.addLast(it) }
         updater.sync(listOf(a, b), mapOf(b to 4))
         val aRefresh = updater.beginRefresh(a)
         updater.update(a, aRefresh, 2, {}, published::add)
@@ -102,7 +96,7 @@ class MissedBadgeCounterTest {
         val b = AccountId("b")
         val pending = ArrayDeque<() -> Unit>()
         val published = mutableListOf<Pair<Int, Set<AccountId>>>()
-        val updater = AccountMissedBadgeUpdater(AccountMissedBadgeCounter()) { pending.addLast(it) }
+        val updater = MissedCallsState(MissedCallsCounter()) { pending.addLast(it) }
         val publish: (Int) -> Unit = { count ->
             val accounts = updater.pendingReconcileAccounts()
             published += count to accounts
@@ -123,7 +117,7 @@ class MissedBadgeCounterTest {
         val account = AccountId("account")
         val pending = ArrayDeque<() -> Unit>()
         val published = mutableListOf<Pair<Int, Set<AccountId>>>()
-        val updater = AccountMissedBadgeUpdater(AccountMissedBadgeCounter()) { pending.addLast(it) }
+        val updater = MissedCallsState(MissedCallsCounter()) { pending.addLast(it) }
         val publish: (Int) -> Unit = { count ->
             val accounts = updater.pendingReconcileAccounts()
             published += count to accounts

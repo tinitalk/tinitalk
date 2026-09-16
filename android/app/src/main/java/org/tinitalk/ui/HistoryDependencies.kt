@@ -7,8 +7,8 @@ import org.tinitalk.data.AccountRecord
 import org.tinitalk.data.AccountUnreadState
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.ContactRepository
-import org.tinitalk.push.AccountBadgeRefreshId
-import org.tinitalk.push.IncomingCallNotifier
+import org.tinitalk.missed.MissedCallsRefreshId
+import org.tinitalk.missed.MissedCallsRepository
 
 internal interface HistoryDataSource {
     fun accounts(): List<AccountRecord>
@@ -28,22 +28,22 @@ internal class RepositoryHistoryDataSource(private val repository: ContactReposi
 
 internal interface HistoryBadgeSink {
     fun sync(accounts: List<AccountId>)
-    fun begin(accountId: AccountId): AccountBadgeRefreshId?
+    fun begin(accountId: AccountId): MissedCallsRefreshId?
     /** Returns the aggregate count only if both the session and badge generation are still current. */
-    fun apply(update: AccountUnreadState, refresh: AccountBadgeRefreshId?): Int?
+    fun apply(update: AccountUnreadState, refresh: MissedCallsRefreshId?): Int?
 }
 
-internal class NotificationHistoryBadgeSink(
-    private val notifier: IncomingCallNotifier,
+internal class MissedCallsHistoryBadgeSink(
+    private val missedCalls: MissedCallsRepository,
     private val authStore: AuthStore,
 ) : HistoryBadgeSink {
-    override fun sync(accounts: List<AccountId>) = notifier.syncMissedAccounts(accounts)
-    override fun begin(accountId: AccountId) = notifier.beginAccountMissedCountRefresh(accountId)
+    override fun sync(accounts: List<AccountId>) = missedCalls.syncAccounts(accounts)
+    override fun begin(accountId: AccountId) = missedCalls.beginRefresh(accountId)
 
-    override fun apply(update: AccountUnreadState, refresh: AccountBadgeRefreshId?): Int? {
+    override fun apply(update: AccountUnreadState, refresh: MissedCallsRefreshId?): Int? {
         val session = update.session ?: authStore.get(update.accountId)?.session ?: return null
         return authStore.withCurrent(update.accountId, session) {
-            notifier.updateAccountMissedState(
+            missedCalls.update(
                 update.accountId, update.unread, refresh, redialBinding = CallSessionBinding.from(session),
             ).takeIf { it.applied }?.count
         }

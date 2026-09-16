@@ -3,6 +3,7 @@ package org.tinitalk.push
 import android.app.NotificationManager
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import org.tinitalk.missedCalls
 import org.tinitalk.call.AccountCallOwner
 import org.tinitalk.call.AccountCallKey
 import org.tinitalk.call.CallAudioState
@@ -198,17 +199,17 @@ internal class IncomingPushHandler(
             }
         }
         if (pending != null && !pending.expiresAt.isAfter(now)) incoming.pruneExpiredPending(context, now)
-        if (cancellation.shouldRefreshMissedCount()) scheduleMissedCountRefresh(notifier, latest, account)
+        if (cancellation.shouldRefreshMissedCount()) scheduleMissedCountRefresh(latest, account)
     }
 
     private fun scheduleMissedCountRefresh(
-        notifier: IncomingCallNotifier,
         latest: IncomingInvite?,
         account: AccountRecord,
     ) {
         val store = authStore()
-        notifier.syncMissedAccounts(store.list().map { it.id })
-        latest?.let { notifier.showAccountMissedIfAbsent(account.id, it) }
+        val missedCalls = missedCalls(context)
+        missedCalls.syncAccounts(store.list().map { it.id })
+        latest?.let { missedCalls.recordMissedIfAbsent(account.id, it.toMissedCall()) }
         MissedCountRefreshScheduler(context).enqueue(account.id)
     }
 

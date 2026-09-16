@@ -10,6 +10,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import org.tinitalk.missedCalls
 import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountStorageException
@@ -69,10 +70,10 @@ internal class MissedCountRefreshWorker(
         } catch (_: Exception) {
             return Result.retry()
         }
-        val notifier = IncomingCallNotifier(applicationContext)
+        val missedCalls = missedCalls(applicationContext)
         val refreshId = try {
-            notifier.syncMissedAccounts(authStore.list().map { it.id })
-            notifier.beginAccountMissedCountRefresh(accountId)
+            missedCalls.syncAccounts(authStore.list().map { it.id })
+            missedCalls.beginRefresh(accountId)
         } catch (_: AccountStorageException) {
             return Result.success()
         }
@@ -84,8 +85,8 @@ internal class MissedCountRefreshWorker(
         }
         try {
             authStore.withCurrent(accountId, pinned) {
-                notifier.syncMissedAccounts(authStore.list().map { it.id })
-                val update = notifier.updateAccountMissedState(
+                missedCalls.syncAccounts(authStore.list().map { it.id })
+                val update = missedCalls.update(
                     accountId,
                     page.unread,
                     refreshId,

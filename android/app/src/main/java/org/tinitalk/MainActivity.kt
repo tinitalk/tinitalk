@@ -74,7 +74,7 @@ import org.tinitalk.ui.MainScreen
 import org.tinitalk.ui.MainHistoryController
 import org.tinitalk.ui.HistoryEnvironment
 import org.tinitalk.ui.RepositoryHistoryDataSource
-import org.tinitalk.ui.NotificationHistoryBadgeSink
+import org.tinitalk.ui.MissedCallsHistoryBadgeSink
 import org.tinitalk.ui.withHistory
 import org.tinitalk.ui.MainScreenState
 import org.tinitalk.ui.AccountPage
@@ -122,6 +122,7 @@ class MainActivity : ComponentActivity() {
     private var launchingCall = false
     private var pinningShortcut = false
     private var shortcutToConfirm by mutableStateOf<AccountContact?>(null)
+    private val missedCalls get() = (application as TinitalkApplication).missedCalls
     private val contactShortcuts get() = (application as TinitalkApplication).contactShortcuts
     private var loginResetKey by mutableIntStateOf(0)
     @Volatile
@@ -185,7 +186,7 @@ class MainActivity : ComponentActivity() {
         network = networkAvailability()
         history = MainHistoryController(
             source = RepositoryHistoryDataSource(repository),
-            badges = NotificationHistoryBadgeSink(IncomingCallNotifier(applicationContext), authStore),
+            badges = MissedCallsHistoryBadgeSink(missedCalls, authStore),
             scope = lifecycleScope,
             environment = {
                 HistoryEnvironment(
@@ -342,7 +343,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         CallUiStateStore.observe(callUiObserver)
-        IncomingCallNotifier(this).observeAccountMissedCount(accountMissedCountObserver)
+        missedCalls.observeCount(accountMissedCountObserver)
         CallHistoryEvents.observeAccount(accountCallHistoryObserver)
         ContactEvents.observe(contactObserver)
         AuthSessionEvents.observe(authSessionObserver)
@@ -526,7 +527,7 @@ class MainActivity : ComponentActivity() {
                 removeContactErrorMessage = null,
                 errorMessage = null,
             )
-            IncomingCallNotifier(this).syncMissedAccounts(accountOrder)
+            missedCalls.syncAccounts(accountOrder)
             refreshPermissions()
             history.refreshMissedCount()
         }
@@ -813,7 +814,7 @@ class MainActivity : ComponentActivity() {
                 accounts.associate { it.id to contactCache.load(it).items },
             ),
         )
-        IncomingCallNotifier(this).syncMissedAccounts(accounts.map { it.id })
+        missedCalls.syncAccounts(accounts.map { it.id })
         history.refreshMissedCount()
     }
 
@@ -864,7 +865,7 @@ class MainActivity : ComponentActivity() {
             serverUrl = remaining.aboutServerUrl(),
             accounts = remaining.toAccountSummaries(),
         )
-        IncomingCallNotifier(this).syncMissedAccounts(remaining.map { it.id })
+        missedCalls.syncAccounts(remaining.map { it.id })
     }
 
     private fun resetToLogin(errorMessage: String? = null) {
@@ -935,7 +936,7 @@ class MainActivity : ComponentActivity() {
         AuthSessionEvents.removeObserver(authSessionObserver)
         CallHistoryEvents.removeAccountObserver(accountCallHistoryObserver)
         ContactEvents.removeObserver(contactObserver)
-        IncomingCallNotifier(this).removeAccountMissedCountObserver(accountMissedCountObserver)
+        missedCalls.removeCountObserver(accountMissedCountObserver)
         CallUiStateStore.removeObserver(callUiObserver)
         super.onDestroy()
     }

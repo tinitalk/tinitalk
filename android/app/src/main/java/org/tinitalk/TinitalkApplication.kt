@@ -27,6 +27,9 @@ import org.tinitalk.data.normalizeServerUrl
 import org.tinitalk.network.NetworkAvailability
 import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
+import org.tinitalk.push.MissedCallNotifier
+import org.tinitalk.missed.MissedCallsPreferences
+import org.tinitalk.missed.MissedCallsRepository
 import org.tinitalk.push.IncomingCallPresentationMode
 import org.tinitalk.push.IncomingRingingAcknowledger
 import org.tinitalk.push.ContactPhotoNotificationLoader
@@ -44,6 +47,12 @@ import java.util.concurrent.Executors
 class TinitalkApplication : Application() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var authStore: AuthStore
+    internal lateinit var missedCalls: MissedCallsRepository
+        private set
+    private val missedCallNotifier by lazy { MissedCallNotifier(this, missedCalls) }
+    private val missedCallsExecutor = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "tinitalk-missed-calls").apply { isDaemon = true }
+    }
     lateinit var contactPhotoStore: ContactPhotoStore
         private set
     lateinit var contactPhotoProcessor: ContactPhotoProcessor
@@ -59,7 +68,7 @@ class TinitalkApplication : Application() {
     private val authSessionObserver: (AuthSessionEvent) -> Unit = {
         mainHandler.post {
             it.accountId?.let { accountId ->
-                IncomingCallNotifier(this).syncMissedAccounts(authStore.list().map { record -> record.id })
+                missedCalls.syncAccounts(authStore.list().map { record -> record.id })
                 cleanupWebPushAccount(this, accountId)
             }
             stopCallsForRemovedSession(it)
@@ -81,6 +90,11 @@ class TinitalkApplication : Application() {
                 Thread(task, "tinitalk-contact-photo-notification").apply { isDaemon = true }
             },
         )
+        missedCalls = MissedCallsRepository(
+            persistence = MissedCallsPreferences(getSharedPreferences("tinitalk", MODE_PRIVATE)),
+            execute = { task -> missedCallsExecutor.execute(task) },
+            publish = { snapshot -> missedCallNotifier.render(snapshot) },
+        )
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
         contactShortcuts = ContactShortcuts(this, contactPhotoStore, authStore, ContactCache(SharedPreferencesKeyValueStore(this)))
         contactShortcuts.observeChanges()
@@ -93,7 +107,7 @@ class TinitalkApplication : Application() {
             contactPhotoProcessor.purgeDrafts()
         }, "tinitalk-contact-photo-trash").start()
         restoreIncomingCall()
-        IncomingCallNotifier(this).syncMissedAccounts(authStore.list().map { it.id })
+        missedCalls.syncAccounts(authStore.list().map { it.id })
 
         Thread({
             runCatching {
@@ -110,6 +124,7 @@ class TinitalkApplication : Application() {
 
     override fun onTerminate() {
         contactShortcuts.close()
+        missedCallsExecutor.shutdown()
         super.onTerminate()
     }
 
@@ -152,6 +167,9 @@ class TinitalkApplication : Application() {
     }
 }
 
+internal fun missedCalls(context: Context): MissedCallsRepository =
+    (context.applicationContext as TinitalkApplication).missedCalls
+
 internal fun contactPhotoStore(context: Context): ContactPhotoStore =
     (context.applicationContext as TinitalkApplication).contactPhotoStore
 
@@ -165,7 +183,7 @@ internal fun cleanupWebPushAccount(context: Context, accountId: AccountId, sessi
     runCatching { ContactCache(SharedPreferencesKeyValueStore(context)).remove(accountId) }
     runCatching { UnifiedPushAccountRegistration(context).unsubscribe(accountId) }
     runCatching { PushRegistrationScheduler(context).cancel(accountId) }
-    runCatching { IncomingCallNotifier(context).removeAccountMissedCount(accountId) }
+    runCatching { missedCalls(context).removeAccount(accountId) }
     session?.let {
         val binding = CallSessionBinding.from(it)
         IncomingCallController().removeAccount(context, accountId, binding)

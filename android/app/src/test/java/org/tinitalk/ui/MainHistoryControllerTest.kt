@@ -7,7 +7,7 @@ import kotlinx.coroutines.cancel
 import org.junit.Assert.*
 import org.junit.Test
 import org.tinitalk.data.*
-import org.tinitalk.push.AccountBadgeRefreshId
+import org.tinitalk.missed.MissedCallsRefreshId
 import kotlin.coroutines.CoroutineContext
 
 class MainHistoryControllerTest {
@@ -179,8 +179,8 @@ class MainHistoryControllerTest {
         var accept = true
         val applied = mutableListOf<AccountUnreadState>()
         override fun sync(accounts: List<AccountId>) = Unit
-        override fun begin(accountId: AccountId) = AccountBadgeRefreshId(accountId, 1)
-        override fun apply(update: AccountUnreadState, refresh: AccountBadgeRefreshId?): Int? {
+        override fun begin(accountId: AccountId) = MissedCallsRefreshId(accountId, 1)
+        override fun apply(update: AccountUnreadState, refresh: MissedCallsRefreshId?): Int? {
             if (!accept) return null
             applied += update
             return update.unread.unreadMissedCount

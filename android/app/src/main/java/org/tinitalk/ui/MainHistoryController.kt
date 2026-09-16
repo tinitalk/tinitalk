@@ -20,7 +20,7 @@ import org.tinitalk.data.ApiException
 import org.tinitalk.data.CallHistoryPage
 import org.tinitalk.data.Session
 import org.tinitalk.data.sameIdentity
-import org.tinitalk.push.AccountBadgeRefreshId
+import org.tinitalk.missed.MissedCallsRefreshId
 
 internal data class HistoryEnvironment(
     val signedIn: Boolean,
@@ -332,7 +332,7 @@ internal class MainHistoryController(
         }
     }
 
-    private fun applyUnread(update: AccountUnreadState, refresh: AccountBadgeRefreshId?): Boolean {
+    private fun applyUnread(update: AccountUnreadState, refresh: MissedCallsRefreshId?): Boolean {
         val account = source.accounts().firstOrNull { it.id == update.accountId } ?: return false
         if (!acceptsAccountUnreadUpdate(account.session, update)) return false
         badges.sync(source.accounts().map { it.id })

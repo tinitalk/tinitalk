@@ -81,7 +81,7 @@ import org.tinitalk.data.UrlConnectionApiClient
 import org.tinitalk.ui.LocalContactPhotoReader
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.IncomingInvite
-import org.tinitalk.push.acknowledgeLatestMissedCall
+import org.tinitalk.missed.acknowledgeLatestMissedCall
 import org.tinitalk.media.VideoRenderSource
 import org.tinitalk.network.NetworkAvailability
 import org.tinitalk.network.networkAvailability
@@ -717,10 +717,10 @@ class CallActivity : ComponentActivity() {
 
     private fun acknowledgeMissedCall(peer: AccountPeerKey, session: Session) {
         val appContext = applicationContext
-        val notifier = IncomingCallNotifier(appContext)
+        val missedCalls = missedCalls(appContext)
         val authStore = AuthStore(SharedPreferencesKeyValueStore(appContext), AndroidKeystoreTokenCipher())
         val accountRefreshId = authStore.withCurrent(peer.accountId, session) {
-            notifier.beginAccountMissedCountRefresh(peer.accountId)
+            missedCalls.beginRefresh(peer.accountId)
         } ?: return
         Thread {
             val repository = ContactRepository(authStore)
@@ -746,7 +746,7 @@ class CallActivity : ComponentActivity() {
                 )
             }.getOrNull() ?: return@Thread
             authStore.withCurrent(peer.accountId, session) {
-                val update = notifier.updateAccountMissedState(
+                val update = missedCalls.update(
                     peer.accountId,
                     unread,
                     accountRefreshId,

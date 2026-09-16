@@ -1,4 +1,4 @@
-package org.tinitalk.push
+package org.tinitalk.missed
 
 import org.tinitalk.data.CallUnreadState
 import org.junit.Assert.assertEquals
