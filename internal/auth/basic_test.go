@@ -25,27 +25,27 @@ func TestBasicAuthenticatorAcceptsOnlyActiveEnabledTokens(t *testing.T) {
 	}
 
 	a := NewBasicAuthenticator(db)
-	user, ok := a.Authenticate("alice", aliceToken)
-	if !ok || user.Login != "alice" {
-		t.Fatalf("Authenticate(alice) = %+v, %v", user, ok)
+	user, ok, err := a.Authenticate("alice", aliceToken)
+	if err != nil || !ok || user.Login != "alice" {
+		t.Fatalf("Authenticate(alice) = %+v, %v, %v", user, ok, err)
 	}
-	if _, ok := a.Authenticate("bob", aliceToken); ok {
-		t.Fatal("Authenticate accepted another user's token")
+	if _, ok, err := a.Authenticate("bob", aliceToken); err != nil || ok {
+		t.Fatalf("Authenticate with another user's token = %v, %v; want false, nil", ok, err)
 	}
 	rotated, err := db.RotateToken("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := a.Authenticate("alice", aliceToken); ok {
-		t.Fatal("Authenticate accepted rotated token")
+	if _, ok, err := a.Authenticate("alice", aliceToken); err != nil || ok {
+		t.Fatalf("Authenticate with rotated token = %v, %v; want false, nil", ok, err)
 	}
-	if _, ok := a.Authenticate("alice", rotated); !ok {
-		t.Fatal("Authenticate rejected new token")
+	if _, ok, err := a.Authenticate("alice", rotated); err != nil || !ok {
+		t.Fatalf("Authenticate with new token = %v, %v; want true, nil", ok, err)
 	}
 	if err := db.DisableUser("alice"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := a.Authenticate("alice", rotated); ok {
-		t.Fatal("Authenticate accepted disabled user")
+	if _, ok, err := a.Authenticate("alice", rotated); err != nil || ok {
+		t.Fatalf("Authenticate with disabled user = %v, %v; want false, nil", ok, err)
 	}
 }

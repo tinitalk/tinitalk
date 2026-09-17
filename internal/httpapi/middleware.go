@@ -42,7 +42,12 @@ func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		user, ok := s.auth.Authenticate(login, token)
+		user, ok, err := s.auth.Authenticate(login, token)
+		if err != nil {
+			// A storage failure must not make clients discard valid credentials.
+			http.Error(w, "authentication unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		if !ok {
 			w.Header().Set("WWW-Authenticate", `Basic realm="tinitalk"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

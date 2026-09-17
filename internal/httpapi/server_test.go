@@ -370,6 +370,32 @@ func TestUnauthorizedCredentialsReturn401(t *testing.T) {
 	}
 }
 
+func TestAuthenticationStorageFailureReturnsServiceUnavailable(t *testing.T) {
+	db, tokens := testDB(t)
+	server := NewServer(db, Options{AllowInsecureLoopback: true})
+	if got := request(t, server, http.MethodGet, "/api/me", nil, "alice", tokens["alice"]); got.Code != http.StatusOK {
+		t.Fatalf("healthy authentication status = %d, body %s", got.Code, got.Body.String())
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, endpoint := range []struct{ method, path string }{
+		{http.MethodGet, "/api/me"},
+		{http.MethodPost, "/api/session"},
+	} {
+		t.Run(endpoint.path, func(t *testing.T) {
+			got := request(t, server, endpoint.method, endpoint.path, nil, "alice", tokens["alice"])
+			if got.Code != http.StatusServiceUnavailable {
+				t.Fatalf("unavailable authentication status = %d, body %s", got.Code, got.Body.String())
+			}
+			if got.Header().Get("WWW-Authenticate") != "" || got.Header().Get(authReasonHeader) != "" {
+				t.Fatalf("storage failure must not invalidate credentials: %v", got.Header())
+			}
+		})
+	}
+}
+
 func TestRejectsBasicAuthWithoutTLSExceptLoopbackMode(t *testing.T) {
 	db, tokens := testDB(t)
 	server := NewServer(db, Options{})
