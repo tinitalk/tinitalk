@@ -54,7 +54,7 @@ class CallForegroundServiceTelecomCallbackTest {
         val coordinator = CallCoordinator("alice", NoopSignalClient(), accountId = accountId)
         val incomingController = IncomingCallController()
         incomingController.save(service, invite)
-        service.setPrivateField("coordinator", coordinator)
+        service.installRuntimeForTest(invite.owner, coordinator = coordinator)
         service.setPrivateField("telecomCallKey", invite.key)
         service.setPrivateField("callOwner", invite.owner)
         service.setPrivateField("admissionLease", lease)
@@ -96,7 +96,7 @@ class CallForegroundServiceTelecomCallbackTest {
             restoreIncoming(CanonicalCallId, acknowledgeRinging = false)
             accept()
         }
-        service.setPrivateField("coordinator", coordinator)
+        service.installRuntimeForTest(owner, coordinator = coordinator)
         service.setPrivateField("telecomCallKey", localKey)
         service.setPrivateField("callOwner", owner)
         service.setPrivateField("admissionLease", lease)

@@ -152,8 +152,7 @@ class CallForegroundServiceToneTest {
             leases += lease
             ReflectionHelpers.setField(service, "callOwner", owner)
             ReflectionHelpers.setField(service, "admissionLease", lease)
-            ReflectionHelpers.setField(service, "media", media)
-            ReflectionHelpers.setField(service, "mediaDispatcher", dispatcher)
+            service.installRuntimeForTest(owner, media = media, dispatcher = dispatcher)
             assertTrue(dispatcher.dispatch { unblockMedia.await(5, java.util.concurrent.TimeUnit.SECONDS) })
             CallUiStateStore.begin(owner.key, peer, CallDirection.Outgoing, CallPhase.Active)
             CallUiStateStore.onMediaConnection(MediaConnectionState.Connected)
@@ -201,7 +200,7 @@ class CallForegroundServiceToneTest {
                         restoreIncoming(owner.key.callId, acknowledgeRinging = false)
                         accept()
                     }
-                    ReflectionHelpers.setField(service, "coordinator", coordinator)
+                    service.installRuntimeForTest(owner, coordinator = coordinator)
                     ReflectionHelpers.setField(service, "callOwner", owner)
                     ReflectionHelpers.setField(service, "admissionLease", lease)
                     ReflectionHelpers.setField(service, "telecomCallKey", owner.key)
@@ -259,8 +258,7 @@ class CallForegroundServiceToneTest {
             leases += lease
             ReflectionHelpers.setField(service, "callOwner", owner)
             ReflectionHelpers.setField(service, "admissionLease", lease)
-            ReflectionHelpers.setField(service, "media", media)
-            ReflectionHelpers.setField(service, "mediaDispatcher", dispatcher)
+            service.installRuntimeForTest(owner, media = media, dispatcher = dispatcher)
             CallUiStateStore.begin(owner.key, peer, CallDirection.Outgoing, CallPhase.Active)
             CallUiStateStore.onMediaConnection(MediaConnectionState.Connected)
             Shadows.shadowOf(Looper.getMainLooper()).idle()

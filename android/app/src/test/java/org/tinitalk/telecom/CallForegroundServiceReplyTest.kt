@@ -88,7 +88,7 @@ class CallForegroundServiceReplyTest {
         fun field(name: String, value: Any) {
             service.javaClass.getDeclaredField(name).apply { isAccessible = true }.set(service, value)
         }
-        field("coordinator", CallCoordinator("alice", signal, accountId = invite.accountId))
+        service.installRuntimeForTest(invite.owner, coordinator = CallCoordinator("alice", signal, accountId = invite.accountId))
         field("telecomCallKey", invite.key)
         field("callOwner", invite.owner)
         field("admissionLease", lease)

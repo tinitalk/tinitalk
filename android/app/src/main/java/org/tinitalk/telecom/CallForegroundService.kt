@@ -55,7 +55,6 @@ import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.WebRtcCallSession
 import org.tinitalk.media.CancellableTask
-import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.network.networkAvailability
 import org.tinitalk.media.CameraMediaCallbacks
@@ -63,15 +62,8 @@ import org.tinitalk.media.CallMediaDispatcher
 import org.tinitalk.push.DeviceIdentity
 import org.tinitalk.push.IncomingCallNotifier
 import org.tinitalk.push.ContactRefreshScheduler
-import okhttp3.OkHttpClient
 import java.time.Instant
-import java.util.concurrent.TimeUnit
 import java.util.UUID
-
-internal fun signalingHttpClient(): OkHttpClient =
-    OkHttpClient.Builder()
-        .pingInterval(20, TimeUnit.SECONDS)
-        .build()
 
 internal fun migrateCallNetwork(
     reconnectSignaling: () -> Unit,
@@ -143,11 +135,11 @@ internal fun cameraCallAction(intent: Intent): CameraCallAction? {
 
 class CallForegroundService : Service() {
     private val handler = Handler(Looper.getMainLooper())
-    private var socket: SignalSocket? = null
-    private var httpClient: OkHttpClient? = null
-    private var coordinator: CallCoordinator? = null
-    @Volatile private var media: ForegroundCallController? = null
-    @Volatile private var mediaDispatcher: CallMediaDispatcher? = null
+    @Volatile private var runtime: CallRuntime? = null
+    private val socket get() = runtime?.socket
+    private val coordinator get() = runtime?.coordinator
+    private val media get() = runtime?.media
+    private val mediaDispatcher get() = runtime?.mediaDispatcher
     @Volatile private var connected = false
     @Volatile private var finishing = false
     @Volatile private var callResourcesReleased = false
@@ -171,8 +163,6 @@ class CallForegroundService : Service() {
     private var callOwner: AccountCallOwner? = null
     private var admissionLease: CallAdmissionLease? = null
     private var outgoingPeer: CallPeer? = null
-    private var callNetworkLock: CallNetworkLock? = null
-    private var networkObserver: DefaultNetworkObserver? = null
     private val notifications by lazy {
         CallNotificationPresenter(
             this, handler, contactPhotoNotificationLoader(this),
@@ -292,17 +282,9 @@ class CallForegroundService : Service() {
         val releasedKey = callOwner?.key
         runtimeGeneration++
         terminalSignalGate.close()
-        runCatching { callNetworkLock?.close() }
-        callNetworkLock = null
-        runCatching { networkObserver?.close() }
-        networkObserver = null
-        runCatching { socket?.close() }
-        runCatching { httpClient?.dispatcher?.executorService?.shutdownNow() }
-        runCatching { httpClient?.connectionPool?.evictAll() }
+        runtime?.close()
         runCatching { coordinator?.finish() }
-        socket = null
-        httpClient = null
-        coordinator = null
+        runtime = null
         connected = false
         telecomCallKey = null
         callOwner = null
@@ -329,10 +311,7 @@ class CallForegroundService : Service() {
         toneThread.quitSafely()
         terminalSignalGate.close()
         stopStatsPolling()
-        callNetworkLock?.close()
-        callNetworkLock = null
-        networkObserver?.close()
-        networkObserver = null
+        runtime?.closeNetwork()
         val snapshot = coordinator?.snapshot()
         if (owned && unexpected && connected && snapshot?.phase == CallPhase.Active) {
             runCatching { coordinator?.hangUp() }
@@ -352,14 +331,8 @@ class CallForegroundService : Service() {
             }
         }
         releaseCallResources(snapshot?.callKey)
-        runCatching { socket?.close() }
-        runCatching { httpClient?.dispatcher?.executorService?.shutdownNow() }
-        runCatching { httpClient?.connectionPool?.evictAll() }
-        media = null
-        mediaDispatcher = null
-        socket = null
-        httpClient = null
-        coordinator = null
+        runtime?.close()
+        runtime = null
         super.onDestroy()
     }
 
@@ -370,18 +343,9 @@ class CallForegroundService : Service() {
         val lease = GlobalCallAdmission.take(owner) ?: return false
         callOwner = owner
         admissionLease = lease
-        val newHttpClient = signalingHttpClient()
-        val newSocket = SignalSocket(
-            newHttpClient,
-            session,
-            deviceId = DeviceIdentity.id(this),
-        )
-        val newCoordinator = CallCoordinator(
-            session.login,
-            newSocket,
-            accountId = owner.key.accountId,
-        )
-        val newMediaDispatcher = CallMediaDispatcher()
+        lateinit var newSocket: SignalSocket
+        lateinit var newCoordinator: CallCoordinator
+        lateinit var newMediaDispatcher: CallMediaDispatcher
         lateinit var newMedia: ForegroundCallController
         fun routeMediaCallback(
             onDropped: () -> Unit = {},
@@ -423,156 +387,159 @@ class CallForegroundService : Service() {
                 finishCallSoon()
             }
         }
-        newMedia = ForegroundCallController(
-            signal = newSocket,
-            mediaFactory = { callId, videoAllowed, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
-                val mediaStatsSession = statsMonitor.openSession(callId)
-                WebRtcCallSession.create(
-                    this,
-                    videoAllowed = videoAllowed,
-                    iceServers = iceServers,
-                    forceRelay = BuildConfig.FORCE_RELAY,
-                    onLocalIceCandidate = { candidate ->
-                        postMediaCallback { onLocalIce(candidate) }
-                    },
-                    onLocalIceCandidatesRemoved = { candidates ->
-                        postMediaCallback { onLocalIceRemoved(candidates) }
-                    },
-                    onIceRestartNeeded = {
-                        postMediaCallback(action = onIceRestartNeeded)
-                    },
-                    onConnectionStateChanged = { state ->
-                        routeMediaCallback { controller ->
-                            val connection = statsMonitor.onConnection(mediaStatsSession, state)
-                                ?: return@routeMediaCallback
-                            controller.onMediaConnection(callId, connection.epoch, state)
-                            handler.post {
-                                if (finishing || media !== newMedia) return@post
-                                if (state == MediaConnectionState.Connected) {
-                                    newCoordinator.mediaConnected()
-                                }
-                                if (CallUiStateStore.snapshot().callId == callId) {
-                                    statsMonitor.resetHealthOnConnection(connection)
-                                    CallUiStateStore.onMediaConnection(state)
+        val newRuntime = CallRuntime.create(session, owner.key.accountId, DeviceIdentity.id(this)) {
+                createdSocket, createdCoordinator, createdDispatcher ->
+            newSocket = createdSocket
+            newCoordinator = createdCoordinator
+            newMediaDispatcher = createdDispatcher
+            newMedia = ForegroundCallController(
+                signal = newSocket,
+                mediaFactory = { callId, videoAllowed, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
+                    val mediaStatsSession = statsMonitor.openSession(callId)
+                    WebRtcCallSession.create(
+                        this,
+                        videoAllowed = videoAllowed,
+                        iceServers = iceServers,
+                        forceRelay = BuildConfig.FORCE_RELAY,
+                        onLocalIceCandidate = { candidate ->
+                            postMediaCallback { onLocalIce(candidate) }
+                        },
+                        onLocalIceCandidatesRemoved = { candidates ->
+                            postMediaCallback { onLocalIceRemoved(candidates) }
+                        },
+                        onIceRestartNeeded = {
+                            postMediaCallback(action = onIceRestartNeeded)
+                        },
+                        onConnectionStateChanged = { state ->
+                            routeMediaCallback { controller ->
+                                val connection = statsMonitor.onConnection(mediaStatsSession, state)
+                                    ?: return@routeMediaCallback
+                                controller.onMediaConnection(callId, connection.epoch, state)
+                                handler.post {
+                                    if (finishing || media !== newMedia) return@post
+                                    if (state == MediaConnectionState.Connected) {
+                                        newCoordinator.mediaConnected()
+                                    }
+                                    if (CallUiStateStore.snapshot().callId == callId) {
+                                        statsMonitor.resetHealthOnConnection(connection)
+                                        CallUiStateStore.onMediaConnection(state)
+                                    }
                                 }
                             }
-                        }
-                    },
-                    onRemoteVideoTrack = { track ->
-                        routeMediaCallback(onDropped = track::close) {
-                            it.onRemoteVideoTrack(callId, track)
-                        }
-                    },
-                    onTransportStateChanged = { state ->
-                        routeMediaCallback {
-                            if (statsMonitor.owns(mediaStatsSession)) it.onTransportConnection(callId, state)
-                        }
-                    },
-                    cameraCallbacks = CameraMediaCallbacks(
-                        onLocalTrackChanged = { track ->
-                            routeMediaCallback(onDropped = { track?.close() }) {
-                                it.onLocalVideoTrack(callId, track)
+                        },
+                        onRemoteVideoTrack = { track ->
+                            routeMediaCallback(onDropped = track::close) {
+                                it.onRemoteVideoTrack(callId, track)
                             }
                         },
-                        onCaptureStarted = { facing ->
-                            routeMediaCallback { it.onCameraCaptureStarted(callId, facing) }
+                        onTransportStateChanged = { state ->
+                            routeMediaCallback {
+                                if (statsMonitor.owns(mediaStatsSession)) it.onTransportConnection(callId, state)
+                            }
                         },
-                        onCaptureInvalidated = {
-                            routeMediaCallback { it.onCameraCaptureInvalidated(callId) }
-                        },
-                        onCaptureStopped = {
-                            routeMediaCallback { it.onCameraCaptureStopped(callId) }
-                        },
-                        onFacingChanged = { facing ->
-                            routeMediaCallback { it.onCameraFacingChanged(callId, facing) }
-                        },
-                        onFailure = { message ->
-                            Log.e(CallLogTag, "camera failed for call $callId: $message")
-                            routeMediaCallback { it.onCameraFailure(callId, message) }
-                        },
-                    ),
-                )
-            },
-            onVideoStateChanged = { state ->
-                val publish = {
-                    if (!finishing && media === newMedia) {
-                        state.failure?.let { message ->
-                            Log.e(CallLogTag, "camera state failed for call ${state.callId}: $message")
+                        cameraCallbacks = CameraMediaCallbacks(
+                            onLocalTrackChanged = { track ->
+                                routeMediaCallback(onDropped = { track?.close() }) {
+                                    it.onLocalVideoTrack(callId, track)
+                                }
+                            },
+                            onCaptureStarted = { facing ->
+                                routeMediaCallback { it.onCameraCaptureStarted(callId, facing) }
+                            },
+                            onCaptureInvalidated = {
+                                routeMediaCallback { it.onCameraCaptureInvalidated(callId) }
+                            },
+                            onCaptureStopped = {
+                                routeMediaCallback { it.onCameraCaptureStopped(callId) }
+                            },
+                            onFacingChanged = { facing ->
+                                routeMediaCallback { it.onCameraFacingChanged(callId, facing) }
+                            },
+                            onFailure = { message ->
+                                Log.e(CallLogTag, "camera failed for call $callId: $message")
+                                routeMediaCallback { it.onCameraFailure(callId, message) }
+                            },
+                        ),
+                    )
+                },
+                onVideoStateChanged = { state ->
+                    val publish = {
+                        if (!finishing && media === newMedia) {
+                            state.failure?.let { message ->
+                                Log.e(CallLogTag, "camera state failed for call ${state.callId}: $message")
+                            }
+                            val screenChanged = VideoCallStateStore.snapshot().screen != state.screen
+                            VideoCallStateStore.publish(state)
+                            if (screenChanged || screenForegroundTypeEnabled) {
+                                notifications.show(CallUiStateStore.snapshot())
+                            }
                         }
-                        val screenChanged = VideoCallStateStore.snapshot().screen != state.screen
-                        VideoCallStateStore.publish(state)
-                        if (screenChanged || screenForegroundTypeEnabled) {
-                            notifications.show(CallUiStateStore.snapshot())
+                    }
+                    if (Looper.myLooper() == Looper.getMainLooper()) publish() else handler.post(publish)
+                },
+                prepareCameraStart = { callId, lease ->
+                    val snapshot = CallServiceState.snapshot()
+                    val permissionGranted = ContextCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.CAMERA,
+                    ) == PackageManager.PERMISSION_GRANTED
+                    synchronized(foregroundLock) {
+                        val prepared = media === newMedia &&
+                            snapshot.callId == callId &&
+                            snapshot.phase == CallPhase.Active &&
+                            permissionGranted &&
+                            updateForegroundType(cameraSending = true)
+                        if (prepared) cameraForegroundLease = CameraForegroundLease(newMedia, lease)
+                        prepared
+                    }
+                },
+                onCameraLeaseReleased = { lease ->
+                    synchronized(foregroundLock) {
+                        val activeLease = cameraForegroundLease
+                        if (media === newMedia && activeLease?.owner === newMedia && activeLease.id == lease) {
+                            cameraForegroundLease = null
+                            updateForegroundType(cameraSending = false)
                         }
                     }
-                }
-                if (Looper.myLooper() == Looper.getMainLooper()) publish() else handler.post(publish)
-            },
-            prepareCameraStart = { callId, lease ->
-                val snapshot = CallServiceState.snapshot()
-                val permissionGranted = ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.CAMERA,
-                ) == PackageManager.PERMISSION_GRANTED
-                synchronized(foregroundLock) {
-                    val prepared = media === newMedia &&
-                        snapshot.callId == callId &&
-                        snapshot.phase == CallPhase.Active &&
-                        permissionGranted &&
-                        updateForegroundType(cameraSending = true)
-                    if (prepared) cameraForegroundLease = CameraForegroundLease(newMedia, lease)
-                    prepared
-                }
-            },
-            onCameraLeaseReleased = { lease ->
-                synchronized(foregroundLock) {
-                    val activeLease = cameraForegroundLease
-                    if (media === newMedia && activeLease?.owner === newMedia && activeLease.id == lease) {
-                        cameraForegroundLease = null
-                        updateForegroundType(cameraSending = false)
+                },
+                accountId = owner.key.accountId,
+                selfLogin = session.login,
+                prepareScreenStart = { callId ->
+                    synchronized(foregroundLock) {
+                        val state = CallServiceState.snapshot()
+                        val blocked = when {
+                            media !== newMedia -> "call runtime changed"
+                            state.callId != callId || state.phase != CallPhase.Active -> "call is not active"
+                            !getSystemService(android.os.PowerManager::class.java).isInteractive -> "screen is off"
+                            getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked -> "screen is locked"
+                            else -> null
+                        }
+                        if (blocked != null) {
+                            Log.w("TiniTalkScreen", "screen start blocked: $blocked")
+                            false
+                        } else {
+                            updateForegroundType(cameraSending = false, screenSending = true)
+                        }
                     }
-                }
-            },
-            accountId = owner.key.accountId,
-            selfLogin = session.login,
-            prepareScreenStart = { callId ->
-                synchronized(foregroundLock) {
-                    val state = CallServiceState.snapshot()
-                    val blocked = when {
-                        media !== newMedia -> "call runtime changed"
-                        state.callId != callId || state.phase != CallPhase.Active -> "call is not active"
-                        !getSystemService(android.os.PowerManager::class.java).isInteractive -> "screen is off"
-                        getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked -> "screen is locked"
-                        else -> null
+                },
+                onScreenReleased = {
+                    synchronized(foregroundLock) {
+                        if (media === newMedia) updateForegroundType(screenSending = false)
                     }
-                    if (blocked != null) {
-                        Log.w("TiniTalkScreen", "screen start blocked: $blocked")
-                        false
-                    } else {
-                        updateForegroundType(cameraSending = false, screenSending = true)
+                },
+                onSecurityStateChanged = { callId, state ->
+                    handler.post {
+                        if (!finishing && media === newMedia) {
+                            CallUiStateStore.setSecurity(AccountCallKey(owner.key.accountId, callId), state)
+                        }
                     }
-                }
-            },
-            onScreenReleased = {
-                synchronized(foregroundLock) {
-                    if (media === newMedia) updateForegroundType(screenSending = false)
-                }
-            },
-            onSecurityStateChanged = { callId, state ->
-                handler.post {
-                    if (!finishing && media === newMedia) {
-                        CallUiStateStore.setSecurity(AccountCallKey(owner.key.accountId, callId), state)
-                    }
-                }
-            },
-        )
-        socket = newSocket
-        httpClient = newHttpClient
-        coordinator = newCoordinator
-        media = newMedia
-        mediaDispatcher = newMediaDispatcher
+                },
+            )
+            newMedia
+        }
+        runtime = newRuntime
         val runtimeOwnerGeneration = runtimeGeneration
-        networkObserver = DefaultNetworkObserver(applicationContext) {
+        newRuntime.observeNetwork(applicationContext) {
             handler.post {
                 if (finishing || runtimeGeneration != runtimeOwnerGeneration || socket !== newSocket) return@post
                 connected = false
@@ -1024,15 +991,14 @@ class CallForegroundService : Service() {
         if (finishing || CallServiceState.snapshot().phase != CallPhase.Active) {
             stopStatsPolling()
         } else {
-            val networkLock = callNetworkLock ?: CallNetworkLock.create(this).also { callNetworkLock = it }
-            networkLock.setActive(true)
+            runtime?.setNetworkActive(this, true)
             statsMonitor.start()
         }
     }
 
     private fun stopStatsPolling() {
         statsMonitor.stop()
-        callNetworkLock?.setActive(false)
+        runtime?.setNetworkActive(this, false)
     }
 
     private fun finishCallSoon(expectedGeneration: Long = runtimeGeneration) {
@@ -1131,21 +1097,7 @@ class CallForegroundService : Service() {
 
     private fun releaseCallMedia() {
         stopStatsPolling()
-        val currentMedia = media
-        val currentDispatcher = mediaDispatcher
-        media = null
-        mediaDispatcher = null
-        if (currentMedia != null) {
-            val cleanupDispatcher = currentDispatcher ?: CallMediaDispatcher()
-            cleanupDispatcher.dispatch {
-                runCatching { currentMedia.close() }.onFailure { failure ->
-                    Log.e(CallLogTag, "failed to release call media", failure)
-                }
-            }
-            cleanupDispatcher.close()
-        } else {
-            currentDispatcher?.close()
-        }
+        runtime?.releaseMedia()
     }
 
     private fun ownsRuntime(): Boolean {
