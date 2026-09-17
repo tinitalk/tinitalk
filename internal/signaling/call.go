@@ -40,6 +40,7 @@ type call struct {
 	ringingAt            time.Time
 	connectedAt          time.Time
 	endedAt              time.Time
+	pendingHistory       *pendingCallHistory
 	iceWindowAt          time.Time
 	iceCount             int
 	lastRestart          time.Time

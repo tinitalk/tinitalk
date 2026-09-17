@@ -189,18 +189,11 @@ func (h *Hub) ReplaceSession(user, currentSessionID string) {
 		SentAt:  now.UnixMilli(),
 		Payload: json.RawMessage(`{"reason":"session_replaced"}`),
 	}
-	delivered := h.next(c, event, c.caller, c.callee)
 	outcome := state.CallOutcomeInterruptedBeforeAnswer
 	if c.state == callActive {
 		outcome = disconnectedOutcome(c)
 	}
-	h.finishHistory(c, outcome, now)
-	h.deliver(c.caller, delivered)
-	h.deliver(c.callee, delivered)
-	for _, participant := range []string{c.caller, c.callee} {
-		h.enqueueNotification(notification{callee: participant, event: delivered, cancel: true})
-	}
-	h.end(c)
+	h.completeServerCall(c, event, outcome, now, []string{c.caller, c.callee})
 }
 
 func (h *Hub) Connected(client *Client) bool {
@@ -431,16 +424,16 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 		}
 	}
 	now := h.now()
+	if endsCall(event.Type) {
+		recipient := c.other(sender)
+		pushRecipient := c.callee
+		if event.Type == "call.end" {
+			pushRecipient = recipient
+		}
+		return h.completeClientCall(c, event, now, []string{recipient}, []string{pushRecipient})
+	}
 	if h.history != nil {
 		switch event.Type {
-		case "call.reject":
-			replyCode, err := protocol.ParseCallReplyCode(event.Payload)
-			if err != nil {
-				return err
-			}
-			if err := h.history.FinishCallWithReply(c.id, state.CallOutcomeRejected, now, replyCode); err != nil {
-				return err
-			}
 		case "call.ringing":
 			if err := h.history.MarkCallRinging(c.id); err != nil {
 				return err
@@ -452,12 +445,6 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 		case "call.connected":
 			if c.connectedAt.IsZero() {
 				if err := h.history.MarkCallConnected(c.id, now); err != nil {
-					return err
-				}
-			}
-		default:
-			if endsCall(event.Type) {
-				if err := h.history.FinishCall(c.id, outcomeForEvent(c, event.Type), now); err != nil {
 					return err
 				}
 			}
@@ -492,14 +479,8 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	if event.Type == "rtc.restart" {
 		h.deliverICEConfig(c, event.ID)
 	}
-	if event.Type == "call.accept" || event.Type == "call.reject" || event.Type == "call.cancel" {
+	if event.Type == "call.accept" {
 		h.enqueueNotification(notification{callee: c.callee, event: delivered, cancel: true})
-	}
-	if event.Type == "call.end" {
-		h.enqueueNotification(notification{callee: recipient, event: delivered, cancel: true})
-	}
-	if endsCall(event.Type) {
-		h.end(c)
 	}
 	return nil
 }
@@ -791,6 +772,7 @@ func (h *Hub) Sweep() int {
 	expired := 0
 	for callID, c := range h.calls {
 		if c.state == callEnded {
+			h.retryHistory(c, now)
 			if now.Sub(c.endedAt) > TerminalRetention {
 				delete(h.calls, callID)
 				for _, alias := range c.aliases {
@@ -814,13 +796,7 @@ func (h *Hub) Sweep() int {
 					SentAt:  now.UnixMilli(),
 					Payload: json.RawMessage(`{"reason":"participant_disconnected"}`),
 				}
-				delivered := h.next(c, event, c.caller, c.callee)
-				h.finishHistory(c, disconnectedOutcome(c), now)
-				h.deliver(c.caller, delivered)
-				h.deliver(c.callee, delivered)
-				h.enqueueNotification(notification{callee: c.caller, event: delivered, cancel: true})
-				h.enqueueNotification(notification{callee: c.callee, event: delivered, cancel: true})
-				h.end(c)
+				h.completeServerCall(c, event, disconnectedOutcome(c), now, []string{c.caller, c.callee})
 				expired++
 				break
 			}
@@ -839,12 +815,7 @@ func (h *Hub) Sweep() int {
 			SentAt:  now.UnixMilli(),
 			Payload: json.RawMessage(`{}`),
 		}
-		delivered := h.next(c, event, c.caller, c.callee)
-		h.finishHistory(c, outcomeForEvent(c, event.Type), now)
-		h.deliver(c.caller, delivered)
-		h.deliver(c.callee, delivered)
-		h.enqueueNotification(notification{callee: c.callee, event: delivered, cancel: true})
-		h.end(c)
+		h.completeServerCall(c, event, outcomeForEvent(c, event.Type), now, []string{c.callee})
 		expired++
 	}
 	return expired
@@ -1107,55 +1078,6 @@ func isSASEvent(eventType string) bool {
 	default:
 		return false
 	}
-}
-
-func (h *Hub) end(c *call) {
-	if c.state == callEnded {
-		return
-	}
-	c.state = callEnded
-	c.notifyPushWaiters()
-	c.clearScreen()
-	c.endedAt = h.now()
-	delete(h.activeByUser, c.caller)
-	delete(h.activeByUser, c.callee)
-}
-
-func (h *Hub) finishHistory(c *call, outcome state.CallOutcome, endedAt time.Time) {
-	if h.history != nil {
-		_ = h.history.FinishCall(c.id, outcome, endedAt)
-	}
-}
-
-func outcomeForEvent(c *call, eventType string) state.CallOutcome {
-	switch eventType {
-	case "call.reject":
-		return state.CallOutcomeRejected
-	case "call.cancel":
-		if c.ringingAt.IsZero() {
-			return state.CallOutcomeCancelledBeforeRinging
-		}
-		return state.CallOutcomeCancelledAfterRinging
-	case "call.expire":
-		if c.ringingAt.IsZero() {
-			return state.CallOutcomeUnreachable
-		}
-		return state.CallOutcomeUnanswered
-	case "call.end":
-		if c.connectedAt.IsZero() {
-			return state.CallOutcomeConnectionFailed
-		}
-		return state.CallOutcomeCompleted
-	default:
-		return state.CallOutcomeInterruptedBeforeAnswer
-	}
-}
-
-func disconnectedOutcome(c *call) state.CallOutcome {
-	if c.connectedAt.IsZero() {
-		return state.CallOutcomeConnectionFailed
-	}
-	return state.CallOutcomeInterrupted
 }
 
 func (c *call) validateTransition(sender, eventType string) error {

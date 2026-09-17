@@ -51,18 +51,7 @@ func (h *Hub) RejectIncomingCall(user, deviceID, sessionID, callID string) error
 		ID:     fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:]),
 		CallID: c.id, Type: "call.reject", SentAt: now.UnixMilli(), Payload: json.RawMessage(`{}`),
 	}
-	if h.history != nil {
-		if err := h.history.FinishCallWithReply(c.id, state.CallOutcomeRejected, now, ""); err != nil {
-			return err
-		}
-	}
-	c.remember(event.ID)
 	// Also stop a background app that is already ringing, and include the
 	// terminal event in its replay if it reconnects after this request.
-	delivered := h.next(c, event, c.caller, c.callee)
-	h.deliver(c.caller, delivered)
-	h.deliver(c.callee, delivered)
-	h.enqueueNotification(notification{callee: c.callee, event: delivered, cancel: true})
-	h.end(c)
-	return nil
+	return h.completeClientCall(c, event, now, []string{c.caller, c.callee}, []string{c.callee})
 }
