@@ -41,7 +41,6 @@ import org.tinitalk.call.CallPeer
 import org.tinitalk.call.CallServiceState
 import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.call.CallUiState
-import org.tinitalk.call.callTransportRoute
 import org.tinitalk.call.VideoCallStateStore
 import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.AndroidKeystoreTokenCipher
@@ -56,7 +55,6 @@ import org.tinitalk.data.signal.SignalSocket
 import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.WebRtcCallSession
 import org.tinitalk.media.CancellableTask
-import org.tinitalk.media.ConnectionHealthClassifier
 import org.tinitalk.media.DefaultNetworkObserver
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.network.networkAvailability
@@ -153,9 +151,18 @@ class CallForegroundService : Service() {
     @Volatile private var connected = false
     @Volatile private var finishing = false
     @Volatile private var callResourcesReleased = false
-    private var statsPolling = false
-    private val statsRequestGate = MediaStatsRequestGate()
-    @Volatile private var statsSession: MediaStatsSession? = null
+    private val statsMonitor by lazy {
+        CallStatsMonitor(handler) {
+            val currentMedia = media
+            val currentDispatcher = mediaDispatcher
+            if (currentMedia == null || currentDispatcher == null) null
+            else CallStatsSource(
+                dispatch = currentDispatcher::dispatch,
+                getStats = currentMedia::getStats,
+                isCurrent = { !finishing && media === currentMedia },
+            )
+        }
+    }
     @Volatile private var cameraForegroundTypeEnabled = false
     @Volatile private var screenForegroundTypeEnabled = false
     @Volatile private var cameraForegroundLease: CameraForegroundLease? = null
@@ -178,7 +185,6 @@ class CallForegroundService : Service() {
     private lateinit var toneThread: HandlerThread
     private var endingMedia: ForegroundCallController? = null
     private var endAudioReady = false
-    private val connectionHealthClassifier = ConnectionHealthClassifier()
     private val terminalSignalGate = TerminalSignalGate(
         timeoutMillis = TerminalSignalTimeoutMillis,
         scheduleTimeout = { delayMillis, action ->
@@ -197,60 +203,6 @@ class CallForegroundService : Service() {
                     notifications.show(state)
                 }
             }
-        }
-    }
-    private val statsTask = object : Runnable {
-        override fun run() {
-            if (!statsPolling) return
-            val activeCallId = CallServiceState.snapshot()
-                .takeIf { it.phase == CallPhase.Active }
-                ?.callId
-            val currentMedia = media
-            val currentDispatcher = mediaDispatcher
-            val currentStatsSession = statsSession
-            val request = if (
-                activeCallId != null && currentMedia != null && currentDispatcher != null &&
-                currentStatsSession?.callId == activeCallId
-            ) {
-                statsRequestGate.begin(currentStatsSession)
-            } else {
-                null
-            }
-            if (activeCallId != null && currentMedia != null && currentDispatcher != null && request != null) {
-                val accepted = currentDispatcher.dispatch {
-                    if (finishing || media !== currentMedia) {
-                        statsRequestGate.complete(request)
-                        return@dispatch
-                    }
-                    runCatching {
-                        currentMedia.getStats { stats ->
-                            handler.post {
-                                val accepted = statsRequestGate.complete(request)
-                                val snapshot = CallServiceState.snapshot()
-                                val stillActive = statsPolling && !finishing &&
-                                    snapshot.phase == CallPhase.Active && snapshot.callId == activeCallId
-                                if (accepted && stillActive && media === currentMedia) {
-                                    Log.i(CallLogTag, CallDiagnostics.format(stats))
-                                    stats.videoDiagnostics.forEach { Log.i("TiniTalkVideo", it) }
-                                    val currentHealth = CallUiStateStore.snapshot().connectionHealth
-                                    val health = connectionHealthClassifier.update(stats, currentHealth)
-                                    val route = callTransportRoute(
-                                        stats.localCandidateType,
-                                        stats.remoteCandidateType,
-                                    )
-                                    snapshot.callKey?.let {
-                                        CallUiStateStore.setConnectionDiagnostics(it, health, route)
-                                    }
-                                }
-                            }
-                        }
-                    }.onFailure {
-                        statsRequestGate.complete(request)
-                    }
-                }
-                if (!accepted) statsRequestGate.complete(request)
-            }
-            if (statsPolling) handler.postDelayed(this, CallDiagnostics.IntervalMillis)
         }
     }
     private val telecom by lazy { TelecomCallController(AndroidTelecomRegistrar(this)) }
@@ -474,7 +426,7 @@ class CallForegroundService : Service() {
         newMedia = ForegroundCallController(
             signal = newSocket,
             mediaFactory = { callId, videoAllowed, iceServers, onLocalIce, onLocalIceRemoved, onIceRestartNeeded ->
-                val mediaStatsSession = statsRequestGate.openSession(callId).also { statsSession = it }
+                val mediaStatsSession = statsMonitor.openSession(callId)
                 WebRtcCallSession.create(
                     this,
                     videoAllowed = videoAllowed,
@@ -491,7 +443,7 @@ class CallForegroundService : Service() {
                     },
                     onConnectionStateChanged = { state ->
                         routeMediaCallback { controller ->
-                            val connection = statsRequestGate.onConnection(mediaStatsSession, state)
+                            val connection = statsMonitor.onConnection(mediaStatsSession, state)
                                 ?: return@routeMediaCallback
                             controller.onMediaConnection(callId, connection.epoch, state)
                             handler.post {
@@ -500,9 +452,7 @@ class CallForegroundService : Service() {
                                     newCoordinator.mediaConnected()
                                 }
                                 if (CallUiStateStore.snapshot().callId == callId) {
-                                    if (!connection.transportReady || connection.becameReady) {
-                                        connectionHealthClassifier.reset()
-                                    }
+                                    statsMonitor.resetHealthOnConnection(connection)
                                     CallUiStateStore.onMediaConnection(state)
                                 }
                             }
@@ -515,7 +465,7 @@ class CallForegroundService : Service() {
                     },
                     onTransportStateChanged = { state ->
                         routeMediaCallback {
-                            if (statsSession === mediaStatsSession) it.onTransportConnection(callId, state)
+                            if (statsMonitor.owns(mediaStatsSession)) it.onTransportConnection(callId, state)
                         }
                     },
                     cameraCallbacks = CameraMediaCallbacks(
@@ -818,7 +768,7 @@ class CallForegroundService : Service() {
             ActionStart -> {
                 if (call.snapshot().phase != CallPhase.Idle) return
                 CallReplyResultStore(this).clearForNewCall(requestOwner.key)
-                connectionHealthClassifier.reset()
+                statsMonitor.resetHealth()
                 CallServiceState.publish(call.snapshot())
                 CallUiStateStore.reset()
                 CallAudioState.reset()
@@ -856,7 +806,7 @@ class CallForegroundService : Service() {
                     return
                 }
                 telecomCallKey = invite.key
-                connectionHealthClassifier.reset()
+                statsMonitor.resetHealth()
                 CallUiStateStore.begin(
                     invite.key,
                     CallPeer(
@@ -1076,20 +1026,13 @@ class CallForegroundService : Service() {
         } else {
             val networkLock = callNetworkLock ?: CallNetworkLock.create(this).also { callNetworkLock = it }
             networkLock.setActive(true)
-            if (!statsPolling) {
-                statsPolling = true
-                handler.postDelayed(statsTask, CallDiagnostics.IntervalMillis)
-            }
+            statsMonitor.start()
         }
     }
 
     private fun stopStatsPolling() {
-        statsPolling = false
-        handler.removeCallbacks(statsTask)
-        statsRequestGate.reset()
-        statsSession = null
+        statsMonitor.stop()
         callNetworkLock?.setActive(false)
-        connectionHealthClassifier.reset()
     }
 
     private fun finishCallSoon(expectedGeneration: Long = runtimeGeneration) {
