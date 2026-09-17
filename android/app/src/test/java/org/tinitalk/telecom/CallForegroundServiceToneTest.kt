@@ -2,6 +2,7 @@ package org.tinitalk.telecom
 
 import android.os.Looper
 import android.media.ToneGenerator
+import com.google.gson.JsonObject
 import org.robolectric.shadows.ShadowToneGenerator
 import org.junit.After
 import org.junit.Assert.*
@@ -16,6 +17,7 @@ import org.robolectric.util.ReflectionHelpers
 import org.tinitalk.call.*
 import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.data.AccountId
+import org.tinitalk.data.signal.SignalEvent
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
@@ -245,14 +247,18 @@ class CallForegroundServiceToneTest {
         ) { _, method, args ->
             if (method.name == "setActive") calls.add("active:${args!![0]}")
             if (method.name == "close") { calls.add("close"); mediaClosed.countDown() }
-            Unit
+            if (method.name == "createOffer") "local-offer" else Unit
         } as org.tinitalk.media.MediaSession
         val signal = java.lang.reflect.Proxy.newProxyInstance(SignalClient::class.java.classLoader,
             arrayOf(SignalClient::class.java)) { _, _, _ -> Unit } as SignalClient
         val media = ForegroundCallController(signal, owner.key.accountId, { _, _, _, _, _ -> session })
         val dispatcher = org.tinitalk.media.CallMediaDispatcher()
-        ReflectionHelpers.setField(media, "session", session)
         try {
+            val snapshot = CallSnapshot(CallPhase.Active, owner.key.callId, 1, owner.key.accountId)
+            for (type in listOf("rtc.config", "call.accept")) {
+                media.onSignalEvent(snapshot, SignalEvent("fixture-$type", owner.key.callId, type, 0L, JsonObject()))
+            }
+            calls.clear()
             GlobalCallAdmission.stage(owner)
             val lease = requireNotNull(GlobalCallAdmission.take(owner))
             leases += lease

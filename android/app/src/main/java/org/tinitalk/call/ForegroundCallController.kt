@@ -17,19 +17,12 @@ import org.tinitalk.media.CancellableTask
 import org.tinitalk.media.ExecutorTaskScheduler
 import org.tinitalk.media.TaskScheduler
 import org.tinitalk.media.VideoRenderSource
-import java.time.Instant
-import kotlin.coroutines.Continuation
-import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.coroutines.startCoroutine
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
-internal const val CredentialRefreshLeadMillis = 60_000L
 internal const val SecurityCodeTimeoutMillis = 30_000L
 
 class ForegroundCallController(
     private val signal: SignalClient,
-    private val mediaFactory: (
+    mediaFactory: (
         String,
         Boolean,
         List<IceServerData>,
@@ -70,7 +63,6 @@ class ForegroundCallController(
         scheduler = scheduler,
     )
 
-    private data class LocalIceEvent(val sequence: Long, val event: SignalEvent)
     private data class SASParties(
         val callId: String,
         val caller: String,
@@ -78,35 +70,22 @@ class ForegroundCallController(
         val localIsCaller: Boolean,
     )
 
-    private var session: MediaSession? = null
-    private var active = false
-    private var muted = false
-    private var callId: String? = null
-    private var iceServers: List<IceServerData> = emptyList()
-    private var videoAllowed = false
-    private var configuredCallId: String? = null
-    private var acceptedCallId: String? = null
-    private var offerStartedCallId: String? = null
-    private var offerAwaitingAnswerCallId: String? = null
-    private var restartInFlightCallId: String? = null
-    private var restartAgainCallId: String? = null
-    private var restartRequestedCallId: String? = null
-    private var restartRequestID: String? = null
-    private var pendingRestart: SignalEvent? = null
-    private var pendingRestartRequest: SignalEvent? = null
-    @Volatile private var localIceGeneration: String? = null
-    private var remoteIceGeneration: String? = null
-    private val localCandidateGenerations = mutableMapOf<IceCandidateData, String?>()
-    private var credentialRefreshTask: CancellableTask? = null
-    private var iceRetryTask: CancellableTask? = null
-    private var iceRetryAtMillis: Long? = null
-    private var restartRetryTask: CancellableTask? = null
-    private var restartRequestRetryTask: CancellableTask? = null
-    private var pendingOffer: SignalEvent? = null
-    private val pendingIce = ArrayDeque<Pair<String, IceCandidateData>>()
-    private var nextLocalIceSequence = 0L
-    private val recentLocalIceEvents = linkedMapOf<String, LocalIceEvent>()
-    private val rateLimitedIceEvents = linkedMapOf<String, LocalIceEvent>()
+    private val negotiation = CallNegotiation(
+        signal = signal,
+        mediaFactory = mediaFactory,
+        ids = ids,
+        scheduler = scheduler,
+        lock = this,
+        onLocalSdp = { callId, sdp ->
+            sasHandshake?.takeIf { sasParties?.callId == callId }?.recordLocalSdp(sdp)
+        },
+        onRemoteSdp = { callId, sdp ->
+            sasHandshake?.takeIf { sasParties?.callId == callId }?.recordRemoteSdp(sdp)
+        },
+    )
+    private val session: MediaSession? get() = negotiation.session
+    private val callId: String? get() = negotiation.callId
+
     private var videoState = CallVideoState<VideoRenderSource>()
     private var screenPermission: Intent? = null
     private var screenStartEventId: String? = null
@@ -154,24 +133,12 @@ class ForegroundCallController(
             "call.accept" -> if (snapshot.phase == CallPhase.Active) {
                 val offerer = !event.payload.has("offerer") || event.payload["offerer"].asBoolean
                 alignSASRole(event.callId, offerer, event.payload["crossed"]?.asBoolean == true)
-                acceptedCallId = event.callId.takeIf { offerer }
-                if (offerer) startOfferWhenReady(event.callId)
+                negotiation.onAccepted(event.callId, offerer)
             }
-            "rtc.offer" -> {
-                if (configuredCallId == event.callId) {
-                    answerOffer(event)
-                } else {
-                    pendingOffer = event
-                }
-            }
+            "rtc.offer" -> negotiation.onOffer(event)
             "rtc.config" -> handleRtcConfig(event)
             "rtc.screen" -> onScreenState(event)
-            "rtc.answer" -> session?.takeIf { callId == event.callId }?.let { media ->
-                sasHandshake?.takeIf { sasParties?.callId == event.callId }
-                    ?.recordRemoteSdp(event.payload["sdp"].asString)
-                runBlockingLite { media.setAnswer(event.payload["sdp"].asString) }
-                completeLocalOffer(event.callId)
-            }
+            "rtc.answer" -> negotiation.onAnswer(event)
             "rtc.sas.commit" -> sasHandshake?.takeIf { sasParties?.callId == event.callId }?.onCommitment(event.payload)
             "rtc.sas.key" -> sasHandshake?.takeIf { sasParties?.callId == event.callId }?.onKey(event.payload)
             "rtc.sas.reveal" -> sasHandshake?.takeIf { sasParties?.callId == event.callId }?.onReveal(event.payload)
@@ -182,41 +149,16 @@ class ForegroundCallController(
                     ?: return
                 updateVideoState(videoState.withRemoteSending(event.callId, enabled))
             }
-            "rtc.restart" -> {
-                restartInFlightCallId = event.callId
-                clearPendingRestartRequest(event.callId)
-                remoteIceGeneration = event.id
-                session?.beginRemoteDescription()
-            }
-            "rtc.restart.request" -> restartIce(event.callId)
-            "rtc.ice" -> {
-                val generation = event.payload.restartID()
-                if (generation != null && generation != remoteIceGeneration) return
-                if (event.payload.isIceRemoval()) {
-                    removeIceCandidates(event.callId, event.payload.parseIceCandidates())
-                    return
-                }
-                val candidate = IceCandidateData(
-                    sdpMid = event.payload["sdp_mid"].asString,
-                    sdpMLineIndex = event.payload["sdp_mline_index"].asInt,
-                    candidate = event.payload["candidate"].asString,
-                )
-                val media = session
-                if (media != null && callId == event.callId) {
-                    runBlockingLite { media.addIceCandidate(candidate) }
-                } else {
-                    if (pendingIce.size == SignalEvent.EVENT_BUFFER_LIMIT) pendingIce.removeFirst()
-                    pendingIce.addLast(event.callId to candidate)
-                }
-            }
+            "rtc.restart" -> negotiation.onRemoteRestart(event)
+            "rtc.restart.request" -> negotiation.restartIce(event.callId)
+            "rtc.ice" -> negotiation.onIce(event)
             "call.reject", "call.cancel", "call.end", "call.expire" -> prepareForCallEnd()
         }
     }
 
     @Synchronized
     fun setMuted(muted: Boolean) {
-        this.muted = muted
-        session?.setMuted(muted)
+        negotiation.setMuted(muted)
     }
 
     @Synchronized
@@ -234,8 +176,7 @@ class ForegroundCallController(
     @Synchronized
     fun setActive(active: Boolean) {
         if (ending || closing || closed) return
-        this.active = active
-        session?.setActive(active)
+        negotiation.setActive(active)
     }
 
     @Synchronized
@@ -390,8 +331,7 @@ class ForegroundCallController(
     @Synchronized
     fun prepareForCallEnd() {
         if (ending || closing || closed) return
-        active = false
-        session?.setActive(false)
+        negotiation.setActive(false)
         ending = true
         // Capture stops immediately; its asynchronous disposal must not delay the end signal.
         stopScreen(videoState.callId)
@@ -410,43 +350,11 @@ class ForegroundCallController(
         closing = true
         stopScreen(videoState.callId)
         cameraTransitionGeneration++
-        credentialRefreshTask?.cancel()
-        credentialRefreshTask = null
-        iceRetryTask?.cancel()
-        iceRetryTask = null
-        iceRetryAtMillis = null
-        restartRetryTask?.cancel()
-        restartRetryTask = null
-        restartRequestRetryTask?.cancel()
-        restartRequestRetryTask = null
+        negotiation.cancelPendingTasks()
         scheduler.close()
         resetSAS()
         sasParties = null
-        val media = session
-        session = null
-        callId = null
-        iceServers = emptyList()
-        videoAllowed = false
-        configuredCallId = null
-        acceptedCallId = null
-        offerStartedCallId = null
-        offerAwaitingAnswerCallId = null
-        restartInFlightCallId = null
-        restartAgainCallId = null
-        restartRequestedCallId = null
-        restartRequestID = null
-        pendingRestart = null
-        pendingRestartRequest = null
-        localIceGeneration = null
-        remoteIceGeneration = null
-        localCandidateGenerations.clear()
-        pendingOffer = null
-        pendingIce.clear()
-        nextLocalIceSequence = 0L
-        recentLocalIceEvents.clear()
-        rateLimitedIceEvents.clear()
-        active = false
-        muted = false
+        val media = negotiation.detachSession()
         capturingVideoCallId = null
         foregroundCallId = null
         cameraStartBlocked = false
@@ -456,7 +364,7 @@ class ForegroundCallController(
         requestCameraStop(
             target = media,
             afterDetached = {
-                runCatching { if (media != null) runBlockingLite { media.close() } }
+                runCatching { if (media != null) awaitMediaOperation { media.close() } }
             },
             afterReleased = {
                 closed = true
@@ -469,7 +377,6 @@ class ForegroundCallController(
     }
 
     private fun handleRtcConfig(event: SignalEvent) {
-        val nextIceServers = event.payload.parseIceServers()
         val nextVideoAllowed = event.payload["video_allowed"]
             ?.takeUnless { it.isJsonNull }
             ?.asBoolean == true
@@ -477,7 +384,7 @@ class ForegroundCallController(
         val requiresCameraStop = previousVideoCallId != null &&
             (previousVideoCallId != event.callId || videoState.allowed && !nextVideoAllowed)
         if (!requiresCameraStop) {
-            applyRtcConfig(event, nextIceServers, nextVideoAllowed)
+            applyRtcConfig(event, nextVideoAllowed)
             return
         }
 
@@ -491,115 +398,23 @@ class ForegroundCallController(
         val previousSession = session
         requestCameraStop(previousSession, afterDetached = {
             if (closing || transition != cameraTransitionGeneration) return@requestCameraStop
-            applyRtcConfig(event, nextIceServers, nextVideoAllowed)
+            applyRtcConfig(event, nextVideoAllowed)
         })
     }
 
-    private fun applyRtcConfig(
-        event: SignalEvent,
-        nextIceServers: List<IceServerData>,
-        nextVideoAllowed: Boolean,
-    ) {
-        iceServers = nextIceServers
-        videoAllowed = nextVideoAllowed
-        if (weakNetworkVideoGate.snapshot().callId != event.callId) {
-            weakNetworkVideoGate.reset(event.callId)
+    private fun applyRtcConfig(event: SignalEvent, nextVideoAllowed: Boolean) {
+        negotiation.configure(event, nextVideoAllowed) {
+            if (weakNetworkVideoGate.snapshot().callId != event.callId) {
+                weakNetworkVideoGate.reset(event.callId)
+            }
+            updateVideoState(
+                videoState
+                    .configured(accountId, event.callId, nextVideoAllowed)
+                    .let { it.copy(screen = it.screen.copy(allowed = event.payload["screen_sharing_allowed"]?.asBoolean == true)) }
+                    .withNetworkGate(event.callId, weakNetworkVideoGate.snapshot().networkGated),
+            )
+            configureSAS(event.callId, event.payload)
         }
-        updateVideoState(
-            videoState
-                .configured(accountId, event.callId, videoAllowed)
-                .let { it.copy(screen = it.screen.copy(allowed = event.payload["screen_sharing_allowed"]?.asBoolean == true)) }
-                .withNetworkGate(event.callId, weakNetworkVideoGate.snapshot().networkGated),
-        )
-        configuredCallId = event.callId
-        configureSAS(event.callId, event.payload)
-        event.payload.restartID()?.let { localIceGeneration = it }
-        session?.takeIf { callId == event.callId }?.let { media ->
-            runBlockingLite { media.updateIceServers(iceServers) }
-        }
-        if (restartRequestedCallId == event.callId && restartRequestID == event.payload.restartID()) {
-            restartRetryTask?.cancel()
-            restartRetryTask = null
-            val offer = runBlockingLite { ensureSession(event.callId).restartIce() }
-            restartRequestedCallId = null
-            restartRequestID = null
-            pendingRestart = null
-            offerAwaitingAnswerCallId = event.callId
-            sasHandshake?.takeIf { sasParties?.callId == event.callId }?.recordLocalSdp(offer)
-            sendSdp(event.callId, "rtc.offer", offer)
-        } else {
-            startOfferWhenReady(event.callId)
-        }
-        scheduleCredentialRefresh(event.callId)
-        pendingOffer?.takeIf { it.callId == event.callId }?.let {
-            pendingOffer = null
-            answerOffer(it)
-        }
-    }
-
-    private fun startOfferWhenReady(nextCallId: String) {
-        if (acceptedCallId != nextCallId || configuredCallId != nextCallId || offerStartedCallId == nextCallId) return
-        offerStartedCallId = nextCallId
-        val offer = runBlockingLite { ensureSession(nextCallId).createOffer() }
-        offerAwaitingAnswerCallId = nextCallId
-        sasHandshake?.takeIf { sasParties?.callId == nextCallId }?.recordLocalSdp(offer)
-        sendSdp(nextCallId, "rtc.offer", offer)
-    }
-
-    private fun answerOffer(event: SignalEvent) {
-        val remoteSdp = event.payload["sdp"].asString
-        sasHandshake?.takeIf { sasParties?.callId == event.callId }?.recordRemoteSdp(remoteSdp)
-        val answer = runBlockingLite { ensureSession(event.callId).acceptOffer(remoteSdp) }
-        sasHandshake?.takeIf { sasParties?.callId == event.callId }?.recordLocalSdp(answer)
-        sendSdp(event.callId, "rtc.answer", answer)
-        completeRemoteOffer(event.callId)
-    }
-
-    private fun completeLocalOffer(nextCallId: String) {
-        if (offerAwaitingAnswerCallId != nextCallId) return
-        offerAwaitingAnswerCallId = null
-        if (restartInFlightCallId == nextCallId) restartInFlightCallId = null
-        runDeferredRestart(nextCallId)
-    }
-
-    private fun completeRemoteOffer(nextCallId: String) {
-        if (offerStartedCallId == nextCallId || restartInFlightCallId != nextCallId) return
-        restartInFlightCallId = null
-        runDeferredRestart(nextCallId)
-    }
-
-    private fun runDeferredRestart(nextCallId: String) {
-        if (restartAgainCallId != nextCallId) return
-        restartAgainCallId = null
-        restartIce(nextCallId)
-    }
-
-    private fun ensureSession(nextCallId: String): MediaSession {
-        val current = session
-        if (current != null && callId == nextCallId) return current
-        if (current != null) {
-            runBlockingLite { current.close() }
-            session = null
-            callId = null
-        }
-        callId = nextCallId
-        val created = mediaFactory(
-            nextCallId,
-            videoAllowed,
-            iceServers,
-            { candidate -> sendIce(nextCallId, candidate) },
-            { candidates -> sendIceCandidatesRemoved(nextCallId, candidates) },
-            { restartIce(nextCallId) },
-        )
-        session = created
-        created.setActive(active)
-        created.setMuted(muted)
-        val queued = pendingIce.filter { it.first == nextCallId }.map { it.second }
-        pendingIce.removeAll { it.first == nextCallId }
-        if (queued.isNotEmpty()) runBlockingLite {
-            queued.forEach { created.addIceCandidate(it) }
-        }
-        return created
     }
 
     private fun reconcileCamera(nextCallId: String) {
@@ -778,8 +593,7 @@ class ForegroundCallController(
     @Synchronized
     fun onSignalConnected() {
         if (ending || closing || closed) return
-        if (restartRetryTask == null) pendingRestart?.let { signal.send(it) }
-        if (restartRequestRetryTask == null) pendingRestartRequest?.let { signal.send(it) }
+        negotiation.onSignalConnected()
         sendVideoState(videoState.callId, capturingVideoCallId == videoState.callId)
     }
 
@@ -788,8 +602,8 @@ class ForegroundCallController(
         if (
             ending || closing || closed ||
             nextCallId != currentCallId ||
-            configuredCallId != currentCallId ||
-            !videoAllowed || !videoState.allowed
+            negotiation.configuredCallId != currentCallId ||
+            !negotiation.videoAllowed || !videoState.allowed
         ) return
         signal.send(
             event(
@@ -815,60 +629,7 @@ class ForegroundCallController(
             stopScreen(failure.callId, if (failure.code == "screen_share_busy") "Собеседник уже показывает экран" else "Не удалось начать показ экрана")
             return
         }
-        when (failure.code) {
-            "ice_rate_limited" -> {
-                val eventId = failure.eventId ?: return
-                val rejected = recentLocalIceEvents[eventId] ?: return
-                if (failure.callId != rejected.event.callId || callId != rejected.event.callId) return
-                val delayMillis = failure.retryAfterMillis?.coerceAtLeast(1L) ?: return
-                if (rateLimitedIceEvents.size == SignalEvent.EVENT_BUFFER_LIMIT && rejected.event.id !in rateLimitedIceEvents) {
-                    rateLimitedIceEvents.remove(rateLimitedIceEvents.keys.first())
-                }
-                rateLimitedIceEvents[rejected.event.id] = rejected
-                val retryAtMillis = ids.nowMillis() + delayMillis
-                if (iceRetryAtMillis?.let { it >= retryAtMillis } == true) return
-                iceRetryTask?.cancel()
-                iceRetryAtMillis = retryAtMillis
-                iceRetryTask = scheduler.schedule(delayMillis) {
-                    synchronized(this) {
-                        iceRetryTask = null
-                        iceRetryAtMillis = null
-                        val pending = rateLimitedIceEvents.values
-                            .filter { it.event.callId == callId }
-                            .sortedBy(LocalIceEvent::sequence)
-                            .map(LocalIceEvent::event)
-                        rateLimitedIceEvents.clear()
-                        pending.forEach { signal.send(it) }
-                    }
-                }
-            }
-            "ice_restart_rate_limited" -> {
-                val restart = pendingRestart ?: return
-                if (failure.callId != restart.callId || failure.eventId != restart.id) return
-                val delayMillis = failure.retryAfterMillis?.coerceAtLeast(1L) ?: return
-                restartRetryTask?.cancel()
-                restartRetryTask = scheduler.schedule(delayMillis) {
-                    synchronized(this) {
-                        restartRetryTask = null
-                        val pending = pendingRestart
-                        if (pending?.id == restart.id && callId == restart.callId) signal.send(pending)
-                    }
-                }
-            }
-            "ice_restart_request_rate_limited" -> {
-                val request = pendingRestartRequest ?: return
-                if (failure.callId != request.callId || failure.eventId != request.id) return
-                val delayMillis = failure.retryAfterMillis?.coerceAtLeast(1L) ?: return
-                restartRequestRetryTask?.cancel()
-                restartRequestRetryTask = scheduler.schedule(delayMillis) {
-                    synchronized(this) {
-                        restartRequestRetryTask = null
-                        val pending = pendingRestartRequest
-                        if (pending?.id == request.id && callId == request.callId) signal.send(pending)
-                    }
-                }
-            }
-        }
+        negotiation.onSignalFailure(failure)
     }
 
     @Synchronized
@@ -1020,97 +781,6 @@ class ForegroundCallController(
         }))
     }
 
-    @Synchronized
-    private fun restartIce(nextCallId: String) {
-        if (callId != nextCallId) return
-        if (offerAwaitingAnswerCallId == nextCallId || restartInFlightCallId == nextCallId) {
-            restartAgainCallId = nextCallId
-            return
-        }
-        restartInFlightCallId = nextCallId
-        if (offerStartedCallId != nextCallId) {
-            event(nextCallId, "rtc.restart.request", JsonObject()).also {
-                pendingRestartRequest = it
-                signal.send(it)
-            }
-            return
-        }
-        val restart = event(nextCallId, "rtc.restart", JsonObject())
-        restartRequestedCallId = nextCallId
-        restartRequestID = restart.id
-        pendingRestart = restart
-        remoteIceGeneration = restart.id
-        signal.send(restart)
-    }
-
-    private fun clearPendingRestartRequest(nextCallId: String) {
-        if (pendingRestartRequest?.callId != nextCallId) return
-        restartRequestRetryTask?.cancel()
-        restartRequestRetryTask = null
-        pendingRestartRequest = null
-    }
-
-    private fun scheduleCredentialRefresh(nextCallId: String) {
-        credentialRefreshTask?.cancel()
-        credentialRefreshTask = null
-        if (acceptedCallId != nextCallId) return
-        val expiresAt = iceServers.mapNotNull { it.expiresAt }.minOrNull() ?: return
-        val delayMillis = (expiresAt.toEpochMilli() - ids.nowMillis() - CredentialRefreshLeadMillis).coerceAtLeast(0L)
-        credentialRefreshTask = scheduler.schedule(delayMillis) { restartIce(nextCallId) }
-    }
-
-    private fun JsonObject.parseIceServers(): List<IceServerData> {
-        val servers = getAsJsonArray("ice_servers") ?: return emptyList()
-        return servers.mapNotNull { element ->
-            val server = element.asJsonObject
-            val urls = server.getAsJsonArray("urls")?.map { it.asString } ?: return@mapNotNull null
-            IceServerData(
-                urls = urls,
-                username = server.get("username")?.asString.orEmpty(),
-                password = server.get("credential")?.asString.orEmpty(),
-                expiresAt = runCatching {
-                    server.get("expires_at")
-                        ?.takeIf { it.isJsonPrimitive }
-                        ?.asString
-                        ?.let { value -> Instant.parse(value) }
-                }.getOrNull(),
-            )
-        }
-    }
-
-    private fun JsonObject.restartID(): String? =
-        get("restart_id")?.takeIf { it.isJsonPrimitive }?.asString
-
-    private fun JsonObject.isIceRemoval(): Boolean =
-        get("removed")?.takeIf { it.isJsonPrimitive }?.asBoolean == true
-
-    private fun JsonObject.parseIceCandidates(): List<IceCandidateData> =
-        getAsJsonArray("candidates")?.mapNotNull { element ->
-            val candidate = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
-            val sdp = candidate.get("candidate")?.takeIf { it.isJsonPrimitive }?.asString ?: return@mapNotNull null
-            IceCandidateData(
-                sdpMid = candidate.get("sdp_mid")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty(),
-                sdpMLineIndex = candidate.get("sdp_mline_index")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
-                candidate = sdp,
-            )
-        }.orEmpty()
-
-    private fun removeIceCandidates(nextCallId: String, candidates: List<IceCandidateData>) {
-        if (candidates.isEmpty()) return
-        val pendingForCall = pendingIce.filter { it.first == nextCallId && it.second in candidates }.toSet()
-        pendingIce.removeAll(pendingForCall)
-        val media = session
-        if (media != null && callId == nextCallId) {
-            val applied = candidates.filterNot { candidate -> pendingForCall.any { it.second == candidate } }
-            if (applied.isNotEmpty()) runBlockingLite { media.removeIceCandidates(applied) }
-        }
-    }
-
-    private fun sendSdp(callId: String, type: String, sdp: String) {
-        val payload = JsonObject().apply { addProperty("sdp", sdp) }
-        signal.send(event(callId, type, payload))
-    }
-
     private fun alignSASRole(nextCallId: String, localIsCaller: Boolean, crossed: Boolean) {
         val current = sasParties ?: return
         if (current.callId != nextCallId && !crossed) return
@@ -1204,117 +874,6 @@ class ForegroundCallController(
         sasHandshake = null
     }
 
-    @Synchronized
-    private fun sendIce(callId: String, candidate: IceCandidateData) {
-        if (this.callId != callId) return
-        val generation = localIceGeneration
-        localCandidateGenerations[candidate] = generation
-        val payload = JsonObject().apply {
-            addProperty("sdp_mid", candidate.sdpMid)
-            addProperty("sdp_mline_index", candidate.sdpMLineIndex)
-            addProperty("candidate", candidate.candidate)
-            generation?.let { addProperty("restart_id", it) }
-        }
-        sendLocalIceEvent(event(callId, "rtc.ice", payload))
-    }
-
-    @Synchronized
-    private fun sendIceCandidatesRemoved(callId: String, candidates: List<IceCandidateData>) {
-        if (this.callId != callId) return
-        candidates.groupBy { candidate ->
-            if (localCandidateGenerations.containsKey(candidate)) {
-                localCandidateGenerations.remove(candidate)
-            } else {
-                localIceGeneration
-            }
-        }.forEach { (generation, generationCandidates) ->
-            sendIceRemovalBatches(callId, generation, generationCandidates)
-        }
-    }
-
-    private fun sendIceRemovalBatches(callId: String, generation: String?, candidates: List<IceCandidateData>) {
-        val batch = mutableListOf<IceCandidateData>()
-        candidates.forEach { candidate ->
-            val expanded = batch + candidate
-            if (iceRemovalFits(callId, generation, expanded)) {
-                batch += candidate
-            } else {
-                sendIceRemovalBatch(callId, generation, batch)
-                batch.clear()
-                if (iceRemovalFits(callId, generation, listOf(candidate))) batch += candidate
-            }
-        }
-        sendIceRemovalBatch(callId, generation, batch)
-    }
-
-    private fun sendIceRemovalBatch(callId: String, generation: String?, candidates: List<IceCandidateData>) {
-        if (candidates.isEmpty()) return
-        sendLocalIceEvent(event(callId, "rtc.ice", iceRemovalPayload(candidates, generation)))
-    }
-
-    private fun sendLocalIceEvent(event: SignalEvent) {
-        if (recentLocalIceEvents.size == SignalEvent.EVENT_BUFFER_LIMIT) {
-            recentLocalIceEvents.remove(recentLocalIceEvents.keys.first())
-        }
-        recentLocalIceEvents[event.id] = LocalIceEvent(nextLocalIceSequence++, event)
-        signal.send(event)
-    }
-
-    private fun iceRemovalFits(callId: String, generation: String?, candidates: List<IceCandidateData>): Boolean =
-        runCatching {
-            SignalEvent(
-                ICE_EVENT_SIZE_PROBE_ID,
-                callId,
-                "rtc.ice",
-                ids.nowMillis(),
-                iceRemovalPayload(candidates, generation),
-            ).encode()
-        }.isSuccess
-
-    private fun iceRemovalPayload(candidates: List<IceCandidateData>, generation: String?): JsonObject {
-        val first = candidates.first()
-        return JsonObject().apply {
-            addProperty("removed", true)
-            add("candidates", com.google.gson.JsonArray().apply {
-                candidates.forEach { add(it.toJson()) }
-            })
-            addProperty("sdp_mid", first.sdpMid)
-            addProperty("sdp_mline_index", first.sdpMLineIndex)
-            addProperty("candidate", first.candidate)
-            generation?.let { addProperty("restart_id", it) }
-        }
-    }
-
-    private fun IceCandidateData.toJson() = JsonObject().apply {
-        addProperty("sdp_mid", sdpMid)
-        addProperty("sdp_mline_index", sdpMLineIndex)
-        addProperty("candidate", candidate)
-    }
-
     private fun event(callId: String, type: String, payload: JsonObject): SignalEvent =
         SignalEvent(ids.nextEventId(), callId, type, ids.nowMillis(), payload)
-
-    private fun <T> runBlockingLite(block: suspend () -> T): T {
-        val done = CountDownLatch(1)
-        var value: T? = null
-        var failure: Throwable? = null
-        block.startCoroutine(
-            object : Continuation<T> {
-                override val context = EmptyCoroutineContext
-                override fun resumeWith(result: Result<T>) {
-                    value = result.getOrNull()
-                    failure = result.exceptionOrNull()
-                    done.countDown()
-                }
-            },
-        )
-        check(done.await(10, TimeUnit.SECONDS)) { "Timed out waiting for media session" }
-        failure?.let { throw it }
-        @Suppress("UNCHECKED_CAST")
-        return value as T
-    }
-
-    private companion object {
-        const val ICE_EVENT_SIZE_PROBE_ID = "00000000-0000-0000-0000-000000000000"
-    }
 }
