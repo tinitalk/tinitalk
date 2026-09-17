@@ -242,7 +242,7 @@ allocations.
 При значении `--turn-max-allocations N` relay-диапазон необходимо задать
 размером `N × 4` портов.
 
-### 5. Зарезервировать relay-диапазон в ОС
+### 5. Настроить сетевые параметры ОС
 
 Relay-диапазон необходимо добавить в `net.ipv4.ip_local_reserved_ports`, чтобы
 ОС не назначала эти порты исходящим соединениям других процессов. Если параметр
@@ -254,13 +254,22 @@ sysctl -n net.ipv4.ip_local_reserved_ports
 sudoedit /etc/sysctl.d/90-tinitalk.conf
 ```
 
+В файле `/etc/sysctl.d/90-tinitalk.conf`:
+
 ```text
 net.ipv4.ip_local_reserved_ports = 49152-49663
+net.core.rmem_max = 4194304
 ```
+
+`rmem_max` разрешает UDP-буфер 4 МиБ — необязательная настройка для высокой
+нагрузки. Более высокий лимит не уменьшайте. Другой размер буфера задаётся
+флагом `--turn-udp-read-buffer BYTES` (в байтах).
 
 ```bash
 sudo sysctl --load /etc/sysctl.d/90-tinitalk.conf
 ```
+
+Если TiniTalk уже запущен: `sudo systemctl restart tinitalk`.
 
 ### 6. Запустить сервис
 

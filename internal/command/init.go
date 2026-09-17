@@ -236,6 +236,7 @@ func turnServerConfig(options serveOptions, tlsConfig *tls.Config, issuer turnse
 	return turnserver.Config{
 		PublicIP:              options.turnPublicIP,
 		UDPAddr:               options.turnAddr,
+		UDPReadBufferBytes:    options.turnUDPReadBuffer,
 		TCPAddr:               options.turnAddr,
 		TLSAddr:               turnTLSAddr,
 		TLS:                   tlsConfig,

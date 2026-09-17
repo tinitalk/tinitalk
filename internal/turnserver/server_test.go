@@ -149,6 +149,7 @@ func TestValidateConfigRejectsUnsafeTURNCapacity(t *testing.T) {
 		{name: "reversed relay range", mutate: func(config *Config) { config.Relay.Min, config.Relay.Max = 50001, 50000 }},
 		{name: "maximum uint16 relay port", mutate: func(config *Config) { config.Relay.Max = 65535 }},
 		{name: "negative total limit", mutate: func(config *Config) { config.MaxAllocations = -1 }},
+		{name: "negative UDP read buffer", mutate: func(config *Config) { config.UDPReadBufferBytes = -1 }},
 		{name: "negative per-user limit", mutate: func(config *Config) { config.MaxAllocationsPerUser = -1 }},
 		{name: "negative allocation lifetime", mutate: func(config *Config) { config.AllocationLifetime = -time.Second }},
 		{name: "per-user above total", mutate: func(config *Config) { config.MaxAllocations, config.MaxAllocationsPerUser = 1, 2 }},

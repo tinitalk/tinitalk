@@ -31,6 +31,7 @@ type serveOptions struct {
 	turnPublicIP              string
 	turnAddr                  string
 	turnTLSAddr               string
+	turnUDPReadBuffer         int
 	turnMaxAllocations        int
 	turnMaxAllocationsPerUser int
 	turnRelayMinPort          uint16
@@ -43,6 +44,7 @@ func parseServeOptions(args []string) (serveOptions, error) {
 		addr:                      ":8080",
 		turnAddr:                  ":3478",
 		turnTLSAddr:               ":5349",
+		turnUDPReadBuffer:         turnserver.DefaultUDPReadBufferBytes,
 		turnMaxAllocations:        defaultTURNMaxAllocations,
 		turnMaxAllocationsPerUser: defaultTURNMaxAllocationsPerUser,
 		turnRelayMinPort:          defaultTURNRelayMinPort,
@@ -102,6 +104,16 @@ func parseServeOptions(args []string) (serveOptions, error) {
 			}
 			options.turnTLSAddr = args[1]
 			args = args[2:]
+		case "--turn-udp-read-buffer":
+			if len(args) < 2 {
+				return options, errors.New("--turn-udp-read-buffer requires a value in bytes")
+			}
+			value, err := strconv.ParseInt(args[1], 10, 32)
+			if err != nil || value <= 0 {
+				return options, errors.New("--turn-udp-read-buffer must be an integer between 1 and 2147483647 bytes")
+			}
+			options.turnUDPReadBuffer = int(value)
+			args = args[2:]
 		case "--turn-max-allocations":
 			if len(args) < 2 {
 				return options, errors.New("--turn-max-allocations requires a value")
@@ -144,7 +156,7 @@ func parseServeOptions(args []string) (serveOptions, error) {
 			options.turnRelayMaxPort = port
 			args = args[2:]
 		default:
-			return options, errors.New("usage: tinitalk serve --tls-cert FILE --tls-key FILE [--data-dir DIR] [--addr ADDR] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR] [--turn-tls-addr ADDR] [--turn-max-allocations N] [--turn-max-allocations-per-user N] [--turn-relay-min-port PORT] [--turn-relay-max-port PORT]]")
+			return options, errors.New("usage: tinitalk serve --tls-cert FILE --tls-key FILE [--data-dir DIR] [--addr ADDR] [--turn-public-host HOST --turn-public-ip IP [--turn-addr ADDR] [--turn-tls-addr ADDR] [--turn-udp-read-buffer BYTES] [--turn-max-allocations N] [--turn-max-allocations-per-user N] [--turn-relay-min-port PORT] [--turn-relay-max-port PORT]]")
 		}
 	}
 	if (options.tlsCert == "") != (options.tlsKey == "") {

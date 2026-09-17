@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"log"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -19,9 +21,14 @@ type RelayPortRange struct {
 
 const relayPortsPerAllocation = 4
 
+// DefaultUDPReadBufferBytes absorbs bursts on the shared UDP listener without
+// enlarging each allocation's relay socket. The OS may cap the requested size.
+const DefaultUDPReadBufferBytes = 4 * 1024 * 1024
+
 type Config struct {
 	PublicIP              string
 	UDPAddr               string
+	UDPReadBufferBytes    int // Zero selects DefaultUDPReadBufferBytes.
 	TCPAddr               string
 	TLSAddr               string
 	TLS                   *tls.Config
@@ -119,6 +126,9 @@ func validateConfig(config Config) error {
 	if net.ParseIP(config.PublicIP) == nil {
 		return errors.New("public IP is invalid")
 	}
+	if config.UDPReadBufferBytes < 0 || config.UDPReadBufferBytes > math.MaxInt32 {
+		return errors.New("UDP read buffer must be between 0 (default) and 2147483647 bytes")
+	}
 	if config.MaxAllocations < 0 {
 		return errors.New("max allocations must not be negative")
 	}
@@ -197,6 +207,13 @@ func packetConnConfigs(config Config, relay turn.RelayAddressGenerator) ([]turn.
 	conn, err := net.ListenPacket("udp4", addr)
 	if err != nil {
 		return nil, nil, err
+	}
+	bufferBytes := config.UDPReadBufferBytes
+	if bufferBytes == 0 {
+		bufferBytes = DefaultUDPReadBufferBytes
+	}
+	if err := conn.(*net.UDPConn).SetReadBuffer(bufferBytes); err != nil {
+		log.Printf("WARNING: could not set TURN UDP read buffer to %d bytes: %v; continuing with the OS-provided buffer", bufferBytes, err)
 	}
 	return []turn.PacketConnConfig{{PacketConn: conn, RelayAddressGenerator: relay}}, []func() error{conn.Close}, nil
 }

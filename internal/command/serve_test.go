@@ -30,6 +30,10 @@ func TestParseServeOptionsUsesTURNCapacityDefaults(t *testing.T) {
 	if options.turnMaxAllocations != 128 {
 		t.Fatalf("TURN max allocations = %d, want 128", options.turnMaxAllocations)
 	}
+	config := turnServerConfig(options, nil, turnserver.CredentialIssuer{})
+	if config.UDPReadBufferBytes != 4194304 {
+		t.Fatalf("default TURN UDP read buffer = %d, want 4194304", config.UDPReadBufferBytes)
+	}
 	if options.turnMaxAllocationsPerUser != 8 {
 		t.Fatalf("TURN max allocations per user = %d, want 8", options.turnMaxAllocationsPerUser)
 	}
@@ -40,6 +44,7 @@ func TestParseServeOptionsUsesTURNCapacityDefaults(t *testing.T) {
 
 func TestParseServeOptionsAcceptsTURNTuning(t *testing.T) {
 	options, err := parseServeOptions(productionServeArgs(
+		"--turn-udp-read-buffer", "1048576",
 		"--turn-max-allocations", "64",
 		"--turn-max-allocations-per-user", "6",
 		"--turn-relay-min-port", "50000",
@@ -76,6 +81,11 @@ func TestParseServeOptionsRejectsInvalidTURNTuning(t *testing.T) {
 		name  string
 		extra []string
 	}{
+		{name: "missing UDP buffer value", extra: []string{"--turn-udp-read-buffer"}},
+		{name: "non numeric UDP buffer", extra: []string{"--turn-udp-read-buffer", "4MiB"}},
+		{name: "zero UDP buffer", extra: []string{"--turn-udp-read-buffer", "0"}},
+		{name: "negative UDP buffer", extra: []string{"--turn-udp-read-buffer", "-1"}},
+		{name: "overflowing socket buffer", extra: []string{"--turn-udp-read-buffer", "4294967297"}},
 		{name: "missing allocation value", extra: []string{"--turn-max-allocations"}},
 		{name: "non numeric allocations", extra: []string{"--turn-max-allocations", "many"}},
 		{name: "zero allocations", extra: []string{"--turn-max-allocations", "0"}},
@@ -101,6 +111,7 @@ func TestParseServeOptionsRejectsInvalidTURNTuning(t *testing.T) {
 
 func TestTURNServerConfigUsesServeCapacityOptions(t *testing.T) {
 	options, err := parseServeOptions(productionServeArgs(
+		"--turn-udp-read-buffer", "1048576",
 		"--turn-max-allocations", "64",
 		"--turn-max-allocations-per-user", "6",
 		"--turn-relay-min-port", "50000",
@@ -114,6 +125,9 @@ func TestTURNServerConfigUsesServeCapacityOptions(t *testing.T) {
 
 	config := turnServerConfig(options, tlsConfig, issuer)
 
+	if config.UDPReadBufferBytes != 1048576 {
+		t.Fatalf("TURN UDP read buffer = %d, want 1048576", config.UDPReadBufferBytes)
+	}
 	if config.MaxAllocations != 64 || config.MaxAllocationsPerUser != 6 {
 		t.Fatalf("TURN limits = %d/%d, want 64/6", config.MaxAllocations, config.MaxAllocationsPerUser)
 	}
