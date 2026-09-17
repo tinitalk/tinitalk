@@ -140,17 +140,16 @@ func (n *PushNotifier) send(callee string, message PushMessage) {
 				targeted.Data["target_device_id"] = device.DeviceID
 			}
 		}
-		if n.incomingGate != nil && targeted.Data["type"] == "incoming_call" &&
-			(webpush.IsBrowserSubscription(device.PushTarget.Subscription) || webpush.IsAppleSubscription(device.PushTarget.Subscription)) {
+		if n.incomingGate != nil && targeted.Data["type"] == "incoming_call" {
 			// Do not hold up the hub's cancellation queue or other push targets.
-			go n.sendBrowserIncoming(callee, device, targeted)
+			go n.sendIncoming(callee, device, targeted)
 		} else {
 			n.deliverTarget(device.PushTarget, targeted)
 		}
 	}
 }
 
-func (n *PushNotifier) sendBrowserIncoming(user string, device state.Device, message PushMessage) {
+func (n *PushNotifier) sendIncoming(user string, device state.Device, message PushMessage) {
 	if !n.incomingGate.WaitIncomingPush(user, device.DeviceID, message.Data["target_session_id"], message.Data["call_id"]) {
 		return
 	}

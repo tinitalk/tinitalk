@@ -51,7 +51,7 @@ import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
-import org.tinitalk.data.signal.SignalSocket
+import org.tinitalk.data.signal.SignalConnection
 import org.tinitalk.data.signal.SignalFailure
 import org.tinitalk.media.WebRtcCallSession
 import org.tinitalk.media.CancellableTask
@@ -343,7 +343,7 @@ class CallForegroundService : Service() {
         val lease = GlobalCallAdmission.take(owner) ?: return false
         callOwner = owner
         admissionLease = lease
-        lateinit var newSocket: SignalSocket
+        lateinit var newSocket: SignalConnection
         lateinit var newCoordinator: CallCoordinator
         lateinit var newMediaDispatcher: CallMediaDispatcher
         lateinit var newMedia: ForegroundCallController

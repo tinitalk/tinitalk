@@ -3,7 +3,6 @@ package org.tinitalk.data.signal
 import com.google.gson.JsonParser
 import com.google.gson.JsonObject
 import org.tinitalk.call.SequencedSignalEvent
-import org.tinitalk.call.SignalClient
 import org.tinitalk.call.SignalSendResult
 import org.tinitalk.data.AuthReasonHeader
 import org.tinitalk.data.Session
@@ -21,6 +20,7 @@ private const val SignalProtocolHeader = "X-TiniTalk-Signal-Protocol"
 private const val SignalProtocolVersion = "2"
 private const val SignalAckHeader = "X-TiniTalk-Signal-Ack"
 private const val SignalAckVersion = "1"
+private const val ForegroundCallsHeader = "X-TiniTalk-Foreground-Calls"
 
 data class SignalFailure(
     val message: String,
@@ -37,7 +37,7 @@ class SignalSocket(
     private val socketFactory: WebSocket.Factory = client,
     private val reconnectScheduler: (Long, () -> Unit) -> Unit = ::scheduleReconnect,
     private val deviceId: String = "",
-) : SignalClient {
+) : SignalConnection {
     private val pending = ArrayDeque<PendingEvent>()
     private var closed = false
     private var opened = false
@@ -45,11 +45,11 @@ class SignalSocket(
     private var callbacks: SignalCallbacks? = null
     private var attempt: SocketAttempt? = null
 
-    fun connect(
+    override fun connect(
         onEvent: (SequencedSignalEvent) -> Unit,
-        onOpen: (Long) -> Unit = {},
-        onDisconnected: (Long) -> Unit = {},
-        onError: (SignalFailure) -> Unit = {},
+        onOpen: (Long) -> Unit,
+        onDisconnected: (Long) -> Unit,
+        onError: (SignalFailure) -> Unit,
     ) {
         val nextCallbacks = SignalCallbacks(onEvent, onOpen, onDisconnected, onError)
         val previous: WebSocket?
@@ -66,7 +66,7 @@ class SignalSocket(
         open(nextCallbacks, expectedGeneration)
     }
 
-    fun reconnectNow() {
+    override fun reconnectNow() {
         val currentCallbacks: SignalCallbacks
         val previous: WebSocket?
         val expectedGeneration: Long
@@ -85,10 +85,21 @@ class SignalSocket(
         open(currentCallbacks, expectedGeneration)
     }
 
-    fun isOpen(): Boolean = synchronized(pending) { !closed && opened }
+    override fun isOpen(): Boolean = synchronized(pending) { !closed && opened }
 
-    fun isOpen(expectedGeneration: Long): Boolean = synchronized(pending) {
+    override fun isOpen(expectedGeneration: Long): Boolean = synchronized(pending) {
         !closed && opened && generation == expectedGeneration
+    }
+
+    // Visibility is a short lease, not a durable call command: never queue or replay it.
+    override fun sendVisibility(callId: String, visible: Boolean): Boolean = synchronized(pending) {
+        val current = attempt
+        if (closed || !opened || current?.foregroundCalls != true) return false
+        val event = SignalEvent(
+            java.util.UUID.randomUUID().toString(), callId, "call.visibility", System.currentTimeMillis(),
+            JsonObject().apply { addProperty("visible", visible) },
+        )
+        current.socket?.send(event.encode()) == true
     }
 
     override fun send(event: SignalEvent, onSettled: (() -> Unit)?) {
@@ -133,7 +144,7 @@ class SignalSocket(
         failedSocket?.cancel()
     }
 
-    fun close() {
+    override fun close() {
         val current = synchronized(pending) {
             if (closed) return
             closed = true
@@ -157,6 +168,7 @@ class SignalSocket(
             .header("Authorization", basicAuth())
             .header(SignalProtocolHeader, SignalProtocolVersion)
             .header(SignalAckHeader, SignalAckVersion)
+            .header(ForegroundCallsHeader, "1")
             .apply {
                 if (deviceId.isNotEmpty()) {
                     header(DeviceIDHeader, deviceId)
@@ -266,6 +278,7 @@ class SignalSocket(
             if (!isCurrentLocked(currentAttempt, webSocket)) return
             backoff.reset()
             currentAttempt.acknowledgesEvents = response.header(SignalAckHeader) == SignalAckVersion
+            currentAttempt.foregroundCalls = response.header(ForegroundCallsHeader) == "1"
             if (currentAttempt.acknowledgesEvents) {
                 for (event in pending) {
                     if (!webSocket.send(event.raw)) {
@@ -428,6 +441,7 @@ class SignalSocket(
     private class SocketAttempt(val generation: Long) {
         var socket: WebSocket? = null
         var acknowledgesEvents = false
+        var foregroundCalls = false
         val deferred = ArrayDeque<() -> Unit>()
     }
 

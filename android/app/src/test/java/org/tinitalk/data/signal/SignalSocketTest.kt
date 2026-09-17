@@ -25,6 +25,98 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class SignalSocketTest {
+    @Test fun foregroundAndCallShareTransportAndReleaseIndependently() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val tasks = ArrayDeque<() -> Unit>()
+        val transports = mutableListOf<SignalSocket>()
+        val pool = SharedSignalConnections(
+            create = { session, device -> SignalSocket(client, session, socketFactory = factory, deviceId = device).also(transports::add) },
+            dispatch = { tasks.addLast(it) },
+        )
+        fun drain() { while (tasks.isNotEmpty()) tasks.removeFirst()() }
+        val session = Session("https://talk.example", "alice", "token", sessionId = "session")
+        val foreground = pool.acquire(session, "phone")
+        val foregroundEvents = mutableListOf<SequencedSignalEvent>()
+        foreground.connect(onEvent = foregroundEvents::add)
+        val raw = factory.connections.single()
+        raw.listener.onOpen(raw.webSocket, response(raw.webSocket.request()))
+        drain()
+        val call = pool.acquire(session.copy(features = setOf("new-feature")), "phone")
+        val callEvents = mutableListOf<SequencedSignalEvent>()
+        val opens = mutableListOf<Long>()
+        call.connect(onEvent = callEvents::add, onOpen = opens::add)
+        drain()
+        assertEquals(1, factory.connections.size)
+        assertEquals(1, opens.size)
+        assertTrue(call.isOpen(opens.single()))
+        foreground.close()
+        assertTrue(call.isOpen())
+        raw.listener.onMessage(raw.webSocket, testEvent("call.end").encode().dropLast(1) + ",\"seq\":1}")
+        drain()
+        assertTrue(foregroundEvents.isEmpty())
+        assertEquals("call.end", callEvents.single().event.type)
+        call.close()
+        call.close()
+        assertFalse(transports.single().isOpen())
+        client.shutdown()
+    }
+
+    @Test fun failingSubscriberDoesNotStarveTheOtherCallOwner() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val tasks = ArrayDeque<() -> Unit>()
+        val failures = mutableListOf<Throwable>()
+        val pool = SharedSignalConnections(
+            create = { session, device -> SignalSocket(client, session, socketFactory = factory, deviceId = device) },
+            dispatch = { tasks.addLast(it) },
+            onCallbackFailure = failures::add,
+        )
+        val session = Session("https://talk.example", "alice", "token")
+        val first = pool.acquire(session, "phone")
+        val second = pool.acquire(session, "phone")
+        val received = mutableListOf<SequencedSignalEvent>()
+        first.connect(onEvent = { error("bad foreground subscriber") })
+        second.connect(onEvent = received::add)
+        val raw = factory.connections.single()
+        raw.listener.onOpen(raw.webSocket, response(raw.webSocket.request()))
+        raw.listener.onMessage(raw.webSocket, testEvent("call.end").encode().dropLast(1) + ",\"seq\":1}")
+        while (tasks.isNotEmpty()) tasks.removeFirst()()
+        assertEquals(1, failures.size)
+        assertEquals("call.end", received.single().event.type)
+        first.close()
+        second.close()
+        client.shutdown()
+    }
+    @Test fun visibilityRequiresNegotiationAndIsNeverReplayed() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val socket = SignalSocket(client, Session("https://talk.example", "alice", "token"), socketFactory = factory)
+        val callId = "018f7d51-40a1-7bb5-a2d0-7e47f9182000"
+        try {
+            socket.connect(onEvent = {})
+            assertFalse(socket.sendVisibility(callId, true))
+            var connection = factory.connections.last()
+            connection.listener.onOpen(connection.webSocket, response(connection.webSocket.request()))
+            assertFalse(socket.sendVisibility(callId, true))
+            assertTrue(connection.webSocket.sent.isEmpty())
+            socket.reconnectNow()
+            connection = factory.connections.last()
+            connection.listener.onOpen(connection.webSocket, response(connection.webSocket.request(), acknowledgesEvents = true)
+                .newBuilder().header("X-TiniTalk-Foreground-Calls", "1").build())
+            assertTrue(socket.sendVisibility(callId, true))
+            assertEquals(1, connection.webSocket.sent.size)
+            assertTrue(connection.webSocket.sent.single().contains("call.visibility"))
+            socket.reconnectNow()
+            connection = factory.connections.last()
+            connection.listener.onOpen(connection.webSocket, response(connection.webSocket.request(), acknowledgesEvents = true)
+                .newBuilder().header("X-TiniTalk-Foreground-Calls", "1").build())
+            assertTrue(connection.webSocket.sent.isEmpty())
+        } finally {
+            socket.close()
+            client.shutdown()
+        }
+    }
     @Test
     fun malformedSASPayloadReachesCallSecurityWithoutFatalSocketError() {
         val client = OkHttpClient()
@@ -90,6 +182,7 @@ class SignalSocketTest {
             assertEquals("session-123", request.getHeader("X-TiniTalk-Session-ID"))
             assertEquals("1", request.getHeader("X-TiniTalk-Signal-Ack"))
             assertEquals("2", request.getHeader("X-TiniTalk-Signal-Protocol"))
+            assertEquals("1", request.getHeader("X-TiniTalk-Foreground-Calls"))
             socket.close()
             client.shutdown()
         }

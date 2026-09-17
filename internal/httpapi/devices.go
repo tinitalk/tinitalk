@@ -23,6 +23,8 @@ const (
 	signalProtocolVersion     = "2"
 	signalAckHeader           = "X-TiniTalk-Signal-Ack"
 	signalAckVersion          = "1"
+	foregroundCallsHeader     = "X-TiniTalk-Foreground-Calls"
+	foregroundCallsVersion    = "1"
 )
 
 type deviceRequest struct {
@@ -139,6 +141,9 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("foreground_call_notifications") == "1" {
 			s.hub.EnableForegroundCallNotifications(client)
 		}
+	} else if r.Header.Get(foregroundCallsHeader) == foregroundCallsVersion &&
+		s.hub.TryEnableForegroundCallNotifications(client) {
+		responseHeader.Set(foregroundCallsHeader, foregroundCallsVersion)
 	}
 	if acknowledgesEvents {
 		responseHeader.Set(signalAckHeader, signalAckVersion)

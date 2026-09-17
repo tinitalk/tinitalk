@@ -11,14 +11,22 @@ import (
 const foregroundPushGrace = 500 * time.Millisecond
 const foregroundCallLease = 3 * time.Second
 
-// EnableForegroundCallNotifications opts a negotiated browser connection into
+// EnableForegroundCallNotifications opts a negotiated connection into
 // acknowledging its incoming screen. A connected legacy client is not enough.
 func (h *Hub) EnableForegroundCallNotifications(client *Client) {
+	h.TryEnableForegroundCallNotifications(client)
+}
+
+// TryEnableForegroundCallNotifications reports whether the connection can
+// bind visibility to a concrete push target.
+func (h *Hub) TryEnableForegroundCallNotifications(client *Client) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if client != nil && !client.closed && client.deviceID != "" {
 		client.foregroundCallNotifications = true
+		return true
 	}
+	return false
 }
 
 func (h *Hub) callVisibility(client *Client, event protocol.Event) error {
@@ -123,4 +131,61 @@ func (c *call) notifyPushWaiters() {
 		close(c.pushChanged)
 		c.pushChanged = nil
 	}
+}
+
+type ActiveCallSnapshot struct {
+	CallID   string
+	Incoming *IncomingCallSnapshot
+}
+
+type IncomingCallSnapshot struct {
+	CallerLogin string
+	StartedAt   time.Time
+	ExpiresAt   time.Time
+	LastSeq     uint64
+}
+
+// ActiveCallSnapshotForDevice returns one mutex-consistent view of the active
+// call. Pending incoming details are restricted to the current callee session
+// and device, while the legacy call ID remains available for active calls.
+func (h *Hub) ActiveCallSnapshotForDevice(user, deviceID, sessionID string) (ActiveCallSnapshot, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	callID, ok := h.activeByUser[user]
+	if !ok {
+		return ActiveCallSnapshot{}, errors.New("active call not found")
+	}
+	c := h.calls[callID]
+	if c == nil || c.state == callEnded {
+		return ActiveCallSnapshot{}, errors.New("active call not found")
+	}
+	if deviceID != "" && c.devicesBound() && c.deviceID(user) != deviceID {
+		return ActiveCallSnapshot{}, errors.New("active call not found")
+	}
+	snapshot := ActiveCallSnapshot{CallID: callID}
+	expiresAt := c.startedAt.Add(time.Duration(protocol.RingTimeoutSecs) * time.Second)
+	if c.state != callRinging || c.callee != user || !h.now().Before(expiresAt) ||
+		!incomingSnapshotMatches(c, deviceID, sessionID) {
+		return snapshot, nil
+	}
+	snapshot.Incoming = &IncomingCallSnapshot{
+		CallerLogin: c.caller,
+		StartedAt:   c.startedAt,
+		ExpiresAt:   expiresAt,
+		LastSeq:     c.incomingSeq,
+	}
+	return snapshot, nil
+}
+
+func incomingSnapshotMatches(c *call, deviceID, sessionID string) bool {
+	if c.incomingSeq == 0 || c.incomingTargetFailed {
+		return false
+	}
+	if !c.incomingTargetKnown || c.incomingTargetID == "" {
+		return sessionID == ""
+	}
+	if c.incomingTargetID != sessionID || c.incomingTargetDevice != deviceID {
+		return false
+	}
+	return true
 }

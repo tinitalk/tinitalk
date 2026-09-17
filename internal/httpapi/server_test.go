@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"tinitalk/internal/protocol"
 	"tinitalk/internal/signaling"
 	"tinitalk/internal/state"
 )
@@ -452,6 +453,60 @@ func TestSocketRoutesCallEvents(t *testing.T) {
 	}
 }
 
+func TestNativeSocketNegotiatesForegroundCalls(t *testing.T) {
+	db, tokens := testDB(t)
+	hub := signaling.NewHub(signaling.NoopNotifier{})
+	server := httptest.NewServer(NewServer(db, Options{AllowInsecureLoopback: true, Hub: hub}))
+	defer server.Close()
+
+	dial := func(value, deviceID string) (*websocket.Conn, *http.Response) {
+		t.Helper()
+		header := http.Header{}
+		header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("bob:"+tokens["bob"])))
+		header.Set(signalProtocolHeader, signalProtocolVersion)
+		header.Set(signalAckHeader, signalAckVersion)
+		if value != "" {
+			header.Set("X-TiniTalk-Foreground-Calls", value)
+		}
+		if deviceID != "" {
+			header.Set(deviceIDHeader, deviceID)
+		}
+		conn, response, err := websocket.DefaultDialer.Dial("ws"+server.URL[len("http"):]+"/api/socket", header)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn, response
+	}
+
+	for _, test := range []struct {
+		name     string
+		value    string
+		deviceID string
+		wantEcho string
+	}{
+		{name: "accepted", value: "1", deviceID: "android-bob", wantEcho: "1"},
+		{name: "legacy", deviceID: "legacy-bob"},
+		{name: "unsupported value", value: "0", deviceID: "android-bob"},
+		{name: "missing device", value: "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn, response := dial(test.value, test.deviceID)
+			defer conn.Close()
+			if got := response.Header.Get("X-TiniTalk-Foreground-Calls"); got != test.wantEcho {
+				t.Fatalf("foreground calls handshake = %q, want %q", got, test.wantEcho)
+			}
+			if test.wantEcho == "" {
+				return
+			}
+			id := "018f7d51-40a1-7bb5-a2d0-7e47f91803f1"
+			writeSocketEvent(t, conn, id, id, "call.visibility", map[string]any{"visible": false})
+			if ack := readSocketEvent(t, conn); ack["ack"] != id {
+				t.Fatalf("visibility acknowledgement = %+v", ack)
+			}
+		})
+	}
+}
+
 func TestActiveCallEndpointReturnsCurrentCallID(t *testing.T) {
 	db, tokens := testDB(t)
 	hub := signaling.NewHub(signaling.NoopNotifier{})
@@ -479,13 +534,85 @@ func TestActiveCallEndpointReturnsCurrentCallID(t *testing.T) {
 		t.Fatalf("active call status = %d, body %s", response.Code, response.Body.String())
 	}
 	var body struct {
-		CallID string `json:"call_id"`
+		CallID   string `json:"call_id"`
+		Incoming *struct {
+			CallID      string `json:"call_id"`
+			CallerLogin string `json:"caller_login"`
+			StartedAt   string `json:"started_at"`
+			ExpiresAt   string `json:"expires_at"`
+			LastSeq     uint64 `json:"last_seq"`
+		} `json:"incoming"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
 	if body.CallID != callID {
 		t.Fatalf("active call id = %q, want %q", body.CallID, callID)
+	}
+	if body.Incoming == nil || body.Incoming.CallID != callID || body.Incoming.CallerLogin != "alice" || body.Incoming.LastSeq != 1 {
+		t.Fatalf("pending incoming snapshot = %+v", body.Incoming)
+	}
+	var exactContract struct {
+		Incoming map[string]json.RawMessage `json:"incoming"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &exactContract); err != nil {
+		t.Fatal(err)
+	}
+	if len(exactContract.Incoming) != 5 {
+		t.Fatalf("incoming JSON fields = %v, want only call_id/caller_login/started_at/expires_at/last_seq", exactContract.Incoming)
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, body.Incoming.StartedAt)
+	if err != nil {
+		t.Fatalf("started_at = %q: %v", body.Incoming.StartedAt, err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, body.Incoming.ExpiresAt)
+	if err != nil {
+		t.Fatalf("expires_at = %q: %v", body.Incoming.ExpiresAt, err)
+	}
+	if expiresAt.Sub(startedAt) != time.Duration(protocol.RingTimeoutSecs)*time.Second {
+		t.Fatalf("incoming lifetime = %s, want %ds", expiresAt.Sub(startedAt), protocol.RingTimeoutSecs)
+	}
+	callerResponse := request(t, handler, http.MethodGet, "/api/active-call", nil, "alice", tokens["alice"])
+	var callerActive map[string]json.RawMessage
+	if err := json.Unmarshal(callerResponse.Body.Bytes(), &callerActive); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := callerActive["incoming"]; exists {
+		t.Fatalf("caller received incoming snapshot: %s", callerResponse.Body.String())
+	}
+
+	writeSocketEvent(t, bob, "018f7d51-3f90-7e63-b657-4a83a6a90402", callID, "call.ringing", map[string]any{})
+	if ringing := readSocketEvent(t, alice); ringing["type"] != "call.ringing" {
+		t.Fatalf("ringing = %+v", ringing)
+	}
+	response = request(t, handler, http.MethodGet, "/api/active-call", nil, "bob", tokens["bob"])
+	var afterRinging struct {
+		CallID   string `json:"call_id"`
+		Incoming *struct {
+			StartedAt string `json:"started_at"`
+			ExpiresAt string `json:"expires_at"`
+			LastSeq   uint64 `json:"last_seq"`
+		} `json:"incoming"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &afterRinging); err != nil {
+		t.Fatal(err)
+	}
+	if afterRinging.Incoming == nil || afterRinging.Incoming.LastSeq != 1 ||
+		afterRinging.Incoming.StartedAt != body.Incoming.StartedAt || afterRinging.Incoming.ExpiresAt != body.Incoming.ExpiresAt {
+		t.Fatalf("incoming snapshot changed after unrelated event: before=%+v after=%+v", body.Incoming, afterRinging.Incoming)
+	}
+
+	writeSocketEvent(t, bob, "018f7d51-3f90-7e63-b657-4a83a6a90403", callID, "call.accept", map[string]any{})
+	if accepted := readSocketEvent(t, alice); accepted["type"] != "call.accept" {
+		t.Fatalf("accepted = %+v", accepted)
+	}
+	response = request(t, handler, http.MethodGet, "/api/active-call", nil, "bob", tokens["bob"])
+	var active map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &active); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := active["incoming"]; exists {
+		t.Fatalf("accepted call retained incoming snapshot: %s", response.Body.String())
 	}
 }
 

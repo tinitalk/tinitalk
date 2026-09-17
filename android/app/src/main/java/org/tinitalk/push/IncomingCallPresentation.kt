@@ -9,13 +9,23 @@ import org.tinitalk.call.AccountCallOwner
 /** Invalidates queued notification hides when the incoming screen relinquishes presentation. */
 internal object IncomingCallScreenState {
     private var owner: AccountCallOwner? = null
+    private val observers = java.util.concurrent.CopyOnWriteArraySet<() -> Unit>()
+
+    fun observe(observer: () -> Unit) { observers += observer }
+    fun removeObserver(observer: () -> Unit) { observers -= observer }
 
     @Synchronized
-    fun shown(owner: AccountCallOwner) { this.owner = owner }
+    fun shown(owner: AccountCallOwner) {
+        this.owner = owner
+        observers.forEach { it() }
+    }
 
     @Synchronized
     fun hidden(expectedOwner: AccountCallOwner? = null) {
-        if (expectedOwner == null || owner == expectedOwner) owner = null
+        if (expectedOwner == null || owner == expectedOwner) {
+            owner = null
+            observers.forEach { it() }
+        }
     }
 
     @Synchronized

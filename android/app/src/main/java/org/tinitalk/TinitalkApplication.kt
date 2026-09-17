@@ -45,6 +45,7 @@ import org.tinitalk.shortcuts.ContactShortcuts
 import java.util.concurrent.Executors
 
 class TinitalkApplication : Application() {
+    private lateinit var foregroundIncoming: org.tinitalk.push.ForegroundIncomingCalls
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var authStore: AuthStore
     internal lateinit var missedCalls: MissedCallsRepository
@@ -118,11 +119,15 @@ class TinitalkApplication : Application() {
 
         networkAvailability = NetworkAvailability(this)
         registerActivityLifecycleCallbacks(AppActivityVisibility)
+        foregroundIncoming = org.tinitalk.push.ForegroundIncomingCalls(this, authStore,
+            networkAvailable = { networkAvailability.canStartNetworkAction() })
+        networkAvailability.observe { foregroundIncoming.networkChanged() }
         runCatching { TelecomCallController(AndroidTelecomRegistrar(this)).registerAudioOnly() }
         AuthSessionEvents.observe(authSessionObserver)
     }
 
     override fun onTerminate() {
+        foregroundIncoming.close()
         contactShortcuts.close()
         missedCallsExecutor.shutdown()
         super.onTerminate()

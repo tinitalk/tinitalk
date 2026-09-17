@@ -73,6 +73,57 @@ func TestForegroundBrowserPushDoesNotBlockOtherDevices(t *testing.T) {
 	})
 }
 
+func TestForegroundNativeSocketSuppressesAndFallsBackToPush(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sender := &expiryPushSender{requests: make(chan WebPushRequest, 2)}
+		native := notifyTarget("android")
+		n := NewPushNotifier(&fakePushTargetStore{targets: []state.Device{
+			{DeviceID: "android", PushTarget: native},
+		}}, sender)
+		h := signaling.NewHub(n)
+		n.SetIncomingCallGate(h)
+		alice := h.Connect("alice")
+		bob, err := h.ConnectDeviceChecked("bob", "android")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.EnableForegroundCallNotifications(bob)
+		h.Connected(bob)
+		id := "018f7d51-40a1-7bb5-a2d0-7e47f9180521"
+		start := protocol.Event{ID: id, CallID: id, Type: "call.start", SentAt: time.Now().UnixMilli(), Payload: json.RawMessage(`{"callee_id":"bob"}`)}
+		if err := h.HandleClient(alice, start); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		select {
+		case request := <-sender.requests:
+			t.Fatalf("native push bypassed foreground grace: %+v", request)
+		default:
+		}
+		visibility := protocol.Event{ID: "018f7d51-40a1-7bb5-a2d0-7e47f9180522", CallID: id, Type: "call.visibility", SentAt: time.Now().UnixMilli(), Payload: json.RawMessage(`{"visible":true}`)}
+		if err := h.HandleClient(bob, visibility); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case request := <-sender.requests:
+			t.Fatalf("visible native socket received duplicate push: %+v", request)
+		default:
+		}
+		visibility.ID = "018f7d51-40a1-7bb5-a2d0-7e47f9180523"
+		visibility.Payload = json.RawMessage(`{"visible":false}`)
+		if err := h.HandleClient(bob, visibility); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		got := nextExpiryPush(t, sender)
+		if got.Subscription != native.Subscription || got.Data["type"] != "incoming_call" {
+			t.Fatalf("native fallback = %+v", got)
+		}
+	})
+}
+
 func TestCancelledBrowserPushIsNotSentAfterWaitingForCapacityOrRetry(t *testing.T) {
 	for _, scenario := range []string{"capacity", "retry"} {
 		t.Run(scenario, func(t *testing.T) {

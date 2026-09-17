@@ -829,6 +829,15 @@ func (h *Hub) enqueueNotification(next notification) {
 		next.event.TargetSessionKnown = known
 		next.event.TargetResolutionFailed = failed
 	}
+	if !next.cancel && next.event.Type == "call.incoming" {
+		if c, ok := h.callByID(next.event.CallID); ok {
+			c.incomingSeq = next.event.Seq
+			c.incomingTargetID = next.event.TargetSessionID
+			c.incomingTargetDevice = next.event.TargetDeviceID
+			c.incomingTargetKnown = next.event.TargetSessionKnown
+			c.incomingTargetFailed = next.event.TargetResolutionFailed
+		}
+	}
 	for i := range h.notifications {
 		if h.notifications[i].event.CallID != next.event.CallID || h.notifications[i].callee != next.callee {
 			continue

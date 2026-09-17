@@ -103,13 +103,28 @@ internal class IncomingPushHandler(
             return
         }
 
-        val notifier = IncomingCallNotifier(context)
+        val handler = IncomingCallHandler(context, disconnectSystemCall)
         val cancellation = IncomingPushPayload.cancellation(data, account.id)
         if (cancellation != null) {
-            handleCancellation(account, cancellation, notifier)
+            handler.cancel(account, cancellation)
             return
         }
         val invite = IncomingPushPayload.parse(data, account) ?: return
+        handler.present(invite)
+    }
+
+    private fun authStore() = AuthStore(SharedPreferencesKeyValueStore(context), AndroidKeystoreTokenCipher())
+}
+
+/** Shared admission and presentation for authenticated socket events and push payloads. */
+internal class IncomingCallHandler(
+    private val context: android.content.Context,
+    private val disconnectSystemCall: (AccountCallKey) -> Unit = {
+        TelecomCallController(AndroidTelecomRegistrar(context)).cancel(it)
+    },
+) {
+    fun present(invite: IncomingInvite) {
+        val notifier = IncomingCallNotifier(context)
         val incoming = IncomingCallController()
         when (incoming.admitIncoming(context, invite)) {
             IncomingAdmissionResult.Invalid -> return
@@ -174,11 +189,11 @@ internal class IncomingPushHandler(
         }
     }
 
-    private fun handleCancellation(
+    fun cancel(
         account: AccountRecord,
         cancellation: CallCancellation,
-        notifier: IncomingCallNotifier,
     ) {
+        val notifier = IncomingCallNotifier(context)
         val incoming = IncomingCallController()
         val owner = AccountCallOwner(cancellation.key, CallSessionBinding.from(account.session))
         if (!incoming.rememberTerminalIfCompatible(context, owner)) return

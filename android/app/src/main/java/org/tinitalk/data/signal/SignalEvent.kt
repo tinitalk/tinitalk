@@ -61,6 +61,7 @@ data class SignalEvent(
             "call.start",
             "call.incoming",
             "call.ringing",
+            "call.visibility",
             "call.accept",
             "call.connected",
             "call.reject",

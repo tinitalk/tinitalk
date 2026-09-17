@@ -4,6 +4,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"tinitalk/internal/protocol"
 )
 
 func foregroundCall(t *testing.T) (*Hub, *Client, *Client, string) {
@@ -164,4 +166,55 @@ func TestForegroundPushDoesNotWaitForLegacyOrOfflineClient(t *testing.T) {
 			t.Fatal("legacy client was delayed")
 		}
 	})
+}
+
+func TestActiveCallSnapshotRestrictsPendingIncomingToCalleeDeviceAndSession(t *testing.T) {
+	h := NewHub(nil)
+	h.SetSessionStore(staticSessionStore{login: "bob", sessionID: "bob-session"})
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	h.SetNow(func() time.Time { return now })
+	alice := h.Connect("alice")
+	start := event(uuid(8301), uuid(8302), "call.start", map[string]any{"callee_id": "bob"})
+	if err := h.HandleClient(alice, start); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := h.ActiveCallSnapshotForDevice("bob", "phone", "bob-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CallID != start.CallID || got.Incoming == nil || got.Incoming.CallerLogin != "alice" || got.Incoming.LastSeq != 1 {
+		t.Fatalf("matching snapshot = %+v", got)
+	}
+	if got.Incoming.ExpiresAt.Sub(got.Incoming.StartedAt) != time.Duration(protocol.RingTimeoutSecs)*time.Second {
+		t.Fatalf("snapshot lifetime = %s", got.Incoming.ExpiresAt.Sub(got.Incoming.StartedAt))
+	}
+	for _, request := range []struct {
+		name      string
+		user      string
+		deviceID  string
+		sessionID string
+	}{
+		{name: "caller", user: "alice"},
+		{name: "wrong device", user: "bob", deviceID: "tablet", sessionID: "bob-session"},
+		{name: "wrong session", user: "bob", deviceID: "phone", sessionID: "old-session"},
+	} {
+		t.Run(request.name, func(t *testing.T) {
+			snapshot, err := h.ActiveCallSnapshotForDevice(request.user, request.deviceID, request.sessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Incoming != nil {
+				t.Fatalf("unauthorized incoming snapshot = %+v", snapshot.Incoming)
+			}
+		})
+	}
+	now = now.Add(time.Duration(protocol.RingTimeoutSecs)*time.Second + time.Nanosecond)
+	expired, err := h.ActiveCallSnapshotForDevice("bob", "phone", "bob-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.Incoming != nil {
+		t.Fatalf("expired call retained incoming snapshot = %+v", expired.Incoming)
+	}
 }

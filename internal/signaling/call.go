@@ -48,6 +48,11 @@ type call struct {
 	offlineSince         map[string]time.Time
 	state                callState
 	pushChanged          chan struct{}
+	incomingSeq          uint64
+	incomingTargetID     string
+	incomingTargetDevice string
+	incomingTargetKnown  bool
+	incomingTargetFailed bool
 	supportsCrossCall    bool
 	callerSupportsVideo  bool
 	calleeSupportsVideo  bool

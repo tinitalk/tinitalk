@@ -7,7 +7,8 @@ import org.tinitalk.call.CallCoordinator
 import org.tinitalk.call.ForegroundCallController
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.Session
-import org.tinitalk.data.signal.SignalSocket
+import org.tinitalk.data.signal.SignalConnection
+import org.tinitalk.data.signal.ApplicationSignaling
 import org.tinitalk.media.CallMediaDispatcher
 import org.tinitalk.media.DefaultNetworkObserver
 import java.util.concurrent.TimeUnit
@@ -19,8 +20,8 @@ internal fun signalingHttpClient(): OkHttpClient =
 
 /** Resources of one call. Local media can end before signaling is closed. */
 internal class CallRuntime(
-    private val httpClient: OkHttpClient,
-    val socket: SignalSocket,
+    private val httpClient: OkHttpClient?,
+    val socket: SignalConnection,
     val coordinator: CallCoordinator,
     media: ForegroundCallController,
     mediaDispatcher: CallMediaDispatcher,
@@ -85,28 +86,27 @@ internal class CallRuntime(
             session: Session,
             accountId: AccountId,
             deviceId: String,
-            createMedia: (SignalSocket, CallCoordinator, CallMediaDispatcher) -> ForegroundCallController,
+            createMedia: (SignalConnection, CallCoordinator, CallMediaDispatcher) -> ForegroundCallController,
         ): CallRuntime {
-            val client = signalingHttpClient()
-            var socket: SignalSocket? = null
+            var socket: SignalConnection? = null
             var dispatcher: CallMediaDispatcher? = null
             try {
-                val signaling = SignalSocket(client, session, deviceId = deviceId).also { socket = it }
+                val signaling = ApplicationSignaling.acquire(session, deviceId).also { socket = it }
                 val coordinator = CallCoordinator(session.login, signaling, accountId = accountId)
                 val mediaDispatcher = CallMediaDispatcher().also { dispatcher = it }
                 val media = createMedia(signaling, coordinator, mediaDispatcher)
-                return CallRuntime(client, signaling, coordinator, media, mediaDispatcher)
+                return CallRuntime(null, signaling, coordinator, media, mediaDispatcher)
             } catch (failure: Throwable) {
                 dispatcher?.close()
-                closeSignaling(client, socket)
+                closeSignaling(null, socket)
                 throw failure
             }
         }
     }
 }
 
-private fun closeSignaling(client: OkHttpClient, socket: SignalSocket?) {
+private fun closeSignaling(client: OkHttpClient?, socket: SignalConnection?) {
     runCatching { socket?.close() }
-    runCatching { client.dispatcher.executorService.shutdownNow() }
-    runCatching { client.connectionPool.evictAll() }
+    runCatching { client?.dispatcher?.executorService?.shutdownNow() }
+    runCatching { client?.connectionPool?.evictAll() }
 }

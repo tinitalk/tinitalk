@@ -10,18 +10,16 @@ import org.tinitalk.data.AndroidKeystoreTokenCipher
 import org.tinitalk.data.AuthStore
 import org.tinitalk.data.SessionReplacedReason
 import org.tinitalk.data.SharedPreferencesKeyValueStore
-import org.tinitalk.data.signal.SignalSocket
-import org.tinitalk.telecom.signalingHttpClient
+import org.tinitalk.data.signal.SignalConnection
+import org.tinitalk.data.signal.ApplicationSignaling
 import java.io.Closeable
 import java.time.Duration
 import java.time.Instant
-import okhttp3.OkHttpClient
 
 class IncomingRingingAcknowledger(context: Context) : Closeable {
     private val context = context.applicationContext
     private var owner: AccountCallOwner? = null
-    private var socket: SignalSocket? = null
-    private var httpClient: OkHttpClient? = null
+    private var socket: SignalConnection? = null
     private val handler = Handler(Looper.getMainLooper())
     private var stopTask: Runnable? = null
 
@@ -48,15 +46,9 @@ class IncomingRingingAcknowledger(context: Context) : Closeable {
         stop()
         val authStore = AuthStore(SharedPreferencesKeyValueStore(context), AndroidKeystoreTokenCipher())
         val session = resolvePinnedCallSession(authStore, invite.accountId, invite.sessionBinding) ?: return
-        val client = signalingHttpClient()
-        val signal = SignalSocket(
-            client,
-            session,
-            deviceId = DeviceIdentity.id(context),
-        )
+        val signal = ApplicationSignaling.acquire(session, DeviceIdentity.id(context))
         owner = invite.owner
         socket = signal
-        httpClient = client
         val timeout = Runnable { stop(invite.owner) }
         stopTask = timeout
         handler.postDelayed(
@@ -85,10 +77,7 @@ class IncomingRingingAcknowledger(context: Context) : Closeable {
         stopTask = null
         owner = null
         socket?.close()
-        httpClient?.dispatcher?.executorService?.shutdownNow()
-        httpClient?.connectionPool?.evictAll()
         socket = null
-        httpClient = null
     }
 
     override fun close() = stop()
