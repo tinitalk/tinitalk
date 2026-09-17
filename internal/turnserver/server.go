@@ -48,7 +48,9 @@ func Start(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	listenerConfigs, listenerClosers, err := streamListenerConfigs(config, relay)
+	// Leave room for connection setup alongside established allocations.
+	streams := newStreamGuard(max(256, 2*config.MaxAllocations), streamSetupTimeout)
+	listenerConfigs, listenerClosers, err := streamListenerConfigs(config, relay, streams)
 	if err != nil {
 		closeAll(packetClosers)
 		closeAll(listenerClosers)
@@ -58,7 +60,7 @@ func Start(config Config) (*Server, error) {
 	turns := make([]*turn.Server, 0, len(packetConfigs)+len(listenerConfigs))
 	for _, packetConfig := range packetConfigs {
 		scope := allocationScope("packet", packetConfig.PacketConn.LocalAddr())
-		server, startErr := newTransportServer(config, limiter, scope, []turn.PacketConnConfig{packetConfig}, nil)
+		server, startErr := newTransportServer(config, limiter, streams, scope, []turn.PacketConnConfig{packetConfig}, nil)
 		if startErr != nil {
 			closeTURNServers(turns)
 			closeAll(packetClosers)
@@ -69,7 +71,7 @@ func Start(config Config) (*Server, error) {
 	}
 	for _, listenerConfig := range listenerConfigs {
 		scope := allocationScope("listener", listenerConfig.Listener.Addr())
-		server, startErr := newTransportServer(config, limiter, scope, nil, []turn.ListenerConfig{listenerConfig})
+		server, startErr := newTransportServer(config, limiter, streams, scope, nil, []turn.ListenerConfig{listenerConfig})
 		if startErr != nil {
 			closeTURNServers(turns)
 			closeAll(packetClosers)
@@ -84,6 +86,7 @@ func Start(config Config) (*Server, error) {
 func newTransportServer(
 	config Config,
 	limiter *AllocationLimiter,
+	streams *streamGuard,
 	scope string,
 	packetConfigs []turn.PacketConnConfig,
 	listenerConfigs []turn.ListenerConfig,
@@ -98,7 +101,7 @@ func newTransportServer(
 			return login, turn.GenerateAuthKey(ra.Username, config.Realm, config.Issuer.Password(ra.Username)), true
 		},
 		QuotaHandler:       func(username, _ string, source net.Addr) bool { return limiter.Allow(scope, username, source) },
-		EventHandler:       limiter.EventHandler(scope),
+		EventHandler:       streams.events(limiter.EventHandler(scope)),
 		AllocationLifetime: config.AllocationLifetime,
 		PacketConnConfigs:  packetConfigs,
 		ListenerConfigs:    listenerConfigs,
@@ -198,7 +201,7 @@ func packetConnConfigs(config Config, relay turn.RelayAddressGenerator) ([]turn.
 	return []turn.PacketConnConfig{{PacketConn: conn, RelayAddressGenerator: relay}}, []func() error{conn.Close}, nil
 }
 
-func streamListenerConfigs(config Config, relay turn.RelayAddressGenerator) ([]turn.ListenerConfig, []func() error, error) {
+func streamListenerConfigs(config Config, relay turn.RelayAddressGenerator, streams *streamGuard) ([]turn.ListenerConfig, []func() error, error) {
 	var configs []turn.ListenerConfig
 	var closers []func() error
 	if config.TCPAddr != "" {
@@ -206,6 +209,7 @@ func streamListenerConfigs(config Config, relay turn.RelayAddressGenerator) ([]t
 		if err != nil {
 			return nil, closers, err
 		}
+		listener = streams.wrap(listener)
 		configs = append(configs, turn.ListenerConfig{Listener: listener, RelayAddressGenerator: relay})
 		closers = append(closers, listener.Close)
 	}
@@ -213,10 +217,17 @@ func streamListenerConfigs(config Config, relay turn.RelayAddressGenerator) ([]t
 		if config.TLS == nil {
 			return nil, closers, errors.New("TLS config is required")
 		}
-		listener, err := tls.Listen("tcp4", config.TLSAddr, config.TLS)
+		// Preserve tls.Listen's startup validation when using tls.NewListener.
+		if len(config.TLS.Certificates) == 0 && config.TLS.GetCertificate == nil && config.TLS.GetConfigForClient == nil {
+			return nil, closers, errors.New("TLS certificate or certificate provider is required")
+		}
+		listener, err := net.Listen("tcp4", config.TLSAddr)
 		if err != nil {
 			return nil, closers, err
 		}
+		// Guard the raw socket so Pion still receives *tls.Conn and performs
+		// its TLS handshake and connection-state checks normally.
+		listener = tls.NewListener(streams.wrap(listener), config.TLS)
 		configs = append(configs, turn.ListenerConfig{Listener: listener, RelayAddressGenerator: relay})
 		closers = append(closers, listener.Close)
 	}
