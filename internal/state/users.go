@@ -38,7 +38,7 @@ func (db *DB) AddUser(login, displayName string) (string, error) {
 }
 
 func (db *DB) ListUsers() ([]User, error) {
-	rows, err := db.sql.Query("SELECT login, display_name, disabled FROM users ORDER BY login")
+	rows, err := db.read.Query("SELECT login, display_name, disabled FROM users ORDER BY login")
 	if err != nil {
 		return nil, err
 	}

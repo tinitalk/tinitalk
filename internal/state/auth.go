@@ -5,7 +5,7 @@ import (
 )
 
 func (db *DB) Authenticate(login, token string) (User, bool, error) {
-	rows, err := db.sql.Query(`
+	rows, err := db.read.Query(`
 		SELECT u.login, u.disabled, t.token_sha256
 		FROM users u
 		JOIN auth_tokens t ON t.user_id = u.id

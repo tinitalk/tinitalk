@@ -30,11 +30,15 @@ func TestOpenReopensWithRequiredPragmasAndStableFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"journal_mode": "delete", "synchronous": "3", "locking_mode": "normal", "foreign_keys": "1"}
+	want := map[string]string{"journal_mode": "wal", "synchronous": "2", "locking_mode": "normal", "foreign_keys": "1"}
 	for key, value := range want {
 		if pragmas[key] != value {
 			t.Fatalf("pragma %s = %q, want %q", key, pragmas[key], value)
 		}
+	}
+	// WAL files are expected while open, but a clean final close checkpoints them.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {

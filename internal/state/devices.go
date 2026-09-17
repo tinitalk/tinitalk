@@ -96,7 +96,7 @@ func upsertPushTarget(tx *sql.Tx, userID int64, deviceID string, target PushTarg
 }
 
 func (db *DB) PushTargetsForUser(login string) ([]Device, error) {
-	rows, err := db.sql.Query(`
+	rows, err := db.read.Query(`
 		SELECT u.login, d.device_id, d.webpush_subscription, d.webpush_config_id
 		FROM devices d
 		JOIN users u ON u.id = d.user_id

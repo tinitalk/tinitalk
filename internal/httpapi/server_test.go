@@ -438,8 +438,15 @@ func TestActiveCallEndpointReturnsCurrentCallID(t *testing.T) {
 	}
 	alice := dialDeviceSocket(t, server.URL, "alice", tokens["alice"], "android-alice")
 	defer alice.Close()
+	bob := dialSocket(t, server.URL, "bob", tokens["bob"])
+	defer bob.Close()
 	callID := "018f7d51-40a1-7bb5-a2d0-7e47f9180401"
 	writeSocketEvent(t, alice, "018f7d51-3f90-7e63-b657-4a83a6a90401", callID, "call.start", map[string]any{"callee_id": "bob"})
+	// A WebSocket write only sends the request; wait until the hub processes it
+	// before querying state through the independent HTTP connection.
+	if incoming := readSocketEvent(t, bob); incoming["type"] != "call.incoming" {
+		t.Fatalf("incoming = %+v", incoming)
+	}
 
 	response := request(t, handler, http.MethodGet, "/api/active-call", nil, "bob", tokens["bob"])
 	if response.Code != http.StatusOK {

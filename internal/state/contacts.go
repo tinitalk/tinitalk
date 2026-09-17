@@ -32,7 +32,7 @@ func (db *DB) ContactForUser(owner, login string) (Contact, error) {
 		return Contact{}, err
 	}
 	var contact Contact
-	err = db.sql.QueryRow(`
+	err = db.read.QueryRow(`
 		SELECT contact.login,
 			COALESCE(NULLIF(uc.custom_name, ''), contact.login),
 			COALESCE(uc.custom_name, ''),
@@ -55,7 +55,7 @@ func (db *DB) ContactForUser(owner, login string) (Contact, error) {
 
 func (db *DB) ContactDisplayName(owner, login string) (string, error) {
 	var name string
-	err := db.sql.QueryRow(`
+	err := db.read.QueryRow(`
 		SELECT COALESCE(NULLIF(personal.custom_name, ''), contact.login)
 		FROM users owner, users contact
 		LEFT JOIN user_contacts personal
@@ -74,7 +74,7 @@ func (db *DB) ContactsForUser(owner string) ([]Contact, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.sql.Query(`
+	rows, err := db.read.Query(`
 		SELECT contact.login,
 			COALESCE(NULLIF(uc.custom_name, ''), contact.login),
 			COALESCE(uc.custom_name, ''),
@@ -140,7 +140,7 @@ func (db *DB) ContactsPageForUser(owner string, limit int, after *ContactCursor)
 		LIMIT ?
 	`
 	args = append(args, limit+1)
-	rows, err := db.sql.Query(query, args...)
+	rows, err := db.read.Query(query, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -183,7 +183,7 @@ func (db *DB) AddContact(owner, login, name string) (Contact, error) {
 		return Contact{}, err
 	}
 	var contactID int64
-	if err := db.sql.QueryRow(
+	if err := db.read.QueryRow(
 		"SELECT id FROM users WHERE login = ? AND disabled = 0",
 		login,
 	).Scan(&contactID); err != nil {
@@ -223,7 +223,7 @@ func (db *DB) RemoveContact(owner, login string) error {
 
 func (db *DB) CanCall(caller, callee string) (bool, error) {
 	var allowed bool
-	err := db.sql.QueryRow(`
+	err := db.read.QueryRow(`
 		SELECT EXISTS(
 			SELECT 1
 			FROM users caller

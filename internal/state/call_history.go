@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -296,13 +297,19 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 	if limit < 1 || limit > 100 {
 		return page, errors.New("history limit must be between 1 and 100")
 	}
-	userID, err := db.userID(login)
+	// Keep the rows, latest ID and unread badge in the same committed snapshot.
+	tx, err := db.read.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return page, err
+	}
+	defer tx.Rollback()
+	userID, err := queryUserID(tx, login)
 	if err != nil {
 		return page, err
 	}
 	var peerID int64
 	if peer != "" {
-		peerID, err = db.userID(peer)
+		peerID, err = queryUserID(tx, peer)
 		if err != nil {
 			return page, err
 		}
@@ -310,7 +317,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 			return page, errors.New("history peer must be another user")
 		}
 	}
-	if err := db.sql.QueryRow(`
+	if err := tx.QueryRow(`
 		SELECT COALESCE(MAX(id), 0) FROM call_history
 		WHERE ended_at IS NOT NULL
 			AND (caller_id = ? OR callee_id = ?)
@@ -318,7 +325,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 	`, userID, userID, peerID, userID, peerID, peerID, userID).Scan(&page.LatestID); err != nil {
 		return page, err
 	}
-	unread, err := unreadMissedState(db.sql, userID)
+	unread, err := unreadMissedState(tx, userID)
 	if err != nil {
 		return page, err
 	}
@@ -326,7 +333,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 	page.LatestUnreadMissed = unread.LatestUnreadByContact
 	var beforeStartedAt int64
 	if before > 0 {
-		if err := db.sql.QueryRow(`
+		if err := tx.QueryRow(`
 			SELECT started_at FROM call_history
 			WHERE id = ?
 				AND ended_at IS NOT NULL
@@ -340,7 +347,7 @@ func (db *DB) callHistory(login, peer string, before int64, limit int) (CallHist
 		}
 	}
 
-	rows, err := db.sql.Query(`
+	rows, err := tx.Query(`
 		SELECT h.id, h.call_id, h.caller_id, peer.login,
 			COALESCE(NULLIF(personal.custom_name, ''), peer.login),
 			h.outcome, h.reply_code, h.stage, h.started_at, h.connected_at, h.ended_at
@@ -529,8 +536,12 @@ func unreadMissedState(queryer callHistoryQueryer, userID int64) (CallUnreadStat
 }
 
 func (db *DB) userID(login string) (int64, error) {
+	return queryUserID(db.read, login)
+}
+
+func queryUserID(queryer callHistoryQueryer, login string) (int64, error) {
 	var id int64
-	err := db.sql.QueryRow("SELECT id FROM users WHERE login = ? AND disabled = 0", login).Scan(&id)
+	err := queryer.QueryRow("SELECT id FROM users WHERE login = ? AND disabled = 0", login).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("user %q not found", login)
 	}

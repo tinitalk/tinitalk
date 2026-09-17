@@ -15,7 +15,7 @@ func (db *DB) SetSetting(key, value string) error {
 
 func (db *DB) Setting(key string) (string, error) {
 	var value string
-	err := db.sql.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+	err := db.read.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

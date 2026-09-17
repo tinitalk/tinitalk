@@ -4,7 +4,7 @@ import "database/sql"
 
 func (db *DB) Get(ctxKey string) ([]byte, error) {
 	var value []byte
-	if err := db.sql.QueryRow("SELECT value FROM autocert_cache WHERE key = ?", ctxKey).Scan(&value); err != nil {
+	if err := db.read.QueryRow("SELECT value FROM autocert_cache WHERE key = ?", ctxKey).Scan(&value); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, sql.ErrNoRows
 		}

@@ -22,7 +22,7 @@ type SessionClaim struct {
 
 func (db *DB) CurrentSession(login string) (AccountSession, bool, error) {
 	var session AccountSession
-	err := db.sql.QueryRow(`
+	err := db.read.QueryRow(`
 		SELECT session.device_id, session.session_id, session.updated_at
 		FROM account_sessions session
 		JOIN users user ON user.id = session.user_id

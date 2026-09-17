@@ -37,14 +37,14 @@ func (db *DB) PruneCallHistory(before time.Time) (int64, error) {
 func (db *DB) Check() (CheckResult, error) {
 	var result CheckResult
 	var integrity string
-	if err := db.sql.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+	if err := db.read.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
 		return result, err
 	}
 	var foreignKeys string
-	if err := db.sql.QueryRow("PRAGMA foreign_key_check").Scan(&foreignKeys); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := db.read.QueryRow("PRAGMA foreign_key_check").Scan(&foreignKeys); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return result, err
 	}
-	if err := db.sql.QueryRow("PRAGMA user_version").Scan(&result.UserVersion); err != nil {
+	if err := db.read.QueryRow("PRAGMA user_version").Scan(&result.UserVersion); err != nil {
 		return result, err
 	}
 	pragmas, err := db.Pragmas()
@@ -72,11 +72,20 @@ func (db *DB) BackupTo(path string) error {
 	if _, err := db.sql.Exec("VACUUM INTO ?", path); err != nil {
 		return err
 	}
-	backup, err := Open(path)
+	// Validate the exported file without the server's WAL/pool bootstrap: the
+	// backup must remain a standalone snapshot, not a second live database.
+	uri, err := databaseURI(path)
 	if err != nil {
 		return err
 	}
-	defer backup.Close()
+	uri.RawQuery = "mode=rw&_pragma=foreign_keys(ON)&_pragma=synchronous(FULL)"
+	connection, err := sql.Open("sqlite", uri.String())
+	if err != nil {
+		return err
+	}
+	connection.SetMaxOpenConns(1)
+	defer connection.Close()
+	backup := &DB{sql: connection, read: connection}
 	check, err := backup.Check()
 	if err != nil {
 		return err
@@ -84,5 +93,15 @@ func (db *DB) BackupTo(path string) error {
 	if !check.IntegrityOK || !check.ForeignKeyOK {
 		return errors.New("backup verification failed")
 	}
-	return nil
+	var mode string
+	if err := connection.QueryRow("PRAGMA journal_mode=DELETE").Scan(&mode); err != nil {
+		return err
+	}
+	if mode != "delete" {
+		return fmt.Errorf("backup journal mode = %q, want delete", mode)
+	}
+	if err := connection.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0600)
 }
