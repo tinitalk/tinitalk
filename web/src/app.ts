@@ -491,6 +491,9 @@ function renderApp(): void {
   if (screen.dataset.viewKey === viewKey && route.name === 'contact') {
     const key = accountKey(route.accountId, route.login);
     const contact = findContact(route.accountId, route.login);
+    // Local actions must remain visible even when history keeps the card mounted.
+    const star = screen.querySelector<HTMLButtonElement>('.favorite-toggle');
+    if (star) updateFavoriteButton(star, key);
     // Keep the measured, scrollable card while a background invalidation reloads
     // its history. An empty loading placeholder would clamp scrollTop to zero.
     if (contact && !contact.account.sessionReplaced && !contactHistory.has(key) && !contactHistoryErrors.has(key)) {
@@ -1430,6 +1433,13 @@ async function deletePhotosForAccount(accountId: string): Promise<void> {
   }
 }
 
+function updateFavoriteButton(button: HTMLButtonElement, key: string): void {
+  const starred = favorites.keys.includes(key);
+  button.classList.toggle('selected', starred);
+  button.setAttribute('aria-label', starred ? 'Убрать из избранных' : 'Добавить в избранные');
+  button.setAttribute('aria-pressed', String(starred));
+}
+
 function contactScreen(accountId: string, login: string): HTMLElement {
   const contact = findContact(accountId, login);
   if (!contact) {
@@ -1446,11 +1456,8 @@ function contactScreen(accountId: string, login: string): HTMLElement {
     renderApp();
     if (position >= 0) notice('Убрано из избранных', () => { favorites.set(key, true, position); renderApp(); });
   }, 'favorite-toggle');
-  const starred = favorites.keys.includes(accountKey(accountId, login));
   star.append(favoriteStar());
-  star.classList.toggle('selected', starred);
-  star.setAttribute('aria-label', starred ? 'Убрать из избранных' : 'Добавить в избранные');
-  star.setAttribute('aria-pressed', String(starred));
+  updateFavoriteButton(star, accountKey(accountId, login));
   const actions = element('div', 'contact-top-actions');
   actions.append(star, menu);
   const body = element('main', 'contact-screen');
