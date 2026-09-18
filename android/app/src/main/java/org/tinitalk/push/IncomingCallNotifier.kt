@@ -16,6 +16,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
+import android.os.VibrationAttributes
 import android.os.Vibrator
 import android.os.VibratorManager
 import org.tinitalk.R
@@ -106,7 +107,19 @@ private object IncomingVibration {
             Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0),
         )
         runCatching {
-            next.vibrate(VibrationEffect.createWaveform(pattern, 0))
+            val effect = VibrationEffect.createWaveform(pattern, 0)
+            // Let Android apply ringtone settings and Do Not Disturb to the manual loop too.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                next.vibrate(effect, VibrationAttributes.Builder()
+                    .setUsage(VibrationAttributes.USAGE_RINGTONE)
+                    .build())
+            } else {
+                @Suppress("DEPRECATION")
+                next.vibrate(effect, AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .build())
+            }
         }.onFailure {
             stop(invite.owner)
         }

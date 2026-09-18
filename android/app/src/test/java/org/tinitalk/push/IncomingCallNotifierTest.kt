@@ -5,6 +5,10 @@ import android.app.NotificationManager
 import android.app.Person
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.media.AudioAttributes
+import android.os.Build
+import android.os.VibrationAttributes
+import android.os.Vibrator
 import org.tinitalk.CallActivity
 import org.tinitalk.R
 import org.tinitalk.data.AccountId
@@ -44,6 +48,37 @@ class IncomingCallNotifierTest {
         Instant.now().plusSeconds(30),
     )
     private fun controller() = IncomingCallController(CallAdmissionHandoff(CallAdmission()))
+
+    @Test
+    @Config(sdk = [26, 32, 35])
+    fun manualVibrationUsesRingtonePolicyAndStopsOnCancel() {
+        val context = RuntimeEnvironment.getApplication()
+        val vibrator = context.getSystemService(Vibrator::class.java)
+        val shadow = Shadows.shadowOf(vibrator)
+        shadow.setHasVibrator(true)
+        val notifier = IncomingCallNotifier(context)
+        val invite = invite("ringtone-vibration")
+        val incoming = IncomingCallController()
+        incoming.admitIncoming(context, invite)
+        try {
+            assertNotNull(notifier.buildIncomingNotification(invite, IncomingCallPresentationMode.HeadsUp))
+            assertTrue(shadow.isVibrating)
+            assertEquals(0, shadow.repeat)
+            // Android 12+ converts AudioAttributes to VibrationAttributes internally too.
+            if (Build.VERSION.SDK_INT >= 31) {
+                val attributes = shadow.vibrationAttributesFromLastVibration as VibrationAttributes
+                assertEquals(VibrationAttributes.USAGE_RINGTONE, attributes.usage)
+                assertFalse(attributes.isFlagSet(VibrationAttributes.FLAG_BYPASS_INTERRUPTION_POLICY))
+            } else {
+                assertEquals(AudioAttributes.USAGE_NOTIFICATION_RINGTONE,
+                    shadow.audioAttributesFromLastVibration?.usage)
+            }
+        } finally {
+            incoming.finishTerminalPresentation(context, invite.owner) {}
+            notifier.cancel()
+        }
+        assertFalse(shadow.isVibrating)
+    }
     @Test
     fun incomingPushRequiresExactSessionTarget() {
         val session = Session("https://a.example", "alice", "token", sessionId = "session-a")
