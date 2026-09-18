@@ -21,8 +21,8 @@ func TestInitAndUserCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := out.String()
-	if !strings.Contains(first, "token:") {
-		t.Fatalf("output = %q, want token once", first)
+	if !strings.Contains(first, "password:") || strings.Contains(first, "token:") {
+		t.Fatalf("output = %q, want temporary password once", first)
 	}
 
 	out.Reset()
@@ -70,8 +70,8 @@ func TestInitAndUserCommands(t *testing.T) {
 	if err := Run(&out, "user", "rotate-token", "--data-dir", dir, "alice"); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(out.String(), "token:") != 1 {
-		t.Fatalf("rotate output = %q, want one token", out.String())
+	if strings.Count(out.String(), "password:") != 1 {
+		t.Fatalf("rotate output = %q, want one temporary password", out.String())
 	}
 	out.Reset()
 	if err := Run(&out, "user", "delete", "--data-dir", dir, "alice"); err != nil {

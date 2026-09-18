@@ -10,7 +10,7 @@ import (
 
 func runUser(w io.Writer, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: tinitalk user add|list|rename|disable|enable|delete|rotate-token")
+		return errors.New("usage: tinitalk user add|list|rename|disable|enable|delete|reset-password")
 	}
 	action := args[0]
 	dataDir, rest, err := parseDataDir(args[1:])
@@ -28,11 +28,11 @@ func runUser(w io.Writer, args []string) error {
 		if len(rest) != 2 {
 			return errors.New("usage: tinitalk user add LOGIN DISPLAY_NAME [--data-dir DIR]")
 		}
-		token, err := db.AddUser(rest[0], rest[1])
+		password, err := db.AddUserWithPassword(rest[0], rest[1])
 		if err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(w, "login: %s\ntoken: %s\n", rest[0], token)
+		_, _ = fmt.Fprintf(w, "login: %s\npassword: %s\n", rest[0], password)
 	case "list":
 		if len(rest) != 0 {
 			return errors.New("usage: tinitalk user list [--data-dir DIR]")
@@ -80,15 +80,15 @@ func runUser(w io.Writer, args []string) error {
 			return err
 		}
 		_, _ = fmt.Fprintf(w, "deleted: %s\n", rest[0])
-	case "rotate-token":
+	case "reset-password", "rotate-token": // Keep the existing admin command as an alias.
 		if len(rest) != 1 {
-			return errors.New("usage: tinitalk user rotate-token LOGIN [--data-dir DIR]")
+			return errors.New("usage: tinitalk user reset-password LOGIN [--data-dir DIR]")
 		}
-		token, err := db.RotateToken(rest[0])
+		password, err := db.ResetPassword(rest[0])
 		if err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(w, "login: %s\ntoken: %s\n", rest[0], token)
+		_, _ = fmt.Fprintf(w, "login: %s\npassword: %s\n", rest[0], password)
 	default:
 		return fmt.Errorf("unknown user command %q", action)
 	}

@@ -6,6 +6,7 @@ type User struct {
 	Login       string
 	DisplayName string `json:"-"`
 	Disabled    bool
+	PasswordSet bool `json:"-"`
 }
 
 func (db *DB) AddUser(login, displayName string) (string, error) {

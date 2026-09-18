@@ -106,6 +106,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := currentUser(r).Login
+	_, socketToken, _ := r.BasicAuth()
 	session, managed := currentSession(r)
 	sessionID := ""
 	if managed {
@@ -158,6 +159,17 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	if !s.hub.Connected(client) {
 		return
 	}
+	credentialsCurrent := func() bool {
+		_, tokenValid, authErr := s.auth.Authenticate(user, socketToken)
+		if authErr != nil || !tokenValid {
+			return false
+		}
+		currentSession, currentManaged, sessionErr := s.db.CurrentSession(user)
+		if sessionErr != nil || currentManaged != managed {
+			return false
+		}
+		return !managed || currentSession.SessionID == sessionID
+	}
 	var writeMu sync.Mutex
 	writeJSON := func(value any) error {
 		writeMu.Lock()
@@ -194,6 +206,13 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			case <-done:
 				return
 			case <-ticker.C:
+				s.sessionClaimMu.Lock()
+				current := credentialsCurrent()
+				s.sessionClaimMu.Unlock()
+				if !current {
+					_ = conn.Close()
+					return
+				}
 				writeMu.Lock()
 				err := conn.SetWriteDeadline(time.Now().Add(s.socketTiming.writeTimeout))
 				if err == nil {
@@ -212,12 +231,22 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		s.sessionClaimMu.Lock()
+		current := credentialsCurrent()
+		if !current {
+			s.sessionClaimMu.Unlock()
+			return
+		}
 		event, err := protocol.Decode(raw)
 		if err != nil {
+			s.sessionClaimMu.Unlock()
 			_ = writeJSON(map[string]string{"error": err.Error()})
 			continue
 		}
-		if err := s.hub.HandleClient(client, event); err != nil {
+		handleErr := s.hub.HandleClient(client, event)
+		s.sessionClaimMu.Unlock()
+		if handleErr != nil {
+			err = handleErr
 			failure := map[string]any{"error": err.Error(), "call_id": event.CallID, "event_id": event.ID}
 			if errors.Is(err, signaling.ErrCalleeBusy) {
 				failure["code"] = "busy"

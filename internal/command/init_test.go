@@ -3,9 +3,40 @@ package command
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"tinitalk/internal/state"
 )
+
+func TestInitTemporaryPasswordTTL(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"--temporary-password-ttl", "24h", "--webpush-contact", "https://example.com"},
+		{},
+	} {
+		if err := Run(&bytes.Buffer{}, append([]string{"init", "--data-dir", dir}, args...)...); err != nil {
+			t.Fatal(err)
+		}
+		db, err := state.OpenDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ttl, err := db.TemporaryPasswordTTL()
+		db.Close()
+		if err != nil || ttl != 24*time.Hour {
+			t.Fatalf("TTL = %v, %v", ttl, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"--temporary-password-ttl"}, {"--temporary-password-ttl", "0"},
+		{"--temporary-password-ttl", "-1h"}, {"--temporary-password-ttl", "garbage"},
+		{"--temporary-password-ttl", "1h", "--temporary-password-ttl", "2h"},
+	} {
+		if err := Run(&bytes.Buffer{}, append([]string{"init", "--data-dir", dir}, args...)...); err == nil {
+			t.Fatalf("accepted invalid TTL arguments %v", args)
+		}
+	}
+}
 
 func TestInitStoresAndPreservesWebPushContact(t *testing.T) {
 	dir := t.TempDir()

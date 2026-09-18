@@ -37,6 +37,8 @@ type Server struct {
 	mux            *http.ServeMux
 	socketTiming   socketTiming
 	sessionClaimMu sync.Mutex
+	authAttempts   *ipAttemptLimiter
+	authMutations  chan struct{}
 	tickets        browserTickets
 }
 
@@ -70,6 +72,8 @@ func NewServer(db *state.DB, options Options) http.Handler {
 		options:       options,
 		mux:           http.NewServeMux(),
 		tickets:       browserTickets{items: make(map[string]browserTicket)},
+		authAttempts:  newIPAttemptLimiter(defaultIPAttemptLimit, defaultIPAttemptWindow, maxIPAttemptEntries),
+		authMutations: make(chan struct{}, 1),
 		socketTiming:  defaultSocketTiming,
 	}
 	s.routes()
@@ -87,6 +91,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.Handle("/api/browser/session", s.requireBasicAuth(http.HandlerFunc(s.session)))
+	s.mux.Handle("POST /api/auth/login", http.HandlerFunc(s.passwordLogin))
+	s.mux.Handle("POST /api/auth/password", http.HandlerFunc(s.changePassword))
+	s.mux.Handle("POST /api/auth/logout", s.requirePasswordBasicAuth(http.HandlerFunc(s.passwordLogout)))
 	s.mux.Handle("/api/browser/socket-ticket", s.requireAuth(http.HandlerFunc(s.issueBrowserTicket)))
 	s.mux.HandleFunc("/api/browser/socket", s.browserSocket)
 	s.mux.HandleFunc("/healthz", s.health)
@@ -108,7 +115,7 @@ func (s *Server) routes() {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	features := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1", "browser_v1"}
+	features := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1", "browser_v1", "password_auth_v1"}
 	writeJSON(w, struct {
 		Service    string   `json:"service"`
 		Status     string   `json:"status"`

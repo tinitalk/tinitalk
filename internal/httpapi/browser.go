@@ -34,11 +34,12 @@ func (s *Server) browserCORS(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Expose-Headers", authReasonHeader+", "+signalProtocolHeader)
+	w.Header().Set("Access-Control-Expose-Headers", authReasonHeader+", "+signalProtocolHeader+", Retry-After")
 	if r.Method != http.MethodOptions {
 		// A non-simple header prevents HTML forms from using ambient browser
 		// Basic credentials. WebSocket authentication uses its own bound ticket.
-		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/browser/socket" && r.Header.Get(deviceIDHeader) == "" {
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/browser/socket" &&
+			!isUnauthenticatedPasswordPath(r.URL.Path) && r.Header.Get(deviceIDHeader) == "" {
 			http.Error(w, "explicit browser device header required", http.StatusForbidden)
 			return true
 		}
@@ -49,6 +50,10 @@ func (s *Server) browserCORS(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Set("Access-Control-Max-Age", "600")
 	w.WriteHeader(http.StatusNoContent)
 	return true
+}
+
+func isUnauthenticatedPasswordPath(path string) bool {
+	return path == "/api/auth/login" || path == "/api/auth/password"
 }
 
 func (s *Server) validBrowserOrigin(origin string) bool {

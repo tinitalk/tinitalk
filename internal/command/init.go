@@ -52,6 +52,10 @@ func runInit(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	passwordTTL, rest, err := parseInitPasswordTTL(rest)
+	if err != nil {
+		return err
+	}
 	webPushContact, err := parseInitWebPushContact(rest)
 	if err != nil {
 		return err
@@ -67,6 +71,11 @@ func runInit(w io.Writer, args []string) error {
 	if _, err := db.EnsureWebPushVAPID(); err != nil {
 		return err
 	}
+	if passwordTTL != nil {
+		if err := db.SetTemporaryPasswordTTL(*passwordTTL); err != nil {
+			return err
+		}
+	}
 	if webPushContact != "" {
 		if err := db.SetSetting(webPushContactSetting, webPushContact); err != nil {
 			return err
@@ -74,6 +83,27 @@ func runInit(w io.Writer, args []string) error {
 	}
 	_, _ = fmt.Fprintf(w, "state: %s\n", dataDir)
 	return nil
+}
+
+func parseInitPasswordTTL(args []string) (*time.Duration, []string, error) {
+	var ttl *time.Duration
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		if args[i] != "--temporary-password-ttl" {
+			rest = append(rest, args[i])
+			continue
+		}
+		if ttl != nil || i+1 >= len(args) {
+			return nil, nil, errors.New("--temporary-password-ttl requires one duration, e.g. 168h")
+		}
+		parsed, err := time.ParseDuration(args[i+1])
+		if err != nil || parsed < time.Second {
+			return nil, nil, errors.New("--temporary-password-ttl must be at least 1s, e.g. 168h")
+		}
+		ttl = &parsed
+		i++
+	}
+	return ttl, rest, nil
 }
 
 func parseInitWebPushContact(args []string) (string, error) {
@@ -84,7 +114,7 @@ func parseInitWebPushContact(args []string) (string, error) {
 		return "", errors.New("--webpush-contact requires URL")
 	}
 	if len(args) != 2 || args[0] != "--webpush-contact" {
-		return "", errors.New("usage: tinitalk init [--data-dir DIR] [--webpush-contact URL]")
+		return "", errors.New("usage: tinitalk init [--data-dir DIR] [--webpush-contact URL] [--temporary-password-ttl 168h]")
 	}
 	parsed, err := url.Parse(args[1])
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {

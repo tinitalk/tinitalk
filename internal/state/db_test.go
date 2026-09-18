@@ -65,7 +65,7 @@ func TestOpenRejectsLegacySchemaWithoutModifyingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Open(path); err == nil || err.Error() != "database schema 8 is unsupported; expected 10" {
+	if _, err := Open(path); err == nil || err.Error() != "database schema 8 is unsupported; expected 11" {
 		t.Fatalf("Open legacy schema error = %v", err)
 	}
 	legacy, err := sql.Open("sqlite", path)
@@ -167,8 +167,8 @@ func TestOpenMigratesSchemaNineCallHistoryWithoutLosingRows(t *testing.T) {
 	if err := db.sql.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 10 {
-		t.Fatalf("schema version = %d, want 10", version)
+	if version != currentSchemaVersion() {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion())
 	}
 	var callID string
 	var replyCode sql.NullString

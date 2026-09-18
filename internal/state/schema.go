@@ -20,6 +20,10 @@ CREATE TABLE users(
 	login TEXT NOT NULL UNIQUE,
 	display_name TEXT NOT NULL,
 	disabled INTEGER NOT NULL DEFAULT 0,
+	password_hash TEXT,
+	password_expires_at INTEGER,
+	password_failed_attempts INTEGER NOT NULL DEFAULT 0,
+	password_retry_after INTEGER,
 	created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -103,6 +107,10 @@ CREATE TABLE account_sessions(
 // Index 0 migrates baseSchemaVersion to baseSchemaVersion+1.
 var schemaMigrations = []string{
 	`ALTER TABLE call_history ADD COLUMN reply_code TEXT;`,
+	`ALTER TABLE users ADD COLUMN password_hash TEXT;
+	 ALTER TABLE users ADD COLUMN password_expires_at INTEGER;
+	 ALTER TABLE users ADD COLUMN password_failed_attempts INTEGER NOT NULL DEFAULT 0;
+	 ALTER TABLE users ADD COLUMN password_retry_after INTEGER;`,
 }
 
 func currentSchemaVersion() int {

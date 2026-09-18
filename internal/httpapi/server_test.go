@@ -26,11 +26,15 @@ func TestAuthenticatedHouseholdEndpoints(t *testing.T) {
 	if me.Code != http.StatusOK {
 		t.Fatalf("/api/me status = %d, body %s", me.Code, me.Body.String())
 	}
-	var profile map[string]string
+	var profile struct {
+		Login       string `json:"login"`
+		DisplayName string `json:"display_name"`
+		PasswordSet bool   `json:"password_set"`
+	}
 	if err := json.Unmarshal(me.Body.Bytes(), &profile); err != nil {
 		t.Fatal(err)
 	}
-	if profile["login"] != "alice" || profile["display_name"] != "alice" {
+	if profile.Login != "alice" || profile.DisplayName != "alice" || profile.PasswordSet {
 		t.Fatalf("profile = %+v", profile)
 	}
 
@@ -122,7 +126,7 @@ func TestHealthKeepsAPIVersionAndFeaturesStable(t *testing.T) {
 	if health.Service != "tinitalk" || health.Status != "ok" || health.APIVersion != 4 || health.Commit != "01234567" {
 		t.Fatalf("health = %+v, want tinitalk, ok, API version 4, commit 01234567", health)
 	}
-	want := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1", "browser_v1"}
+	want := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1", "browser_v1", "password_auth_v1"}
 	if fmt.Sprint(health.Features) != fmt.Sprint(want) {
 		t.Fatalf("health features = %v, want %v", health.Features, want)
 	}

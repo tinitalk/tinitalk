@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"tinitalk/internal/state"
@@ -40,10 +41,22 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 	}
 
 	login := currentUser(r).Login
+	_, presentedToken, credentialsPresent := r.BasicAuth()
 	s.sessionClaimMu.Lock()
-	claim, err := s.db.ClaimSessionWithPushTarget(login, request.DeviceID, target)
+	if !credentialsPresent {
+		s.sessionClaimMu.Unlock()
+		w.Header().Set("WWW-Authenticate", `Basic realm="tinitalk"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	claim, err := s.db.ClaimSessionWithToken(login, presentedToken, request.DeviceID, target)
 	if err != nil {
 		s.sessionClaimMu.Unlock()
+		if errors.Is(err, state.ErrInvalidCredentials) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="tinitalk"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		http.Error(w, "session unavailable", http.StatusInternalServerError)
 		return
 	}

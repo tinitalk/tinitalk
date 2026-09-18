@@ -321,7 +321,7 @@ sudo -u tinitalk tinitalk init [--data-dir DIR] [--webpush-contact HTTPS_URL]
 sudo -u tinitalk tinitalk user add LOGIN "DISPLAY NAME"
 sudo -u tinitalk tinitalk user list
 sudo -u tinitalk tinitalk user rename LOGIN "DISPLAY NAME"
-sudo -u tinitalk tinitalk user rotate-token LOGIN
+sudo -u tinitalk tinitalk user reset-password LOGIN
 sudo -u tinitalk tinitalk user disable LOGIN
 sudo -u tinitalk tinitalk user enable LOGIN
 sudo -u tinitalk tinitalk user delete LOGIN
@@ -330,14 +330,20 @@ sudo -u tinitalk tinitalk user delete LOGIN
 `DISPLAY NAME` — внутреннее имя пользователя только для администратора.
 Оно не передаётся через пользовательский API и не используется в телефонных книгах.
 
-`add` и `rotate-token` показывают новый token только один раз. `rotate-token`
-сбрасывает регистрации устройств и push-подписки.
+`add` и `reset-password` один раз показывают временный пароль из 8 цифр.
+Он действует 7 суток и блокируется после 5 неверных попыток. При первом входе
+пользователь задаёт свой пароль. `reset-password` отзывает прежний доступ;
+`rotate-token` сохранён как синоним этой команды.
+
+Срок действия новых временных паролей можно изменить без перезапуска сервера:
+`sudo -u tinitalk tinitalk init --temporary-password-ttl 168h`.
 
 `disable` блокирует доступ пользователя без удаления данных, `enable` возвращает
 доступ, а `delete` необратимо удаляет пользователя и связанные с ним данные.
 
-Для входа в Android-приложение указать адрес TiniTalk-сервера, `login` и
-`token`, выданные командой `user add`.
+Для первого входа в Android или web указать адрес сервера, `login` и временный
+пароль. Существующие пользователи остаются авторизованными; ранее выданные
+токены работают до смены/сброса пароля или отзыва доступа.
 
 ### Диагностика
 

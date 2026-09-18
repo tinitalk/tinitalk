@@ -44,6 +44,16 @@ func (db *DB) ClaimSession(login, deviceID string) (SessionClaim, error) {
 // ClaimSessionWithPushTarget atomically claims a session and, when provided,
 // stores the current device's push target.
 func (db *DB) ClaimSessionWithPushTarget(login, deviceID string, target *PushTarget) (SessionClaim, error) {
+	return db.claimSession(login, nil, deviceID, target)
+}
+
+// ClaimSessionWithToken authorizes and claims in one writer transaction, so a
+// separate CLI process cannot revoke the token between those operations.
+func (db *DB) ClaimSessionWithToken(login, token, deviceID string, target *PushTarget) (SessionClaim, error) {
+	return db.claimSession(login, &token, deviceID, target)
+}
+
+func (db *DB) claimSession(login string, token *string, deviceID string, target *PushTarget) (SessionClaim, error) {
 	if deviceID == "" {
 		return SessionClaim{}, errors.New("device ID is required")
 	}
@@ -60,7 +70,20 @@ func (db *DB) ClaimSessionWithPushTarget(login, deviceID string, target *PushTar
 
 	var userID int64
 	if err := tx.QueryRow("SELECT id FROM users WHERE login = ?", login).Scan(&userID); err != nil {
+		if token != nil && errors.Is(err, sql.ErrNoRows) {
+			return SessionClaim{}, ErrInvalidCredentials
+		}
 		return SessionClaim{}, err
+	}
+	if token != nil {
+		var valid int
+		if err := tx.QueryRow(`SELECT count(*) FROM auth_tokens t JOIN users u ON u.id=t.user_id
+			WHERE u.id=? AND u.disabled=0 AND t.token_sha256=? AND t.active=1`, userID, hashToken(*token)).Scan(&valid); err != nil {
+			return SessionClaim{}, err
+		}
+		if valid == 0 {
+			return SessionClaim{}, ErrInvalidCredentials
+		}
 	}
 	claim := SessionClaim{}
 	var previous AccountSession
