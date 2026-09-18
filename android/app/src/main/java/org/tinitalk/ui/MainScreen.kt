@@ -188,11 +188,20 @@ data class MainScreenState(
     val latestUnreadMissedByAccountContact: Map<AccountPeerKey, Long> = emptyMap(),
     val permissions: AppPermissionsState = AppPermissionsState(),
     val errorMessage: String? = null,
+    val passwordSetupRequired: Boolean = false,
+    val loginRetryAtMillis: Long = 0,
     val networkAvailable: Boolean = true,
     val accountPage: AccountPage = AccountPage.Main,
     val accounts: List<AccountSummary> = emptyList(),
     val addingAccount: Boolean = false,
     val addAccountErrorMessage: String? = null,
+    val addAccountPasswordSetupRequired: Boolean = false,
+    val addAccountRetryAtMillis: Long = 0,
+    val passwordChanging: Boolean = false,
+    val passwordChangeErrorMessage: String? = null,
+    val passwordChangeCompletionKey: Int = 0,
+    val passwordRetryAtMillis: Long = 0,
+    val signInRecovery: AccountSummary? = null,
     val addingContact: Boolean = false,
     val addContactErrorMessage: String? = null,
     val removingContact: AccountPeerKey? = null,
@@ -207,6 +216,7 @@ data class AccountSummary(
     val serverUrl: String,
     val login: String,
     val displayName: String?,
+    val passwordSet: Boolean? = null,
 )
 
 internal fun contactsRequiringServerSubtitle(contacts: List<AccountContact>): Set<AccountPeerKey> =
@@ -340,8 +350,11 @@ fun MainScreen(
     contactOpenRequest: ContactOpenRequest? = null,
     onContactOpenRequestHandled: (ContactOpenRequest) -> Unit = {},
     onSignIn: (url: String, login: String, token: String) -> Unit,
+    onSetInitialPassword: (url: String, login: String, temporaryPassword: String, newPassword: String) -> Unit =
+        { _, _, _, _ -> },
     onCheckServer: (url: String) -> ServerCheckResult,
     onCheckServerDetails: (url: String) -> ServerCheckDetails,
+    onCheckPasswordSet: (AccountId) -> Boolean? = { null },
     onRequestNotifications: () -> Unit,
     onRequestMicrophone: () -> Unit,
     onRequestFullScreenCalls: () -> Unit,
@@ -375,7 +388,10 @@ fun MainScreen(
     onOpenAddAccount: () -> Unit,
     onCloseAddAccount: () -> Unit,
     onAddAccount: (url: String, login: String, token: String) -> Unit,
+    onSetInitialPasswordForAccount: (url: String, login: String, temporaryPassword: String, newPassword: String) -> Unit =
+        { _, _, _, _ -> },
     onRemoveAccount: (AccountId) -> Unit,
+    onChangePassword: (AccountId, String, String) -> Unit = { _, _, _ -> },
     onCheckAddAccountServer: (String) -> ServerCheckResult = onCheckServer,
     onOpenAddContact: () -> Unit = {},
     onCloseAddContact: () -> Unit = {},
@@ -383,6 +399,8 @@ fun MainScreen(
     onAddContact: (AccountId, String, String) -> Unit = { _, _, _ -> },
     onRemoveContact: (AccountContact) -> Unit = {},
     onRemoveContactDismissed: () -> Unit = {},
+    onCancelPasswordSetup: () -> Unit = {},
+    onCancelAccountPasswordSetup: () -> Unit = {},
 ) {
     var aboutVisible by rememberSaveable(state.signedIn) { mutableStateOf(false) }
     LaunchedEffect(contactOpenRequest) {
@@ -401,25 +419,41 @@ fun MainScreen(
                     loading = state.signingIn,
                     errorMessage = state.errorMessage,
                     internetAvailable = state.networkAvailable,
+                    passwordSetupRequired = state.passwordSetupRequired,
                     onSignIn = onSignIn,
+                    signInRecovery = state.signInRecovery,
+                    onSetPassword = onSetInitialPassword,
+                    onCancelPasswordSetup = onCancelPasswordSetup,
+                    retryAtMillis = state.loginRetryAtMillis,
                     onCheckServer = onCheckServer,
                 )
                 state.accountPage == AccountPage.Profile -> ProfileScreen(
                     accounts = state.accounts,
                     internetAvailable = state.networkAvailable,
                     onCheckServer = onCheckServerDetails,
+                    onCheckPasswordSet = onCheckPasswordSet,
                     onBack = onCloseProfile,
                     onAdd = onOpenAddAccount,
                     onRemoveAccount = onRemoveAccount,
+                    passwordChanging = state.passwordChanging,
+                    passwordErrorMessage = state.passwordChangeErrorMessage,
+                    passwordChangeCompletionKey = state.passwordChangeCompletionKey,
+                    onChangePassword = onChangePassword,
+                    retryAtMillis = state.passwordRetryAtMillis,
                 )
                 state.accountPage == AccountPage.AddAccount -> AddAccountScreen(
                     resetKey = loginResetKey,
                     loading = state.addingAccount,
                     errorMessage = state.addAccountErrorMessage,
                     internetAvailable = state.networkAvailable,
+                    passwordSetupRequired = state.addAccountPasswordSetupRequired,
                     onBack = onCloseAddAccount,
                     onAdd = onAddAccount,
+                    onSetPassword = onSetInitialPasswordForAccount,
+                    onCancelPasswordSetup = onCancelAccountPasswordSetup,
+                    retryAtMillis = state.addAccountRetryAtMillis,
                     onCheckServer = onCheckAddAccountServer,
+                    signInRecovery = state.signInRecovery,
                 )
                 state.accountPage == AccountPage.AddContact -> AddContactScreen(
                     accounts = state.accounts,
@@ -559,9 +593,19 @@ private fun LoginScreen(
     loading: Boolean,
     errorMessage: String?,
     internetAvailable: Boolean,
+    passwordSetupRequired: Boolean,
     onSignIn: (String, String, String) -> Unit,
+    onSetPassword: (String, String, String, String) -> Unit,
+    onCancelPasswordSetup: () -> Unit,
+    retryAtMillis: Long,
     onCheckServer: (String) -> ServerCheckResult,
+    signInRecovery: AccountSummary? = null,
 ) {
+    val credentials = rememberAccountCredentials(resetKey, signInRecovery?.login.orEmpty(), signInRecovery?.serverUrl.orEmpty())
+    if (passwordSetupRequired) {
+        PasswordSetupScreen(credentials, loading, errorMessage, internetAvailable, retryAtMillis, onSetPassword, onCancelPasswordSetup)
+        return
+    }
     val sharedKeyboardVisible = WindowInsets.isImeVisible
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
@@ -582,8 +626,8 @@ private fun LoginScreen(
                 }
                 Spacer(Modifier.height(if (sharedKeyboardVisible) 16.dp else 28.dp))
                 AccountCredentialsForm(
-                    resetKey, loading, errorMessage, internetAvailable, "Войти", sharedKeyboardVisible,
-                    onSignIn, onCheckServer,
+                    credentials, loading, errorMessage, internetAvailable, "Войти", sharedKeyboardVisible,
+                    onSignIn, onCheckServer, retryAtMillis,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text("v ${BuildConfig.COMMIT_HASH}", modifier = Modifier.align(Alignment.CenterHorizontally), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f), fontSize = 10.sp)

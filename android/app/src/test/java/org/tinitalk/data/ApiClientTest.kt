@@ -6,10 +6,135 @@ import org.tinitalk.push.WebPushSubscription
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApiClientTest {
+    @Test
+    fun passwordRequestsNeverFollowRedirects() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(307).setHeader("Location", server.url("/other")))
+            server.enqueue(MockResponse().setBody("{}"))
+            val error = assertThrows(ApiException::class.java) {
+                UrlConnectionApiClient(server.url("/").toString(), "", "").login("alice", "secret")
+            }
+            assertEquals(307, error.code)
+            assertEquals(1, server.requestCount)
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun passwordLoginUsesUnauthenticatedJsonContract() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"token":"new-token","password_required":false}"""))
+        server.start()
+        try {
+            val result = UrlConnectionApiClient(
+                server.url("/").toString(),
+                "constructor-login",
+                "constructor-token",
+                sessionId = "constructor-session",
+            ).login("alice", "  пароль без обрезки  ")
+
+            assertEquals("new-token", result.token)
+            assertFalse(result.passwordRequired)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/auth/login", request.path)
+            assertEquals(
+                "{\"login\":\"alice\",\"password\":\"  пароль без обрезки  \"}",
+                request.body.readUtf8(),
+            )
+            assertEquals(null, request.getHeader("Authorization"))
+            assertEquals(null, request.getHeader("X-TiniTalk-Session-ID"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun temporaryPasswordResponseDoesNotRequireAToken() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"password_required":true}"""))
+        server.start()
+        try {
+            val result = UrlConnectionApiClient(server.url("/").toString(), "", "")
+                .login("alice", "1234 5678")
+
+            assertEquals(null, result.token)
+            assertTrue(result.passwordRequired)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun passwordSetupSendsCurrentAndNewPasswordWithoutBasicAuth() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"token":"rotated","password_required":false}"""))
+        server.start()
+        try {
+            val result = UrlConnectionApiClient(server.url("/").toString(), "alice", "legacy-token")
+                .setPassword("alice", "1234 5678", "  личный пароль длиной 15+  ")
+
+            assertEquals("rotated", result.token)
+            val request = server.takeRequest()
+            assertEquals("/api/auth/password", request.path)
+            assertEquals(
+                "{\"login\":\"alice\",\"password\":\"1234 5678\",\"new_password\":\"  личный пароль длиной 15+  \"}",
+                request.body.readUtf8(),
+            )
+            assertEquals(null, request.getHeader("Authorization"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun logoutIncludesTheSessionBeingEnded() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(204))
+        server.start()
+        try {
+            UrlConnectionApiClient(server.url("/").toString(), "alice", "current-token", "session-a").logout()
+
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/auth/logout", request.path)
+            assertEquals("Basic YWxpY2U6Y3VycmVudC10b2tlbg==", request.getHeader("Authorization"))
+            assertEquals("session-a", request.getHeader("X-TiniTalk-Session-ID"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun exposesPasswordErrorCodeAndRetrySeconds() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(429)
+                .setHeader("Retry-After", "31")
+                .setBody("""{"error":"password_retry_later","retry_after":30}"""),
+        )
+        server.start()
+        try {
+            val error = assertThrows(ApiException::class.java) {
+                UrlConnectionApiClient(server.url("/").toString(), "", "").login("alice", "wrong")
+            }
+
+            assertEquals(429, error.code)
+            assertEquals("password_retry_later", error.errorCode)
+            assertEquals(30L, error.retryAfterSeconds)
+        } finally {
+            server.shutdown()
+        }
+    }
+
     @Test
     fun ignoresAdminNamesReturnedByOlderServers() {
         val server = MockWebServer()
@@ -22,6 +147,20 @@ class ApiClientTest {
             assertEquals("alice", api.me().displayName)
             assertEquals(Contact("bob", "Папа", "Папа"), api.contact("bob"))
             assertEquals(Contact("bob", "bob"), api.contact("bob"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun loadsOptionalPersonalPasswordStateFromProfile() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"login":"alice","password_set":false}"""))
+        server.start()
+        try {
+            val profile = UrlConnectionApiClient(server.url("/").toString(), "alice", "token").me()
+
+            assertEquals(false, profile.passwordSet)
         } finally {
             server.shutdown()
         }

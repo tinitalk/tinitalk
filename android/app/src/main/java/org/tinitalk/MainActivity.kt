@@ -55,6 +55,8 @@ import org.tinitalk.data.AuthStore
 import org.tinitalk.data.CallHistoryEvents
 import org.tinitalk.data.Contact
 import org.tinitalk.data.ContactRepository
+import org.tinitalk.data.PasswordSetupRequiredException
+import org.tinitalk.data.PasswordSignInRequiredException
 import org.tinitalk.data.CompatibilityProblem
 import org.tinitalk.data.ContactCache
 import org.tinitalk.data.ContactEvents
@@ -87,6 +89,8 @@ import org.tinitalk.ui.LocalContactPhotoReader
 import org.tinitalk.ui.isCurrentSessionRequest
 import org.tinitalk.ui.withOfflineSession
 import org.tinitalk.ui.configuredAboutServerUrl
+import org.tinitalk.ui.passwordAuthErrorMessage
+import org.tinitalk.ui.passwordRetryDeadline
 import org.tinitalk.ui.theme.TiniTalkTheme
 import java.net.MalformedURLException
 import java.net.SocketTimeoutException
@@ -236,8 +240,12 @@ class MainActivity : ComponentActivity() {
                         contactOpenRequest = contactOpenRequest,
                         onContactOpenRequestHandled = ::consumeContactOpenRequest,
                         onSignIn = ::loadContacts,
+                        onSetInitialPassword = ::setInitialPasswordAndLoadContacts,
+                        onCancelPasswordSetup = { screenState = screenState.copy(passwordSetupRequired = false, errorMessage = null, loginRetryAtMillis = 0) },
+                        onCancelAccountPasswordSetup = { screenState = screenState.copy(addAccountPasswordSetupRequired = false, addAccountErrorMessage = null, addAccountRetryAtMillis = 0) },
                         onCheckServer = repository::checkServer,
                         onCheckServerDetails = repository::checkServerDetails,
+                        onCheckPasswordSet = repository::passwordSet,
                         onRequestNotifications = ::requestNotificationPermission,
                         onRequestMicrophone = ::requestMicrophonePermission,
                         onRequestFullScreenCalls = ::requestFullScreenIntentPermission,
@@ -275,13 +283,15 @@ class MainActivity : ComponentActivity() {
                         onOpenProfile = { screenState = screenState.copy(accountPage = AccountPage.Profile) },
                         onCloseProfile = { screenState = screenState.copy(accountPage = AccountPage.Main) },
                         onOpenAddAccount = {
-                            screenState = screenState.copy(accountPage = AccountPage.AddAccount, addAccountErrorMessage = null)
+                            screenState = screenState.copy(accountPage = AccountPage.AddAccount, addAccountErrorMessage = null, signInRecovery = null)
                         },
                         onCloseAddAccount = {
-                            if (!screenState.addingAccount) screenState = screenState.copy(accountPage = AccountPage.Profile)
+                            if (!screenState.addingAccount) screenState = screenState.copy(accountPage = AccountPage.Profile, signInRecovery = null)
                         },
                         onAddAccount = ::addAccount,
+                        onSetInitialPasswordForAccount = ::setInitialPasswordAndAddAccount,
                         onRemoveAccount = ::removeAccount,
+                        onChangePassword = ::changePassword,
                         onCheckAddAccountServer = repository::checkAddAccountServer,
                         onOpenAddContact = {
                             screenState = screenState.copy(
@@ -423,35 +433,111 @@ class MainActivity : ComponentActivity() {
         contactNameViewModel.reset()
         authGeneration++
         val requestAuthGeneration = authGeneration
-        screenState = screenState.copy(signingIn = true, errorMessage = null)
+        screenState = screenState.copy(signingIn = true, errorMessage = null, loginRetryAtMillis = 0)
         val serverUrl = checkNotNull(httpsServerUrl(url))
         val deviceId = DeviceIdentity.id(this)
         Thread {
             runCatching { repository.signIn(url, login, token, deviceId) }
                 .onSuccess { page ->
-                    contactPhotoAccountLifecycle(this).activateServer(serverUrl)
-                    runOnUiThread {
-                        if (isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
-                            val account = repository.accounts().singleOrNull {
-                                it.session.url == serverUrl && it.session.login == login.trim()
-                            }
-                            if (account != null) {
-                                showContacts(
-                                    listOf(
-                                        AccountContactPage(
-                                            account.id,
-                                            page.items.map { contact ->
-                                                org.tinitalk.data.AccountContact(account.id, serverUrl, contact)
-                                            },
-                                        ),
-                                    ),
+                    completeInitialSignIn(serverUrl, login, page, requestAuthGeneration)
+                }
+                .onFailure { error ->
+                    if (error is PasswordSetupRequiredException) {
+                        runOnUiThread {
+                            if (isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
+                                screenState = screenState.copy(
+                                    signingIn = false,
+                                    passwordSetupRequired = true,
+                                    errorMessage = null,
                                 )
                             }
                         }
+                    } else {
+                        if (!showSavedLoginAfterFailure(serverUrl, login, requestAuthGeneration)) {
+                            showSessionErrorIfCurrent(error, requestAuthGeneration)
+                        }
                     }
                 }
-                .onFailure { showSessionErrorIfCurrent(it, requestAuthGeneration) }
         }.start()
+    }
+
+    private fun setInitialPasswordAndLoadContacts(
+        url: String,
+        login: String,
+        temporaryPassword: String,
+        newPassword: String,
+    ) {
+        if (!network.available || screenState.signingIn) return
+        authGeneration++
+        val requestAuthGeneration = authGeneration
+        screenState = screenState.copy(signingIn = true, errorMessage = null, loginRetryAtMillis = 0)
+        val serverUrl = checkNotNull(httpsServerUrl(url))
+        val deviceId = DeviceIdentity.id(this)
+        Thread {
+            runCatching {
+                repository.setInitialPassword(url, login, temporaryPassword, newPassword, deviceId)
+            }.onSuccess { page ->
+                completeInitialSignIn(serverUrl, login, page, requestAuthGeneration)
+            }.onFailure { error ->
+                if (showSavedLoginAfterFailure(serverUrl, login, requestAuthGeneration)) return@onFailure
+                if (error is ApiException) {
+                    showSessionErrorIfCurrent(error, requestAuthGeneration)
+                } else {
+                    runOnUiThread {
+                        if (isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
+                            screenState = screenState.copy(
+                                signingIn = false,
+                                passwordSetupRequired = false,
+                                errorMessage = passwordSetupRecoveryMessage(),
+                            )
+                        }
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun showSavedLoginAfterFailure(serverUrl: String, login: String, generation: Int): Boolean {
+        val saved = repository.accounts().any {
+            it.session.url == serverUrl && it.session.login == login.trim() &&
+                org.tinitalk.data.PASSWORD_AUTH_FEATURE in it.session.features
+        }
+        if (!saved) return false
+        runOnUiThread {
+            if (!isCurrentSessionRequest(generation, authGeneration)) return@runOnUiThread
+            screenState = screenState.copy(passwordSetupRequired = false)
+            restoreContacts()
+            Toast.makeText(this, "Вход сохранён. Восстанавливаем подключение", Toast.LENGTH_LONG).show()
+        }
+        return true
+    }
+
+    private fun completeInitialSignIn(
+        serverUrl: String,
+        login: String,
+        page: org.tinitalk.data.ContactPage,
+        requestAuthGeneration: Int,
+    ) {
+        contactPhotoAccountLifecycle(this).activateServer(serverUrl)
+        runOnUiThread {
+            if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration)) return@runOnUiThread
+            val account = repository.accounts().singleOrNull {
+                it.session.url == serverUrl && it.session.login == login.trim()
+            }
+            if (account != null) {
+                screenState = screenState.copy(passwordSetupRequired = false, signInRecovery = null)
+                showContacts(
+                    listOf(
+                        AccountContactPage(
+                            account.id,
+                            page.items.map { contact ->
+                                org.tinitalk.data.AccountContact(account.id, serverUrl, contact)
+                            },
+                        ),
+                    ),
+                )
+            }
+        }
     }
 
     private fun startCall(accountContact: AccountContact) {
@@ -548,7 +634,7 @@ class MainActivity : ComponentActivity() {
         }
         val requests = accounts.map { account ->
             CompletableFuture.supplyAsync {
-                runCatching { repository.refreshContacts(account.id) }.getOrNull()
+                runCatching { repository.refreshContacts(account.id, DeviceIdentity.id(this)) }.getOrNull()
             }
         }
         CompletableFuture.allOf(*requests.toTypedArray()).whenComplete { _, _ ->
@@ -563,7 +649,7 @@ class MainActivity : ComponentActivity() {
                     return@runOnUiThread
                 }
                 val activeAccounts = repository.accounts().filter { current ->
-                    accounts.any { it.id == current.id && it.session.sameIdentity(current.session) }
+                    accounts.any { it.id == current.id && it.session.token == current.session.token }
                 }
                 val activeIds = activeAccounts.map { it.id }.toSet()
                 val updated = pages.any { it.accountId in activeIds }
@@ -606,7 +692,7 @@ class MainActivity : ComponentActivity() {
             if (!isCurrentSessionRequest(requestAuthGeneration, authGeneration)) {
                 return@runOnUiThread
             }
-            if (error is ApiException && error.code == 401 && authStore.list().isNotEmpty()) return@runOnUiThread
+            if (error is ApiException && error.code == 401 && error.errorCode == null && authStore.list().isNotEmpty()) return@runOnUiThread
             showError(error)
         }
     }
@@ -619,7 +705,9 @@ class MainActivity : ComponentActivity() {
                 CompatibilityProblem.AppOutdated -> "Приложение TiniTalk устарело. Установите новую версию"
                 CompatibilityProblem.Unavailable -> "Сервер TiniTalk временно недоступен"
             }
-            is ApiException -> if (
+            is ApiException -> if (error.errorCode != null) {
+                passwordAuthErrorMessage(error)
+            } else if (
                 error.code == 401 && error.authReason == SessionReplacedReason
             ) SessionReplacedMessage else when (error.code) {
                 401 -> "Неверный логин или пароль"
@@ -639,13 +727,14 @@ class MainActivity : ComponentActivity() {
                 signingIn = false,
                 signedIn = false,
                 errorMessage = message,
+                loginRetryAtMillis = passwordRetryDeadline(error),
             )
         }
     }
 
     private fun addAccount(url: String, login: String, token: String) {
         if (!network.available || screenState.addingAccount || accountRemovalInProgress) return
-        screenState = screenState.copy(addingAccount = true, addAccountErrorMessage = null)
+        screenState = screenState.copy(addingAccount = true, addAccountErrorMessage = null, addAccountRetryAtMillis = 0)
         val deviceId = DeviceIdentity.id(this)
         Thread {
             runCatching { repository.addAccount(url, login, token, deviceId) }
@@ -660,8 +749,60 @@ class MainActivity : ComponentActivity() {
                         ),
                     )
                 }.onFailure { error ->
-                    accountAdditionHandoff.publish(AccountAdditionOutcome.Failed(userErrorMessage(error)))
+                    if (error is PasswordSetupRequiredException) {
+                        runOnUiThread {
+                            screenState = screenState.copy(
+                                addingAccount = false,
+                                addAccountPasswordSetupRequired = true,
+                                addAccountErrorMessage = null,
+                            )
+                        }
+                    } else {
+                        runOnUiThread { screenState = screenState.copy(addAccountRetryAtMillis = passwordRetryDeadline(error)) }
+                        accountAdditionHandoff.publish(AccountAdditionOutcome.Failed(userErrorMessage(error)))
+                    }
                 }
+        }.start()
+    }
+
+    private fun setInitialPasswordAndAddAccount(
+        url: String,
+        login: String,
+        temporaryPassword: String,
+        newPassword: String,
+    ) {
+        if (!network.available || screenState.addingAccount || accountRemovalInProgress) return
+        screenState = screenState.copy(addingAccount = true, addAccountErrorMessage = null, addAccountRetryAtMillis = 0)
+        val deviceId = DeviceIdentity.id(this)
+        Thread {
+            runCatching {
+                repository.setInitialPasswordAndAddAccount(
+                    url,
+                    login,
+                    temporaryPassword,
+                    newPassword,
+                    deviceId,
+                )
+            }.onSuccess { added ->
+                contactPhotoAccountLifecycle(this).activateServer(added.account.session.url)
+                accountAdditionHandoff.publish(
+                    AccountAdditionOutcome.Added(
+                        accountId = added.account.id,
+                        sessionId = added.account.session.sessionId,
+                        configId = added.account.session.configId,
+                        contacts = added.contacts,
+                    ),
+                )
+            }.onFailure { error ->
+                val message = if (error is ApiException) userErrorMessage(error) else passwordSetupRecoveryMessage()
+                runOnUiThread {
+                    screenState = screenState.copy(
+                        addAccountRetryAtMillis = passwordRetryDeadline(error),
+                        addAccountPasswordSetupRequired = error is ApiException,
+                    )
+                }
+                accountAdditionHandoff.publish(AccountAdditionOutcome.Failed(message))
+            }
         }.start()
     }
 
@@ -768,16 +909,24 @@ class MainActivity : ComponentActivity() {
             is AccountAdditionOutcome.Added -> applyAccountAddition(outcome)
             is AccountAdditionOutcome.Failed -> {
                 val accounts = repository.accounts()
+                val stagedAddition = accounts.any { account ->
+                    screenState.accounts.none { it.id == account.id }
+                }
                 screenState = screenState.copy(
                     restoring = false,
                     signingIn = false,
                     signedIn = accounts.isNotEmpty(),
                     addingAccount = false,
-                    accountPage = AccountPage.AddAccount,
-                    addAccountErrorMessage = outcome.message,
+                    accountPage = if (stagedAddition) AccountPage.Main else AccountPage.AddAccount,
+                    addAccountPasswordSetupRequired = screenState.addAccountPasswordSetupRequired && !stagedAddition,
+                    addAccountErrorMessage = outcome.message.takeUnless { stagedAddition },
                     serverUrl = accounts.aboutServerUrl(),
                     accounts = accounts.toAccountSummaries(),
                 )
+                if (stagedAddition) {
+                    refreshContacts(showProgress = false)
+                    Toast.makeText(this, "Вход сохранён. Восстанавливаем подключение", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -806,7 +955,9 @@ class MainActivity : ComponentActivity() {
             signedIn = true,
             accountPage = AccountPage.Main,
             addingAccount = false,
+            addAccountPasswordSetupRequired = false,
             addAccountErrorMessage = null,
+            signInRecovery = null,
             serverUrl = accounts.aboutServerUrl(),
             accounts = accounts.toAccountSummaries(),
             accountContacts = org.tinitalk.ui.mergeAccountContacts(
@@ -824,10 +975,19 @@ class MainActivity : ComponentActivity() {
         ) return
         accountRemovalInProgress = true
         Thread {
-            val removed = repository.removeAccount(accountId)
+            val removal = runCatching { repository.removeAccount(accountId) }
+            val removed = removal.getOrDefault(false)
             val remaining = repository.accounts()
             runOnUiThread {
                 accountRemovalInProgress = false
+                removal.exceptionOrNull()?.let { error ->
+                    val message = when (error) {
+                        is UnknownHostException, is SocketTimeoutException ->
+                            "Не удалось отозвать вход на сервере. Аккаунт остался на устройстве"
+                        else -> "Не удалось выйти: сервер не подтвердил отзыв входа"
+                    }
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                }
                 if (!removed) {
                     screenState = screenState.copy(accounts = remaining.toAccountSummaries())
                     return@runOnUiThread
@@ -838,6 +998,88 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun changePassword(accountId: AccountId, currentPassword: String, newPassword: String) {
+        if (!network.available) {
+            screenState = screenState.copy(passwordChangeErrorMessage = "Нет подключения к интернету")
+            return
+        }
+        if (screenState.passwordChanging || accountRemovalInProgress) return
+        if (callUiState.phase != CallPhase.Idle && callUiState.phase != CallPhase.Ended) {
+            screenState = screenState.copy(passwordChangeErrorMessage = "Сначала завершите звонок")
+            return
+        }
+        val previous = repository.accounts().firstOrNull { it.id == accountId } ?: return
+        screenState = screenState.copy(passwordChanging = true, passwordChangeErrorMessage = null, passwordRetryAtMillis = 0)
+        val previousToken = previous.session.token
+        val deviceId = DeviceIdentity.id(this)
+        Thread {
+            runCatching { repository.changePassword(accountId, currentPassword, newPassword, deviceId) }
+                .onSuccess {
+                    runOnUiThread {
+                        screenState = screenState.copy(
+                            passwordChanging = false,
+                            passwordChangeErrorMessage = null,
+                            passwordChangeCompletionKey = screenState.passwordChangeCompletionKey + 1,
+                            accounts = repository.accounts().toAccountSummaries(),
+                        )
+                        Toast.makeText(this, "Пароль сохранён", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .onFailure { error ->
+                    runOnUiThread {
+                        val saved = repository.accounts().firstOrNull { it.id == accountId }
+                        if (saved != null && saved.session.token != previousToken) {
+                            screenState = screenState.copy(
+                                passwordChanging = false,
+                                passwordChangeErrorMessage = null,
+                                passwordChangeCompletionKey = screenState.passwordChangeCompletionKey + 1,
+                                accounts = repository.accounts().toAccountSummaries(),
+                            )
+                            refreshContacts(showProgress = false)
+                            Toast.makeText(this, "Пароль сохранён. Восстанавливаем подключение", Toast.LENGTH_LONG).show()
+                            return@runOnUiThread
+                        }
+                        if (error is PasswordSignInRequiredException) {
+                            showPasswordSignInRecovery(previous)
+                            return@runOnUiThread
+                        }
+                        screenState = screenState.copy(
+                            passwordChanging = false,
+                            passwordChangeErrorMessage = userErrorMessage(error),
+                            passwordRetryAtMillis = passwordRetryDeadline(error),
+                        )
+                    }
+                }
+        }.start()
+    }
+
+    private fun showPasswordSignInRecovery(account: org.tinitalk.data.AccountRecord) {
+        val remaining = repository.accounts()
+        val message = "Не удалось получить ответ сервера. Войдите с новым паролем. Если он не подходит — используйте прежние данные для входа."
+        pruneRemovedAccount(account.id, remaining, clearFavorites = false)
+        if (remaining.isEmpty()) {
+            resetToLogin(message)
+        } else {
+            authGeneration++
+            history.invalidateLoads()
+            loginResetKey++
+            screenState = screenState.copy(
+                restoring = false,
+                signingIn = false,
+                signedIn = true,
+                accountPage = AccountPage.AddAccount,
+                addingAccount = false,
+                addAccountPasswordSetupRequired = false,
+                addAccountRetryAtMillis = 0,
+                addAccountErrorMessage = message,
+                passwordChanging = false,
+                passwordChangeErrorMessage = null,
+                passwordRetryAtMillis = 0,
+            )
+        }
+        screenState = screenState.copy(signInRecovery = listOf(account).toAccountSummaries().single())
     }
 
     private fun cleanupContactPhotosAfterExplicitAccountRemoval(accountId: AccountId, session: org.tinitalk.data.Session) {
@@ -852,8 +1094,12 @@ class MainActivity : ComponentActivity() {
         contactPhotoAccountLifecycle(this).removeServerAfterExplicitLogout(session.url)
     }
 
-    private fun pruneRemovedAccount(accountId: AccountId, remaining: List<org.tinitalk.data.AccountRecord>) {
-        org.tinitalk.data.FavoriteContactsStore(this).removeAccount(accountId)
+    private fun pruneRemovedAccount(
+        accountId: AccountId,
+        remaining: List<org.tinitalk.data.AccountRecord>,
+        clearFavorites: Boolean = true,
+    ) {
+        if (clearFavorites) org.tinitalk.data.FavoriteContactsStore(this).removeAccount(accountId)
         history.removeAccount(accountId)
         screenState = screenState.copy(
             accountContacts = screenState.accountContacts.filterNot { it.accountId == accountId },
@@ -883,7 +1129,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showOfflineAccounts() {
         history.onOffline()
-        val accounts = repository.accounts().filter { repository.restorableSession(it.id) != null }
+        val accounts = repository.accounts()
         screenState = screenState.withOfflineSession(
             serverUrl = accounts.aboutServerUrl(),
             signedIn = accounts.isNotEmpty(),
@@ -997,7 +1243,7 @@ class MainActivity : ComponentActivity() {
         }
         screenState = screenState.copy(networkAvailable = true)
         if (!changed) return
-        val session = repository.restorableSession() ?: return
+        if (repository.accounts().isEmpty()) return
         refreshPermissions()
         if (!screenState.signedIn || screenState.accountContacts.isEmpty()) {
             screenState = screenState.copy(restoring = true)
@@ -1014,7 +1260,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private fun List<org.tinitalk.data.AccountRecord>.toAccountSummaries(): List<AccountSummary> = map { account ->
-    AccountSummary(account.id, account.session.url, account.session.login, account.displayName)
+    AccountSummary(account.id, account.session.url, account.session.login, account.displayName, account.session.passwordSet)
 }
 
 private fun List<org.tinitalk.data.AccountRecord>.aboutServerUrl(): String =
@@ -1033,9 +1279,18 @@ private fun userErrorMessage(error: Throwable): String = when (error) {
         CompatibilityProblem.AppOutdated -> "Приложение TiniTalk устарело. Установите новую версию"
         CompatibilityProblem.Unavailable -> "Сервер TiniTalk временно недоступен"
     }
-    is ApiException -> if (error.code == 401) "Неверный логин или пароль" else "Сервер вернул ошибку ${error.code}"
+    is ApiException -> if (error.errorCode != null) {
+        passwordAuthErrorMessage(error)
+    } else if (error.code == 401) {
+        "Неверный логин или пароль"
+    } else {
+        "Сервер вернул ошибку ${error.code}"
+    }
     else -> "Не удалось подключиться к серверу"
 }
+
+private fun passwordSetupRecoveryMessage(): String =
+    "Не удалось получить ответ сервера. Вернитесь ко входу и попробуйте новый пароль."
 
 private fun contactAddError(error: Throwable, login: String, serverUrl: String): String = when (error) {
     is ServerCompatibilityException -> "Сервер ${serverUrl.removePrefix("https://")} необходимо обновить, чтобы добавлять контакты"

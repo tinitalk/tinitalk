@@ -8,6 +8,7 @@ import org.tinitalk.data.AuthReasonHeader
 import org.tinitalk.data.Session
 import org.tinitalk.data.SessionIdHeader
 import org.tinitalk.data.SessionReplacedReason
+import org.tinitalk.data.needsActivation
 import java.util.Base64
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -158,6 +159,9 @@ class SignalSocket(
     }
 
     private fun open(callbacks: SignalCallbacks, expectedGeneration: Long) {
+        // An account may already be persisted while /api/session is in flight.
+        // Wait for its activated identity rather than opening a socket without it.
+        if (session.needsActivation()) return
         val currentAttempt = synchronized(pending) {
             if (closed || generation != expectedGeneration) return
             opened = false

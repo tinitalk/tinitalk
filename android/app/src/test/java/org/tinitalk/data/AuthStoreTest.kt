@@ -9,6 +9,136 @@ import org.junit.Test
 
 class AuthStoreTest {
     @Test
+    fun passwordRecoveryKeepsOnlyLocalIdentityAcrossRestartAndReusesItOnSignIn() {
+        val persistence = MemoryKeyValueStore()
+        val store = AuthStore(persistence, PrefixTokenCipher())
+        val old = Session("https://a.example", "alice", "revoked-token", sessionId = "old-session")
+        val account = store.upsert(old)
+        assertTrue(store.requireSignInIfCurrent(account.id, old))
+        assertTrue(store.list().isEmpty())
+        val json = requireNotNull(persistence.get(AccountCollectionKey))
+        assertTrue(!json.contains("revoked-token"))
+        assertTrue(!json.contains("old-session"))
+        assertTrue(!json.contains("\"token\""))
+
+        val restarted = AuthStore(persistence, PrefixTokenCipher())
+        assertTrue(restarted.list().isEmpty())
+        val otherLogin = restarted.upsert(Session(old.url, "bob", "bob-token"))
+        val otherServer = restarted.upsert(Session("https://b.example", "alice", "alice-token"))
+        assertTrue(otherLogin.id != account.id)
+        assertTrue(otherServer.id != account.id)
+        val restored = restarted.upsert(old.copy(url = "https://A.EXAMPLE:443/", token = "new-token", sessionId = "new-session"))
+        assertEquals(account.id, restored.id)
+        assertTrue(AccountCollectionStorage.read(persistence).signInRecoveries.isEmpty())
+        assertEquals(3, restarted.list().size)
+    }
+
+    @Test
+    fun stalePasswordFailureCannotReserveOrRemoveANewerAccount() {
+        val persistence = MemoryKeyValueStore()
+        val store = AuthStore(persistence, PrefixTokenCipher())
+        val old = Session("https://a.example", "alice", "old-token", sessionId = "old-session")
+        val account = store.upsert(old)
+        val current = old.copy(token = "current-token", sessionId = "current-session")
+        assertTrue(store.saveIfCurrent(account.id, old, current))
+        assertTrue(!store.requireSignInIfCurrent(account.id, old))
+        assertEquals(current, store.get(account.id)?.session)
+        assertTrue(AccountCollectionStorage.read(persistence).signInRecoveries.isEmpty())
+    }
+
+    @Test
+    fun accountCollectionWithoutRecoveryFieldRemainsReadable() {
+        val persistence = MemoryKeyValueStore()
+        val store = AuthStore(persistence, PrefixTokenCipher())
+        val account = store.upsert(Session("https://a.example", "alice", "token"))
+        persistence.put(AccountCollectionKey, requireNotNull(persistence.get(AccountCollectionKey))
+            .replace(",\"signInRecoveries\":[]", ""))
+        assertEquals(listOf(account), AuthStore(persistence, PrefixTokenCipher()).list())
+    }
+
+    @Test
+    fun missingConstructorDefaultsDoNotInvalidateExistingAccounts() {
+        val persistence = MemoryKeyValueStore()
+        val store = AuthStore(persistence, PrefixTokenCipher())
+        val first = store.upsert(Session("https://a.example", "alice", "token-a", sessionId = "session-a"))
+        val second = store.upsert(Session("https://b.example", "bob", "token-b", sessionId = "session-b"))
+        // Explicit null gives the same field value as a missing JSON field when
+        // R8 removes the no-arg constructor and Gson allocates without defaults.
+        persistence.put(AccountCollectionKey, requireNotNull(persistence.get(AccountCollectionKey))
+            .replace("\"signInRecoveries\":[]", "\"signInRecoveries\":null"))
+
+        val restarted = AuthStore(persistence, PrefixTokenCipher())
+        assertEquals(listOf(first, second), restarted.list())
+        assertTrue(AccountCollectionStorage.read(persistence).signInRecoveries.isEmpty())
+        assertTrue(restarted.requireSignInIfCurrent(first.id, first.session))
+        assertEquals(first.id, restarted.upsert(first.session.copy(token = "new-token")).id)
+        assertEquals(second, restarted.get(second.id))
+    }
+
+    @Test
+    fun legacyTokenWithoutSessionIsPendingButActualRevocationStillApplies() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val pending = Session("https://old.example", "alice", "legacy-token", features = setOf("webpush_v1"))
+        val account = store.upsert(pending)
+        assertTrue(pending.needsActivation())
+        assertTrue(!store.invalidateIfCurrent(account.id, pending, AuthRemovalReason.SessionReplaced))
+        assertEquals(pending, store.get(account.id)?.session)
+        val activated = pending.copy(sessionId = "ready", configId = "config")
+        assertTrue(store.saveIfCurrent(account.id, pending, activated))
+        assertTrue(!activated.needsActivation())
+        assertTrue(!store.invalidateIfCurrent(account.id, pending, AuthRemovalReason.SessionReplaced))
+        assertTrue(store.invalidateIfCurrent(account.id, activated, AuthRemovalReason.SessionReplaced))
+        store.upsert(pending)
+        val retry = store.list().single()
+        assertTrue(store.invalidateIfCurrent(retry.id, pending, AuthRemovalReason.Unauthorized))
+    }
+
+    @Test
+    fun credentialRotationIgnoresOldSocketWhileResponseIsPendingAndReleasesGuardOnFailure() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session("https://a.example", "alice", "old-token", sessionId = "old-session")
+        val account = store.upsert(session)
+        assertThrows(IllegalStateException::class.java) {
+            store.changingCredentials(account) {
+                assertTrue(!store.invalidateIfCurrent(account.id, session))
+                error("lost response")
+            }
+        }
+        assertEquals(session, store.get(account.id)?.session)
+        assertTrue(store.invalidateIfCurrent(account.id, session))
+    }
+
+    @Test
+    fun unclaimedPasswordTokenSurvivesMissingSessionResponseButNotActualRevocation() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val session = Session("https://a.example", "alice", "issued", features = setOf(PASSWORD_AUTH_FEATURE))
+        val account = store.upsert(session)
+        assertTrue(!store.invalidateIfCurrent(account.id, session, AuthRemovalReason.SessionReplaced))
+        assertEquals(session, store.get(account.id)?.session)
+        assertTrue(store.invalidateIfCurrent(account.id, session, AuthRemovalReason.Unauthorized))
+    }
+
+    @Test
+    fun staleSessionReplacementCannotClearRotatedPasswordSession() {
+        val store = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { AccountId("account-a") }
+        val old = Session(
+            "https://a.example",
+            "alice",
+            "old-token",
+            setOf("webpush_v1", "password_auth_v1"),
+            "old-session",
+            "config-a",
+        )
+        val account = store.add(store.newAccountId(), old, config(old))
+        val rotated = old.copy(token = "new-token", sessionId = "new-session")
+
+        assertTrue(store.saveIfCurrent(account.id, old, rotated))
+        assertTrue(!store.invalidateIfCurrent(account.id, old, AuthRemovalReason.SessionReplaced))
+
+        assertEquals(rotated, store.get(account.id)?.session)
+    }
+
+    @Test
     fun clearsCachedAdminLabelWithoutLosingAccount() {
         val persistence = MemoryKeyValueStore()
         val store = AuthStore(persistence, PrefixTokenCipher())

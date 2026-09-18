@@ -28,7 +28,11 @@ data class Session(
     val features: Set<String> = emptySet(),
     val sessionId: String? = null,
     val configId: String? = null,
+    val passwordSet: Boolean? = null,
 )
+
+internal fun Session.needsActivation(): Boolean =
+    sessionId.isNullOrBlank() && ("webpush_v1" in features || PASSWORD_AUTH_FEATURE in features)
 
 interface KeyValueStore {
     fun get(key: String): String?
@@ -65,7 +69,11 @@ data class AccountRecord(
 internal data class PersistedAccountCollection(
     val version: Int = AccountCollectionVersion,
     val accounts: List<PersistedAccount> = emptyList(),
+    val signInRecoveries: List<SignInRecoveryIdentity> = emptyList(),
 )
+
+// Only the local identity survives an ambiguous password response, never credentials.
+internal data class SignInRecoveryIdentity(val id: String, val url: String, val login: String)
 
 internal data class PersistedAccount(
     val id: String,
@@ -75,6 +83,7 @@ internal data class PersistedAccount(
     val features: Set<String> = emptySet(),
     val sessionId: String? = null,
     val configId: String? = null,
+    val passwordSet: Boolean? = null,
     val displayName: String? = null,
     val webPushConfig: StoredWebPushConfig? = null,
     val webPushRegistration: PushRegistrationState? = null,
@@ -83,6 +92,7 @@ internal data class PersistedAccount(
 internal const val AccountCollectionKey = "accounts_v1"
 internal const val AccountCollectionVersion = 1
 internal val AccountStorageLock = Any()
+private val credentialChanges = mutableMapOf<AccountId, Session>()
 
 internal object AccountCollectionStorage {
     private val gson = Gson()
@@ -90,7 +100,10 @@ internal object AccountCollectionStorage {
     fun read(store: KeyValueStore): PersistedAccountCollection {
         val encoded = store.get(AccountCollectionKey) ?: return PersistedAccountCollection()
         return runCatching {
-            val collection = requireNotNull(gson.fromJson(encoded, PersistedAccountCollection::class.java))
+            val decoded = requireNotNull(gson.fromJson(encoded, PersistedAccountCollection::class.java))
+            // Older account JSON has no recovery field. Gson can bypass Kotlin's
+            // constructor in a minified build, so migrate explicitly at the boundary.
+            val collection = decoded.copy(signInRecoveries = decoded.signInRecoveries.orEmpty())
             require(collection.version == AccountCollectionVersion)
             val identities = mutableSetOf<Pair<String, String>>()
             val ids = mutableSetOf<String>()
@@ -104,6 +117,11 @@ internal object AccountCollectionStorage {
                     account.features.size >= 0 &&
                     account.webPushConfig?.isValid() != false &&
                     account.webPushRegistration?.isValid() != false &&
+                    identities.add(normalizeServerUrl(account.url) to account.login.trim())
+            })
+            require(collection.signInRecoveries.all { account ->
+                account.id.isNotBlank() && ids.add(account.id) &&
+                    account.url.isNotBlank() && account.login.isNotBlank() &&
                     identities.add(normalizeServerUrl(account.url) to account.login.trim())
             })
             val privateCollection = collection.copy(accounts = collection.accounts.map { it.copy(displayName = null) })
@@ -136,6 +154,19 @@ class AuthStore(
     private val cipher: TokenCipher,
     private val accountIdFactory: () -> AccountId = { AccountId(UUID.randomUUID().toString()) },
 ) {
+    // Old sockets can report session_replaced before the password response
+    // arrives. Ignore only that old identity while replacing its credentials;
+    // never hold the storage lock across a network request.
+    internal fun <T> changingCredentials(account: AccountRecord, operation: () -> T): T {
+        synchronized(AccountStorageLock) {
+            check(isCurrent(account.id, account.session)) { "account changed" }
+            check(account.id !in credentialChanges) { "credential change already running" }
+            credentialChanges[account.id] = account.session
+        }
+        return try { operation() } finally {
+            synchronized(AccountStorageLock) { credentialChanges.remove(account.id) }
+        }
+    }
     fun save(session: Session) {
         synchronized(AccountStorageLock) {
             val collection = readCollectionUnlocked()
@@ -253,6 +284,8 @@ class AuthStore(
         require(session.configId?.isNotBlank() == true) { "config ID is required" }
         require(webPushConfig.isValid() && session.isBoundTo(webPushConfig)) { "WebPush configuration does not match session" }
         require(collection.accounts.none { it.id == accountId.value }) { "duplicate account ID" }
+        require(collection.signInRecoveries.none { it.id == accountId.value }) { "reserved account ID" }
+        require(collection.canReplace(accountId.value, session)) { "duplicate account identity" }
         require(collection.accounts.none { sameServerUrl(it.url, session.url) }) { "duplicate server" }
         val persisted = persistedAccount(accountId.value, session).copy(
             webPushConfig = webPushConfig,
@@ -338,11 +371,26 @@ class AuthStore(
         removeIfCurrentUnlocked(accountId.value, session)
     }
 
+    internal fun requireSignInIfCurrent(accountId: AccountId, session: Session): Boolean = synchronized(AccountStorageLock) {
+        val collection = readCollectionUnlocked()
+        val current = collection.accounts.firstOrNull { it.id == accountId.value } ?: return@synchronized false
+        if (!current.toSession().sameIdentity(session)) return@synchronized false
+        AccountCollectionStorage.write(store, collection.copy(
+            accounts = collection.accounts.filterNot { it.id == current.id },
+            signInRecoveries = collection.signInRecoveries + SignInRecoveryIdentity(current.id, current.url, current.login),
+        ))
+        true
+    }
+
     fun invalidateIfCurrent(
         accountId: AccountId,
         session: Session,
         reason: AuthRemovalReason = AuthRemovalReason.SessionReplaced,
     ): Boolean = synchronized(AccountStorageLock) {
+        if (credentialChanges[accountId]?.sameIdentity(session) == true) return@synchronized false
+        // Credentials can be saved before session activation, including legacy
+        // tokens. A missing session header does not mean another device logged in.
+        if (reason == AuthRemovalReason.SessionReplaced && session.needsActivation()) return@synchronized false
         val current = readCollectionUnlocked().accounts.firstOrNull { it.id == accountId.value }
             ?.toSession()
             ?: return@synchronized false
@@ -363,6 +411,7 @@ class AuthStore(
             features = session.features,
             sessionId = session.sessionId,
             configId = session.configId,
+            passwordSet = session.passwordSet,
             webPushConfig = previous?.webPushConfig,
             webPushRegistration = previous?.webPushRegistration,
         )
@@ -370,15 +419,22 @@ class AuthStore(
 
     private fun upsertUnlocked(collection: PersistedAccountCollection, session: Session): AccountRecord {
         val duplicate = collection.accounts.firstOrNull { it.hasSemanticIdentity(session) }
-        val id = duplicate?.id ?: accountIdFactory().value
+        val recovery = collection.signInRecoveries.firstOrNull {
+            sameServerUrl(it.url, session.url) && it.login.trim() == session.login.trim()
+        }
+        val id = duplicate?.id ?: recovery?.id ?: accountIdFactory().value
         require(duplicate != null || collection.accounts.none { it.id == id }) { "duplicate account ID" }
+        require(collection.signInRecoveries.none { it.id == id && it != recovery }) { "reserved account ID" }
         val replacement = persistedAccount(id, session, duplicate)
         val accounts = if (duplicate == null) {
             collection.accounts + replacement
         } else {
             collection.accounts.map { if (it.id == id) replacement else it }
         }
-        AccountCollectionStorage.write(store, collection.copy(accounts = accounts))
+        AccountCollectionStorage.write(store, collection.copy(
+            accounts = accounts,
+            signInRecoveries = collection.signInRecoveries.filterNot { it == recovery },
+        ))
         return AccountRecord(AccountId(id), session, replacement.displayName)
     }
 
@@ -412,6 +468,7 @@ class AuthStore(
         features = features,
         sessionId = sessionId,
         configId = configId,
+        passwordSet = passwordSet,
     )
 
     private fun PersistedAccount.hasSemanticIdentity(session: Session): Boolean =
@@ -419,12 +476,14 @@ class AuthStore(
             login.trim() == session.login.trim()
 
     private fun PersistedAccountCollection.canReplace(id: String, session: Session): Boolean =
-        accounts.none { account -> account.id != id && account.hasSemanticIdentity(session) }
+        accounts.none { account -> account.id != id && account.hasSemanticIdentity(session) } &&
+            signInRecoveries.none { sameServerUrl(it.url, session.url) && it.login.trim() == session.login.trim() }
 
     private fun generateAccountId(collection: PersistedAccountCollection): AccountId {
         while (true) {
             val candidate = accountIdFactory()
-            if (collection.accounts.none { it.id == candidate.value }) return candidate
+            if (collection.accounts.none { it.id == candidate.value } &&
+                collection.signInRecoveries.none { it.id == candidate.value }) return candidate
         }
     }
 

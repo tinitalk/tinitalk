@@ -25,6 +25,25 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class SignalSocketTest {
+    @Test fun pendingSessionsNeverOpenSocketsOnOldOrNewServers() {
+        val client = OkHttpClient()
+        try {
+            for (features in listOf(setOf("webpush_v1"), setOf("webpush_v1", "password_auth_v1"))) {
+                val factory = FakeWebSocketFactory()
+                val pending = Session("https://talk.example", "alice", "token", features = features)
+                val socket = SignalSocket(client, pending, socketFactory = factory)
+                socket.connect(onEvent = {})
+                socket.reconnectNow()
+                assertTrue(factory.connections.isEmpty())
+                socket.close()
+                val active = SignalSocket(client, pending.copy(sessionId = "claimed"), socketFactory = factory)
+                active.connect(onEvent = {})
+                assertEquals(1, factory.connections.size)
+                active.close()
+            }
+        } finally { client.shutdown() }
+    }
+
     @Test fun foregroundAndCallShareTransportAndReleaseIndependently() {
         val client = OkHttpClient()
         val factory = FakeWebSocketFactory()

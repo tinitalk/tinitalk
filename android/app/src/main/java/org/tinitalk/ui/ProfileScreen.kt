@@ -1,6 +1,8 @@
 package org.tinitalk.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -43,10 +46,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import org.tinitalk.R
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.ServerCheckDetails
+import org.tinitalk.data.ServerCheckResult
 import org.tinitalk.ui.theme.BrandGold
 import org.tinitalk.ui.theme.CallAnswerGreen
 import org.tinitalk.ui.theme.CallRejectRed
@@ -58,11 +63,25 @@ internal fun ProfileScreen(
     accounts: List<AccountSummary>,
     internetAvailable: Boolean,
     onCheckServer: (String) -> ServerCheckDetails,
+    onCheckPasswordSet: (AccountId) -> Boolean? = { null },
     onBack: () -> Unit,
     onAdd: () -> Unit,
     onRemoveAccount: (AccountId) -> Unit,
+    passwordChanging: Boolean = false,
+    passwordErrorMessage: String? = null,
+    passwordChangeCompletionKey: Int = 0,
+    onChangePassword: (AccountId, String, String) -> Unit = { _, _, _ -> },
+    retryAtMillis: Long = 0,
 ) {
     var pendingRemoval by rememberSaveable { mutableStateOf<String?>(null) }
+    var passwordAccount by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedPasswordSet by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(passwordChangeCompletionKey) {
+        if (passwordChangeCompletionKey > 0) {
+            passwordAccount = null
+            selectedPasswordSet = true
+        }
+    }
     BackHandler(onBack = onBack)
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -87,7 +106,12 @@ internal fun ProfileScreen(
                         account = account,
                         internetAvailable = internetAvailable,
                         onCheckServer = onCheckServer,
+                        onCheckPasswordSet = onCheckPasswordSet,
                         onRemove = { pendingRemoval = account.id.value },
+                        onChangePassword = { passwordSet ->
+                            selectedPasswordSet = passwordSet
+                            passwordAccount = account.id.value
+                        },
                     )
                 }
                 item {
@@ -110,6 +134,16 @@ internal fun ProfileScreen(
             dismissButton = { TextButton(onClick = { pendingRemoval = null }) { Text("Отмена") } },
         )
     }
+    passwordAccount?.let { value ->
+        ChangePasswordDialog(
+            loading = passwordChanging,
+            errorMessage = passwordErrorMessage,
+            passwordSet = selectedPasswordSet,
+            retryAtMillis = retryAtMillis,
+            onDismiss = { if (!passwordChanging) passwordAccount = null },
+            onSubmit = { current, new -> onChangePassword(AccountId(value), current, new) },
+        )
+    }
 }
 
 @Composable
@@ -117,10 +151,13 @@ private fun ProfileAccountCard(
     account: AccountSummary,
     internetAvailable: Boolean,
     onCheckServer: (String) -> ServerCheckDetails,
+    onCheckPasswordSet: (AccountId) -> Boolean?,
     onRemove: () -> Unit,
+    onChangePassword: (Boolean?) -> Unit,
 ) {
     var details by remember(account.serverUrl) { mutableStateOf<ServerCheckDetails?>(null) }
     var checking by remember(account.serverUrl) { mutableStateOf(internetAvailable) }
+    var passwordSet by remember(account.id, account.passwordSet) { mutableStateOf(account.passwordSet) }
     val presentation = serverCheckPresentation(
         serverReady = account.serverUrl.isNotBlank(),
         checking = checking,
@@ -147,7 +184,7 @@ private fun ProfileAccountCard(
         }
     }
 
-    LaunchedEffect(account.serverUrl, internetAvailable) {
+    LaunchedEffect(account.id, account.serverUrl, internetAvailable) {
         if (!internetAvailable) {
             checking = false
             details = null
@@ -156,6 +193,9 @@ private fun ProfileAccountCard(
         checking = true
         details = null
         details = withContext(Dispatchers.IO) { onCheckServer(account.serverUrl) }
+        passwordSet = if (details?.result == ServerCheckResult.Available) {
+            withContext(Dispatchers.IO) { runCatching { onCheckPasswordSet(account.id) }.getOrNull() }
+        } else null
         checking = false
     }
 
@@ -243,6 +283,81 @@ private fun ProfileAccountCard(
                     )
                 }
             }
+            if (internetAvailable && !checking && details?.result == ServerCheckResult.Available && passwordSet != null) {
+                TextButton(onClick = { onChangePassword(passwordSet) }, modifier = Modifier.align(Alignment.End)) {
+                    Text(if (passwordSet == true) "Сменить пароль" else "Задать пароль")
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun ChangePasswordDialog(
+    loading: Boolean,
+    errorMessage: String?,
+    passwordSet: Boolean?,
+    retryAtMillis: Long,
+    onDismiss: () -> Unit,
+    onSubmit: (String, String) -> Unit,
+) {
+    var currentPassword by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf("") }
+    var validationMessage by remember { mutableStateOf<String?>(null) }
+    val retry = retrySeconds(retryAtMillis)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (passwordSet == false) "Задать пароль" else "Сменить пароль") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Не менее 8 символов. Рекомендуем сочетать строчные и заглавные буквы с цифрами.", style = MaterialTheme.typography.bodySmall)
+                if (passwordSet != false) {
+                    OutlinedTextField(
+                        currentPassword,
+                        { currentPassword = it; validationMessage = null },
+                        label = { Text("Текущий пароль") },
+                        singleLine = true,
+                        enabled = !loading,
+                        visualTransformation = PasswordVisualTransformation(),
+                    )
+                }
+                OutlinedTextField(
+                    newPassword,
+                    { newPassword = it; validationMessage = null },
+                    label = { Text("Новый пароль") },
+                    singleLine = true,
+                    enabled = !loading,
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                OutlinedTextField(
+                    confirmation,
+                    { confirmation = it; validationMessage = null },
+                    label = { Text("Повторите пароль") },
+                    singleLine = true,
+                    enabled = !loading,
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                (validationMessage ?: if (retryAtMillis > 0) {
+                    if (retry > 0) "Повторите через $retry с" else "Можно попробовать ещё раз"
+                } else errorMessage)?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !loading && retry == 0L && (passwordSet == false || currentPassword.isNotEmpty()),
+                onClick = {
+                    validationMessage = personalPasswordError(newPassword)
+                        ?: passwordConfirmationError(newPassword, confirmation)
+                    if (validationMessage == null) onSubmit(currentPassword, newPassword)
+                },
+            ) {
+                if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                else Text("Сохранить")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Отмена") } },
+    )
 }

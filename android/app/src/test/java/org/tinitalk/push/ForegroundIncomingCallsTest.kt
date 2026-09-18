@@ -70,6 +70,21 @@ class ForegroundIncomingCallsTest {
         assertTrue(sockets.all { it.second.closed })
     }
 
+    @Test fun pendingLegacyAndPasswordAccountsStartListeningOnlyAfterActivation() {
+        unlock()
+        auth.upsert(Session("https://ready.example", "ready", "token", sessionId = "ready-session"))
+        val legacy = auth.upsert(Session("https://old.example", "alice", "token", features = setOf("webpush_v1")))
+        val password = auth.upsert(Session("https://new.example", "bob", "token", features = setOf("webpush_v1", PASSWORD_AUTH_FEATURE)))
+        receiver.onActivityResumed(firstActivity)
+        await { sockets.isNotEmpty() }
+        assertEquals(listOf("ready"), sockets.map { it.first.login })
+        assertTrue(auth.saveIfCurrent(legacy.id, legacy.session, legacy.session.copy(sessionId = "legacy-session", configId = "legacy-config")))
+        assertTrue(auth.saveIfCurrent(password.id, password.session, password.session.copy(sessionId = "password-session", configId = "password-config")))
+        receiver.networkChanged()
+        await { sockets.size == 3 }
+        assertTrue(sockets.all { it.second.connected && !it.first.sessionId.isNullOrBlank() })
+    }
+
     @Test fun offlineAndRemovedAccountReleaseOnlyTheAffectedSubscriptions() {
         unlock()
         val first = auth.upsert(Session("https://one.example", "alice", "token"))

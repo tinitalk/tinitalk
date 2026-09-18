@@ -32,6 +32,7 @@ import org.tinitalk.data.ContactCache
 import org.tinitalk.data.Session
 import org.tinitalk.data.SessionIdHeader
 import org.tinitalk.data.SessionReplacedReason
+import org.tinitalk.data.needsActivation
 import org.tinitalk.data.SharedPreferencesKeyValueStore
 import org.tinitalk.data.signal.ApplicationSignaling
 import org.tinitalk.data.signal.SignalConnection
@@ -138,7 +139,8 @@ internal class ForegroundIncomingCalls(
             }
         }
         accountReader.execute {
-            val accounts = runCatching { authStore.list() }.getOrNull() ?: return@execute
+            val accounts = runCatching { authStore.list().filterNot { it.session.needsActivation() } }
+                .getOrNull() ?: return@execute
             handler.post {
                 if (requested != revision || !canListen()) return@post
                 val desired = accounts.associateBy { it.id }

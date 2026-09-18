@@ -13,6 +13,439 @@ import org.junit.Test
 
 class ContactRepositoryTest {
     @Test
+    fun lostPasswordResponseRequiresLoginAndDoesNotRetryThePasswordMutation() {
+        for (additional in listOf(false, true)) {
+            val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+            val first = if (additional) auth.upsert(Session("https://first.example", "first", "first-token", sessionId = "first-session")) else null
+            val account = auth.upsert(Session("https://a.example", "alice", "old-token",
+                features = setOf("webpush_v1", PASSWORD_AUTH_FEATURE), sessionId = "old-session", passwordSet = false))
+            val api = RecordingApi("alice", "config-a", features = account.session.features,
+                loginResult = PasswordAuthResult("new-token", false))
+            val failure = java.io.IOException("response lost after server saved the password")
+            var mutations = 0
+            api.beforePassword = { mutations++; throw failure }
+            val removed = mutableListOf<AccountId>()
+            val repo = ContactRepository(auth, RecordingWebPushRegistration(),
+                onAccountRemoved = { id, _ -> removed += id },
+                onExplicitAccountRemoved = { _, _ -> error("recovery must not delete personal photos") },
+                apiFactory = { _, _, _, _ -> api })
+
+            val error = assertThrows(PasswordSignInRequiredException::class.java) {
+                repo.changePassword(account.id, "", "password123", "phone")
+            }
+            assertEquals(failure, error.cause)
+            assertEquals(listOfNotNull(first), auth.list())
+            assertEquals(listOf(account.id), removed)
+            assertEquals(0, api.logoutRequests)
+
+            if (additional) repo.addAccount("a.example", "alice", "password123", "phone")
+            else repo.signIn("a.example", "alice", "password123", "phone")
+            assertEquals("alice" to "password123", api.loginCredentials)
+            assertEquals(1, mutations)
+            assertEquals(account.id, auth.list().single { it.session.login == "alice" }.id)
+            assertEquals("new-token", auth.list().single { it.session.login == "alice" }.session.token)
+            if (first != null) assertEquals(first, auth.get(first.id))
+        }
+    }
+
+    @Test
+    fun incompletePasswordResponseAlsoRequiresSignIn() {
+        for (failure in listOf(
+            com.google.gson.JsonSyntaxException("truncated response"),
+            IllegalStateException("successful password response without token"),
+        )) {
+            val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+            val account = auth.upsert(Session("https://a.example", "alice", "old-token",
+                features = setOf("webpush_v1", PASSWORD_AUTH_FEATURE), sessionId = "old-session"))
+            val api = RecordingApi("alice", "config-a").apply { beforePassword = { throw failure } }
+            val repo = ContactRepository(auth, apiFactory = { _, _, _, _ -> api })
+            val error = assertThrows(PasswordSignInRequiredException::class.java) {
+                repo.changePassword(account.id, "", "new-password", "phone")
+            }
+            assertEquals(failure, error.cause)
+            assertTrue(auth.list().isEmpty())
+        }
+    }
+
+    @Test
+    fun passwordRequestLostBeforeCommitCanRecoverWithPreviousLoginCredentials() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val account = auth.upsert(Session("https://a.example", "alice", "legacy-token",
+            features = setOf("webpush_v1", PASSWORD_AUTH_FEATURE), sessionId = "old-session", passwordSet = false))
+        var verified = false
+        var mutations = 0
+        val api = object : HouseholdApi by RecordingApi("alice", "config-a", features = account.session.features) {
+            override fun setPassword(login: String, password: String, newPassword: String): PasswordAuthResult {
+                mutations++
+                throw java.io.IOException("connection lost before request reached server")
+            }
+            override fun login(login: String, password: String): PasswordAuthResult {
+                if (password != account.session.token) throw ApiException(401, "unauthorized")
+                verified = true
+                return PasswordAuthResult(account.session.token, false)
+            }
+        }
+        val repo = ContactRepository(auth, RecordingWebPushRegistration(), apiFactory = { _, _, _, _ -> api })
+        assertThrows(PasswordSignInRequiredException::class.java) {
+            repo.changePassword(account.id, "", "new-password", "phone")
+        }
+        assertThrows(ApiException::class.java) { repo.signIn("a.example", "alice", "new-password", "phone") }
+        assertTrue(auth.list().isEmpty())
+        repo.signIn("a.example", "alice", "legacy-token", "phone")
+        assertTrue(verified)
+        assertEquals(account.id, auth.list().single().id)
+        assertEquals(1, mutations)
+    }
+
+    @Test
+    fun explicitPasswordFailureKeepsTheCurrentAccount() {
+        for (code in listOf(401, 429, 503)) {
+            val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+            val account = auth.upsert(Session("https://a.example", "alice", "old-token",
+                features = setOf("webpush_v1", PASSWORD_AUTH_FEATURE), sessionId = "old-session"))
+            val failure = ApiException(code, "password request rejected")
+            val api = RecordingApi("alice", "config-a").apply { beforePassword = { throw failure } }
+            val repo = ContactRepository(auth, onAccountRemoved = { _, _ -> error("must keep account") },
+                apiFactory = { _, _, _, _ -> api })
+
+            assertEquals(failure, assertThrows(ApiException::class.java) {
+                repo.changePassword(account.id, "password123", "new-password", "phone")
+            })
+            assertEquals(account, auth.get(account.id))
+        }
+    }
+
+    @Test
+    fun passwordTokenReceivedBeforeConnectionLossIsKeptForActivation() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val account = auth.upsert(Session("https://a.example", "alice", "old-token",
+            features = setOf("webpush_v1", PASSWORD_AUTH_FEATURE), sessionId = "old-session"))
+        val failure = java.io.IOException("config unavailable")
+        val api = RecordingApi("alice", "config-a", passwordResult = PasswordAuthResult("new-token", false))
+        api.beforeConfig = { throw failure }
+        val repo = ContactRepository(auth, RecordingWebPushRegistration(),
+            onAccountRemoved = { _, _ -> error("must keep issued token") }, apiFactory = { _, _, _, _ -> api })
+
+        assertEquals(failure, assertThrows(java.io.IOException::class.java) {
+            repo.changePassword(account.id, "password123", "new-password", "phone")
+        })
+        assertEquals("new-token", auth.get(account.id)?.session?.token)
+        api.beforeConfig = {}
+        assertEquals(listOf("bob"), repo.refreshContacts(account.id, "phone")?.items?.map { it.login })
+    }
+
+    @Test
+    fun lostPasswordResponseDoesNotDiscardANewerSession() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val account = auth.upsert(Session("https://a.example", "alice", "old-token",
+            features = setOf("webpush_v1", PASSWORD_AUTH_FEATURE), sessionId = "old-session"))
+        val replacement = account.session.copy(token = "new-token", sessionId = "new-session")
+        val failure = java.io.IOException("old request failed")
+        val api = RecordingApi("alice", "config-a").apply {
+            beforePassword = {
+                assertTrue(auth.saveIfCurrent(account.id, account.session, replacement))
+                throw failure
+            }
+        }
+        val repo = ContactRepository(auth, onAccountRemoved = { _, _ -> error("must keep newer session") },
+            apiFactory = { _, _, _, _ -> api })
+
+        assertEquals(failure, assertThrows(java.io.IOException::class.java) {
+            repo.changePassword(account.id, "password123", "new-password", "phone")
+        })
+        assertEquals(replacement, auth.get(account.id)?.session)
+    }
+
+    @Test
+    fun rejectedLegacyTokenIsRemovedAndCorrectedLoginCanBeRetried() {
+        for (additional in listOf(false, true)) {
+            val persistence = MemoryKeyValueStore()
+            val auth = AuthStore(persistence, PrefixTokenCipher())
+            val first = if (additional) auth.upsert(Session("https://first.example", "first", "first-token", sessionId = "first-session")) else null
+            val registration = RecordingWebPushRegistration()
+            val failure = ApiException(401, "unauthorized")
+            val rejectedApi = RecordingApi("alice", "config-old").apply { beforeConfig = { throw failure } }
+            val acceptedApi = RecordingApi("alice", "config-old")
+            val removed = mutableListOf<Session>()
+            val repo = ContactRepository(auth, registration,
+                onAccountRemoved = { _, session -> removed += session },
+                apiFactory = { _, _, token, _ -> if (token == "wrong-token") rejectedApi else acceptedApi })
+
+            assertEquals(failure, assertThrows(ApiException::class.java) {
+                if (additional) repo.addAccount("old.example", "alice", "wrong-token", "phone")
+                else repo.signIn("old.example", "alice", "wrong-token", "phone")
+            })
+            assertEquals(listOfNotNull(first), AuthStore(persistence, PrefixTokenCipher()).list())
+            assertEquals(listOf("wrong-token"), removed.map { it.token })
+            assertTrue(registration.subscribed.isEmpty())
+            assertTrue(registration.unsubscribed.isEmpty())
+
+            if (additional) repo.addAccount("old.example", "alice", "correct-token", "phone")
+            else repo.signIn("old.example", "alice", "correct-token", "phone")
+            val activated = auth.list().single { it.session.login == "alice" }
+            assertEquals("correct-token", activated.session.token)
+            assertEquals("session-alice", activated.session.sessionId)
+            assertFalse(activated.session.needsActivation())
+            if (first != null) assertEquals(first, auth.get(first.id))
+        }
+    }
+
+    @Test
+    fun temporaryConfigFailureKeepsIssuedTokenAndCanResumeActivation() {
+        for (failure in listOf(java.io.IOException("offline"), ApiException(503, "unavailable"))) {
+            val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+            val registration = RecordingWebPushRegistration()
+            val api = RecordingApi("alice", "config-a", features = setOf("webpush_v1", PASSWORD_AUTH_FEATURE),
+                loginResult = PasswordAuthResult("issued-token", false))
+            api.beforeConfig = { throw failure }
+            val repo = ContactRepository(auth, registration, apiFactory = { _, _, _, _ -> api })
+            assertEquals(failure, assertThrows(failure.javaClass) {
+                repo.signIn("a.example", "alice", "password123", "phone")
+            })
+            val pending = auth.list().single()
+            assertEquals("issued-token", pending.session.token)
+            assertTrue(pending.session.needsActivation())
+            assertTrue(registration.unsubscribed.isEmpty())
+
+            api.beforeConfig = {}
+            api.loginCredentials = null
+            assertEquals(listOf("bob"), repo.refreshContacts(pending.id, "phone")?.items?.map { it.login })
+            assertEquals(null, api.loginCredentials)
+            assertFalse(requireNotNull(auth.get(pending.id)).session.needsActivation())
+        }
+    }
+
+    @Test
+    fun staleConfigRejectionDoesNotRemoveOrUnsubscribeNewerSession() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val registration = RecordingWebPushRegistration()
+        val api = RecordingApi("alice", "config-a")
+        var replacement: AccountRecord? = null
+        api.beforeConfig = {
+            val pending = auth.list().single()
+            val session = pending.session.copy(token = "new-token", sessionId = "new-session", configId = "config-a")
+            assertTrue(auth.activateWebPushIfCurrent(pending.id, pending.session, session, storedConfig(session)))
+            replacement = auth.get(pending.id)
+            throw ApiException(401, "unauthorized")
+        }
+        val repo = ContactRepository(auth, registration, apiFactory = { _, _, _, _ -> api })
+
+        assertThrows(ApiException::class.java) { repo.signIn("a.example", "alice", "old-token", "phone") }
+
+        assertEquals(listOf(requireNotNull(replacement)), auth.list())
+        assertTrue(registration.unsubscribed.isEmpty())
+    }
+
+    @Test
+    fun legacyLoginAndAdditionalAccountIgnorePrematureSessionReplacement() {
+        for (additional in listOf(false, true)) {
+            val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+            val first = if (additional) auth.upsert(Session("https://first.example", "first", "first-token", sessionId = "first-session")) else null
+            val api = RecordingApi("alice", "config-old", features = setOf("webpush_v1"))
+            api.beforeClaim = {
+                val pending = auth.list().single { it.session.login == "alice" }
+                assertTrue(pending.session.needsActivation())
+                assertFalse(auth.invalidateIfCurrent(pending.id, pending.session, AuthRemovalReason.SessionReplaced))
+            }
+            val repo = ContactRepository(auth, RecordingWebPushRegistration(), apiFactory = { _, _, _, _ -> api })
+            if (additional) repo.addAccount("old.example", "alice", " legacy-token ", "phone")
+            else repo.signIn("old.example", "alice", " legacy-token ", "phone")
+            assertEquals(null, api.loginCredentials)
+            val activated = auth.list().single { it.session.login == "alice" }
+            assertEquals("legacy-token", activated.session.token)
+            assertEquals("session-alice", activated.session.sessionId)
+            assertFalse(activated.session.needsActivation())
+            if (first != null) assertEquals(first, auth.get(first.id))
+        }
+    }
+
+    @Test
+    fun legacyTokenCanResumeActivationAfterInterruptedLogin() {
+        val persistence = MemoryKeyValueStore()
+        val auth = AuthStore(persistence, PrefixTokenCipher())
+        val api = RecordingApi("alice", "config-old", features = setOf("webpush_v1"))
+        api.beforeClaim = { throw java.io.IOException("offline") }
+        val repo = ContactRepository(auth, RecordingWebPushRegistration(), apiFactory = { _, _, _, _ -> api })
+        assertThrows(java.io.IOException::class.java) { repo.signIn("old.example", "alice", "legacy-token", "phone") }
+        val account = auth.list().single()
+        api.beforeClaim = {}
+        val restored = ContactRepository(AuthStore(persistence, PrefixTokenCipher()), RecordingWebPushRegistration(),
+            apiFactory = { _, _, token, _ -> assertEquals("legacy-token", token); api })
+        assertEquals(listOf("bob"), restored.refreshContacts(account.id, "phone")?.items?.map { it.login })
+        assertEquals("session-alice", restored.accounts().single().session.sessionId)
+        assertEquals(null, api.loginCredentials)
+    }
+
+    @Test
+    fun issuedTokenSurvivesFailedClaimAndResumesWithoutAnotherPasswordLogin() {
+        val persistence = MemoryKeyValueStore()
+        val auth = AuthStore(persistence, PrefixTokenCipher())
+        val api = RecordingApi("alice", "config-a", features = setOf("webpush_v1", PASSWORD_AUTH_FEATURE),
+            loginResult = PasswordAuthResult("issued-token", false))
+        api.beforeClaim = { throw java.io.IOException("connection lost") }
+        val repo = ContactRepository(auth, RecordingWebPushRegistration(), apiFactory = { _, _, _, _ -> api })
+        assertThrows(java.io.IOException::class.java) { repo.signIn("a.example", "alice", "personal password", "phone") }
+        val staged = AuthStore(persistence, PrefixTokenCipher()).list().single()
+        assertEquals("issued-token", staged.session.token)
+        assertEquals(null, staged.session.sessionId)
+        api.beforeClaim = {}
+        api.loginCredentials = null
+        val restored = ContactRepository(AuthStore(persistence, PrefixTokenCipher()), RecordingWebPushRegistration(),
+            apiFactory = { _, _, token, _ -> assertEquals("issued-token", token); api })
+        assertEquals(listOf("bob"), restored.refreshContacts(staged.id, "phone")?.items?.map { it.login })
+        assertEquals(null, api.loginCredentials)
+        assertEquals("session-alice", restored.accounts().single().session.sessionId)
+    }
+
+    @Test
+    fun passwordServerExchangesPasswordAndPersistsReturnedTokenBeforeSessionClaim() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val registration = RecordingWebPushRegistration()
+        val api = RecordingApi(
+            "alice",
+            "config-a",
+            features = setOf("webpush_v1", "password_auth_v1"),
+            loginResult = PasswordAuthResult("issued-token", passwordRequired = false),
+        ).apply {
+            beforeClaim = {
+                assertEquals("issued-token", auth.list().single().session.token)
+                assertEquals(null, auth.list().single().session.sessionId)
+            }
+        }
+        val repository = ContactRepository(auth, registration, apiFactory = { _, _, _, _ -> api })
+
+        repository.signIn("a.example", "alice", "  personal password  ", "phone")
+
+        assertEquals("alice" to "  personal password  ", api.loginCredentials)
+        assertEquals("issued-token", auth.list().single().session.token)
+        assertEquals("session-alice", auth.list().single().session.sessionId)
+    }
+
+    @Test
+    fun temporaryPasswordRequestsSetupWithoutGrantingOrPersistingAccess() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val registration = RecordingWebPushRegistration()
+        val api = RecordingApi(
+            "alice",
+            "config-a",
+            features = setOf("webpush_v1", "password_auth_v1"),
+            loginResult = PasswordAuthResult(passwordRequired = true),
+        )
+        val repository = ContactRepository(auth, registration, apiFactory = { _, _, _, _ -> api })
+
+        assertThrows(PasswordSetupRequiredException::class.java) {
+            repository.signIn("a.example", "alice", "1234 5678", "phone")
+        }
+
+        assertTrue(auth.list().isEmpty())
+        assertTrue(registration.subscribed.isEmpty())
+    }
+
+    @Test
+    fun passwordServerErrorsNeverFallBackToTokenAuthentication() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val registration = RecordingWebPushRegistration()
+        val expected = ApiException(401, "invalid", errorCode = "invalid_credentials")
+        val api = RecordingApi(
+            "alice",
+            "config-a",
+            features = setOf("webpush_v1", "password_auth_v1"),
+            loginFailure = expected,
+        )
+        val repository = ContactRepository(auth, registration, apiFactory = { _, _, _, _ -> api })
+
+        assertEquals(expected, assertThrows(ApiException::class.java) {
+            repository.signIn("a.example", "alice", "looks-like-token", "phone")
+        })
+        assertTrue(auth.list().isEmpty())
+        assertTrue(registration.subscribed.isEmpty())
+    }
+
+    @Test
+    fun missingPasswordFeatureKeepsLegacyTokenFlowWithoutCallingLogin() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { AccountId("account-a") }
+        val api = RecordingApi("alice", "config-a", features = setOf("webpush_v1"))
+        val repository = ContactRepository(auth, RecordingWebPushRegistration(), apiFactory = { _, _, _, _ -> api })
+
+        repository.signIn("a.example", "alice", " legacy-token ", "phone")
+
+        assertEquals(null, api.loginCredentials)
+        assertEquals("legacy-token", auth.list().single().session.token)
+    }
+
+    @Test
+    fun setupExchangesTemporaryPasswordForPersonalPasswordAndActivatesReturnedToken() {
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher()) { AccountId("account-a") }
+        val api = RecordingApi(
+            "alice",
+            "config-a",
+            features = setOf("webpush_v1", "password_auth_v1"),
+            passwordResult = PasswordAuthResult("personal-token", passwordRequired = false),
+        )
+        val repository = ContactRepository(auth, RecordingWebPushRegistration(), apiFactory = { _, _, _, _ -> api })
+
+        repository.setInitialPassword(
+            "a.example",
+            "alice",
+            "1234 5678",
+            "a deliberately long password",
+            "phone",
+        )
+
+        assertEquals(
+            Triple("alice", "1234 5678", "a deliberately long password"),
+            api.passwordCredentials,
+        )
+        assertEquals("personal-token", auth.list().single().session.token)
+    }
+
+    @Test
+    fun passwordCapableLogoutRevokesBeforeRemovingAndKeepsAccountOnNetworkError() {
+        val session = Session(
+            "https://a.example",
+            "alice",
+            "token-a",
+            setOf("webpush_v1", "password_auth_v1"),
+            "session-a",
+            "config-a",
+        )
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val account = auth.add(auth.newAccountId(), session, storedConfig(session))
+        val failure = java.io.IOException("offline")
+        val api = RecordingApi("alice", "config-a", logoutFailure = failure)
+        val repository = ContactRepository(auth, apiFactory = { _, _, _, _ -> api })
+
+        assertEquals(failure, assertThrows(java.io.IOException::class.java) {
+            repository.removeAccount(account.id)
+        })
+
+        assertEquals(account, auth.get(account.id))
+        assertEquals(1, api.logoutRequests)
+    }
+
+    @Test
+    fun legacyAccountWithoutPasswordCanLogoutWithoutPasswordSetup() {
+        val session = Session(
+            "https://a.example",
+            "alice",
+            "legacy-token",
+            setOf("webpush_v1", "password_auth_v1"),
+            "session-a",
+            "config-a",
+            passwordSet = false,
+        )
+        val auth = AuthStore(MemoryKeyValueStore(), PrefixTokenCipher())
+        val account = auth.add(auth.newAccountId(), session, storedConfig(session))
+        val api = RecordingApi("alice", "config-a")
+        val repository = ContactRepository(auth, apiFactory = { _, _, _, _ -> api })
+
+        assertTrue(repository.removeAccount(account.id))
+        assertEquals(null, auth.get(account.id))
+        assertEquals(1, api.logoutRequests)
+        assertEquals(null, api.passwordCredentials)
+    }
+
+    @Test
     fun legacyCacheKeepsOnlyPersonalNamesOffline() {
         val store = MemoryKeyValueStore()
         val account = AccountRecord(AccountId("account-a"), Session("https://a.example", "alice", "token"))
@@ -51,11 +484,11 @@ class ContactRepositoryTest {
         val contacts = repository.signIn("a.example/", "alice", "token-a", "phone")
 
         assertEquals(listOf("bob", "carol"), contacts.items.map { it.login })
-        assertEquals(listOf(AccountId("account-a")), registration.subscribed)
+        assertEquals(listOf(auth.list().single().id), registration.subscribed)
         assertEquals(subscription, api.claimedSubscription)
         assertEquals("phone", api.claimedDeviceId)
         assertEquals("session-alice", auth.list().single().session.sessionId)
-        assertEquals("https://a.example", auth.webPushConfig(AccountId("account-a"))?.serverUrl)
+        assertEquals("https://a.example", auth.webPushConfig(auth.list().single().id)?.serverUrl)
         assertEquals(listOf("bob", "carol"), cache.load(auth.list().single()).items.map { it.login })
     }
 
@@ -258,7 +691,8 @@ class ContactRepositoryTest {
                 ),
             )
         }
-        val repository = ContactRepository(auth, contactCache = cache)
+        val repository = ContactRepository(auth, contactCache = cache,
+            apiFactory = { _, _, _, _ -> RecordingApi("alice", "config-a") })
 
         repository.removeAccount(account.id)
 
@@ -392,6 +826,7 @@ class ContactRepositoryTest {
             authStore = auth,
             onAccountRemoved = { accountId, removedSession -> common += accountId to removedSession },
             onExplicitAccountRemoved = { accountId, removedSession -> explicit += accountId to removedSession },
+            apiFactory = { _, _, _, _ -> RecordingApi("alice", "config-a") },
         )
 
         assertTrue(repository.removeAccount(account.id))
@@ -442,6 +877,7 @@ private val subscription = WebPushSubscription(
 
 private class RecordingWebPushRegistration : AccountWebPushRegistration {
     val subscribed = mutableListOf<AccountId>()
+    val unsubscribed = mutableListOf<AccountId>()
 
     override fun subscribe(accountId: AccountId, config: StoredWebPushConfig): WebPushSubscription {
         subscribed += accountId
@@ -449,7 +885,7 @@ private class RecordingWebPushRegistration : AccountWebPushRegistration {
     }
 
     override fun restore(accountId: AccountId, config: StoredWebPushConfig) = Unit
-    override fun unsubscribe(accountId: AccountId) = Unit
+    override fun unsubscribe(accountId: AccountId) { unsubscribed += accountId }
 }
 
 private class RecordingApi(
@@ -460,15 +896,42 @@ private class RecordingApi(
     private val contactPages: Map<String, ContactPage>? = null,
     private val failedCursor: String? = null,
     private val failContactsWith: RuntimeException? = null,
+    private val loginResult: PasswordAuthResult? = null,
+    private val loginFailure: RuntimeException? = null,
+    private val passwordResult: PasswordAuthResult? = null,
+    private val logoutFailure: Throwable? = null,
 ) : HouseholdApi {
     var claimedDeviceId: String? = null
     var claimedSubscription: WebPushSubscription? = null
+    var loginCredentials: Pair<String, String>? = null
+    var passwordCredentials: Triple<String, String, String>? = null
+    var logoutRequests: Int = 0
+    var beforeConfig: () -> Unit = {}
+    var beforePassword: () -> Unit = {}
+    var beforeClaim: () -> Unit = {}
 
     override fun serverInfo() = ServerInfo("tinitalk", "ok", apiVersion, features = features)
-    override fun webPushConfig() = WebPushClientConfig(
-        "BNVQmPpYlVnSqeE5_UfDgJQG4YIqq7FPPHUZ6riR5TqQh_9ZgfkrdmHH99yqCGMiMSRuOJ5hK3sLrx_cUpnF4U4",
-        configId,
-    )
+    override fun login(login: String, password: String): PasswordAuthResult {
+        loginCredentials = login to password
+        loginFailure?.let { throw it }
+        return requireNotNull(loginResult)
+    }
+    override fun setPassword(login: String, password: String, newPassword: String): PasswordAuthResult {
+        passwordCredentials = Triple(login, password, newPassword)
+        beforePassword()
+        return requireNotNull(passwordResult)
+    }
+    override fun logout() {
+        logoutRequests++
+        logoutFailure?.let { throw it }
+    }
+    override fun webPushConfig(): WebPushClientConfig {
+        beforeConfig()
+        return WebPushClientConfig(
+            "BNVQmPpYlVnSqeE5_UfDgJQG4YIqq7FPPHUZ6riR5TqQh_9ZgfkrdmHH99yqCGMiMSRuOJ5hK3sLrx_cUpnF4U4",
+            configId,
+        )
+    }
     override fun me() = Profile(login, login.replaceFirstChar(Char::uppercase))
     override fun contactsPage(limit: Int, cursor: String): ContactPage {
         failContactsWith?.let { throw it }
@@ -479,6 +942,7 @@ private class RecordingApi(
         )
     }
     override fun claimSession(deviceId: String, subscription: WebPushSubscription, configId: String): String {
+        beforeClaim()
         claimedDeviceId = deviceId
         claimedSubscription = subscription
         return "session-$login"

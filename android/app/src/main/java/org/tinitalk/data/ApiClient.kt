@@ -14,7 +14,11 @@ internal const val SessionIdHeader = "X-TiniTalk-Session-ID"
 internal const val AuthReasonHeader = "X-TiniTalk-Auth-Reason"
 internal const val SessionReplacedReason = "session_replaced"
 
-data class Profile(val login: String, @SerializedName("display_name") val displayName: String)
+data class Profile(
+    val login: String,
+    @SerializedName("display_name") val displayName: String,
+    @SerializedName("password_set") val passwordSet: Boolean? = null,
+)
 data class ServerInfo(
     val service: String?,
     val status: String?,
@@ -171,15 +175,30 @@ private data class CallHistoryReadResult(
 }
 
 private data class SessionClaimWire(@SerializedName("session_id") val sessionId: String)
+data class PasswordAuthResult(
+    val token: String? = null,
+    @SerializedName("password_required") val passwordRequired: Boolean = false,
+)
+private data class ApiErrorWire(
+    val error: String? = null,
+    @SerializedName("retry_after") val retryAfter: Long? = null,
+)
 
 class ApiException(
     val code: Int,
     message: String,
     val authReason: String? = null,
+    val errorCode: String? = null,
+    val retryAfterSeconds: Long? = null,
 ) : RuntimeException(message)
 
 interface HouseholdApi {
     fun serverInfo(): ServerInfo
+    fun login(login: String, password: String): PasswordAuthResult =
+        error("Password authentication is unavailable")
+    fun setPassword(login: String, password: String, newPassword: String): PasswordAuthResult =
+        error("Password authentication is unavailable")
+    fun logout(): Unit = error("Password authentication is unavailable")
     fun webPushConfig(): WebPushClientConfig = error("WebPush is unavailable")
     fun me(): Profile
     fun contactsPage(limit: Int = 20, cursor: String = ""): ContactPage
@@ -197,12 +216,40 @@ interface HouseholdApi {
 
 class UrlConnectionApiClient(
     private val baseUrl: String,
-    private val login: String,
-    private val token: String,
+    private val authLogin: String,
+    private val authToken: String,
     private val sessionId: String? = null,
 ) : HouseholdApi {
     override fun serverInfo(): ServerInfo =
         get("/healthz", ServerInfoWire::class.java, authenticated = false).toServerInfo()
+
+    override fun login(login: String, password: String): PasswordAuthResult =
+        write(
+            "POST",
+            "/api/auth/login",
+            linkedMapOf("login" to login, "password" to password),
+            PasswordAuthResult::class.java,
+            authenticated = false,
+        )
+
+    override fun setPassword(login: String, password: String, newPassword: String): PasswordAuthResult =
+        write(
+            "POST",
+            "/api/auth/password",
+            linkedMapOf("login" to login, "password" to password, "new_password" to newPassword),
+            PasswordAuthResult::class.java,
+            authenticated = false,
+        )
+
+    override fun logout() {
+        write<Unit>(
+            "POST",
+            "/api/auth/logout",
+            emptyMap<String, String>(),
+            null,
+            expectedStatus = 204,
+        )
+    }
 
     override fun webPushConfig(): WebPushClientConfig =
         get("/api/webpush-config", WebPushClientConfig::class.java, includeSessionId = false)
@@ -295,14 +342,16 @@ class UrlConnectionApiClient(
         type: Class<T>?,
         includeSessionId: Boolean = true,
         expectedStatus: Int? = null,
+        authenticated: Boolean = true,
     ): T {
         val body = gson.toJson(value).toByteArray(Charsets.UTF_8)
         val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
+            instanceFollowRedirects = false
             connectTimeout = 5000
             readTimeout = 5000
             doOutput = true
-            authenticate(this, includeSessionId)
+            if (authenticated) authenticate(this, includeSessionId)
             setRequestProperty("Content-Type", "application/json")
             outputStream.use { it.write(body) }
         }
@@ -341,14 +390,21 @@ class UrlConnectionApiClient(
         if (includeSessionId) sessionId?.let { connection.setRequestProperty(SessionIdHeader, it) }
     }
 
-    private fun HttpURLConnection.apiException(code: Int): ApiException = ApiException(
-        code,
-        errorStream?.bufferedReader()?.readText() ?: "request failed",
-        getHeaderField(AuthReasonHeader),
-    )
+    private fun HttpURLConnection.apiException(code: Int): ApiException {
+        val body = errorStream?.bufferedReader()?.readText().orEmpty()
+        val error = runCatching { gson.fromJson(body, ApiErrorWire::class.java) }.getOrNull()
+        val retryAfter = error?.retryAfter ?: getHeaderField("Retry-After")?.trim()?.toLongOrNull()
+        return ApiException(
+            code = code,
+            message = body.ifEmpty { "request failed" },
+            authReason = getHeaderField(AuthReasonHeader),
+            errorCode = error?.error,
+            retryAfterSeconds = retryAfter,
+        )
+    }
 
     private fun basicAuth(): String {
-        val raw = "$login:$token".toByteArray(Charsets.UTF_8)
+        val raw = "$authLogin:$authToken".toByteArray(Charsets.UTF_8)
         return "Basic " + Base64.getEncoder().encodeToString(raw)
     }
 

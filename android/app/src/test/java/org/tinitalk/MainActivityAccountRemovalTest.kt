@@ -16,6 +16,8 @@ import org.tinitalk.data.FavoriteContactsStore
 import org.tinitalk.data.MemoryKeyValueStore
 import org.tinitalk.data.PrefixTokenCipher
 import org.tinitalk.data.Session
+import org.tinitalk.data.HouseholdApi
+import org.tinitalk.data.ServerInfo
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -29,8 +31,16 @@ class MainActivityAccountRemovalTest {
         val account = auth.upsert(Session("https://example.com", "alice", "token"))
         val favorites = FavoriteContactsStore(activity)
         favorites.setFavorite(AccountPeerKey(account.id, "bob"), true)
+        val api = object : HouseholdApi {
+            override fun serverInfo() = ServerInfo("tinitalk", "ok", 4, features = setOf("webpush_v1"))
+            override fun me() = error("unexpected request")
+            override fun contactsPage(limit: Int, cursor: String) = error("unexpected request")
+            override fun updateContactName(login: String, customName: String) = error("unexpected request")
+            override fun calls(limit: Int, before: Long, peerLogin: String?) = error("unexpected request")
+            override fun markCallsRead(throughId: Long, peerLogin: String?) = error("unexpected request")
+        }
         MainActivity::class.java.getDeclaredField("repository").apply { isAccessible = true }
-            .set(activity, ContactRepository(auth))
+            .set(activity, ContactRepository(auth, apiFactory = { _, _, _, _ -> api }))
         val removing = MainActivity::class.java.getDeclaredField("accountRemovalInProgress").apply {
             isAccessible = true
         }

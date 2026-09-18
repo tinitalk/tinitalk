@@ -47,6 +47,7 @@ import java.util.concurrent.Executors
 class TinitalkApplication : Application() {
     private lateinit var foregroundIncoming: org.tinitalk.push.ForegroundIncomingCalls
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var terminated = false
     private lateinit var authStore: AuthStore
     internal lateinit var missedCalls: MissedCallsRepository
         private set
@@ -68,6 +69,7 @@ class TinitalkApplication : Application() {
         private set
     private val authSessionObserver: (AuthSessionEvent) -> Unit = {
         mainHandler.post {
+            if (terminated) return@post
             it.accountId?.let { accountId ->
                 missedCalls.syncAccounts(authStore.list().map { record -> record.id })
                 cleanupWebPushAccount(this, accountId)
@@ -127,6 +129,9 @@ class TinitalkApplication : Application() {
     }
 
     override fun onTerminate() {
+        terminated = true
+        AuthSessionEvents.removeObserver(authSessionObserver)
+        mainHandler.removeCallbacksAndMessages(null)
         foregroundIncoming.close()
         contactShortcuts.close()
         missedCallsExecutor.shutdown()

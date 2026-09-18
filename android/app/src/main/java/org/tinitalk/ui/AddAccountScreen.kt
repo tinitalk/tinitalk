@@ -39,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,10 +69,20 @@ internal fun AddAccountScreen(
     loading: Boolean,
     errorMessage: String?,
     internetAvailable: Boolean,
+    passwordSetupRequired: Boolean = false,
     onBack: () -> Unit,
     onAdd: (String, String, String) -> Unit,
+    onSetPassword: (String, String, String, String) -> Unit = { _, _, _, _ -> },
+    onCancelPasswordSetup: () -> Unit = {},
     onCheckServer: (String) -> ServerCheckResult,
+    retryAtMillis: Long = 0,
+    signInRecovery: AccountSummary? = null,
 ) {
+    val credentials = rememberAccountCredentials(resetKey, signInRecovery?.login.orEmpty(), signInRecovery?.serverUrl.orEmpty())
+    if (passwordSetupRequired) {
+        PasswordSetupScreen(credentials, loading, errorMessage, internetAvailable, retryAtMillis, onSetPassword, onCancelPasswordSetup)
+        return
+    }
     val keyboardVisible = WindowInsets.isImeVisible
     BackHandler { if (!loading) onBack() }
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -90,23 +101,42 @@ internal fun AddAccountScreen(
                             Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "Назад")
                         }
                     }
-                    Text("Добавить аккаунт", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(if (signInRecovery == null) "Добавить аккаунт" else "Войти снова", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
                 Column(
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp)
                         .padding(bottom = if (keyboardVisible) 12.dp else 28.dp),
                 ) {
                     Spacer(Modifier.height(20.dp))
-                    AccountCredentialsForm(resetKey, loading, errorMessage, internetAvailable, "Добавить", keyboardVisible, onAdd, onCheckServer)
+                    AccountCredentialsForm(
+                        credentials, loading, errorMessage, internetAvailable, if (signInRecovery == null) "Добавить" else "Войти", keyboardVisible,
+                        onAdd, onCheckServer, retryAtMillis,
+                    )
                 }
             }
         }
     }
 }
 
+internal class AccountCredentials(login: String = "", server: String = "") {
+    var login by mutableStateOf(login)
+    var password by mutableStateOf("")
+    var server by mutableStateOf(server)
+}
+
+@Composable
+internal fun rememberAccountCredentials(resetKey: Int, login: String = "", server: String = ""): AccountCredentials = rememberSaveable(
+    resetKey, login, server,
+    saver = listSaver(
+        // Never write a password to saved instance state.
+        save = { listOf(it.login, it.server) },
+        restore = { AccountCredentials(it[0], it[1]) },
+    ),
+) { AccountCredentials(login, server) }
+
 @Composable
 internal fun AccountCredentialsForm(
-    resetKey: Int,
+    credentials: AccountCredentials,
     loading: Boolean,
     errorMessage: String?,
     internetAvailable: Boolean,
@@ -114,12 +144,14 @@ internal fun AccountCredentialsForm(
     compactSpacing: Boolean,
     onSubmit: (String, String, String) -> Unit,
     onCheckServer: (String) -> ServerCheckResult,
+    retryAtMillis: Long = 0,
 ) {
-    var login by rememberSaveable(resetKey) { mutableStateOf("") }
-    var token by rememberSaveable(resetKey) { mutableStateOf("") }
-    var url by rememberSaveable(resetKey) { mutableStateOf("") }
-    var serverCheckResult by remember(resetKey) { mutableStateOf<ServerCheckResult?>(null) }
-    var checkingServer by remember(resetKey) { mutableStateOf(false) }
+    var login by credentials::login
+    var token by credentials::password
+    var url by credentials::server
+    val retry = retrySeconds(retryAtMillis)
+    var serverCheckResult by remember(credentials) { mutableStateOf<ServerCheckResult?>(null) }
+    var checkingServer by remember(credentials) { mutableStateOf(false) }
     val context = LocalContext.current
     val clipboardManager = remember(context) { context.getSystemService(ClipboardManager::class.java) }
     val clipboardText: () -> String? = {
@@ -157,9 +189,13 @@ internal fun AccountCredentialsForm(
     val normalizedUrl = httpsServerUrl(url)
     val serverReady = normalizedUrl != null
     val presentation = serverCheckPresentation(serverReady, checkingServer, serverCheckResult, internetAvailable)
-    val canSubmit = internetAvailable && !loading && serverReady && login.isNotBlank() && token.isNotBlank()
+    val canSubmit = internetAvailable && !loading && retry == 0L && serverReady && login.isNotBlank() && token.isNotEmpty()
     val submit: () -> Unit = {
-        normalizedUrl?.let { if (canSubmit) onSubmit(it, login, token) }
+        normalizedUrl?.let { server ->
+            if (canSubmit) {
+                onSubmit(server, login, token)
+            }
+        }
     }
     LaunchedEffect(url, internetAvailable) {
         if (!internetAvailable) { checkingServer = false; serverCheckResult = null; return@LaunchedEffect }
@@ -237,7 +273,9 @@ internal fun AccountCredentialsForm(
             }
         }, singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { submit() }),
     )
-    errorMessage?.let {
+    (if (retryAtMillis > 0) {
+        if (retry > 0) "Повторите через $retry с" else "Можно попробовать ещё раз"
+    } else errorMessage)?.let {
         Spacer(Modifier.height(14.dp))
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.errorContainer) { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium) }
     }
@@ -268,13 +306,13 @@ private fun splitAccountAddress(value: String): Pair<String, String>? {
     return login to server
 }
 
-private fun splitCredentials(value: String): Triple<String, String, String>? {
-    val lines = value.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
+internal fun splitCredentials(value: String): Triple<String, String, String>? {
+    val lines = value.lineSequence().toList().dropWhile(String::isBlank).dropLastWhile(String::isBlank)
     return when (lines.size) {
         3 -> {
-            val login = lines[0]
+            val login = lines[0].trim()
             val token = lines[1]
-            val server = lines[2]
+            val server = lines[2].trim()
             if (
                 '@' in login ||
                 login.any(Char::isWhitespace) ||

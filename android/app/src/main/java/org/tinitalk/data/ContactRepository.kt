@@ -16,6 +16,7 @@ private const val TINITALK_SERVICE = "tinitalk"
 private const val SUPPORTED_API_VERSION = 4
 private const val WEBPUSH_FEATURE = "webpush_v1"
 private const val PERSONAL_CONTACTS_FEATURE = "personal_contacts"
+internal const val PASSWORD_AUTH_FEATURE = "password_auth_v1"
 
 data class AddedAccount(
     val account: AccountRecord,
@@ -49,6 +50,8 @@ class ServerCompatibilityException(
 ) : RuntimeException()
 
 class DuplicateAccountException : IllegalArgumentException("server already exists")
+class PasswordSetupRequiredException : IllegalStateException("personal password setup is required")
+class PasswordSignInRequiredException(cause: Exception) : IOException("password change requires a new login", cause)
 
 class ContactRepository internal constructor(
     private val authStore: AuthStore,
@@ -134,44 +137,34 @@ class ContactRepository internal constructor(
     }
 
     fun signIn(url: String, login: String, token: String, deviceId: String = ""): ContactPage {
-        val previous = authStore.load()
-        val accountId = authStore.list().firstOrNull()?.id ?: authStore.newAccountId()
-        var session = Session(requireNotNull(httpsServerUrl(url)), login.trim(), token.trim())
-        var api = api(session)
-        var subscribed = false
-        var persisted = false
-        return try {
-            val info = api.requireWebPushServer()
-            require(deviceId.isNotBlank()) { "device_id is required for push activation" }
-            val registration = checkNotNull(webPushRegistration) { "push activation is unavailable" }
-            val config = api.webPushConfig().toStoredConfig(session.url)
-            val subscription = registration.subscribe(accountId, config)
-            subscribed = true
-            val sessionId = api.claimSession(deviceId, subscription, config.configId)
-            session = session.copy(
-                features = info.features,
-                sessionId = sessionId,
-                configId = config.configId,
-            )
-            if (previous == null) {
-                authStore.add(accountId, session, config)
-            } else {
-                check(authStore.activateWebPushIfCurrent(accountId, previous, session, config)) {
-                    "authentication state changed"
-                }
-            }
-            persisted = true
-            api = api(session)
-            val profile = api.me()
-            val contacts = api.allContacts(profile.login)
-            contactCache?.replace(contacts.boundTo(accountId, session.url))
-            contacts
-        } catch (e: ApiException) {
-            handleUnauthorized(e, session)
-            throw e
-        } finally {
-            if (subscribed && !persisted) runCatching { webPushRegistration?.unsubscribe(accountId) }
+        val normalizedUrl = requireNotNull(httpsServerUrl(url))
+        val normalizedLogin = login.trim()
+        val client = apiFactory(normalizedUrl, normalizedLogin, token, null)
+        val info = client.requireWebPushServer()
+        val accessToken = if (PASSWORD_AUTH_FEATURE in info.features) {
+            client.login(normalizedLogin, token).accessTokenOrThrow()
+        } else {
+            token.trim()
         }
+        return activateFirstAccount(normalizedUrl, normalizedLogin, accessToken, info, deviceId)
+    }
+
+    fun setInitialPassword(
+        url: String,
+        login: String,
+        temporaryPassword: String,
+        newPassword: String,
+        deviceId: String,
+    ): ContactPage {
+        val normalizedUrl = requireNotNull(httpsServerUrl(url))
+        val normalizedLogin = login.trim()
+        val client = apiFactory(normalizedUrl, normalizedLogin, "", null)
+        val info = client.requireWebPushServer()
+        if (PASSWORD_AUTH_FEATURE !in info.features) {
+            throw ServerCompatibilityException(CompatibilityProblem.ServerOutdated, normalizedUrl)
+        }
+        val token = client.setPassword(normalizedLogin, temporaryPassword, newPassword).accessTokenOrThrow()
+        return activateFirstAccount(normalizedUrl, normalizedLogin, token, info, deviceId)
     }
 
     fun restorableSession(): Session? {
@@ -181,35 +174,178 @@ class ContactRepository internal constructor(
 
     fun accounts(): List<AccountRecord> = authStore.list()
 
+    fun passwordSet(accountId: AccountId): Boolean? {
+        val account = authStore.get(accountId) ?: return null
+        if (PASSWORD_AUTH_FEATURE !in account.session.features) {
+            val info = api(account.session).requireWebPushServer(account.session.url)
+            authStore.updateFeatures(account.session.url, info.features)
+            if (PASSWORD_AUTH_FEATURE !in info.features) return null
+        }
+        account.session.passwordSet?.let { return it }
+        val value = api(account.session).me().passwordSet ?: return null
+        authStore.saveIfCurrent(account.id, account.session, account.session.copy(passwordSet = value))
+        return value
+    }
+
     fun addAccount(url: String, login: String, token: String, deviceId: String): AddedAccount {
         val existing = authStore.list()
         require(existing.isNotEmpty()) { "addAccount requires an existing account" }
-        val candidate = Session(requireNotNull(httpsServerUrl(url)), login.trim(), token.trim())
+        val normalizedUrl = requireNotNull(httpsServerUrl(url))
+        val normalizedLogin = login.trim()
+        val candidate = Session(normalizedUrl, normalizedLogin, token.trim())
         if (existing.any { sameServerUrl(it.session.url, candidate.url) }) throw DuplicateAccountException()
+        val client = apiFactory(normalizedUrl, normalizedLogin, token, null)
+        val info = client.requireWebPushServer(candidate.url)
+        val accessToken = if (PASSWORD_AUTH_FEATURE in info.features) {
+            client.login(normalizedLogin, token).accessTokenOrThrow()
+        } else {
+            token.trim()
+        }
+        return activateAdditionalAccount(normalizedUrl, normalizedLogin, accessToken, info, deviceId)
+    }
+
+    fun setInitialPasswordAndAddAccount(
+        url: String,
+        login: String,
+        temporaryPassword: String,
+        newPassword: String,
+        deviceId: String,
+    ): AddedAccount {
+        val normalizedUrl = requireNotNull(httpsServerUrl(url))
+        val normalizedLogin = login.trim()
+        if (authStore.list().any { sameServerUrl(it.session.url, normalizedUrl) }) throw DuplicateAccountException()
+        val client = apiFactory(normalizedUrl, normalizedLogin, "", null)
+        val info = client.requireWebPushServer(normalizedUrl)
+        if (PASSWORD_AUTH_FEATURE !in info.features) {
+            throw ServerCompatibilityException(CompatibilityProblem.ServerOutdated, normalizedUrl)
+        }
+        val token = client.setPassword(normalizedLogin, temporaryPassword, newPassword).accessTokenOrThrow()
+        return activateAdditionalAccount(normalizedUrl, normalizedLogin, token, info, deviceId)
+    }
+
+    fun changePassword(accountId: AccountId, currentPassword: String, newPassword: String, deviceId: String): ContactPage {
+        val account = authStore.get(accountId) ?: throw IllegalStateException("account is unavailable")
+        val client = api(account.session)
+        val info = if (PASSWORD_AUTH_FEATURE in account.session.features) {
+            ServerInfo(TINITALK_SERVICE, "ok", SUPPORTED_API_VERSION, features = account.session.features)
+        } else {
+            client.requireWebPushServer(account.session.url).also {
+                if (PASSWORD_AUTH_FEATURE !in it.features) {
+                    throw ServerCompatibilityException(CompatibilityProblem.ServerOutdated, account.session.url)
+                }
+                authStore.updateFeatures(account.session.url, it.features)
+            }
+        }
+        val password = currentPassword.takeUnless(String::isEmpty) ?: account.session.token
+        return authStore.changingCredentials(account) {
+            val token = try {
+                client.setPassword(account.session.login, password, newPassword).accessTokenOrThrow()
+            } catch (error: Exception) {
+                if (error is ApiException) throw error
+                // The server may have replaced the password and revoked this token.
+                // Do not retry the mutation with credentials whose validity is unknown.
+                if (authStore.requireSignInIfCurrent(account.id, account.session)) {
+                    contactCache?.remove(account.id)
+                    onAccountRemoved(account.id, account.session)
+                    throw PasswordSignInRequiredException(error)
+                }
+                throw error
+            }
+            activateExistingAccount(account, token, info, deviceId)
+        }
+    }
+
+    private fun activateFirstAccount(
+        url: String,
+        login: String,
+        token: String,
+        info: ServerInfo,
+        deviceId: String,
+    ): ContactPage {
+        val previous = authStore.load()
+        val provisional = Session(url, login, token, features = info.features)
+        val accountId = if (previous == null) {
+            authStore.upsert(provisional).id
+        } else {
+            check(authStore.saveIfCurrent(previous, provisional)) { "authentication state changed" }
+            checkNotNull(authStore.list().firstOrNull()?.id)
+        }
+        return activateStagedAccount(accountId, provisional, deviceId).second
+    }
+
+    private fun activateAdditionalAccount(
+        url: String,
+        login: String,
+        token: String,
+        info: ServerInfo,
+        deviceId: String,
+    ): AddedAccount {
+        require(authStore.list().isNotEmpty()) { "addAccount requires an existing account" }
+        require(authStore.list().none { sameServerUrl(it.session.url, url) }) { "duplicate server" }
+        val provisional = Session(url, login, token, features = info.features)
+        val staged = authStore.upsert(provisional)
+        val accountId = staged.id
+        val (account, contacts) = activateStagedAccount(accountId, provisional, deviceId)
+        return AddedAccount(account, contacts.boundTo(accountId, url))
+    }
+
+    private fun activateExistingAccount(
+        account: AccountRecord,
+        token: String,
+        info: ServerInfo,
+        deviceId: String,
+    ): ContactPage {
+        val provisional = account.session.copy(
+            token = token,
+            features = info.features,
+            sessionId = null,
+            configId = null,
+            passwordSet = true,
+        )
+        check(authStore.saveIfCurrent(account.id, account.session, provisional)) { "authentication state changed" }
+        return activateStagedAccount(account.id, provisional, deviceId).second
+    }
+
+    private fun activateStagedAccount(
+        accountId: AccountId,
+        provisional: Session,
+        deviceId: String,
+    ): Pair<AccountRecord, ContactPage> {
         require(deviceId.isNotBlank()) { "device_id is required for push activation" }
         val registration = checkNotNull(webPushRegistration) { "push activation is unavailable" }
-        val api = api(candidate)
-        val info = api.requireWebPushServer(candidate.url)
-        val config = api.webPushConfig().toStoredConfig(candidate.url)
-        val accountId = authStore.newAccountId()
+        val client = api(provisional)
         var committed = false
+        var subscriptionStarted = false
         try {
+            val config = client.webPushConfig().toStoredConfig(provisional.url)
+            subscriptionStarted = true
             val subscription = registration.subscribe(accountId, config)
-            val session = candidate.copy(
-                features = info.features,
-                sessionId = api.claimSession(deviceId, subscription, config.configId),
+            val session = provisional.copy(
+                sessionId = client.claimSession(deviceId, subscription, config.configId),
                 configId = config.configId,
             )
-            val claimedApi = api(session)
+            check(authStore.activateWebPushIfCurrent(accountId, provisional, session, config)) {
+                "authentication state changed"
+            }
+            committed = true
+            val claimedApi = this.api(session)
             val profile = claimedApi.me()
             val contacts = claimedApi.allContacts(profile.login)
-            val account = authStore.add(accountId, session, config)
-            committed = true
+            val profiledSession = session.copy(passwordSet = profile.passwordSet ?: session.passwordSet)
+            if (profiledSession != session) {
+                check(authStore.saveIfCurrent(accountId, session, profiledSession)) {
+                    "authentication state changed"
+                }
+            }
+            val account = checkNotNull(authStore.get(accountId))
             val bound = contacts.boundTo(accountId, session.url)
             contactCache?.replace(bound)
-            return AddedAccount(account, bound)
+            return account to contacts
+        } catch (e: ApiException) {
+            handleUnauthorized(e, accountId, provisional)
+            throw e
         } finally {
-            if (!committed) runCatching { registration.unsubscribe(accountId) }
+            if (subscriptionStarted && !committed) runCatching { registration.unsubscribe(accountId) }
         }
     }
 
@@ -222,9 +358,13 @@ class ContactRepository internal constructor(
         }
     }
 
-    fun refreshContacts(accountId: AccountId): AccountContactPage? {
+    fun refreshContacts(accountId: AccountId, deviceId: String = ""): AccountContactPage? {
         val account = authStore.get(accountId) ?: return null
         return try {
+            if (account.session.needsActivation()) {
+                if (deviceId.isBlank()) return null
+                return activateStagedAccount(account.id, account.session, deviceId).second.boundTo(account.id, account.session.url)
+            }
             repeat(2) {
                 val revision = contactCache?.revision(account.id)
                 val page = api(account.session).allContacts(account.session.login).boundTo(account.id, account.session.url)
@@ -359,7 +499,25 @@ class ContactRepository internal constructor(
 
     fun removeAccount(accountId: AccountId): Boolean {
         val account = authStore.get(accountId) ?: return false
-        if (!authStore.removeIfCurrent(accountId, account.session)) return false
+        try { passwordSet(accountId) } catch (error: ApiException) {
+            if (error.code != 401) throw error
+            // A reset/revocation has already logged this device out.
+            if (!authStore.removeIfCurrent(accountId, account.session)) return false
+            contactCache?.remove(accountId)
+            onAccountRemoved(accountId, account.session)
+            onExplicitAccountRemoved(accountId, account.session)
+            return true
+        }
+        val current = authStore.get(accountId) ?: return false
+        if (PASSWORD_AUTH_FEATURE in current.session.features) {
+            authStore.changingCredentials(current) {
+                try { api(current.session).logout() } catch (error: ApiException) {
+                    if (error.code != 401) throw error // Already revoked is also logged out.
+                }
+                if (!authStore.removeIfCurrent(accountId, current.session)) return@changingCredentials false
+                true
+            }.let { if (!it) return false }
+        } else if (!authStore.removeIfCurrent(accountId, current.session)) return false
         contactCache?.remove(accountId)
         onAccountRemoved(accountId, account.session)
         onExplicitAccountRemoved(accountId, account.session)
@@ -396,6 +554,12 @@ class ContactRepository internal constructor(
             onAccountRemoved(accountId, session)
         }
     }
+}
+
+private fun PasswordAuthResult.accessTokenOrThrow(): String {
+    if (passwordRequired) throw PasswordSetupRequiredException()
+    return token?.takeIf(String::isNotBlank)
+        ?: throw IllegalStateException("password authentication returned no token")
 }
 
 private fun ContactPage.withoutUser(login: String): ContactPage =
