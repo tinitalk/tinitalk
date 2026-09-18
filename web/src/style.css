@@ -814,6 +814,19 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   border-radius: 20px;
   font-size: .92rem;
 }
+.profile-account-actions {
+  display: grid;
+  gap: 8px;
+}
+.profile-password-button {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 20px;
+  font-size: .92rem;
+}
+.password-form {
+  min-width: min(340px, calc(100vw - 96px));
+}
 .status-icon {
   width: 16px;
   height: 16px;

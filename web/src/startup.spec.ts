@@ -30,6 +30,7 @@ it('recovers an incoming call that arrived during an ordinary socket outage', as
   const app = new Function('SignalConnection', 'api', 'APIError', `
     const account = {id:'a', server:'https://family.example', login:'alice', token:'test', deviceId:'a', sessionId:'s'};
     const list = [account], connections = new Map(), states = new Map(), recoveringAccounts = new Map(), openingNotificationCalls = new Map();
+    const rotatingCredentials = new Set();
     let current = null;
     const receive = async () => {}, refreshAccountContacts = async () => {}, renderApp = () => {}, failure = () => {};
     const callKey = (a,b) => a+':'+b;

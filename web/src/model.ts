@@ -1,6 +1,6 @@
 export type Account = {
   id: string; server: string; login: string; token: string; name: string;
-  deviceId: string; sessionId: string; pushConfigId?: string; sessionReplaced?: boolean;
+  deviceId: string; sessionId: string; pushConfigId?: string; sessionReplaced?: boolean; passwordAuth?: true; passwordSet?: boolean;
 };
 export type Contact = { login: string; display_name: string; custom_name?: string; can_call: boolean };
 export type ContactPhoto = { id: string; accountId: string; login: string; dataUrl: string; updatedAt: number };

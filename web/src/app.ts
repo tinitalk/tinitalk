@@ -1,4 +1,4 @@
-import { explainError } from './userErrors';
+import { explainError, OperationError } from './userErrors';
 import './style.css';
 import { Favorites } from './favorites';
 import { bindHistoryScroll } from './historyScroll';
@@ -25,6 +25,7 @@ import { securityEmoji, type CallSecurityFailureReason, type CallSecurityUnavail
 import { CallToneController, type CallToneEndReason, type CallToneState } from './callTones';
 import { buildTime, canUpdateApplication, fetchBuildVersions, inspectUpdates, updateStatus, waitForWorker, webBuild, webCommit, type UpdateReport } from './updates';
 import { microphoneControlIcon } from './callControls';
+import { AuthError, authenticate, authErrorMessage, changePassword, logout, personalPasswordError } from './auth';
 
 const base = new URL('./', document.baseURI).href;
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -96,9 +97,12 @@ type LocalPreviewPosition = { left: number; top: number };
 type LocalPreviewBounds = { left: number; top: number; right: number; bottom: number };
 type SelfPreviewCorner = 'TopLeft' | 'TopRight' | 'BottomLeft' | 'BottomRight';
 type NotificationCallAction = 'answer' | 'reject';
+type PendingPasswordSetup = { server: string; login: string; temporaryPassword: string; previous?: Account };
 
 const list: Account[] = [];
 const removingAccounts = new Set<Account>();
+const rotatingCredentials = new Set<Account>();
+const activatingAccounts = new Set<Account>();
 const connections = new Map<string, SignalConnection>();
 const states = new Map<string, string>();
 const notifications = new Map<string, boolean>();
@@ -390,7 +394,12 @@ async function claim(account: Account): Promise<void> {
 
 function markSessionReplaced(account: Account, sessionId: string): void {
   // Delayed responses from the previous login must not invalidate a new one.
-  if (!sessionId || list.find(item => item.id === account.id) !== account || account.sessionId !== sessionId || account.sessionReplaced) return;
+  if (!sessionId || rotatingCredentials.has(account) || list.find(item => item.id === account.id) !== account || account.sessionId !== sessionId || account.sessionReplaced) return;
+  requireAccountLogin(account);
+}
+
+function requireAccountLogin(account: Account): void {
+  if (list.find(item => item.id === account.id) !== account || account.sessionReplaced) return;
   account.sessionReplaced = true;
   clearUnread(account.id);
   connections.get(account.id)?.stop();
@@ -414,9 +423,26 @@ function markSessionReplaced(account: Account, sessionId: string): void {
   } else renderApp();
 }
 
+function beginCredentialRotation(account: Account): void {
+  if (rotatingCredentials.has(account) || removingAccounts.has(account)) throw new Error('Дождитесь завершения предыдущего действия.');
+  rotatingCredentials.add(account);
+  connections.get(account.id)?.stop();
+  connections.delete(account.id);
+}
+
+function endCredentialRotation(account: Account | undefined, reconnect = false): void {
+  if (!account) return;
+  rotatingCredentials.delete(account);
+  if (reconnect && list.includes(account) && !account.sessionReplaced && !removingAccounts.has(account)) connectAccount(account);
+}
+
 function connectAccount(account: Account, recoverActive = true): void {
   connections.get(account.id)?.stop();
-  if (account.sessionReplaced) return;
+  if (account.sessionReplaced || rotatingCredentials.has(account)) return;
+  if (account.passwordAuth && !account.sessionId) {
+    void resumeAccountActivation(account);
+    return;
+  }
   const connection = new SignalConnection(account,
     event => receive(account, event),
     status => {
@@ -451,13 +477,58 @@ function connectAccount(account: Account, recoverActive = true): void {
 }
 
 function connectAndResume(account: Account): void {
-  if (account.sessionReplaced) return;
+  if (account.sessionReplaced || rotatingCredentials.has(account)) return;
+  if (account.passwordAuth && !account.sessionId) {
+    void resumeAccountActivation(account);
+    return;
+  }
   const connection = connections.get(account.id);
   if (!connection) return;
   if (recoveringAccounts.has(account.id)) return;
   const job = connection.connect().then(() => resumeActiveCall(account)).catch(() => undefined)
     .finally(() => recoveringAccounts.delete(account.id));
   recoveringAccounts.set(account.id, job);
+}
+
+async function resumeAccountActivation(account: Account): Promise<void> {
+  if (activatingAccounts.has(account) || !list.includes(account) || removingAccounts.has(account)) return;
+  activatingAccounts.add(account);
+  try {
+    await claim(account);
+    if (!list.includes(account) || removingAccounts.has(account)) return;
+    await saveAccount(account);
+    connectAccount(account);
+    if (account.pushConfigId) void restorePushRegistration(account);
+    await refreshPasswordState(account);
+    await refreshAll(false);
+  } catch (error) {
+    if (!list.includes(account)) return;
+    if (error instanceof APIError && error.status === 401) requireAccountLogin(account);
+    else states.set(account.id, 'Нет связи');
+  } finally {
+    activatingAccounts.delete(account);
+    renderApp();
+  }
+}
+
+async function restorePushRegistration(account: Account): Promise<void> {
+  const token = account.token;
+  const sessionId = account.sessionId;
+  const stillCurrent = () => list.includes(account) && !account.sessionReplaced && !removingAccounts.has(account)
+    && !rotatingCredentials.has(account) && account.token === token && account.sessionId === sessionId
+    && Boolean(account.pushConfigId);
+  // The saved config ID expresses the user's choice; disabling push clears it.
+  // A password change removes the server registration, not the browser subscription.
+  if (!sessionId || !stillCurrent()) return;
+  notifications.set(account.id, false);
+  try {
+    await enablePush(account, base, false);
+    if (stillCurrent()) notifications.set(account.id, true);
+  } catch {
+    if (stillCurrent()) notice('Не удалось подключить уведомления. Попробуйте включить их в профиле.');
+  } finally {
+    if (stillCurrent() && route.name === 'profile') renderApp();
+  }
 }
 
 async function resumeActiveCall(account: Account): Promise<void> {
@@ -1346,8 +1417,39 @@ function accountCard(account: Account): HTMLElement {
   statusRow.append(element('span', '', status.text));
   card.append(top, server, statusRow, account.sessionReplaced
     ? actionButton('Войти снова', () => navigate({ name: 'login', accountId: account.id }), 'primary profile-notification-button')
-    : notificationButton(account));
+    : profileAccountActions(account));
   return card;
+}
+
+function profileAccountActions(account: Account): HTMLElement {
+  const actions = element('div', 'profile-account-actions');
+  actions.append(notificationButton(account));
+  void loadProfilePasswordAction(account, actions);
+  return actions;
+}
+
+async function loadProfilePasswordAction(account: Account, actions: HTMLElement): Promise<void> {
+  const sessionId = account.sessionId;
+  const token = account.token;
+  const stillCurrent = () => actions.isConnected && list.includes(account) && !account.sessionReplaced
+    && !removingAccounts.has(account) && !rotatingCredentials.has(account)
+    && account.sessionId === sessionId && account.token === token;
+  try {
+    // Do not show a cached action while checking, or on servers without password auth.
+    const health = await api<ServerHealth>(account, '/healthz');
+    if (!stillCurrent() || !health.features?.includes('password_auth_v1') || !sessionId) return;
+    const profile = await api<{ password_set?: unknown }>(account, '/api/me');
+    if (!stillCurrent() || typeof profile.password_set !== 'boolean') return;
+    account.passwordAuth = true;
+    account.passwordSet = profile.password_set;
+    await saveAccount(account);
+    if (!stillCurrent()) return;
+    actions.append(actionButton(profile.password_set ? 'Сменить пароль' : 'Задать пароль',
+      () => changePasswordDialog(account), 'secondary profile-password-button'));
+  } catch {
+    // The account's existing connection status conveys connectivity problems.
+    // Without a confirmed result, there is no password action to offer.
+  }
 }
 
 function notificationButton(account: Account): HTMLButtonElement {
@@ -1379,14 +1481,24 @@ function notificationButton(account: Account): HTMLButtonElement {
 }
 
 function profileAccountStatus(account: Account): { kind: 'checking' | 'available' | 'unavailable'; text: string } {
-  if (account.sessionReplaced) return { kind: 'unavailable', text: 'Вход выполнен на другом устройстве' };
+  if (account.sessionReplaced) return { kind: 'unavailable', text: 'Нужно войти снова' };
   const status = states.get(account.id);
   if (!status || status === 'Подключение…') return { kind: 'checking', text: 'Проверяем…' };
   if (status === 'На связи') return { kind: 'available', text: 'Сервер доступен' };
   return { kind: 'unavailable', text: status === 'Нет связи' ? 'Сервер недоступен' : status };
 }
 
-function confirmRemoveAccount(account: Account): void {
+async function preparePasswordAccount(account: Account): Promise<void> {
+  if (!account.passwordAuth) {
+    const details = await api<{ features?: string[] }>(account, '/healthz');
+    if (!details.features?.includes('password_auth_v1')) return;
+    account.passwordAuth = true;
+    await saveAccount(account);
+  }
+  await refreshPasswordState(account);
+}
+
+async function confirmRemoveAccount(account: Account): Promise<void> {
   const replaced = account.sessionReplaced === true;
   const modal = dialog(replaced ? 'Удалить аккаунт из списка?' : 'Выйти из аккаунта?');
   modal.body.append(element('p', '', replaced
@@ -1402,8 +1514,10 @@ function confirmRemoveAccount(account: Account): void {
 async function removeAccount(account: Account): Promise<void> {
   if (current?.account.id === account.id) throw new Error('Сначала завершите звонок.');
   if (removingAccounts.has(account)) return;
+  if (!account.sessionReplaced) beginCredentialRotation(account);
   removingAccounts.add(account);
   try {
+    if (!account.sessionReplaced) await logout(account);
     await disablePush(account, base).catch(() => undefined);
     connections.get(account.id)?.stop();
     connections.delete(account.id);
@@ -1421,6 +1535,7 @@ async function removeAccount(account: Account): Promise<void> {
     replaceRoute(list.length ? { name: 'profile' } : { name: 'login' });
   } finally {
     removingAccounts.delete(account);
+    endCredentialRotation(account, true);
   }
 }
 
@@ -1438,6 +1553,109 @@ function updateFavoriteButton(button: HTMLButtonElement, key: string): void {
   button.classList.toggle('selected', starred);
   button.setAttribute('aria-label', starred ? 'Убрать из избранных' : 'Добавить в избранные');
   button.setAttribute('aria-pressed', String(starred));
+}
+
+async function changePasswordDialog(account: Account): Promise<void> {
+  if (current?.account.id === account.id) { notice('Сначала завершите звонок.'); return; }
+  await preparePasswordAccount(account);
+  if (!account.passwordAuth) throw new Error('Для входа по паролю нужно обновить сервер.');
+  if (account.passwordSet === undefined) throw new Error('Не удалось проверить, задан ли пароль. Попробуйте ещё раз.');
+  const installing = account.passwordSet === false;
+  const modal = dialog(installing ? 'Задать пароль' : 'Сменить пароль');
+  const form = element('form', 'material-form password-form');
+  form.noValidate = true;
+  if (!installing) form.append(inputField('Текущий пароль', 'current_password', 'password'));
+  form.append(inputField('Новый пароль', 'new_password', 'password'),
+    inputField('Повторите пароль', 'confirm_password', 'password'));
+  const hint = element('small', 'supporting-text', installing
+    ? 'Не менее 8 символов. Рекомендуем сочетать строчные и заглавные буквы с цифрами.'
+    : 'Введите текущий пароль. Новый пароль — не менее 8 символов. Рекомендуем сочетать строчные и заглавные буквы с цифрами.');
+  const error = element('p', 'form-error');
+  error.hidden = true;
+  form.append(hint, error);
+  const cancel = actionButton('Отмена', () => closeDialog(modal), 'secondary');
+  const submit = element('button', 'primary', 'Сохранить');
+  submit.type = 'button';
+  let busy = false;
+  let retryUntil = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  const update = () => {
+    const data = new FormData(form);
+    const currentReady = account.passwordSet !== true || Boolean(String(data.get('current_password')));
+    submit.disabled = busy || Date.now() < retryUntil || !currentReady || !String(data.get('new_password')) || !String(data.get('confirm_password'));
+  };
+  form.addEventListener('input', update);
+  submit.onclick = () => form.requestSubmit();
+  form.onsubmit = event => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    let issued = false;
+    void (async () => {
+      busy = true;
+      cancel.disabled = true;
+      update();
+      error.hidden = true;
+      const data = new FormData(form);
+      const next = String(data.get('new_password'));
+      const confirmation = String(data.get('confirm_password'));
+      const validation = personalPasswordError(next);
+      if (validation) throw new Error(validation);
+      if (next !== confirmation) throw new Error('Пароли не совпадают.');
+      const enteredCurrent = data.get('current_password');
+      const currentPassword = typeof enteredCurrent === 'string' && enteredCurrent ? enteredCurrent : account.token;
+      beginCredentialRotation(account);
+      const result = await changePassword(account.server, account.login, currentPassword, next);
+      issued = true;
+      account.token = result.token;
+      account.passwordAuth = true;
+      account.passwordSet = true;
+      account.sessionId = '';
+      if (account.pushConfigId) notifications.set(account.id, false);
+      await saveAccount(account);
+      await claim(account);
+      await saveAccount(account);
+      endCredentialRotation(account);
+      connectAccount(account);
+      await closeDialog(modal, 'remove');
+      notice('Пароль изменён. На других устройствах нужно войти снова.');
+      if (account.pushConfigId) void restorePushRegistration(account);
+    })().catch(err => {
+      if (issued) {
+        endCredentialRotation(account);
+        void closeDialog(modal, 'remove');
+        connectAccount(account);
+        notice('Пароль сохранён. Подключение будет восстановлено, когда появится связь.');
+        return;
+      }
+      if (err instanceof OperationError) {
+        endCredentialRotation(account);
+        requireAccountLogin(account);
+        void closeDialog(modal, 'remove');
+        notice('Не удалось получить ответ сервера. Попробуйте войти с новым паролем. Если он не подходит — с прежним.');
+        return;
+      }
+      endCredentialRotation(account, true);
+      error.hidden = false;
+      error.textContent = err instanceof Error ? err.message : String(err);
+      busy = false;
+      cancel.disabled = false;
+      if (err instanceof AuthError && err.code === 'password_retry_later' && err.retryAfterSeconds) {
+        retryUntil = Date.now() + err.retryAfterSeconds * 1000;
+        clearTimeout(retryTimer);
+        const tick = () => {
+          if (!form.isConnected) return;
+          const remaining = Math.max(0, Math.ceil((retryUntil - Date.now()) / 1000));
+          error.textContent = authErrorMessage('password_retry_later', remaining || 1);
+          update();
+          if (remaining > 0) retryTimer = setTimeout(tick, 250);
+        };
+        tick();
+      } else update();
+    });
+  };
+  modal.body.append(form);
+  modal.actions.append(cancel, submit);
+  update();
 }
 
 function contactScreen(accountId: string, login: string): HTMLElement {
@@ -2104,17 +2322,19 @@ function addContactScreen(): HTMLElement {
 }
 
 function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTMLElement {
+  const flow = element('div', 'credentials-flow');
   const page = element('section', `credential-screen ${mode}`);
   const form = element('form', 'material-form credentials');
   form.noValidate = true;
   const standalone = mode === 'login' && (!reauth || list.length === 1);
+  let brand: HTMLElement | undefined;
   if (standalone) {
-    const header = element('div', 'login-brand');
-    header.append(appMark('52px'));
+    brand = element('div', 'login-brand');
+    brand.append(appMark('52px'));
     const title = element('div');
     title.append(element('h1', '', 'TiniTalk'), element('p', '', 'Звонки для своих'));
-    header.append(title);
-    form.append(header);
+    brand.append(title);
+    form.append(brand);
   }
   form.append(inputField('Логин', 'login', 'text', true));
   form.append(inputField('Пароль', 'token', 'password', true));
@@ -2123,14 +2343,17 @@ function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTM
   server.append(serverStatus);
   form.append(server);
   if (reauth?.sessionReplaced) {
-    form.append(element('p', 'reauth-explanation', 'Вход выполнен на другом устройстве. Войдите снова, чтобы принимать звонки здесь.'));
+    form.append(element('p', 'reauth-explanation', 'Предыдущий вход завершён. Войдите снова, чтобы принимать звонки здесь.'));
   }
   const error = element('p', 'form-error');
   error.hidden = true;
   const submit = element('button', 'primary wide', mode === 'login' ? 'Войти' : 'Добавить');
   submit.type = 'submit';
+  let pendingSetup: PendingPasswordSetup | undefined;
+  let retryUntil = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const updateSubmit = () => {
-    submit.disabled = Boolean(accountSubmission) || !credentialsReady(form);
+    submit.disabled = Boolean(accountSubmission) || Date.now() < retryUntil || !credentialsReady(form, Boolean(pendingSetup));
   };
   form.append(error, submit);
   wireCredentialsPaste(form);
@@ -2145,9 +2368,65 @@ function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTM
     event.preventDefault();
     if (submit.disabled || accountSubmission) return;
     submit.disabled = true;
-    accountSubmission = submitAccount(form, mode, error, submit).catch(err => {
-      error.hidden = false;
-      error.textContent = err instanceof Error ? err.message : String(err);
+    error.hidden = true;
+    accountSubmission = (async () => {
+      if (pendingSetup) {
+        await submitPasswordSetup(form, mode, pendingSetup);
+        return;
+      }
+      const setup = await submitAccount(form, mode);
+      if (!setup || !form.isConnected) return;
+      pendingSetup = setup;
+      const loginFields = Array.from(form.childNodes);
+      const loginHost = form.parentElement!;
+      const loginView = flow.firstElementChild!;
+      // Reuse the normal Back-stack handling, but show a full page instead of a
+      // dialog. Credentials stay on detached DOM nodes, never in history state.
+      const back = registerActiveOverlay(() => {
+        pendingSetup = undefined;
+        clearTimeout(retryTimer);
+        retryUntil = 0;
+        error.hidden = true;
+        submit.textContent = mode === 'login' ? 'Войти' : 'Добавить';
+        form.replaceChildren(...loginFields);
+        loginHost.append(form);
+        flow.replaceChildren(loginView);
+        updateSubmit();
+      });
+      form.replaceChildren();
+      form.append(element('p', 'reauth-explanation', 'Не менее 8 символов. Рекомендуем сочетать строчные и заглавные буквы с цифрами.'),
+        inputField('Новый пароль', 'new_password', 'password'),
+        inputField('Повторите пароль', 'confirm_password', 'password'), error, submit);
+      const body = element('main', 'form-page');
+      body.append(form);
+      flow.replaceChildren(appPage(body, {
+        title: 'Придумайте пароль', back: () => { if (!accountSubmission) back(); }, className: 'form-app-page',
+      }));
+      submit.textContent = 'Войти';
+      form.querySelector<HTMLInputElement>('input[name="new_password"]')?.focus();
+    })().catch(err => {
+      if (pendingSetup && err instanceof OperationError) {
+        closeActiveOverlay();
+        screen.dataset.viewKey = '';
+        renderApp();
+        notice('Не удалось получить ответ сервера. Попробуйте войти с новым паролем.');
+        return;
+      }
+      showCredentialError(error, err, () => {
+        retryUntil = 0;
+        updateSubmit();
+      }, seconds => {
+        retryUntil = Date.now() + seconds * 1000;
+        clearTimeout(retryTimer);
+        const tick = () => {
+          if (!form.isConnected) return;
+          const remaining = Math.max(0, Math.ceil((retryUntil - Date.now()) / 1000));
+          error.textContent = authErrorMessage('password_retry_later', remaining || 1);
+          updateSubmit();
+          if (remaining > 0) retryTimer = setTimeout(tick, 250);
+        };
+        tick();
+      });
     }).finally(() => {
       accountSubmission = undefined;
       updateSubmit();
@@ -2157,16 +2436,24 @@ function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTM
   };
   if (standalone) {
     page.append(form, element('p', 'version', `v ${webCommit}`));
-    return page;
+    flow.append(page);
+  } else {
+    const body = element('main', 'form-page');
+    body.append(form);
+    flow.append(appPage(body, { title: reauth ? 'Войти снова' : 'Добавить аккаунт', back: () => goBack({ name: 'profile' }), className: 'form-app-page' }));
   }
-  const body = element('main', 'form-page');
-  body.append(form);
-  return appPage(body, { title: reauth ? 'Войти снова' : 'Добавить аккаунт', back: () => goBack({ name: 'profile' }), className: 'form-app-page' });
+  const previousDispose = disposeView;
+  disposeView = () => { previousDispose(); clearTimeout(retryTimer); };
+  return flow;
 }
 
-function credentialsReady(form: HTMLFormElement): boolean {
+function credentialsReady(form: HTMLFormElement, passwordSetup = false): boolean {
+  if (passwordSetup) {
+    return Boolean(form.querySelector<HTMLInputElement>('input[name="new_password"]')?.value)
+      && Boolean(form.querySelector<HTMLInputElement>('input[name="confirm_password"]')?.value);
+  }
   const login = form.querySelector<HTMLInputElement>('input[name="login"]')?.value.trim() ?? '';
-  const token = form.querySelector<HTMLInputElement>('input[name="token"]')?.value.trim() ?? '';
+  const token = form.querySelector<HTMLInputElement>('input[name="token"]')?.value ?? '';
   const server = form.querySelector<HTMLInputElement>('input[name="server"]')?.value.trim() ?? '';
   if (!login || !token || !server) return false;
   try {
@@ -2182,7 +2469,9 @@ function inputField(label: string, name: string, type: string, paste = false, pl
   input.name = name;
   input.type = type;
   input.placeholder = placeholder;
-  input.setAttribute('autocomplete', name === 'login' ? 'username' : name === 'token' ? 'current-password' : 'url');
+  input.setAttribute('autocomplete', name === 'login' ? 'username'
+    : name === 'new_password' || name === 'confirm_password' ? 'new-password'
+      : name === 'token' || name === 'current_password' ? 'current-password' : 'url');
   input.autocapitalize = 'none';
   input.spellcheck = false;
   const field = inputFieldShell(label, input);
@@ -2229,7 +2518,7 @@ async function pasteIntoField(input: HTMLInputElement): Promise<void> {
       return;
     }
   }
-  setFormValue(form, input.name, value.trim());
+  setFormValue(form, input.name, input.name === 'token' ? value : value.trim());
 }
 
 function wireCredentialsPaste(form: HTMLFormElement): void {
@@ -2281,30 +2570,75 @@ async function checkServer(server: string): Promise<{ state: string; message: st
   }
 }
 
-async function submitAccount(form: HTMLFormElement, mode: 'login' | 'add-account', error: HTMLElement, submit: HTMLButtonElement): Promise<void> {
-  error.hidden = true;
+async function submitAccount(form: HTMLFormElement, mode: 'login' | 'add-account'): Promise<PendingPasswordSetup | undefined> {
   const data = new FormData(form);
   const server = normalizeServer(String(data.get('server')));
   const login = String(data.get('login')).trim();
-  const token = String(data.get('token')).trim();
-  if (!login || !token) throw new Error('Заполните логин и пароль.');
+  const password = String(data.get('token'));
+  if (!login || !password) throw new Error('Заполните логин и пароль.');
   const previous = accountForLogin(list, server, login);
   const loginStillValid = () => !previous || (list.includes(previous) && !removingAccounts.has(previous));
   if (!loginStillValid()) return;
-  submit.disabled = true;
-  const account: Account = { id: previous?.id ?? crypto.randomUUID(), server, login, token, name: previous?.name ?? login,
-    deviceId: previous?.deviceId ?? crypto.randomUUID(), sessionId: '', pushConfigId: previous?.pushConfigId };
+  // Request during the submit gesture, before network latency can expire it.
   const pushPermission = requestPushPermission();
-  await claim(account);
-  if (!loginStillValid()) return;
-  await saveAccount(account);
-  if (!loginStillValid()) {
-    // Removal can finish while IndexedDB is still saving the new session.
-    await deleteAccount(account.id);
-    return;
+  if (previous) beginCredentialRotation(previous);
+  try {
+    const authenticated = await authenticate(server, login, password);
+    if (authenticated.passwordRequired) {
+      endCredentialRotation(previous, true);
+      return { server, login, temporaryPassword: password, previous };
+    }
+    await finishAccountLogin(form, mode, server, login, authenticated.token, authenticated.passwordAuth, previous, loginStillValid, pushPermission);
+  } catch (error) {
+    endCredentialRotation(previous, true);
+    throw error;
   }
-  if (previous) list.splice(list.indexOf(previous), 1, account);
-  else list.push(account);
+}
+
+async function submitPasswordSetup(form: HTMLFormElement, mode: 'login' | 'add-account', setup: PendingPasswordSetup): Promise<void> {
+  const data = new FormData(form);
+  const password = String(data.get('new_password'));
+  const confirmation = String(data.get('confirm_password'));
+  const validation = personalPasswordError(password);
+  if (validation) throw new Error(validation);
+  if (password !== confirmation) throw new Error('Пароли не совпадают.');
+  const loginStillValid = () => !setup.previous || (list.includes(setup.previous) && !removingAccounts.has(setup.previous));
+  if (!loginStillValid()) return;
+  const pushPermission = requestPushPermission();
+  if (setup.previous) beginCredentialRotation(setup.previous);
+  try {
+    const result = await changePassword(setup.server, setup.login, setup.temporaryPassword, password);
+    await finishAccountLogin(form, mode, setup.server, setup.login, result.token, true, setup.previous, loginStillValid, pushPermission, true);
+  } catch (error) {
+    endCredentialRotation(setup.previous, true);
+    throw error;
+  }
+}
+
+async function finishAccountLogin(form: HTMLFormElement, mode: 'login' | 'add-account', server: string, login: string,
+  token: string, passwordAuth: boolean, previous: Account | undefined, loginStillValid: () => boolean,
+  pushPermission: Promise<boolean>, passwordSet?: boolean): Promise<void> {
+  const account: Account = { id: previous?.id ?? crypto.randomUUID(), server, login, token, name: previous?.name ?? login,
+    deviceId: previous?.deviceId ?? crypto.randomUUID(), sessionId: '', pushConfigId: previous?.pushConfigId, passwordSet: previous?.passwordSet,
+    ...(passwordAuth ? { passwordAuth: true as const } : {}) };
+  let staged = false;
+  const install = () => {
+    if (previous) list.splice(list.indexOf(previous), 1, account);
+    else list.push(account);
+    staged = true;
+    endCredentialRotation(previous);
+  };
+  const stillCurrent = () => staged ? list.includes(account) && !removingAccounts.has(account) : loginStillValid();
+  try {
+    await persistAndClaim(account, passwordAuth, stillCurrent, install);
+  } catch (error) {
+    if (!staged || !(error instanceof OperationError)) throw error;
+    notice('Вход сохранён. Подключение будет восстановлено, когда появится связь.');
+  }
+  if (!stillCurrent()) return;
+  if (!staged) install();
+  await refreshPasswordState(account, passwordSet);
+  if (!stillCurrent()) return;
   connectAccount(account);
   notifications.set(account.id, await pushEnabled(account, base).catch(() => false));
   tab = 'contacts';
@@ -2326,6 +2660,35 @@ async function submitAccount(form: HTMLFormElement, mode: 'login' | 'add-account
   if (!previous && mode === 'add-account') notice('Аккаунт добавлен.');
 }
 
+async function refreshPasswordState(account: Account, known?: boolean): Promise<void> {
+  if (!account.passwordAuth || !account.sessionId) return;
+  let passwordSet = known;
+  if (passwordSet === undefined) {
+    const result = await api<{ password_set?: unknown }>(account, '/api/me').catch(() => undefined);
+    if (typeof result?.password_set !== 'boolean') return;
+    passwordSet = result.password_set;
+  }
+  account.passwordSet = passwordSet;
+  await saveAccount(account);
+}
+
+async function persistAndClaim(account: Account, persistBeforeClaim: boolean, loginStillValid: () => boolean, onPersisted: () => void = () => {}): Promise<void> {
+  if (persistBeforeClaim) await saveAccount(account);
+  if (!loginStillValid()) { if (persistBeforeClaim) await deleteAccount(account.id); return; }
+  if (persistBeforeClaim) onPersisted();
+  await claim(account);
+  if (!loginStillValid()) { if (persistBeforeClaim) await deleteAccount(account.id); return; }
+  await saveAccount(account);
+  if (!loginStillValid()) await deleteAccount(account.id);
+}
+
+function showCredentialError(error: HTMLElement, value: unknown, onOrdinary: () => void, onRetry: (seconds: number) => void): void {
+  error.hidden = false;
+  error.textContent = value instanceof Error ? value.message : String(value);
+  if (value instanceof AuthError && value.code === 'password_retry_later' && value.retryAfterSeconds) onRetry(value.retryAfterSeconds);
+  else onOrdinary();
+}
+
 function setFormValue(form: HTMLFormElement, name: string, value: string): void {
   const input = form.elements.namedItem(name);
   if (input instanceof HTMLInputElement) {
@@ -2345,9 +2708,15 @@ function splitAccountAddress(value: string): [string, string] | null {
 }
 
 function splitCredentials(value: string): [string, string, string] | null {
-  const lines = value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  if (lines.length === 3 && !lines[0].includes('@') && !/\s/.test(lines[0]) && !/\s/.test(lines[2])) {
-    try { normalizeServer(lines[2]); return [lines[0], lines[1], lines[2]]; } catch { return null; }
+  const lines = value.split(/\r?\n/);
+  while (lines.length && !lines[0].trim()) lines.shift();
+  while (lines.length && !lines.at(-1)!.trim()) lines.pop();
+  if (lines.length === 3) {
+    const login = lines[0].trim();
+    const server = lines[2].trim();
+    if (login && server && !login.includes('@') && !/\s/.test(login) && !/\s/.test(server)) {
+      try { normalizeServer(server); return [login, lines[1], server]; } catch { return null; }
+    }
   }
   if (lines.length === 2) {
     const account = splitAccountAddress(lines[0]);
@@ -2363,6 +2732,7 @@ async function refreshAll(markHistoryRead: boolean): Promise<void> {
 const contactRefreshes = new Map<Account, { dirty: boolean; promise: Promise<void> }>();
 
 function refreshAccountContacts(account: Account): Promise<void> {
+  if (account.passwordAuth && !account.sessionId) return Promise.resolve();
   const pending = contactRefreshes.get(account);
   if (pending) {
     pending.dirty = true;
@@ -2412,7 +2782,7 @@ async function refreshHistory(markRead: boolean, options: { renderStart?: boolea
   loadingMoreHistory = false;
   loadingHistory = true;
   if (renderStart) renderApp();
-  const targets = list.filter(account => !account.sessionReplaced);
+  const targets = list.filter(account => !account.sessionReplaced && !(account.passwordAuth && !account.sessionId));
   for (const account of targets) historyCursors.set(account.id, 0);
   const results = await Promise.allSettled(targets.map(async account => {
     const pendingRead = unreadReads.get(account);
@@ -3877,6 +4247,8 @@ async function init(): Promise<void> {
     navigator.serviceWorker.addEventListener('controllerchange', () => { if (controlled && !current && !updatingApp) location.reload(); controlled = true; });
   }
   for (const account of list) if (!account.sessionReplaced && account.pushConfigId && pushSupport() === null) {
+    // Pending sessions restore push in resumeAccountActivation, after claim.
+    if (account.passwordAuth && !account.sessionId) continue;
     void enablePush(account, base, false).then(() => { notifications.set(account.id, true); }).catch(() => { notifications.set(account.id, false); }).finally(() => {
       if (route.name === 'about') void checkAppUpdates(); else renderApp();
     });

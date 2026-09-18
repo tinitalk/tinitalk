@@ -3,7 +3,7 @@ import * as ts from 'typescript';
 import appSource from './app.ts?raw';
 
 const source = ts.createSourceFile('app.ts', appSource, ts.ScriptTarget.ES2022, true);
-const names = ['removeAccount', 'markSessionReplaced', 'unreadCount', 'clearUnread', 'receive', 'outgoing', 'submitAccount', 'claim'];
+const names = ['removeAccount', 'markSessionReplaced', 'requireAccountLogin', 'beginCredentialRotation', 'endCredentialRotation', 'unreadCount', 'clearUnread', 'receive', 'outgoing', 'submitAccount', 'finishAccountLogin', 'persistAndClaim', 'refreshPasswordState', 'claim'];
 const code = ts.transpileModule(source.statements.filter(node => ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? '')).map(node => node.getText(source)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 it.each(['remove', 'revoke'])('clears missed calls for an account on %s without clearing another account', async action => {
@@ -13,8 +13,8 @@ it.each(['remove', 'revoke'])('clears missed calls for an account on %s without 
     const unreadMissedCountByAccount = new Map([['a', 3], ['b', 2]]);
     const unreadMissedByContact = new Map([['a:alice', 1], ['b:bob', 2]]);
     const connections = new Map(), states = new Map(), contactsByAccount = new Map(), historyByAccount = new Map(), notifications = new Map();
-    const current = null, endedCall = null, route = {name: 'home'}, base = '/', removingAccounts = new Set();
-    const disablePush = async () => {}, deleteAccount = async () => {}, prunePushes = async () => {}, deletePhotosForAccount = async () => {}, saveAccount = async () => {};
+    const current = null, endedCall = null, route = {name: 'home'}, base = '/', removingAccounts = new Set(), rotatingCredentials = new Set();
+    const disablePush = async () => {}, logout = async () => {}, deleteAccount = async () => {}, prunePushes = async () => {}, deletePhotosForAccount = async () => {}, saveAccount = async () => {};
     const replaceRoute = () => {}, renderApp = () => {}, failure = () => {};
     ${code}
     return { account, removeAccount, markSessionReplaced, unreadCount, unreadMissedByContact };
@@ -32,11 +32,11 @@ it('does not admit incoming or outgoing calls during account removal', async () 
   const createCall = vi.fn(() => { throw new Error('must not create a call'); });
   const app = new Function('disablePush', 'createCall', `
     const favorites = {removeAccount() {}};
-    const account = {id:'a'}, list = [account], removingAccounts = new Set();
+    const account = {id:'a'}, list = [account], removingAccounts = new Set(), rotatingCredentials = new Set();
     const connections = new Map(), contactsByAccount = new Map(), historyByAccount = new Map(), states = new Map(), notifications = new Map();
     const unreadMissedCountByAccount = new Map(), unreadMissedByContact = new Map();
     let current = null;
-    const base = '/', deleteAccount = async () => {}, prunePushes = async () => {}, deletePhotosForAccount = async () => {}, replaceRoute = () => {};
+    const base = '/', logout = async () => {}, deleteAccount = async () => {}, prunePushes = async () => {}, deletePhotosForAccount = async () => {}, replaceRoute = () => {};
     const contactDisplayName = () => 'peer';
     ${code}
     return {account, removeAccount, receive, outgoing};
@@ -62,12 +62,13 @@ it.each(['claim', 'save'])('does not replace another account when removed during
   const deleteAccount = vi.fn(async () => {});
   const app = new Function('api', 'saveAccount', 'connectAccount', 'deleteAccount', `
     const favorites = {removeAccount() {}};
-    const account = {id:'a', sessionId:'old', sessionReplaced:true}, other = {id:'b'}, list = [account, other], removingAccounts = new Set();
+    const account = {id:'a', sessionId:'old', sessionReplaced:true}, other = {id:'b'}, list = [account, other], removingAccounts = new Set(), rotatingCredentials = new Set();
     const connections = new Map(), contactsByAccount = new Map(), historyByAccount = new Map(), states = new Map(), notifications = new Map();
     const unreadMissedCountByAccount = new Map(), unreadMissedByContact = new Map();
-    const current = null, route = {name:'profile'}, base = '/', disablePush = async () => {}, prunePushes = async () => {}, deletePhotosForAccount = async () => {}, replaceRoute = () => {}, renderApp = () => {};
+    const current = null, route = {name:'profile'}, base = '/', disablePush = async () => {}, logout = async () => {}, prunePushes = async () => {}, deletePhotosForAccount = async () => {}, replaceRoute = () => {}, renderApp = () => {};
     const FormData = class {get(name) {return name === 'server' ? 'https://a.example' : 'value'}};
     const normalizeServer = value => value, accountForLogin = () => account, crypto = {randomUUID: () => 'id'};
+    const authenticate = async () => ({token:'value', passwordRequired:false, passwordAuth:false});
     const requestPushPermission = async () => false, pushEnabled = async () => false, refreshAll = async () => {}, notice = () => {};
     let tab;
     ${code}

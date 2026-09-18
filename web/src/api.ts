@@ -18,9 +18,11 @@ export async function api<T>(account: Account, path: string, method = 'GET', bod
   }).catch(error => { throw new OperationError('network', error); });
   if (!response.ok) {
     const replaced = response.status === 401 && response.headers.get('X-TiniTalk-Auth-Reason') === 'session_replaced';
-    if (replaced) sessionReplacedHandler?.(account, sessionId);
+    // Password resets revoke the token itself, so there may be no session
+    // reason header. Both kinds of 401 require an explicit new login.
+    if (response.status === 401) sessionReplacedHandler?.(account, sessionId);
     const message = replaced ? 'Учётка открыта на другом устройстве. Войдите снова.'
-      : response.status === 401 ? 'Проверьте логин и ключ доступа.'
+      : response.status === 401 ? 'Вход завершён. Войдите снова.'
         : `Сервер ответил ${response.status}: ${(await response.text()).slice(0, 180)}`;
     throw new APIError(response.status, message, replaced);
   }

@@ -15,19 +15,26 @@ it('reports a replaced session from any authenticated API request', async () => 
   expect(replaced).toHaveBeenCalledExactlyOnceWith(owner, 'old-session');
 });
 
-it('does not treat network failures or ordinary authentication errors as a replacement', async () => {
+it('does not invalidate a session on network failures or server errors', async () => {
   const replaced = vi.fn();
   setSessionReplacedHandler(replaced);
   const offline = new TypeError('offline');
   vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(offline)
-    .mockResolvedValueOnce(new Response('', { status: 401 }))
     .mockResolvedValueOnce(new Response('', { status: 503, headers: { 'X-TiniTalk-Auth-Reason': 'session_replaced' } })));
   const failedRequest = api(account(), '/api/contacts');
   await expect(failedRequest).rejects.toBeInstanceOf(OperationError);
   await expect(failedRequest).rejects.toMatchObject({ context: 'network', cause: offline });
   await expect(api(account(), '/api/contacts')).rejects.toBeInstanceOf(APIError);
-  await expect(api(account(), '/api/contacts')).rejects.toBeInstanceOf(APIError);
   expect(replaced).not.toHaveBeenCalled();
+});
+
+it('requires login when a password reset revokes the token without a session reason header', async () => {
+  const owner = account();
+  const replaced = vi.fn();
+  setSessionReplacedHandler(replaced);
+  vi.stubGlobal('fetch', async () => new Response('', {status: 401}));
+  await expect(api(owner, '/api/contacts')).rejects.toMatchObject({status: 401, replaced: false});
+  expect(replaced).toHaveBeenCalledExactlyOnceWith(owner, 'old-session');
 });
 
 it('identifies the session that sent a delayed request, not a newer login', async () => {
