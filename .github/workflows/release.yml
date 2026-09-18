@@ -6,21 +6,17 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  RELEASE_CERT_SHA256: "68:D3:AC:A0:56:3C:44:CF:4A:7D:FC:2D:E8:9F:12:C8:FF:84:59:F4:EE:07:C5:A8:CA:AC:73:7F:E8:C2:6D:BF"
-
 jobs:
-  release:
-    name: Build release draft
+  validate:
+    name: Validate release tag
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    environment: release
+    timeout-minutes: 5
 
     steps:
       - name: Checkout
@@ -42,6 +38,18 @@ jobs:
             echo "::error::Release tag must point to a commit in main"
             exit 1
           fi
+
+  server:
+    name: Test and build server and web
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -67,7 +75,9 @@ jobs:
 
       - name: Package web archive
         working-directory: web/dist
-        run: zip -r "../../dist/tinitalk-web-$GITHUB_REF_NAME.zip" .
+        run: |
+          mkdir -p ../../dist
+          zip -r "../../dist/tinitalk-web-$GITHUB_REF_NAME.zip" .
 
       - name: Test Go
         run: go test -race -count=1 -tags webui ./...
@@ -79,6 +89,30 @@ jobs:
         run: |
           make server GO_BUILD_TAGS=webui GOARCH=amd64
           make server GO_BUILD_TAGS=webui GOARCH=arm64
+
+      - name: Upload server and web artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-server-web
+          path: |
+            dist/tinitalk-linux-amd64
+            dist/tinitalk-linux-arm64
+            dist/tinitalk-web-*.zip
+          if-no-files-found: error
+          retention-days: 3
+
+  android:
+    name: Test and build signed APK
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up JDK
         uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
@@ -118,16 +152,21 @@ jobs:
             printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
           } > android/keystore/release.properties
 
-      - name: Lint Android
+      - name: Test, lint and build verified signed APK
         working-directory: android
-        run: ./gradlew --no-daemon lintRelease -PtinitalkAbi=arm64
-
-      - name: Build signed APK
-        run: make client-release
+        run: ./gradlew --no-daemon testDebugUnitTest lintRelease exportReleaseApk -PtinitalkAbi=arm64
 
       - name: Verify APK signature
+        env:
+          RELEASE_CERT_SHA256: ${{ vars.RELEASE_CERT_SHA256 }}
         shell: bash
         run: |
+          EXPECTED_CERT_SHA256="${RELEASE_CERT_SHA256//:/}"
+          if [[ ! "$EXPECTED_CERT_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::Set GitHub variable RELEASE_CERT_SHA256 to the signing certificate SHA-256 fingerprint"
+            exit 1
+          fi
+
           VERSION="${GITHUB_REF_NAME#v}"
           APK="dist/tinitalk-v$VERSION.apk"
           test -f "$APK"
@@ -143,7 +182,6 @@ jobs:
           SIGNATURE_OUTPUT="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1)"
           printf '%s\n' "$SIGNATURE_OUTPUT"
 
-          EXPECTED_CERT_SHA256="${RELEASE_CERT_SHA256//:/}"
           if ! printf '%s\n' "$SIGNATURE_OUTPUT" \
             | tr -d ':' \
             | grep -Fqi "certificate SHA-256 digest $EXPECTED_CERT_SHA256"; then
@@ -158,6 +196,36 @@ jobs:
           rm -f \
             android/keystore/release.jks \
             android/keystore/release.properties
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-android
+          path: dist/tinitalk-v*.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+  release:
+    name: Create release draft
+    needs: [server, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download tested release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
 
       - name: Generate checksums
         shell: bash

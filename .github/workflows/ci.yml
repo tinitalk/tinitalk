@@ -77,11 +77,6 @@ jobs:
         with:
           cache-provider: basic
 
-      - name: Test, lint and build debug APK
+      - name: Test and lint Android
         working-directory: android
-        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug -PtinitalkAbi=all
-
-      - name: Verify minified WebRTC build
-        if: github.event_name == 'push'
-        working-directory: android
-        run: ./gradlew --no-daemon verifyWebRtcJniMin -PtinitalkAbi=arm64
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug -PtinitalkAbi=all
