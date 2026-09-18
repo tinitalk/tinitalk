@@ -61,12 +61,19 @@ func (db *DB) BackupTo(path string) error {
 	if path == "" {
 		return errors.New("backup path is required")
 	}
-	if _, err := os.Stat(path); err == nil {
-		return errors.New("backup file already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	// VACUUM INTO accepts an empty file. Reserve it exclusively with private
+	// permissions before SQLite writes secrets, including on failure paths.
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if errors.Is(err, os.ErrExist) {
+		return errors.New("backup file already exists")
+	}
+	if err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
 		return err
 	}
 	if _, err := db.sql.Exec("VACUUM INTO ?", path); err != nil {
@@ -103,5 +110,5 @@ func (db *DB) BackupTo(path string) error {
 	if err := connection.Close(); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0600)
+	return nil
 }
