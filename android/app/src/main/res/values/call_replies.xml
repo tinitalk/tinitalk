@@ -19,6 +19,5 @@
     <string name="call_reply_result_title">Ответ на звонок</string>
     <string name="call_reply_send_failed">Не удалось отправить ответ</string>
     <string name="call_reply_send_unconfirmed">Не удалось подтвердить отправку ответа</string>
-    <string name="call_reply_sending">Отправляем ответ…</string>
     <string name="call_reply_sent">Ответ отправлен</string>
 </resources>

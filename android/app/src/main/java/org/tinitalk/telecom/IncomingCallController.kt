@@ -1,5 +1,6 @@
 package org.tinitalk.telecom
 
+import android.annotation.SuppressLint
 import androidx.core.net.toUri
 import android.app.PendingIntent
 import android.app.ActivityOptions
@@ -46,6 +47,8 @@ class IncomingCallController internal constructor(
         admission,
     )
 
+    // KTX edit(commit = true) discards the Boolean needed to detect a failed durable write.
+    @SuppressLint("UseKtx")
     internal fun save(
         context: Context,
         invite: IncomingInvite,
@@ -523,6 +526,8 @@ class IncomingCallController internal constructor(
         true
     }
 
+    // Preserve commit()'s result so an unpersisted cleanup is never reported as successful.
+    @SuppressLint("UseKtx")
     internal fun completePendingReject(context: Context, owner: AccountCallOwner): Boolean =
         synchronized(PresentationLock) {
             synchronized(PendingActionLock) {

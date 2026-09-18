@@ -33,9 +33,9 @@ provides them.
 
 | Component | Version | Source | License |
 | --- | --- | --- | --- |
-| AndroidX libraries | Compose BOM 2026.08.00 and resolved runtime dependencies | [source](https://android.googlesource.com/platform/frameworks/support/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| AndroidX libraries | Compose BOM 2026.09.00 and resolved runtime dependencies | [source](https://android.googlesource.com/platform/frameworks/support/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
 | AndroidX ExifInterface | 1.4.2 | [source](https://android.googlesource.com/platform/frameworks/support/+/androidx-main/exifinterface/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
-| Bouncy Castle (`bcprov-jdk18on`) | 1.85.2 | [source](https://github.com/bcgit/bc-java) | [MIT](https://www.bouncycastle.org/licence.html) |
+| Bouncy Castle (`bcprov-jdk18on`) | 1.86 | [source](https://github.com/bcgit/bc-java) | [MIT](https://www.bouncycastle.org/licence.html) |
 | Gson | 2.14.0 | [source](https://github.com/google/gson/tree/gson-parent-2.14.0) | [Apache-2.0](https://github.com/google/gson/blob/gson-parent-2.14.0/LICENSE) |
 | Google Tink | 1.23.0 | [source](https://github.com/tink-crypto/tink-java/tree/v1.23.0) | [Apache-2.0](https://github.com/tink-crypto/tink-java/blob/v1.23.0/LICENSE) |
 | Error Prone annotations | 2.48.0 | [source](https://github.com/google/error-prone/tree/v2.48.0) | [Apache-2.0](https://github.com/google/error-prone/blob/v2.48.0/COPYING) |
@@ -46,7 +46,7 @@ provides them.
 | OkHttp Public Suffix List data | 2024-11-26 snapshot bundled with OkHttp 5.5.0 | [source](https://github.com/lysine-dev/okhttp/blob/parent-5.5.0/okhttp/src/jvmTest/resources/okhttp3/internal/publicsuffix/public_suffix_list.dat) | [MPL-2.0](https://mozilla.org/MPL/2.0/), [notice](https://github.com/lysine-dev/okhttp/blob/parent-5.5.0/okhttp/src/jvmTest/resources/okhttp3/internal/publicsuffix/NOTICE) |
 | Unicode IDNA mapping data used by OkHttp | 15.1.0 | [source](https://github.com/lysine-dev/okhttp/blob/parent-5.5.0/okhttp-idna-mapping-table/src/main/resources/okhttp3/internal/idna/IdnaMappingTable.txt) | [Unicode-3.0](https://www.unicode.org/license.txt) |
 | JSR305 | 3.0.2 | [source](https://code.google.com/archive/p/jsr-305/) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0), [BSD-3-Clause](https://opensource.org/license/bsd-3-clause), [CC-BY-2.5](https://creativecommons.org/licenses/by/2.5/) |
-| Kotlin standard library | 2.4.10 | [source](https://github.com/JetBrains/kotlin/tree/v2.4.10) | [Apache-2.0](https://github.com/JetBrains/kotlin/blob/v2.4.10/license/LICENSE.txt) |
+| Kotlin standard library | 2.4.20 | [source](https://github.com/JetBrains/kotlin/tree/v2.4.20) | [Apache-2.0](https://github.com/JetBrains/kotlin/blob/v2.4.20/license/LICENSE.txt) |
 | Kotlin coroutines | 1.11.0 | [source](https://github.com/Kotlin/kotlinx.coroutines/tree/1.11.0) | [Apache-2.0](https://github.com/Kotlin/kotlinx.coroutines/blob/1.11.0/LICENSE.txt) |
 | Kotlin serialization | 1.7.3 | [source](https://github.com/Kotlin/kotlinx.serialization/tree/v1.7.3) | [Apache-2.0](https://github.com/Kotlin/kotlinx.serialization/blob/v1.7.3/LICENSE.txt) |
 | JetBrains annotations | 23.0.0 | [source](https://github.com/JetBrains/java-annotations/tree/23.0.0) | [Apache-2.0](https://github.com/JetBrains/java-annotations/blob/23.0.0/LICENSE.txt) |
