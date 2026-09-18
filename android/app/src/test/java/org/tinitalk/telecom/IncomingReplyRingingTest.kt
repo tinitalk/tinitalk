@@ -4,11 +4,13 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.graphics.Bitmap
 import android.content.Context
+import android.os.Looper
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.data.AccountId
@@ -44,6 +46,7 @@ class IncomingReplyRingingTest {
         assertEquals(1, queued.size)
         assertTrue(notifier.silence(current))
         queued.single().run()
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
         val notification = context.getSystemService(NotificationManager::class.java).activeNotifications
             .single { it.id == IncomingCallNotifier.NotificationId }.notification
         assertEquals(Notification.GROUP_ALERT_SUMMARY, notification.groupAlertBehavior)

@@ -12,6 +12,7 @@ import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
@@ -195,30 +196,35 @@ class IncomingCallNotifier internal constructor(
 
     fun show(invite: IncomingInvite) {
         val mode = currentIncomingCallPresentation(context, appVisible = false)
-        buildIncomingNotification(invite, mode, incomingPhotoAddress(invite)?.let(photoLoader::peek)) { notification ->
+        presentIncoming(invite, mode) { notification ->
             context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
         }
     }
 
     internal fun buildIncomingNotification(invite: IncomingInvite): Notification? =
-        buildIncomingNotification(invite, currentIncomingCallPresentation(context), null) {}
+        buildIncomingNotification(invite, currentIncomingCallPresentation(context))
 
     internal fun buildIncomingNotification(
         invite: IncomingInvite,
         mode: IncomingCallPresentationMode,
         bitmap: Bitmap? = null,
-    ): Notification? = buildIncomingNotification(invite, mode, bitmap) {}
+        foregroundService: Boolean = false,
+    ): Notification? = buildIncomingNotification(invite, mode, bitmap, foregroundService) {}
 
     internal fun presentIncoming(
         invite: IncomingInvite,
         mode: IncomingCallPresentationMode,
+        foregroundService: Boolean = false,
         publish: (Notification) -> Unit,
-    ): Boolean = buildIncomingNotification(invite, mode, incomingPhotoAddress(invite)?.let(photoLoader::peek), publish) != null
+    ): Boolean = buildIncomingNotification(
+        invite, mode, incomingPhotoAddress(invite)?.let(photoLoader::peek), foregroundService, publish,
+    ) != null
 
     private fun buildIncomingNotification(
         invite: IncomingInvite,
         mode: IncomingCallPresentationMode,
         bitmap: Bitmap?,
+        foregroundService: Boolean,
         publish: (Notification) -> Unit,
     ): Notification? {
         ensureChannel(mode)
@@ -229,10 +235,10 @@ class IncomingCallNotifier internal constructor(
             val answer = controller.activityIntent(context, IncomingCallController.ActionAnswer, invite)
             val reject = controller.actionIntent(context, IncomingCallController.ActionReject, invite)
             val fullScreen = controller.activityIntent(context, IncomingCallController.ActionIncoming, invite)
-            val builder = incomingNotificationBuilder(invite, mode, answer, reject, fullScreen, bitmap)
+            val builder = incomingNotificationBuilder(invite, mode, answer, reject, fullScreen, bitmap, foregroundService)
             notification = builder.build()
             publish(requireNotNull(notification))
-            enqueueIncomingPhotoRefresh(invite, mode, answer, reject, fullScreen, bitmap)
+            enqueueIncomingPhotoRefresh(invite, answer, reject, bitmap)
         }
         return notification.takeIf { presented }
     }
@@ -244,7 +250,11 @@ class IncomingCallNotifier internal constructor(
         reject: PendingIntent,
         fullScreen: PendingIntent,
         bitmap: Bitmap?,
+        foregroundService: Boolean,
     ): Notification.Builder {
+        // A standalone CallStyle is rejected on newer Android unless it has a usable
+        // fullScreenIntent. Only use it when publishing through startForeground.
+        val useCallStyle = Build.VERSION.SDK_INT >= 31 && foregroundService
         val builder = Notification.Builder(
             context,
             if (mode == IncomingCallPresentationMode.InApp) InAppChannelId else ChannelId,
@@ -268,7 +278,7 @@ class IncomingCallNotifier internal constructor(
                 .setSmallIcon(R.drawable.ic_call_ringing)
                 .setContentTitle("Входящий звонок")
                 .setContentText(
-                    if (Build.VERSION.SDK_INT >= 31) "Входящий звонок" else invite.caller.ifEmpty { "TiniTalk" },
+                    if (useCallStyle) "Входящий звонок" else invite.caller.ifEmpty { "TiniTalk" },
                 )
                 .setCategory(Notification.CATEGORY_CALL)
                 .setPriority(
@@ -283,10 +293,11 @@ class IncomingCallNotifier internal constructor(
                 .setOngoing(true)
                 .setTimeoutAfter(Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(0))
                 .setBadgeIconType(Notification.BADGE_ICON_NONE)
+                .addExtras(Bundle().apply { putString(NotificationOwnerExtra, invite.owner.localId()) })
             if (mode == IncomingCallPresentationMode.FullScreen) {
                 builder.setFullScreenIntent(fullScreen, true)
             }
-            if (Build.VERSION.SDK_INT >= 31) {
+            if (Build.VERSION.SDK_INT >= 31 && useCallStyle) {
                 builder.setStyle(
                     Notification.CallStyle.forIncomingCall(
                         requireNotNull(personBuilder).build(),
@@ -311,21 +322,23 @@ class IncomingCallNotifier internal constructor(
                         ).build(),
                     )
             }
+        applySilence(invite, builder)
+        return builder
+    }
+
+    private fun applySilence(invite: IncomingInvite, builder: Notification.Builder) {
         if (incomingCallSilenceStore(context).isSilenced(invite)) {
             // The child of this silent group never alerts, including when the channel has sound.
             builder.setGroup("incoming_call_silenced")
                 .setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
                 .setOnlyAlertOnce(true)
         }
-        return builder
     }
 
     private fun enqueueIncomingPhotoRefresh(
         invite: IncomingInvite,
-        mode: IncomingCallPresentationMode,
         answer: PendingIntent,
         reject: PendingIntent,
-        fullScreen: PendingIntent,
         initialBitmap: Bitmap?,
     ) {
         val address = incomingPhotoAddress(invite) ?: return
@@ -334,10 +347,33 @@ class IncomingCallNotifier internal constructor(
         val requestKey = invite.owner.localId()
         photoLoader.load(address, requestKey, revision) { loadedKey, capturedRevision, bitmap ->
             if (loadedKey != requestKey || bitmap == null) return@load
-            if (capturedRevision != photoLoader.revision) return@load
-            IncomingCallController().presentSavedIncoming(context, invite) {
-                val notification = incomingNotificationBuilder(invite, mode, answer, reject, fullScreen, bitmap).build()
-                context.getSystemService(NotificationManager::class.java).notify(NotificationId, notification)
+            // Serialize with the Activity/Service handoff. A late photo must not resurrect
+            // a hidden notification or turn a standalone fallback back into CallStyle.
+            Handler(Looper.getMainLooper()).post {
+                if (capturedRevision != photoLoader.revision) return@post
+                IncomingCallController().presentSavedIncoming(context, invite) refresh@{
+                    if (IncomingCallScreenState.isShowing(invite.owner)) return@refresh
+                    val manager = context.getSystemService(NotificationManager::class.java)
+                    val current = manager.activeNotifications.firstOrNull { it.id == NotificationId }?.notification
+                        ?: return@refresh
+                    if (current.extras.getString(NotificationOwnerExtra) != requestKey) return@refresh
+                    val photo = roundedNotificationPhoto(bitmap)
+                    val builder = Notification.Builder.recoverBuilder(context, current)
+                        .setLargeIcon(photo)
+                        .setOnlyAlertOnce(true)
+                        .setTimeoutAfter(Duration.between(Instant.now(), invite.expiresAt).toMillis().coerceAtLeast(1))
+                    if (Build.VERSION.SDK_INT >= 31 &&
+                        current.extras.getString(Notification.EXTRA_TEMPLATE) == Notification.CallStyle::class.java.name
+                    ) {
+                        builder.setStyle(Notification.CallStyle.forIncomingCall(
+                            Person.Builder().setName(invite.caller.ifEmpty { "TiniTalk" }).setImportant(true)
+                                .setIcon(Icon.createWithBitmap(photo)).build(),
+                            reject, answer,
+                        ))
+                    }
+                    applySilence(invite, builder)
+                    manager.notify(NotificationId, builder.build())
+                }
             }
         }
     }
@@ -369,7 +405,12 @@ class IncomingCallNotifier internal constructor(
     fun fullScreenHidden(invite: IncomingInvite) {
         IncomingCallScreenState.hidden(invite.owner)
         IncomingRingtone.stop(invite.owner)
-        show(invite)
+        IncomingCallController().presentSavedIncoming(context, invite) {
+            if (!IncomingCallForegroundService.restoreNotification(context, invite)) {
+                show(invite)
+                scheduleIncomingExpiry(context, invite)
+            }
+        }
     }
 
     private fun dismissNotification() {
@@ -411,6 +452,7 @@ class IncomingCallNotifier internal constructor(
     companion object {
         private const val ChannelId = "incoming_calls_v2"
         private const val InAppChannelId = "incoming_calls_in_app_v1"
+        private const val NotificationOwnerExtra = "org.tinitalk.incoming.owner"
         internal const val NotificationId = 11
     }
 }

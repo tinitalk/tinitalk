@@ -57,45 +57,66 @@ class IncomingCallForegroundService : Service() {
         }
 
         val notifier = IncomingCallNotifier(this)
-        val mode = currentIncomingCallPresentation(this)
-        var foregroundStarted = false
+        val restoring = intent?.action == ActionRestoreNotification
+        if (restoring && !incoming.presentSavedIncoming(this, invite) {}) {
+            // An answer or cancellation may overtake the queued restore command.
+            stopPresentation(startId, invite.owner)
+            return START_NOT_STICKY
+        }
+        val mode = when {
+            !restoring -> currentIncomingCallPresentation(this)
+            IncomingCallScreenState.isShowing(invite.owner) -> IncomingCallPresentationMode.InApp
+            else -> currentIncomingCallPresentation(this, appVisible = false)
+        }
         var fallbackPresented = false
-        val presented = runCatching {
-            notifier.presentIncoming(invite, mode) { notification ->
-                foregroundStarted = runCatching {
-                    IncomingCallForegroundPresentation(
-                        enterForeground = {
-                            ServiceCompat.startForeground(
-                                this,
-                                IncomingCallNotifier.NotificationId,
-                                notification,
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL,
-                            )
-                            foreground = true
-                            presentedOwner = invite.owner
-                        },
-                        acknowledgeRinging = ringingAcknowledger::acknowledge,
-                        openFullScreen = { incoming.openScreen(this, it) },
-                    ).present(invite, mode)
-                }.isSuccess
-                if (!foregroundStarted) {
-                    fallbackPresented = runCatching {
-                        IncomingCallForegroundPresentation(
-                            enterForeground = {
-                                getSystemService(NotificationManager::class.java)
-                                    .notify(IncomingCallNotifier.NotificationId, notification)
-                            },
-                            acknowledgeRinging = ringingAcknowledger::acknowledge,
-                            openFullScreen = { incoming.openScreen(this, it) },
-                        ).present(invite, mode)
-                    }.isSuccess
-                }
+        val foregroundStarted = runCatching {
+            notifier.presentIncoming(invite, mode, foregroundService = true) { notification ->
+                IncomingCallForegroundPresentation(
+                    enterForeground = {
+                        ServiceCompat.startForeground(
+                            this,
+                            IncomingCallNotifier.NotificationId,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL,
+                        )
+                        foreground = true
+                        presentedOwner = invite.owner
+                    },
+                    acknowledgeRinging = ringingAcknowledger::acknowledge,
+                    openFullScreen = { if (!restoring) incoming.openScreen(this, it) },
+                ).present(invite, mode)
             }
         }.getOrDefault(false)
+        if (!foregroundStarted) {
+            fallbackPresented = runCatching {
+                // Rebuild as a regular notification: reusing the foreground CallStyle
+                // here is illegal when Android refuses foreground-service promotion.
+                notifier.presentIncoming(invite, mode) { notification ->
+                    IncomingCallForegroundPresentation(
+                        enterForeground = {
+                            getSystemService(NotificationManager::class.java)
+                                .notify(IncomingCallNotifier.NotificationId, notification)
+                        },
+                        acknowledgeRinging = IncomingRingingAcknowledger(this)::acknowledge,
+                        openFullScreen = { if (!restoring) incoming.openScreen(this, it) },
+                    ).present(invite, mode)
+                }
+            }.getOrDefault(false)
+        }
 
         when {
-            presented && foregroundStarted -> scheduleStop(invite, startId)
-            presented && fallbackPresented -> {
+            foregroundStarted -> {
+                scheduleStop(invite, startId)
+                if (restoring && IncomingCallScreenState.isShowing(invite.owner)) {
+                    // Fulfil startForegroundService first even if the user has already
+                    // returned to the call screen, then give presentation back to the UI.
+                    detachForeground(removeNotification = true)
+                }
+            }
+            fallbackPresented -> {
+                if (restoring && IncomingCallScreenState.isShowing(invite.owner)) {
+                    getSystemService(NotificationManager::class.java).cancel(IncomingCallNotifier.NotificationId)
+                }
                 scheduleIncomingExpiry(this, invite)
                 stopPresentation(startId, invite.owner)
             }
@@ -173,11 +194,19 @@ class IncomingCallForegroundService : Service() {
     companion object {
         internal const val ActionShow = "org.tinitalk.action.SHOW_INCOMING_CALL"
         internal const val ActionHideNotification = "org.tinitalk.action.HIDE_INCOMING_CALL_NOTIFICATION"
+        internal const val ActionRestoreNotification = "org.tinitalk.action.RESTORE_INCOMING_CALL_NOTIFICATION"
 
         fun show(context: Context, invite: IncomingInvite): Boolean = runCatching {
             ContextCompat.startForegroundService(
                 context,
                 IncomingCallController().presentationIntent(context, invite),
+            )
+        }.isSuccess
+
+        fun restoreNotification(context: Context, invite: IncomingInvite): Boolean = runCatching {
+            ContextCompat.startForegroundService(
+                context,
+                IncomingCallController().presentationIntent(context, invite).setAction(ActionRestoreNotification),
             )
         }.isSuccess
 

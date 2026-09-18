@@ -23,6 +23,7 @@ import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -91,12 +92,36 @@ class IncomingCallNotifierTest {
         val incoming = IncomingCallController()
         incoming.admitIncoming(context, invite)
 
-        val notification = IncomingCallNotifier(context).buildIncomingNotification(invite)!!
+        val notification = IncomingCallNotifier(context).buildIncomingNotification(
+            invite, IncomingCallPresentationMode.HeadsUp, foregroundService = true,
+        )!!
         val caller = notification.extras.getParcelable(Notification.EXTRA_CALL_PERSON, Person::class.java)
 
         assertEquals("Alice", caller?.name)
         assertEquals("Входящий звонок", notification.extras.getCharSequence(Notification.EXTRA_TEXT))
         incoming.finishTerminalPresentation(context, invite.owner) {}
+    }
+
+    @Test
+    fun standaloneNotificationsRemainValidWithoutAForegroundServiceOrFullScreenPermission() {
+        val context = RuntimeEnvironment.getApplication()
+        val incoming = IncomingCallController()
+        val invite = invite("standalone")
+        incoming.admitIncoming(context, invite)
+        val notifier = IncomingCallNotifier(context)
+
+        for (mode in IncomingCallPresentationMode.entries) {
+            assertTrue(notifier.presentIncoming(invite, mode) { notification ->
+                // NotificationManager's Robolectric shadow does not enforce this Android rule.
+                assertFalse(notification.extras.getString(Notification.EXTRA_TEMPLATE) == Notification.CallStyle::class.java.name)
+                assertEquals("Alice", notification.extras.getCharSequence(Notification.EXTRA_TEXT))
+                val actions = notification.actions.map { Shadows.shadowOf(it.actionIntent).savedIntent.action }
+                assertTrue(IncomingCallController.ActionAnswer in actions)
+                assertTrue(IncomingCallController.ActionReject in actions)
+                assertNotNull(notification.contentIntent)
+            })
+        }
+        incoming.finishTerminalPresentation(context, invite.owner) { notifier.cancel() }
     }
 
     @Test
@@ -111,6 +136,7 @@ class IncomingCallNotifierTest {
             invite,
             IncomingCallPresentationMode.FullScreen,
             bitmap,
+            foregroundService = true,
         )!!
         val caller = notification.extras.getParcelable(Notification.EXTRA_CALL_PERSON, Person::class.java)
 

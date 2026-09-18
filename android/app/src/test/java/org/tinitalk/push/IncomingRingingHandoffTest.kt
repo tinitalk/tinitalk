@@ -102,15 +102,17 @@ class IncomingRingingHandoffTest {
 
     @Test fun returningToFullScreenHidesRestoredNotificationWithoutClosingSocket() {
         val notifier = IncomingCallNotifier(context)
-        val expiryTask = ReflectionHelpers.getField<Runnable>(service, "stopTask")
         repeat(2) {
+            val expiryTask = ReflectionHelpers.getField<Runnable>(service, "stopTask")
             notifier.fullScreenShown(invite)
             drainServiceCommands()
             assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isEmpty())
             assertFalse(transport.closed)
             assertSame(expiryTask, ReflectionHelpers.getField<Runnable>(service, "stopTask"))
             notifier.fullScreenHidden(invite)
+            drainServiceCommands()
             assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isNotEmpty())
+            assertTrue(ReflectionHelpers.getField<Boolean>(service, "foreground"))
         }
     }
 
@@ -133,6 +135,78 @@ class IncomingRingingHandoffTest {
         assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isNotEmpty())
         assertFalse(transport.closed)
         assertFalse(destroyed)
+    }
+
+    @Test fun leavingIncomingScreenRestoresForegroundServiceWithoutReopeningActivity() {
+        val notifier = IncomingCallNotifier(context)
+        notifier.fullScreenShown(invite)
+        drainServiceCommands()
+        assertFalse(ReflectionHelpers.getField<Boolean>(service, "foreground"))
+        while (Shadows.shadowOf(context).nextStartedActivity != null) { /* Clear the initial presentation. */ }
+
+        notifier.fullScreenHidden(invite)
+        drainServiceCommands()
+
+        assertTrue("The ringing service must regain foreground status", ReflectionHelpers.getField<Boolean>(service, "foreground"))
+        assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isNotEmpty())
+        assertNull(Shadows.shadowOf(context).nextStartedActivity)
+        assertFalse(transport.closed)
+    }
+
+    @Test fun reopeningScreenBeforeRestoreIsDeliveredDoesNotLeaveANotification() {
+        val notifier = IncomingCallNotifier(context)
+        notifier.fullScreenShown(invite)
+        drainServiceCommands()
+        notifier.fullScreenHidden(invite)
+        notifier.fullScreenShown(invite)
+        drainServiceCommands()
+
+        assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isEmpty())
+        assertFalse(ReflectionHelpers.getField<Boolean>(service, "foreground"))
+        assertFalse(transport.closed)
+        assertFalse(destroyed)
+    }
+
+    @Test fun cancellationOvertakingRestoreCannotResurrectTheCall() {
+        val notifier = IncomingCallNotifier(context)
+        notifier.fullScreenShown(invite)
+        drainServiceCommands()
+        notifier.fullScreenHidden(invite)
+        incoming.finishTerminalPresentation(context, invite.owner) {}
+        drainServiceCommands()
+
+        assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isEmpty())
+        assertFalse(ReflectionHelpers.getField<Boolean>(service, "foreground"))
+        assertTrue(Shadows.shadowOf(service).isStoppedBySelf)
+    }
+
+    @Test fun answerOvertakingRestoreIsNotMarkedAsTerminal() {
+        val notifier = IncomingCallNotifier(context)
+        notifier.fullScreenShown(invite)
+        drainServiceCommands()
+        notifier.fullScreenHidden(invite)
+        val lease = requireNotNull(GlobalCallAdmission.take(invite.owner))
+        try {
+            drainServiceCommands()
+            assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isEmpty())
+            assertFalse(incoming.isTerminal(context, invite.owner))
+            assertTrue(GlobalCallAdmission.owns(lease))
+        } finally {
+            GlobalCallAdmission.release(lease)
+        }
+    }
+
+    @Test fun expiredCallIsNotRestoredWhenLeavingScreen() {
+        val notifier = IncomingCallNotifier(context)
+        notifier.fullScreenShown(invite)
+        drainServiceCommands()
+        incoming.expirePending(context, invite.owner, now = invite.expiresAt) {}
+        notifier.fullScreenHidden(invite)
+        drainServiceCommands()
+
+        assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isEmpty())
+        assertFalse(ReflectionHelpers.getField<Boolean>(service, "foreground"))
+        assertNull(incoming.load(context))
     }
 
     private fun drainServiceCommands() {
