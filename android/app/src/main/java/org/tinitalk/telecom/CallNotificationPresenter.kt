@@ -72,6 +72,8 @@ internal class CallNotificationPresenter(
     }
 
     fun show(state: CallUiState) {
+        // finishCallSoon may have released the service since its observer started.
+        if (closed || !canRefresh()) return
         context.getSystemService(NotificationManager::class.java).notify(NotificationId, build(state))
     }
 
@@ -84,7 +86,8 @@ internal class CallNotificationPresenter(
             ?: Intent(context, CallForegroundService::class.java).setAction(action)
 
     fun build(state: CallUiState, bitmap: Bitmap? = state.peer?.contactAddress?.let(photoLoader::peek)): Notification {
-        state.peer?.contactAddress?.let { address ->
+        val liveCall = state.phase != CallPhase.Ended && state.phase != CallPhase.Idle
+        state.peer?.contactAddress?.takeIf { liveCall }?.let { address ->
             if (bitmap == null) enqueueNotificationPhotoRefresh(state, address)
         }
         val builder = Notification.Builder(context, ChannelId)
@@ -117,11 +120,11 @@ internal class CallNotificationPresenter(
             .setSmallIcon(callNotificationIcon(state))
             .setContentTitle(peerName)
             .setContentText(status)
-            .setCategory(Notification.CATEGORY_CALL)
+            .setCategory(if (liveCall) Notification.CATEGORY_CALL else Notification.CATEGORY_SERVICE)
             .setContentIntent(content)
-            .setOngoing(true)
+            .setOngoing(liveCall)
         val screen = VideoCallStateStore.snapshot().takeIf { it.callKey == state.callKey }?.screen
-        if (screen?.requested == true) {
+        if (liveCall && screen?.requested == true) {
             val stop = PendingIntent.getService(context, 2,
                 actionIntent(ActionScreenStop),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -136,7 +139,7 @@ internal class CallNotificationPresenter(
                 .setUsesChronometer(true)
                 .setShowWhen(true)
         } ?: builder.setShowWhen(false)
-        if (Build.VERSION.SDK_INT >= 31) {
+        if (liveCall && Build.VERSION.SDK_INT >= 31) {
             val personBuilder = Person.Builder().setName(peerName).setImportant(true)
             bitmap?.let { personBuilder.setIcon(android.graphics.drawable.Icon.createWithBitmap(it)) }
             builder.setStyle(
@@ -145,7 +148,7 @@ internal class CallNotificationPresenter(
                     hangUp,
                 ),
             )
-        } else {
+        } else if (liveCall) {
             @Suppress("DEPRECATION")
             builder.addAction(Notification.Action.Builder(R.drawable.ic_call, "Завершить", hangUp).build())
         }

@@ -92,6 +92,8 @@ internal fun callForegroundServiceType(cameraSending: Boolean, screenSending: Bo
         (if (cameraSending) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0) or
         (if (screenSending) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0)
 
+internal const val EndMediaPreparationTimeoutMillis = 2_000L
+
 internal sealed interface OutgoingCallStartResult {
     data class Started(val key: AccountCallKey) : OutgoingCallStartResult
     data class Busy(val owner: AccountCallOwner) : OutgoingCallStartResult
@@ -175,6 +177,7 @@ class CallForegroundService : Service() {
     private lateinit var toneThread: HandlerThread
     private var endingMedia: ForegroundCallController? = null
     private var endAudioReady = false
+    private var endMediaTimeout: Runnable? = null
     private val terminalSignalGate = TerminalSignalGate(
         timeoutMillis = TerminalSignalTimeoutMillis,
         scheduleTimeout = { delayMillis, action ->
@@ -279,6 +282,7 @@ class CallForegroundService : Service() {
     }
 
     private fun resetReleasedRuntime() {
+        cancelEndMediaTimeout()
         val releasedKey = callOwner?.key
         runtimeGeneration++
         terminalSignalGate.close()
@@ -298,6 +302,7 @@ class CallForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        cancelEndMediaTimeout()
         unregisterReceiver(screenOffReceiver)
         val unexpected = !finishing
         val ownedLease = admissionLease
@@ -1014,10 +1019,23 @@ class CallForegroundService : Service() {
                 if (endingMedia !== currentMedia) {
                     endingMedia = currentMedia
                     endAudioReady = false
+                    val timeout = Runnable {
+                        if (finishing || callResourcesReleased || expectedGeneration != runtimeGeneration ||
+                            media !== currentMedia || endAudioReady) return@Runnable
+                        endMediaTimeout = null
+                        Log.e(CallLogTag, "ended call media preparation timed out; releasing outside the media queue\n" +
+                            mediaDispatcher?.describeWorker())
+                        releaseCallResources(bypassMediaQueue = true)
+                        finishCall(expectedGeneration)
+                    }
+                    endMediaTimeout = timeout
+                    handler.postDelayed(timeout, EndMediaPreparationTimeoutMillis)
                     val submitted = mediaDispatcher?.dispatch {
+                        if (finishing || media !== currentMedia || expectedGeneration != runtimeGeneration) return@dispatch
                         val result = runCatching { currentMedia.prepareForCallEnd() }
                         handler.post {
                             if (finishing || expectedGeneration != runtimeGeneration || media !== currentMedia) return@post
+                            cancelEndMediaTimeout()
                             endAudioReady = true
                             if (result.isFailure) {
                                 Log.e(CallLogTag, "failed to silence ended call", result.exceptionOrNull())
@@ -1050,6 +1068,11 @@ class CallForegroundService : Service() {
         if (!terminalSignalGate.isWaiting()) finishCallSoon()
     }
 
+    private fun cancelEndMediaTimeout() {
+        endMediaTimeout?.let(handler::removeCallbacks)
+        endMediaTimeout = null
+    }
+
     private fun finishCallAfter(delayMillis: Long, expectedGeneration: Long = runtimeGeneration) {
         handler.postDelayed({ finishCall(expectedGeneration) }, delayMillis)
     }
@@ -1074,7 +1097,8 @@ class CallForegroundService : Service() {
         stopSelf()
     }
 
-    private fun releaseCallResources(callKeyHint: AccountCallKey? = null) {
+    private fun releaseCallResources(callKeyHint: AccountCallKey? = null, bypassMediaQueue: Boolean = false) {
+        cancelEndMediaTimeout()
         if (callResourcesReleased) {
             endSystemCall(callKeyHint)
             return
@@ -1092,12 +1116,12 @@ class CallForegroundService : Service() {
         }
         lease?.let(GlobalCallAdmission::release)
         admissionLease = null
-        releaseCallMedia()
+        releaseCallMedia(bypassMediaQueue)
     }
 
-    private fun releaseCallMedia() {
+    private fun releaseCallMedia(bypassQueue: Boolean = false) {
         stopStatsPolling()
-        runtime?.releaseMedia()
+        runtime?.releaseMedia(bypassQueue)
     }
 
     private fun ownsRuntime(): Boolean {

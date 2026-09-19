@@ -57,19 +57,26 @@ internal class CallRuntime(
         networkObserver = null
     }
 
-    fun releaseMedia() {
+    fun releaseMedia(bypassQueue: Boolean = false) {
         val currentMedia = media
         val currentDispatcher = mediaDispatcher
         media = null
         mediaDispatcher = null
         if (currentMedia != null) {
-            val cleanupDispatcher = currentDispatcher ?: CallMediaDispatcher()
-            cleanupDispatcher.dispatch {
+            val cleanup = {
                 runCatching { currentMedia.close() }.onFailure { failure ->
                     Log.e("TiniTalkCall", "failed to release call media", failure)
                 }
+                Unit
             }
-            cleanupDispatcher.close()
+            // An unresponsive queue must not also own its recovery. The controller's
+            // monitor still serializes close with any media operation already executing.
+            if (bypassQueue || currentDispatcher?.dispatch(cleanup) != true) {
+                val cleanupDispatcher = CallMediaDispatcher()
+                cleanupDispatcher.dispatch(cleanup)
+                cleanupDispatcher.close()
+            }
+            currentDispatcher?.close()
         } else currentDispatcher?.close()
     }
 

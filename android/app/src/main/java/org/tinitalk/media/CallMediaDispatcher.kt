@@ -6,8 +6,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal class CallMediaDispatcher : AutoCloseable {
     private val closed = AtomicBoolean(false)
+    @Volatile private var worker: Thread? = null
     private val executor = Executors.newSingleThreadExecutor { task ->
-        Thread(task, ThreadName).apply { isDaemon = true }
+        Thread(task, ThreadName).apply { isDaemon = true }.also { worker = it }
     }
 
     fun dispatch(task: () -> Unit): Boolean {
@@ -24,6 +25,10 @@ internal class CallMediaDispatcher : AutoCloseable {
     override fun close() {
         if (closed.compareAndSet(false, true)) executor.shutdown()
     }
+
+    fun describeWorker(): String = worker?.let { thread ->
+        "${thread.name} (${thread.state})\n" + thread.stackTrace.joinToString("\n") { "  at $it" }
+    } ?: "media worker not started"
 
     private companion object {
         const val ThreadName = "TiniTalkCallMedia"

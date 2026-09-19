@@ -66,6 +66,34 @@ class CallNotificationPresenterTest {
         assertEquals("Алексей", person?.name)
     }
 
+    @Test @Config(sdk = [26, 35])
+    fun endedCallHasNoActiveCallStyleActionsOrChronometer() {
+        presenter.ensureChannel()
+        state = state.copy(phase = CallPhase.Ended, connectedAtElapsedMs = 1L, endReason = CallEndReason.RemoteHangup)
+        // Late screen state must not turn a terminal notification back into a live call.
+        VideoCallStateStore.publish(CallVideoState(
+            accountId = state.accountId, callId = state.callId,
+            screen = ScreenShareState(localId = "old-share", sending = true),
+        ))
+        val notification = presenter.build(state)
+        assertEquals("Звонок завершён", notification.extras.getString(Notification.EXTRA_TEXT))
+        assertEquals(Notification.CATEGORY_SERVICE, notification.category)
+        assertTrue(notification.actions.isNullOrEmpty())
+        assertFalse(notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
+        assertFalse(notification.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
+        assertNotEquals("android.app.Notification\$CallStyle", notification.extras.getString(Notification.EXTRA_TEMPLATE))
+    }
+
+    @Test fun observerCannotRestoreNotificationAfterResourcesWereReleased() {
+        presenter.ensureChannel()
+        presenter.show(state)
+        assertNotNull(shadowOf(manager).getNotification(CallForegroundService.NotificationId))
+        refreshAllowed = false
+        presenter.cancel()
+        presenter.show(state.copy(phase = CallPhase.Ended))
+        assertNull(shadowOf(manager).getNotification(CallForegroundService.NotificationId))
+    }
+
     @Test fun actionsAreScopedToTheCallAndScreenSharingKeepsTheDuration() {
         presenter.ensureChannel()
         state = state.copy(connectedAtElapsedMs = SystemClock.elapsedRealtime())

@@ -86,6 +86,36 @@ class CallRuntimeTest {
         }
     }
 
+    @Test fun emergencyCleanupDoesNotWaitBehindBlockedMediaQueue() {
+        val f = fixture()
+        val unblock = CountDownLatch(1)
+        val started = CountDownLatch(1)
+        try {
+            assertTrue(f.dispatcher.dispatch {
+                started.countDown()
+                unblock.await(10, TimeUnit.SECONDS)
+            })
+            assertTrue(started.await(2, TimeUnit.SECONDS))
+            f.runtime.releaseMedia(bypassQueue = true)
+            assertNull(f.runtime.media)
+            assertFalse(f.dispatcher.dispatch { fail("detached queue accepted work") })
+            assertTrue("close must run while the original queue remains blocked", f.mediaClosed.await(2, TimeUnit.SECONDS))
+            assertEquals(1L, unblock.count)
+            assertEquals(1, f.mediaCloses.get())
+            assertTrue(f.socket.isOpen())
+            f.runtime.releaseMedia(bypassQueue = true)
+            assertEquals(1, f.mediaCloses.get())
+        } finally { unblock.countDown() }
+    }
+
+    @Test fun cleanupStillRunsWhenDispatcherAlreadyRejectsWork() {
+        val f = fixture()
+        f.dispatcher.close()
+        f.runtime.releaseMedia()
+        assertTrue(f.mediaClosed.await(2, TimeUnit.SECONDS))
+        assertEquals(1, f.mediaCloses.get())
+    }
+
     @Test fun closingNetworkUnregistersOnlyThisCallsObserver() {
         val context = RuntimeEnvironment.getApplication()
         val connectivity = shadowOf(context.getSystemService(ConnectivityManager::class.java))
