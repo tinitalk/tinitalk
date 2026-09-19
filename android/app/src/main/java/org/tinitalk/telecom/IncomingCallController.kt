@@ -26,6 +26,7 @@ import org.tinitalk.call.CallUiStateStore
 import org.tinitalk.data.AccountId
 import org.tinitalk.push.IncomingCallForegroundService
 import org.tinitalk.push.IncomingCallNotifier
+import org.tinitalk.push.IncomingCallScreenState
 import org.tinitalk.push.IncomingInvite
 import java.time.Instant
 import java.util.UUID
@@ -436,6 +437,17 @@ class IncomingCallController internal constructor(
             pendingFlags(),
             activityOptions(),
         )
+
+    /** The user opened the app during ringing; do not depend on a duplicate push/socket event. */
+    internal fun openPendingScreen(context: Context): Boolean = synchronized(PresentationLock) {
+        val pending = load(context) ?: return@synchronized false
+        if (pending.action != null || IncomingCallScreenState.isShowing(pending.invite.owner)) {
+            return@synchronized false
+        }
+        // Recheck expiry, terminal state and admission under the presentation lock.
+        // Navigation alone must not republish the notification or restart ringing.
+        presentSavedIncoming(context, pending.invite) { openScreen(context, pending.invite) }
+    }
 
     fun openScreen(context: Context, invite: IncomingInvite) {
         runCatching {

@@ -1149,6 +1149,7 @@ class MainActivity : ComponentActivity() {
         contactShortcuts.refresh()
         mainScreenResumed = true
         cleanupStaleIncomingPresentation()
+        IncomingCallController().openPendingScreen(this)
         consumeAccountAdditionIfResumed()
         refreshPermissions()
         reloadCachedContacts()
