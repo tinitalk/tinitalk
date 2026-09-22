@@ -1,122 +1,124 @@
 # TiniTalk
 
+English | [Русский](README.ru.md)
+
 [![CI](https://github.com/tinitalk/tinitalk/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/tinitalk/tinitalk/actions/workflows/ci.yml?query=branch%3Amain)
 [![Release](https://img.shields.io/github/v/release/tinitalk/tinitalk?include_prereleases&sort=semver)](https://github.com/tinitalk/tinitalk/releases)
 
-TiniTalk — self-hosted приложение для аудио- и видеозвонков один на один для
-небольшой семьи или закрытой группы. Для работы нужно развернуть собственный
-сервер, создать пользователей и подключить к нему Android-приложение; звонки
-идут напрямую по WebRTC или через встроенный TURN.
+TiniTalk is a self-hosted app for one-to-one audio and video calls within a
+small family or private group. To use it, deploy your own server, create user
+accounts, and connect the Android app to it. Calls use WebRTC, either directly
+or through the built-in TURN server.
 
-Для iPhone доступен экспериментальный [web-клиент (PWA)](web/).
-Он поддерживает аудио- и видеозвонки,
-несколько учёток независимых серверов, персональные контакты, избранное,
-историю звонков и Web Push.
+An experimental [web client (PWA)](web/) is available for iPhone.
+It supports audio and video calls, accounts on multiple independent servers,
+personal contacts, favorites, call history, and Web Push.
 
-## Сборка
+## Building
 
-Для сборки TiniTalk-сервера нужны Go 1.26.8 или новее, Git и GNU Make. Для
-сборки Android-приложения дополнительно нужны JDK 17 и Android SDK Platform 37;
-Gradle запускается через wrapper. JDK должен быть настроен через `JAVA_HOME`
-или доступен как команда `java` через `PATH`.
+Building the TiniTalk server requires Go 1.26.8 or later, Git, and GNU Make.
+Building the Android app also requires JDK 17 and Android SDK Platform 37;
+Gradle runs through the wrapper. Configure the JDK through `JAVA_HOME`
+or make the `java` command available on `PATH`.
 
-### Dev-сборка
+### Development builds
 
-Сервер собирается командой:
+Build the server with:
 
 ```bash
 make server
 ```
 
-Результат: `dist/tinitalk-linux-amd64`.
+Output: `dist/tinitalk-linux-amd64`.
 
-Для Android доступны две dev-сборки с локальной debug-подписью:
+Two Android development builds are available, both signed with a local debug key:
 
 ```bash
 make client
 make client-min
 ```
 
-- `make client` создаёт `dist/tinitalk-debug.apk` для всех поддерживаемых ABI;
-- `make client-min` создаёт уменьшенный `dist/tinitalk-min.apk` только для
-  ARM64 с включёнными R8 и удалением неиспользуемых ресурсов.
+- `make client` creates `dist/tinitalk-debug.apk` for all supported ABIs.
+- `make client-min` creates a smaller `dist/tinitalk-min.apk` for ARM64 only,
+  with R8 and resource shrinking enabled.
 
-APK подписывается локальным debug-ключом: `~/.android/debug.keystore` на Linux
-и `%USERPROFILE%\.android\debug.keystore` на Windows. Этот файл нужно сохранить:
-Android не установит поверх приложения обновление, подписанное другим ключом.
+The APK is signed with a local debug key: `~/.android/debug.keystore` on Linux
+and `%USERPROFILE%\.android\debug.keystore` on Windows. Keep this file:
+Android will not install an update over an existing app if it is signed with
+a different key.
 
-Dev-сборки не требуют release-ключа и не предназначены для публикации.
+Development builds do not require a release key and are not intended for distribution.
 
-### Release-сборка
+### Release builds
 
-Сервер собирается так же, как для dev-сборки: `make server`.
+Build the server the same way as a development build: `make server`.
 
-Release APK подписывается постоянным ключом проекта. Ключ нужно создать один
-раз до первой публикации и затем использовать для всех следующих версий.
+The release APK is signed with a permanent project key. Create this key once,
+before the first release, and use it for all subsequent versions.
 
-Создайте локальный каталог и сгенерируйте хранилище ключа:
+Create a local directory and generate the keystore:
 
 ```bash
 mkdir android/keystore
 keytool -genkeypair -v -keystore android/keystore/tinitalk-release.jks -alias tinitalk-release -keyalg RSA -keysize 4096 -validity 36500 -dname "CN=TiniTalk, OU=Release Signing, O=TiniTalk Open Source Project"
 ```
 
-`keytool` попросит пароль для хранилища ключа.
+`keytool` will prompt for a keystore password.
 
-Создайте файл `android/keystore/release.properties`:
+Create `android/keystore/release.properties`:
 
 ```properties
 storeFile=keystore/tinitalk-release.jks
-storePassword=ПАРОЛЬ
+storePassword=PASSWORD
 keyAlias=tinitalk-release
-keyPassword=ПАРОЛЬ
+keyPassword=PASSWORD
 ```
 
-Соберите релиз:
+Build the release:
 
 ```bash
 make client-release
 ```
 
-Команда запускает unit-тесты, проверяет сохранение WebRTC API после R8 и
-создаёт подписанный ARM64 APK. Номер версии автоматически берётся из
-`versionName` в `android/app/build.gradle.kts`:
+This command runs unit tests, checks that the WebRTC API is preserved after R8,
+and creates a signed ARM64 APK. The version number is taken automatically from
+`versionName` in `android/app/build.gradle.kts`:
 
 ```text
 dist/tinitalk-v0.10.apk
 ```
 
-Каталог `android/keystore` добавлен в `.gitignore`. Файлы
-`tinitalk-release.jks`, `release.properties` и пароли не должны попадать в Git.
+The `android/keystore` directory is included in `.gitignore`. Do not commit
+`tinitalk-release.jks`, `release.properties`, or passwords to Git.
 
-После создания ключа обязательно сохраните резервную копию
-`tinitalk-release.jks` и паролей в защищённом месте. Потеря ключа не позволит
-выпускать обновления для уже установленного приложения, а утечка позволит
-постороннему подписывать APK от имени проекта.
+After creating the key, back up `tinitalk-release.jks` and its passwords in a
+secure location. Losing the key prevents you from publishing updates for
+existing installations; leaking it allows someone else to sign APKs on behalf
+of the project.
 
-## Настройка и запуск TiniTalk-сервера
+## Setting up and running the TiniTalk server
 
-Инструкция ниже рассчитана на VPS с Debian или Ubuntu.
+The instructions below assume a VPS running Debian or Ubuntu.
 
-Потребуются готовый бинарник TiniTalk-сервера, TLS-сертификат и ключ. Сертификат
-должен соответствовать домену или IP, который будет указан в
-Android-приложении, и быть доверенным на устройстве. TiniTalk-сервер должен быть
-доступен из интернета по публичному домену или IP. Для встроенного TURN
-требуется публичный IPv4 VPS.
+You need a TiniTalk server binary, a TLS certificate, and its private key.
+The certificate must match the domain or IP address entered in the Android app
+and be trusted by the device. The TiniTalk server must be reachable from the
+internet through a public domain or IP address. The built-in TURN server
+requires a public IPv4 address on the VPS.
 
-### 1. Создать системного пользователя и каталоги
+### 1. Create a system user and directories
 
-Рекомендуется запускать TiniTalk-сервер от имени отдельного системного
-пользователя `tinitalk`: так процесс не получает права root, а файлы сервера
-доступны только этому пользователю.
+Run the TiniTalk server as a dedicated system user named `tinitalk`. This keeps
+the process from running as root and restricts access to the server's files
+to that user.
 
-Каталоги:
+Directories:
 
-| Путь | Назначение |
+| Path | Purpose |
 |---|---|
-| `/var/lib/tinitalk` | база SQLite и внутренние ключи сервера |
-| `/var/lib/tinitalk/tls` | TLS-сертификат и приватный ключ |
-| `/var/backups/tinitalk` | резервные копии |
+| `/var/lib/tinitalk` | SQLite database and internal server keys |
+| `/var/lib/tinitalk/tls` | TLS certificate and private key |
+| `/var/backups/tinitalk` | Backups |
 
 ```bash
 sudo adduser --system --group --home /var/lib/tinitalk --no-create-home tinitalk
@@ -124,13 +126,13 @@ sudo install -d -o tinitalk -g tinitalk -m 0700 \
   /var/lib/tinitalk /var/lib/tinitalk/tls /var/backups/tinitalk
 ```
 
-### 2. Скопировать бинарник и TLS-файлы
+### 2. Copy the binary and TLS files
 
-Предварительно скопировать на VPS `tinitalk-linux-amd64` и получить файлы
-TLS-сертификата и приватного ключа.
+First, copy `tinitalk-linux-amd64` to the VPS and obtain the TLS certificate
+and private key files.
 
-Рекомендуется хранить TLS-файлы в `/var/lib/tinitalk/tls`, чтобы процесс,
-запущенный от пользователя `tinitalk`, мог их читать.
+Store the TLS files in `/var/lib/tinitalk/tls` so the process running as
+`tinitalk` can read them.
 
 ```bash
 sudo install -m 0755 \
@@ -144,39 +146,39 @@ sudo install -o tinitalk -g tinitalk -m 0600 \
   /var/lib/tinitalk/tls/privkey.pem
 ```
 
-### 3. Инициализировать хранилище
+### 3. Initialize storage
 
-Перед первым запуском сервиса команда `tinitalk init` создаёт базу данных, схему
-и внутренние ключи сервера в `/var/lib/tinitalk`:
+Before starting the service for the first time, run `tinitalk init` to create
+the database, schema, and internal server keys in `/var/lib/tinitalk`:
 
 ```bash
 sudo -u tinitalk tinitalk init
 ```
 
-По умолчанию для создания базы данных используется каталог `/var/lib/tinitalk`
-(можно переопределить параметром `--data-dir DIR`).
+The default database directory is `/var/lib/tinitalk`
+(override it with `--data-dir DIR`).
 
-Значение WebPush contact по умолчанию — `https://tinitalk.org`
-(можно переопределить параметром `--webpush-contact HTTPS_URL`).
+The default WebPush contact is `https://tinitalk.org`
+(override it with `--webpush-contact HTTPS_URL`).
 
-WebPush contact — адрес, который передаётся Google FCM для связи с владельцем
-TiniTalk-сервера при проблемах с push-уведомлениями или злоупотреблениях.
+The WebPush contact is an address sent to Google FCM so the TiniTalk server
+owner can be contacted about push notification issues or abuse.
 
-### 4. Настроить запуск сервиса
+### 4. Configure the service
 
-Рекомендуется запускать TiniTalk-сервер через systemd: он запускает сервис после
-перезагрузки VPS и перезапускает его при сбое.
+Running the TiniTalk server through systemd is recommended: it starts the
+service after the VPS reboots and restarts it after a failure.
 
-Можно запускать сервис без systemd, например через Docker, supervisor или
-другой менеджер процессов.
+You can also run the service without systemd, for example using Docker,
+supervisor, or another process manager.
 
-Для настройки через systemd создать unit-файл. В `--turn-public-host` указать
-публичный домен или IP, по которому Android-клиент подключается к TURN. В
-`--turn-public-ip` указать публичный IPv4 для relay-трафика. Обычно это внешний
-IPv4 VPS.
+To use systemd, create a unit file. Set `--turn-public-host` to the public
+domain or IP address the Android client uses to connect to TURN. Set
+`--turn-public-ip` to the public IPv4 address used for relay traffic.
+This is usually the VPS's external IPv4 address.
 
-В примере ниже `calls.example.com` заменить публичным доменом или IP сервера, а
-`203.0.113.10` — его публичным IPv4.
+In the example below, replace `calls.example.com` with the server's public
+domain or IP address, and `203.0.113.10` with its public IPv4 address.
 
 ```bash
 sudoedit /etc/systemd/system/tinitalk.service
@@ -215,63 +217,62 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 ```
 
-Сервис использует следующие порты:
+The service uses the following ports:
 
-- HTTPS/WSS — API и сигналинг для Android-приложения (протокол TCP). Задаётся
-  параметром `--addr ADDR`. По умолчанию `:8080`.
+- HTTPS/WSS — API and signaling for the Android app (TCP).
+  Set with `--addr ADDR`. Default: `:8080`.
 
-- TURN — подключение клиентов к встроенному TURN (протоколы UDP и TCP). Задаётся
-  параметром `--turn-addr ADDR`. По умолчанию `:3478`.
+- TURN — client connections to the built-in TURN server (UDP and TCP).
+  Set with `--turn-addr ADDR`. Default: `:3478`.
 
-- TURN/TLS — подключение клиентов к TURN поверх TLS (протокол TCP). Задаётся
-  параметром `--turn-tls-addr ADDR`. По умолчанию `:5349`.
+- TURN/TLS — client connections to TURN over TLS (TCP).
+  Set with `--turn-tls-addr ADDR`. Default: `:5349`.
 
-- TURN relay — медиа-трафик через TURN (протокол UDP). Задаётся параметрами
-  `--turn-relay-min-port PORT` и `--turn-relay-max-port PORT`. По умолчанию
-  `49152` и `49663` соответственно (это 512 портов).
-  `--turn-relay-max-port` должен быть нечётным.
+- TURN relay — media traffic relayed through TURN (UDP).
+  Set with `--turn-relay-min-port PORT` and `--turn-relay-max-port PORT`.
+  Defaults: `49152` and `49663`, respectively (512 ports).
+  `--turn-relay-max-port` must be odd.
 
-Почему нужно резервировать 512 портов для TURN relay.
-По умолчанию сервис имеет лимит в 128 одновременно выданных relay-адресов.
-Pion выбирает свободный relay-порт случайно и делает не более 10 попыток.
-Поэтому relay-диапазон рекомендуется делать в четыре раза больше лимита
-allocations.
-При лимите 128 диапазон из 512 портов остаётся заполнен не более чем на 25%,
-и вероятность не найти свободный порт становится пренебрежимо малой.
+Why reserve 512 ports for TURN relay?
+By default, the service allows 128 concurrent relay allocations.
+Pion selects a free relay port at random and makes at most 10 attempts.
+The recommended relay port range is therefore four times the allocation limit.
+With a limit of 128 allocations, a 512-port range is at most 25% occupied,
+making the probability of failing to find a free port negligible.
 
-При значении `--turn-max-allocations N` relay-диапазон необходимо задать
-размером `N × 4` портов.
+When setting `--turn-max-allocations N`, configure a relay range of
+`N × 4` ports.
 
-### 5. Настроить сетевые параметры ОС
+### 5. Configure OS network parameters
 
-Relay-диапазон необходимо добавить в `net.ipv4.ip_local_reserved_ports`, чтобы
-ОС не назначала эти порты исходящим соединениям других процессов. Если параметр
-уже содержит значения, новый диапазон добавить через запятую, не удаляя
-существующие. Для диапазона по умолчанию:
+Add the relay range to `net.ipv4.ip_local_reserved_ports` so the OS does not
+assign these ports to outgoing connections from other processes. If the
+parameter already contains values, append the new range with a comma,
+preserving the existing entries. For the default range:
 
 ```bash
 sysctl -n net.ipv4.ip_local_reserved_ports
 sudoedit /etc/sysctl.d/90-tinitalk.conf
 ```
 
-В файле `/etc/sysctl.d/90-tinitalk.conf`:
+In `/etc/sysctl.d/90-tinitalk.conf`:
 
 ```text
 net.ipv4.ip_local_reserved_ports = 49152-49663
 net.core.rmem_max = 4194304
 ```
 
-`rmem_max` разрешает UDP-буфер 4 МиБ — необязательная настройка для высокой
-нагрузки. Более высокий лимит не уменьшайте. Другой размер буфера задаётся
-флагом `--turn-udp-read-buffer BYTES` (в байтах).
+`rmem_max` allows a 4 MiB UDP receive buffer — an optional setting for high
+loads. Do not lower an existing higher limit. To request a different buffer
+size, use `--turn-udp-read-buffer BYTES` (in bytes).
 
 ```bash
 sudo sysctl --load /etc/sysctl.d/90-tinitalk.conf
 ```
 
-Если TiniTalk уже запущен: `sudo systemctl restart tinitalk`.
+If TiniTalk is already running: `sudo systemctl restart tinitalk`.
 
-### 6. Запустить сервис
+### 6. Start the service
 
 ```bash
 sudo systemctl daemon-reload
@@ -280,42 +281,43 @@ sudo systemctl status --no-pager tinitalk
 sudo journalctl -u tinitalk -n 50 --no-pager
 ```
 
-### 7. Настроить firewall
+### 7. Configure the firewall
 
-Если используется firewall, для приведённой конфигурации разрешить входящие
-подключения:
+If you use a firewall, allow these incoming connections for the configuration
+above:
 
-- `443/tcp` — HTTPS/WSS;
-- `3478/udp` и `3478/tcp` — TURN;
-- `5349/tcp` — TURN/TLS;
-- UDP-порты с `49152` по `49663` — TURN relay.
+- `443/tcp` — HTTPS/WSS.
+- `3478/udp` and `3478/tcp` — TURN.
+- `5349/tcp` — TURN/TLS.
+- UDP ports `49152` through `49663` — TURN relay.
 
-Если при запуске сервиса заданы другие порты, разрешить их в firewall.
+If you configure different ports when starting the service, allow those ports
+in the firewall instead.
 
-Если firewall ограничивает исходящие подключения, разрешить исходящие
-HTTPS-соединения для отправки push-уведомлений.
+If the firewall restricts outbound connections, allow outbound HTTPS
+connections for sending push notifications.
 
-## Управление TiniTalk-сервером
+## Managing the TiniTalk server
 
-Управление выполняется по SSH: команды `tinitalk` запускаются на VPS.
+Manage the server over SSH by running `tinitalk` commands on the VPS.
 
-По умолчанию команды используют каталог `/var/lib/tinitalk`. Другой каталог
-указать параметром `--data-dir DIR`.
+Commands use `/var/lib/tinitalk` by default.
+To use another directory, specify `--data-dir DIR`.
 
-### Повторная инициализация
+### Reinitialization
 
-Повторный `init` может потребоваться для изменения WebPush contact или если
-TiniTalk-сервер сообщает об отсутствии внутреннего ключа TURN:
+You may need to run `init` again to change the WebPush contact or if the
+TiniTalk server reports a missing internal TURN key:
 
 ```bash
 sudo -u tinitalk tinitalk init [--data-dir DIR] [--webpush-contact HTTPS_URL]
 ```
 
-Существующие ключи команда не заменяет. Если `--webpush-contact` не указан,
-сохраняется текущее значение. После изменения WebPush contact перезапустить
-сервис.
+This command does not replace existing keys. If `--webpush-contact` is omitted,
+the current value is kept. Restart the service after changing the WebPush
+contact.
 
-### Пользователи
+### Users
 
 ```bash
 sudo -u tinitalk tinitalk user add LOGIN "DISPLAY NAME"
@@ -327,89 +329,91 @@ sudo -u tinitalk tinitalk user enable LOGIN
 sudo -u tinitalk tinitalk user delete LOGIN
 ```
 
-`DISPLAY NAME` — внутреннее имя пользователя только для администратора.
-Оно не передаётся через пользовательский API и не используется в телефонных книгах.
+`DISPLAY NAME` is an internal user name visible only to the administrator.
+It is not exposed through the user API or used in contact lists.
 
-`add` и `reset-password` один раз показывают временный пароль из 8 цифр.
-Он действует 7 суток и блокируется после 5 неверных попыток. При первом входе
-пользователь задаёт свой пароль. `reset-password` отзывает прежний доступ;
-`rotate-token` сохранён как синоним этой команды.
+`add` and `reset-password` display an 8-digit temporary password once.
+It is valid for 7 days and is locked after 5 incorrect attempts. At the first
+sign-in, the user sets their own password. `reset-password` revokes previous
+access; `rotate-token` remains available as an alias.
 
-Срок действия новых временных паролей можно изменить без перезапуска сервера:
+You can change the validity period for new temporary passwords without
+restarting the server:
 `sudo -u tinitalk tinitalk init --temporary-password-ttl 168h`.
 
-`disable` блокирует доступ пользователя без удаления данных, `enable` возвращает
-доступ, а `delete` необратимо удаляет пользователя и связанные с ним данные.
+`disable` blocks a user's access without deleting their data, `enable` restores
+access, and `delete` permanently removes the user and their associated data.
 
-Для первого входа в Android или web указать адрес сервера, `login` и временный
-пароль. Существующие пользователи остаются авторизованными; ранее выданные
-токены работают до смены/сброса пароля или отзыва доступа.
+To sign in for the first time on Android or the web, enter the server address,
+`login`, and temporary password. Existing users remain signed in; previously
+issued tokens continue to work until the password is changed or reset, or
+access is revoked.
 
-### Диагностика
+### Diagnostics
 
 ```bash
 sudo -u tinitalk tinitalk doctor [--data-dir DIR] [--host HOST] [--addr ADDR] \
   [--turn-addr ADDR] [--turn-tls-addr ADDR]
 ```
 
-`doctor` проверяет базу, внутренние ключи и возможность занять локальные порты.
-Параметры адресов должны совпадать с параметрами запуска сервиса.
+`doctor` checks the database, internal keys, and whether local ports can be
+bound. The address parameters should match those used to start the service.
 
-- `database.integrity` должно иметь значение `ok`; `fail` означает повреждение
-  базы. `database.foreign_keys` должно иметь значение `ok`; `fail` означает
-  нарушение связей между данными.
-- `database.schema` показывает версию схемы, `sqlite.*` — параметры SQLite.
-- `users.count` показывает количество пользователей, включая отключённых.
-- `turn.secret` и `webpush.vapid` показывают наличие внутренних ключей и должны
-  иметь значение `ok`.
-- `port.http`, `port.turn_udp`, `port.turn_tcp` и `port.turn_tls` показывают
-  возможность занять локальные порты: `free` — порт удалось занять, `busy` — не
-  удалось. Для запущенного сервиса ожидается `busy`. Для остановленного `busy`
-  может означать, что порт занят другим процессом, адрес недоступен или у
-  команды недостаточно прав. Эта проверка не проверяет firewall и доступность
-  портов извне.
-- При указании `--host HOST` без схемы и порта строка `dns.HOST` показывает
-  количество найденных IP-адресов, а `tls.HOST` должна иметь значение `ok`. TLS
-  проверяется на порту `443`.
+- `database.integrity` should be `ok`; `fail` indicates database corruption.
+  `database.foreign_keys` should be `ok`; `fail` indicates broken references
+  between records.
+- `database.schema` shows the schema version; `sqlite.*` shows SQLite settings.
+- `users.count` shows the number of users, including disabled users.
+- `turn.secret` and `webpush.vapid` show whether the internal keys are present
+  and should be `ok`.
+- `port.http`, `port.turn_udp`, `port.turn_tcp`, and `port.turn_tls` show
+  whether local ports can be bound: `free` means binding succeeded, `busy`
+  means it failed. For a running service, `busy` is expected. When the service
+  is stopped, `busy` can mean another process is using the port, the address
+  is unavailable, or the command lacks permission. This check does not test
+  the firewall or whether the ports are reachable from outside.
+- When `--host HOST` is specified without a scheme or port, `dns.HOST` shows
+  the number of resolved IP addresses, and `tls.HOST` should be `ok`.
+  TLS is checked on port `443`.
 
-Результат определять по выводу: статусы `busy`, `fail` и `error` не меняют exit
-code. Для `--data-dir` всегда указывать существующий каталог данных — новый путь
-создаст пустую базу.
+Read the output to assess the result: `busy`, `fail`, and `error` statuses
+do not change the exit code. Always point `--data-dir` to an existing data
+directory — a new path creates an empty database.
 
-### Резервное копирование
+### Backups
 
 ```bash
 sudo -u tinitalk tinitalk backup --out FILE [--data-dir DIR]
 ```
 
-`backup` создаёт и проверяет согласованный снимок работающей базы SQLite,
-поэтому останавливать сервис не требуется. Если команда завершилась с ошибкой
-`database is locked`, повторить её позднее. Резервная копия содержит секреты
-сервера и должна храниться как чувствительные данные.
+`backup` creates and verifies a consistent snapshot of the live SQLite
+database, so you do not need to stop the service. If the command fails with
+`database is locked`, try again later. Backups contain server secrets and must
+be treated as sensitive data.
 
-База работает в режиме WAL: часть последних изменений может находиться в
-`state.db-wal`, а не в `state.db`. Не копировать один `state.db` работающего
-сервера вручную. Команда `backup` учитывает WAL и сохраняет полноценную копию
-в один файл.
+The database uses WAL mode: some recent changes may be in `state.db-wal`
+rather than `state.db`. Do not manually copy just `state.db` while the server
+is running. The `backup` command includes WAL data and saves a complete copy
+in a single file.
 
 ```bash
 sudo -u tinitalk tinitalk backup \
   --out /var/backups/tinitalk/state-$(date -u +%Y%m%dT%H%M%SZ).db
 ```
 
-Для восстановления сначала остановить сервис и проверить его статус:
+To restore a backup, first stop the service and check its status:
 
 ```bash
 sudo systemctl stop tinitalk
 sudo systemctl status --no-pager tinitalk
 ```
 
-Продолжать только при статусе `inactive (dead)`. Если остановка не удалась,
-файлы базы не трогать. Во время восстановления не запускать другие команды,
-работающие с базой.
+Proceed only if the status is `inactive (dead)`. If the service did not stop,
+do not touch the database files. Do not run other commands that access the
+database during restoration.
 
-Удалить старые служебные файлы WAL и заменить базу резервной копией
-(вместо `BACKUP_FILE` указать путь к существующему файлу копии):
+Remove the old WAL support files and replace the database with the backup
+(replace `BACKUP_FILE` with the path to an existing backup):
 
 ```bash
 sudo rm -f /var/lib/tinitalk/state.db-wal /var/lib/tinitalk/state.db-shm
@@ -418,22 +422,22 @@ sudo install -o tinitalk -g tinitalk -m 0600 \
   /var/lib/tinitalk/state.db
 ```
 
-Если обе команды завершились без ошибок, запустить сервис:
+If both commands succeed, start the service:
 
 ```bash
 sudo systemctl start tinitalk
 ```
 
-### Очистка истории звонков
+### Pruning call history
 
-По умолчанию история звонков хранится без ограничения срока. Сервер сохраняет
-только метаданные звонков, без аудио и видео. Одна запись вместе с индексами
-занимает примерно 200 байт: один миллион звонков потребует около 200 МБ диска.
+By default, call history is retained indefinitely. The server stores only
+call metadata, with no audio or video. A record, including its indexes, takes
+about 200 bytes: one million calls require roughly 200 MB of disk space.
 
-При необходимости администратор может удалить записи, созданные до указанной
-даты. Перед очисткой рекомендуется сделать резервную копию, как описано выше.
+Administrators can delete records created before a specified date.
+Before pruning, back up the database as described above.
 
-На время очистки сервис нужно остановить:
+Stop the service before pruning:
 
 ```bash
 sudo systemctl stop tinitalk
@@ -441,22 +445,21 @@ sudo -u tinitalk tinitalk history prune --before 2025-01-01
 sudo systemctl start tinitalk
 ```
 
-> Дата интерпретируется как полночь по UTC и не зависит от локали или часового
-> пояса сервера.
+> The date is interpreted as midnight UTC, regardless of the server's locale
+> or time zone.
 
-Команда выводит количество удалённых записей и уплотняет базу SQLite, чтобы
-освободившееся место вернулось операционной системе. Для уплотнения требуется
-дополнительное свободное место, поэтому очистку нельзя откладывать до полного
-заполнения диска.
+The command prints the number of deleted records and compacts the SQLite
+database to return freed space to the operating system. Compaction requires
+additional free space, so do not wait until the disk is full before pruning.
 
-## Лицензия
+## License
 
-TiniTalk — бесплатное программное обеспечение с открытым исходным кодом.
-Лицензия BSD Zero Clause разрешает использовать, копировать, изменять и
-распространять проект, в том числе в коммерческих целях. Программное обеспечение
-предоставляется без гарантий.
+TiniTalk is free and open-source software.
+The BSD Zero Clause license allows you to use, copy, modify, and distribute
+the project, including for commercial purposes. The software is provided
+without warranties.
 
-Полный текст лицензии: [LICENSE](LICENSE).
+Full license text: [LICENSE](LICENSE).
 
-Зависимости распространяются под собственными лицензиями.
-Список сторонних компонентов: [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+Dependencies are distributed under their own licenses.
+See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for third-party components.
