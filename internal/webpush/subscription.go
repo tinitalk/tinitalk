@@ -12,6 +12,7 @@ import (
 )
 
 type Subscription struct {
+	Language   string `json:"language,omitempty"`
 	ClientType string `json:"client_type,omitempty"`
 	WebAppURL  string `json:"web_app_url,omitempty"`
 	Endpoint   string `json:"endpoint"`
@@ -32,6 +33,9 @@ func ParseSubscription(raw []byte) (Subscription, string, error) {
 	}
 	if subscription.ClientType != "" && subscription.ClientType != "web" {
 		return Subscription{}, "", errors.New("unsupported push client")
+	}
+	if len(subscription.Language) > 35 {
+		return Subscription{}, "", errors.New("WebPush language is too long")
 	}
 	if err := validateEndpoint(subscription.Endpoint); err != nil {
 		return Subscription{}, "", err

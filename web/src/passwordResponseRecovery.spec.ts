@@ -1,3 +1,4 @@
+import { localizedFunction } from './testI18n';
 import { afterEach, expect, it, vi } from 'vitest';
 import * as ts from 'typescript';
 import { AuthError, authErrorMessage, changePassword, personalPasswordError } from './auth';
@@ -31,7 +32,7 @@ function passwordDialogHarness(passwordSet: boolean) {
     beginCredentialRotation: vi.fn(), endCredentialRotation: vi.fn(), saveAccount: vi.fn(), claim: vi.fn(),
     connectAccount, requireAccountLogin, notice,
   };
-  const open = new Function(...Object.keys(dependencies), `${code}; return changePasswordDialog;`)(...Object.values(dependencies));
+  const open = localizedFunction(...Object.keys(dependencies), `${code}; return changePasswordDialog;`)(...Object.values(dependencies));
   return { account, closeDialog, requireAccountLogin, notice, connectAccount,
     open: () => open(account),
     submit: () => nodes.get('material-form password-form').onsubmit({ preventDefault() {} }),

@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { t, loadWorkerLanguage } from './i18n';
 import { accountFromScope, callKey, canOpenIncoming, deepLink, type PushRecord } from './model';
 import { api, APIError } from './api';
 import { decidePushNotification, hasNotificationActionCollision, usesAppleWebPush } from './pushNotificationPolicy';
@@ -31,12 +32,12 @@ sw.addEventListener('message', event => {
 });
 sw.addEventListener('push', event => {
   // Keep a cancel and a simultaneous late invite in durable arrival order.
-  const task = delivery.then(() => handlePush(event)).catch(async error => {
+  const task = delivery.then(async () => { await loadWorkerLanguage(); await handlePush(event); }).catch(async error => {
     // Declarative pushes have an OS-owned fallback. Older Safari subscriptions
     // need an explicit fallback when a local error prevents normal rendering.
     if (!(event as DeclarativePushEvent).notification && usesAppleWebPush(navigator.userAgent)) {
       await sw.registration.showNotification('TiniTalk', {
-        body: 'Откройте приложение, чтобы проверить звонки', tag: 'tinitalk-fallback', silent: true,
+        body: t('web_open_the_app_to_check_your_calls_110'), tag: 'tinitalk-fallback', silent: true,
       });
       return;
     }

@@ -22,7 +22,7 @@ func TestWebPushConfigReturnsServerVAPIDIdentity(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got["vapid_public_key"] != "public-vapid-key" || got["config_id"] != "sha256:webpush" || got["declarative_web_push"] != true {
+	if len(got) != 4 || got["vapid_public_key"] != "public-vapid-key" || got["config_id"] != "sha256:webpush" || got["declarative_web_push"] != true || got["webpush_language"] != true {
 		t.Fatalf("WebPush config = %#v", got)
 	}
 }

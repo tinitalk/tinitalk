@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import type { Account, ContactPhoto, PushRecord } from './model';
 
 const stores = ['accounts', 'inbox', 'contact_photos'] as const;
@@ -10,14 +11,14 @@ async function transaction<T>(name: Store, mode: IDBTransactionMode, operation: 
     const open = indexedDB.open('tinitalk-pwa', 2);
     open.onupgradeneeded = () => { for (const store of stores) if (!open.result.objectStoreNames.contains(store)) open.result.createObjectStore(store, { keyPath: 'id' }); };
     open.onerror = () => reject(open.error);
-    open.onblocked = () => reject(new Error('Закройте другие окна TiniTalk и повторите.'));
+    open.onblocked = () => reject(new Error(t('web_close_other_tinitalk_windows_and_try_again_132')));
     open.onsuccess = () => { open.result.onversionchange = () => open.result.close(); resolve(open.result); };
   });
   return new Promise<T>((resolve, reject) => {
     const tx = db.transaction(name, mode);
     const req = operation(tx.objectStore(name));
     tx.oncomplete = () => { db.close(); resolve(req.result); };
-    tx.onerror = tx.onabort = () => { db.close(); reject(tx.error ?? new Error('Не удалось сохранить данные')); };
+    tx.onerror = tx.onabort = () => { db.close(); reject(tx.error ?? new Error(t('web_could_not_save_data_133'))); };
   });
 }
 export const accounts = () => transaction<Account[]>('accounts', 'readonly', s => s.getAll());

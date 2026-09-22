@@ -1,5 +1,5 @@
 {
-  "id": "./", "name": "TiniTalk", "short_name": "TiniTalk", "lang": "ru",
+  "id": "./", "name": "TiniTalk", "short_name": "TiniTalk", "lang": "en",
   "start_url": "./", "scope": "./", "display": "standalone",
   "related_applications": [{"platform":"webapp","url":"./manifest.webmanifest"}],
   "background_color": "#08111f", "theme_color": "#111d30",

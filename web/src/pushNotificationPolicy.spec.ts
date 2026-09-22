@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { t } from './i18n';
 import { decidePushNotification } from './pushNotificationPolicy';
 import type { PushRecord } from './model';
 
@@ -19,9 +20,9 @@ describe('push notification policy', () => {
     'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/152.0.0.0 Mobile Safari/537.36',
   ])('avoids colliding buttons on affected Android Chrome: %s', userAgent => {
     const decision = decidePushNotification({ record: baseRecord, raw: {}, now: 1_000, hasVisibleClient: false, maxActions: 2, userAgent });
-    expect(decision.actions).toEqual([{ action: 'reject', title: 'Отклонить' }]);
+    expect(decision.actions).toEqual([{ action: 'reject', title: t('text_decline_63') }]);
     expect(decision.defaultAction).toBe('answer');
-    expect(decision.body).toContain('Нажмите на уведомление, чтобы принять');
+    expect(decision.body).toContain(t('web_tap_the_notification_to_answer_123'));
   });
 
   it.each([
@@ -31,7 +32,7 @@ describe('push notification policy', () => {
     'Mozilla/5.0 (Android 10; Mobile; rv:150.0) Gecko/150.0 Firefox/150.0',
   ])('keeps both actions on browsers without the Android Chromium collision: %s', userAgent => {
     const decision = decidePushNotification({ record: baseRecord, raw: {}, now: 1_000, hasVisibleClient: false, maxActions: 2, userAgent });
-    expect(decision.actions).toEqual([{ action: 'answer', title: 'Принять' }, { action: 'reject', title: 'Отклонить' }]);
+    expect(decision.actions).toEqual([{ action: 'answer', title: t('web_answer_125') }, { action: 'reject', title: t('text_decline_63') }]);
     expect(decision.defaultAction).toBeUndefined();
   });
 
@@ -48,10 +49,10 @@ describe('push notification policy', () => {
       openVisibleClient: false,
       closeExisting: false,
       title: 'Алексей',
-      body: 'alex_web · Нажмите, чтобы ответить',
+      body: `alex_web · ${t('web_tap_to_answer_124')}`,
       actions: [
-        { action: 'answer', title: 'Принять' },
-        { action: 'reject', title: 'Отклонить' },
+        { action: 'answer', title: t('web_answer_125') },
+        { action: 'reject', title: t('text_decline_63') },
       ],
     });
   });
@@ -69,10 +70,10 @@ describe('push notification policy', () => {
       openVisibleClient: false,
       closeExisting: false,
       title: 'Алексей',
-      body: 'alex_web · Нажмите, чтобы ответить',
+      body: `alex_web · ${t('web_tap_to_answer_124')}`,
       actions: [
-        { action: 'answer', title: 'Принять' },
-        { action: 'reject', title: 'Отклонить' },
+        { action: 'answer', title: t('web_answer_125') },
+        { action: 'reject', title: t('text_decline_63') },
       ],
     });
   });

@@ -1,3 +1,4 @@
+import { t, currentLocale, currentLanguage, selectedLanguage, selectLanguage, languages, browserLanguages, resolveLanguage, translate, onLanguageChange, relocalize, type Message } from './i18n';
 import { explainError, OperationError } from './userErrors';
 import './style.css';
 import { Favorites } from './favorites';
@@ -17,7 +18,7 @@ import {
 } from './model';
 import { accounts, saveAccount, deleteAccount, readPush, prunePushes, contactPhotos, saveContactPhoto, deleteContactPhoto } from './storage';
 import { api, APIError, setSessionReplacedHandler } from './api';
-import { closeCallNotification, enablePush, disablePush, isActiveNotificationCall, notificationCallState, pushEnabled, pushSupport, requestPushPermission, updatePushWorker } from './push';
+import { closeCallNotification, enablePush, disablePush, isActiveNotificationCall, notificationCallState, pushEnabled, pushSupport, requestPushPermission, updatePushWorker, syncPushLanguage } from './push';
 import { SignalConnection, SignalError } from './signal';
 import { IncomingCallVisibility } from './incomingVisibility';
 import { AudioCall, type CallSecurityState, type CallTransportRoute, type CallVideoState } from './media';
@@ -59,7 +60,7 @@ type ActiveCall = {
   accepted: boolean;
   answering?: boolean;
   seq: number;
-  status: string;
+  status: Message;
   security: CallSecurityState;
   transportRoute: CallTransportRoute;
   video: CallVideoState;
@@ -104,7 +105,7 @@ const removingAccounts = new Set<Account>();
 const rotatingCredentials = new Set<Account>();
 const activatingAccounts = new Set<Account>();
 const connections = new Map<string, SignalConnection>();
-const states = new Map<string, string>();
+const states = new Map<string, Message>();
 const notifications = new Map<string, boolean>();
 const contactsByAccount = new Map<string, Contact[]>();
 const historyByAccount = new Map<string, HistoryItem[]>();
@@ -138,11 +139,12 @@ const loadingContactHistory = new Set<string>();
 const aboutServers = new Map<string, AboutServerState>();
 let audioOutputs: AudioOutputDevice[] = [];
 let audioOutputsLoading: Promise<void> | undefined;
-const callReplies: { code: CallReplyCode; text: string; result: string; receivedHistory: string; sentHistory: string }[] = [
-  { code: 'cannot_talk', text: 'Не могу говорить', result: 'сейчас не может говорить', receivedHistory: 'Не могли говорить', sentHistory: 'Вы не могли говорить' },
-  { code: 'call_me_later', text: 'Перезвоните мне позднее', result: 'просит перезвонить позже', receivedHistory: 'Просили перезвонить позже', sentHistory: 'Вы просили перезвонить позже' },
-  { code: 'will_call_back', text: 'Я вам перезвоню', result: 'обещает перезвонить позже', receivedHistory: 'Обещали перезвонить', sentHistory: 'Вы обещали перезвонить' },
+function callReplies(): { code: CallReplyCode; text: string; result: string; receivedHistory: string; sentHistory: string }[] { return [
+  { code: 'cannot_talk', text: t('call_reply_cannot_talk'), result: t('call_reply_result_cannot_talk'), receivedHistory: t('call_reply_history_cannot_talk'), sentHistory: t('call_reply_history_sent_cannot_talk') },
+  { code: 'call_me_later', text: t('call_reply_call_me_later'), result: t('call_reply_result_call_me_later'), receivedHistory: t('call_reply_history_call_me_later'), sentHistory: t('call_reply_history_sent_call_me_later') },
+  { code: 'will_call_back', text: t('call_reply_will_call_back'), result: t('call_reply_result_will_call_back'), receivedHistory: t('call_reply_history_will_call_back'), sentHistory: t('call_reply_history_sent_will_call_back') },
 ];
+}
 const maxCropScale = 12;
 
 let route: Route = { name: 'home' };
@@ -277,7 +279,7 @@ function notice(message: string, undo?: () => void): void {
   box.hidden = !message;
   box.onclick = message ? () => notice('') : null;
   if (message) {
-    if (undo) box.append(actionButton('Отменить', () => { undo(); notice(''); }, 'notice-undo'));
+    if (undo) box.append(actionButton(t('text_undo_196'), () => { undo(); notice(''); }, 'notice-undo'));
     box.append(element('span', 'notice-progress'));
     noticeTimer = setTimeout(() => notice(''), 3_000);
   }
@@ -291,14 +293,14 @@ function failure(error: unknown, retry?: () => void | Promise<void>): void {
     closeActiveOverlay();
     const modal = dialog(explanation.title);
     modal.body.append(element('p', '', explanation.message));
-    modal.actions.append(actionButton('Закрыть', () => modal.close(), 'secondary'));
-    if (retry) modal.actions.append(actionButton(explanation.retryLabel ?? 'Повторить', async () => {
+    modal.actions.append(actionButton(t('text_close_272'), () => modal.close(), 'secondary'));
+    if (retry) modal.actions.append(actionButton(explanation.retryLabel ?? t('text_retry_234'), async () => {
       await closeDialog(modal, 'remove');
       try { await retry(); } catch (nextError) { failure(nextError, retry); }
     }, 'primary'));
     return;
   }
-  notice(error instanceof Error ? error.message : 'Не удалось выполнить действие.');
+  notice(error instanceof Error ? error.message : t('web_could_not_complete_the_action_3'));
 }
 
 function contactDisplayName(contact: Pick<Contact, 'display_name' | 'login'>): string {
@@ -338,7 +340,7 @@ function applyNotificationCallAction(call: ActiveCall, action: NotificationCallA
 }
 
 function allContacts(): AccountContact[] {
-  const collator = new Intl.Collator('ru', { sensitivity: 'base' });
+  const collator = new Intl.Collator(currentLocale(), { sensitivity: 'base' });
   return list.filter(account => !account.sessionReplaced).flatMap(account => (contactsByAccount.get(account.id) ?? []).map(contact => ({ ...contact, account })))
     .sort((a, b) => collator.compare(contactDisplayName(a), contactDisplayName(b)) || collator.compare(a.login, b.login) || collator.compare(a.account.server, b.account.server));
 }
@@ -382,12 +384,12 @@ function avatar(name: string, login: string, className = '', photoUrl = ''): HTM
 }
 
 function initial(name: string, fallback: string): string {
-  return [...(name.trim() || fallback.trim() || 'T')][0]?.toLocaleUpperCase('ru-RU') ?? 'T';
+  return [...(name.trim() || fallback.trim() || 'T')][0]?.toLocaleUpperCase(currentLocale()) ?? 'T';
 }
 
 async function claim(account: Account): Promise<void> {
   const health = await api<{ features: string[] }>(account, '/healthz');
-  if (!health.features?.includes('browser_v1')) throw new Error('Этот сервер нужно обновить для подключения PWA.');
+  if (!health.features?.includes('browser_v1')) throw new Error(t('web_update_this_server_to_connect_the_web_app_4'));
   const session = await api<{ session_id: string }>(account, '/api/browser/session', 'POST', { device_id: account.deviceId });
   account.sessionId = session.session_id;
 }
@@ -424,7 +426,7 @@ function requireAccountLogin(account: Account): void {
 }
 
 function beginCredentialRotation(account: Account): void {
-  if (rotatingCredentials.has(account) || removingAccounts.has(account)) throw new Error('Дождитесь завершения предыдущего действия.');
+  if (rotatingCredentials.has(account) || removingAccounts.has(account)) throw new Error(t('web_wait_for_the_previous_action_to_finish_5'));
   rotatingCredentials.add(account);
   connections.get(account.id)?.stop();
   connections.delete(account.id);
@@ -448,9 +450,10 @@ function connectAccount(account: Account, recoverActive = true): void {
     status => {
       if (account.sessionReplaced || !list.includes(account)) return;
       states.set(account.id, status);
-      if (status === 'На связи') connectAndResume(account);
-      if (status === 'На связи') void refreshAccountContacts(account).then(() => renderApp()).catch(() => undefined);
-      if (status === 'На связи' && current?.account.id === account.id) current.media.resendVideoState();
+      if (status === 'web_online_6') connectAndResume(account);
+      if (status === 'web_online_6') syncNotificationLanguages();
+      if (status === 'web_online_6') void refreshAccountContacts(account).then(() => renderApp()).catch(() => undefined);
+      if (status === 'web_online_6' && current?.account.id === account.id) current.media.resendVideoState();
       renderApp();
     },
     (error, callId) => {
@@ -462,7 +465,7 @@ function connectAccount(account: Account, recoverActive = true): void {
       }
       failure(error);
       if (current?.account.id === account.id && (!callId || current.id === callId)) {
-        finishCurrentCall(error instanceof SignalError && error.code === 'busy' ? 'Занято' : 'Звонок завершён', true, '', signalFailureToneReason(error));
+        finishCurrentCall(error instanceof SignalError && error.code === 'busy' ? t('text_busy_91') : t('text_call_ended_93'), true, '', signalFailureToneReason(error));
       }
     },
     () => current?.account.id === account.id && current.started ? { id: current.id, seq: current.seq } : null,
@@ -504,7 +507,7 @@ async function resumeAccountActivation(account: Account): Promise<void> {
   } catch (error) {
     if (!list.includes(account)) return;
     if (error instanceof APIError && error.status === 401) requireAccountLogin(account);
-    else states.set(account.id, 'Нет связи');
+    else states.set(account.id, 'web_offline_7');
   } finally {
     activatingAccounts.delete(account);
     renderApp();
@@ -525,7 +528,7 @@ async function restorePushRegistration(account: Account): Promise<void> {
     await enablePush(account, base, false);
     if (stillCurrent()) notifications.set(account.id, true);
   } catch {
-    if (stillCurrent()) notice('Не удалось подключить уведомления. Попробуйте включить их в профиле.');
+    if (stillCurrent()) notice(t('web_could_not_enable_notifications_try_enabling_them_in_your_profile_8'));
   } finally {
     if (stillCurrent() && route.name === 'profile') renderApp();
   }
@@ -785,7 +788,7 @@ function appPage(content: HTMLElement, options: { title?: string; back?: () => v
   const page = element('section', `app-page ${options.back ? 'has-back' : ''} ${options.className ?? ''}`.trim());
   const top = element('header', 'top-bar');
   if (options.back) {
-    top.append(iconButton('Назад', 'arrowBack', options.back, 'top-back'));
+    top.append(iconButton(t('text_back_101'), 'arrowBack', options.back, 'top-back'));
     top.append(element('h1', '', options.title ?? ''));
   } else {
     const brand = element('button', 'brand-button');
@@ -795,12 +798,12 @@ function appPage(content: HTMLElement, options: { title?: string; back?: () => v
     top.append(brand, element('span', 'top-spacer'));
   }
   if (!options.back) {
-    const profile = iconButton('Профиль', list.length > 1 ? 'contacts' : 'person', () => navigate({ name: 'profile' }), 'profile-button');
+    const profile = iconButton(t('text_profile_308'), list.length > 1 ? 'contacts' : 'person', () => navigate({ name: 'profile' }), 'profile-button');
     if (list.some(account => account.sessionReplaced)) {
       const dot = element('span', 'profile-attention-dot');
       dot.ariaHidden = 'true';
       profile.append(dot);
-      profile.title = 'Профиль — требуется повторный вход';
+      profile.title = t('web_profile_sign_in_again_9');
       profile.ariaLabel = profile.title;
     }
     top.append(profile);
@@ -813,13 +816,13 @@ function appPage(content: HTMLElement, options: { title?: string; back?: () => v
 
 function homeScreen(): HTMLElement {
   const content = element('main', `home-content pull-refresh-host ${pullRefreshing === tab ? 'refreshing' : ''}`.trim());
-  const refreshText = tab === 'contacts' ? 'Обновляем контакты…' : 'Обновляем историю…';
-  const indicator = pullRefreshIndicator(pullRefreshing === tab ? refreshText : 'Потяните вниз для обновления');
+  const refreshText = tab === 'contacts' ? t('web_updating_contacts_10') : t('web_updating_history_11');
+  const indicator = pullRefreshIndicator(pullRefreshing === tab ? refreshText : t('web_pull_down_to_refresh_12'));
   content.append(indicator, tab === 'contacts' ? contactsPage() : historyPage());
   wirePullRefresh(content, indicator, tab);
   const nav = element('nav', 'bottom-nav');
-  nav.append(navItem('Контакты', 'contacts', tab === 'contacts', () => switchHomeTab('contacts')));
-  nav.append(navItem('История', 'history', tab === 'history', () => switchHomeTab('history'), unreadCount()));
+  nav.append(navItem(t('text_contacts_298'), 'contacts', tab === 'contacts', () => switchHomeTab('contacts')));
+  nav.append(navItem(t('text_history_251'), 'history', tab === 'history', () => switchHomeTab('history'), unreadCount()));
   const wrap = element('div', 'home-wrap');
   if (tab === 'contacts' && allContacts().some(c => favorites.keys.includes(accountKey(c.account.id, c.login)))) {
     const tabs = element('div', `favorite-tabs ${showFavorites ? '' : 'all-selected'}`);
@@ -832,7 +835,7 @@ function homeScreen(): HTMLElement {
       }));
     }
     tabs.setAttribute('role', 'tablist');
-    for (const [index, label] of ['Избранные', 'Все'].entries()) {
+    for (const [index, label] of [t('text_favorites_247'), t('text_all_248')].entries()) {
       const button = actionButton(label, () => { showFavorites = index === 0; renderApp(); }, 'favorite-tab');
       button.setAttribute('role', 'tab');
       button.setAttribute('aria-selected', String(showFavorites === (index === 0)));
@@ -865,7 +868,7 @@ function wirePullRefresh(scroller: HTMLElement, indicator: HTMLElement, refreshT
     scroller.style.setProperty('--pull-alpha', String(Math.min(1, pull / 34)));
     scroller.style.setProperty('--pull-rotate', `${Math.min(1, pull / threshold) * 180}deg`);
     if (text && pullRefreshing !== refreshTab) {
-      text.textContent = pull >= threshold ? 'Отпустите для обновления' : 'Потяните вниз для обновления';
+      text.textContent = pull >= threshold ? t('web_release_to_refresh_13') : t('web_pull_down_to_refresh_12');
     }
   }
 
@@ -875,7 +878,7 @@ function wirePullRefresh(scroller: HTMLElement, indicator: HTMLElement, refreshT
     scroller.style.removeProperty('--pull-alpha');
     scroller.style.removeProperty('--pull-rotate');
     pull = 0;
-    if (text && pullRefreshing !== refreshTab) text.textContent = 'Потяните вниз для обновления';
+    if (text && pullRefreshing !== refreshTab) text.textContent = t('web_pull_down_to_refresh_12');
   }
 
   scroller.addEventListener('touchstart', event => {
@@ -950,8 +953,8 @@ function contactsPage(): HTMLElement {
   const contacts = favoriteMode ? starred : all;
   if (!contacts.length) {
     const empty = element('div', 'empty-state');
-    empty.append(element('h2', '', 'Контактов пока нет'), element('p', '', 'Добавьте первый контакт.'));
-    empty.append(actionButton('＋ Добавить', () => navigate({ name: 'add-contact' }), 'text-action'));
+    empty.append(element('h2', '', t('text_no_contacts_yet_300')), element('p', '', t('text_add_your_first_contact_301')));
+    empty.append(actionButton(t('text_add_303'), () => navigate({ name: 'add-contact' }), 'text-action'));
     page.append(empty);
     return page;
   }
@@ -968,7 +971,7 @@ function contactsPage(): HTMLElement {
     listEl.append(row);
   }
   if (favoriteMode) wireFavoriteDrag(listEl);
-  const add = actionButton('＋ Добавить', () => navigate({ name: 'add-contact' }), 'text-action list-add');
+  const add = actionButton(t('text_add_303'), () => navigate({ name: 'add-contact' }), 'text-action list-add');
   page.append(listEl);
   if (!favoriteMode) page.append(add);
   return page;
@@ -1094,14 +1097,14 @@ function wireFavoriteDrag(listEl: HTMLElement): void {
     try { favorites.reorder(Array.from(listEl.children, child => (child as HTMLElement).dataset.peer!)); } catch (error) { failure(error); renderApp(); }
     row.focus();
   });
-  for (const row of listEl.children) row.setAttribute('aria-description', 'Удерживайте для перемещения. С клавиатуры: Alt и стрелки вверх или вниз.');
+  for (const row of listEl.children) row.setAttribute('aria-description', t('web_hold_to_move_keyboard_alt_and_the_up_or_down_arrow_14'));
 }
 
 function wireHistoryScroll(scroller: HTMLElement): void {
   const page = scroller.closest<HTMLElement>('.app-page')!;
   const contact = page.classList.contains('collapsing-contact');
   if (!contact && !scroller.querySelector('.history-list')) return;
-  const up = iconButton('В начало', 'chevron', () => {}, 'scroll-top');
+  const up = iconButton(t('text_back_to_top_204'), 'chevron', () => {}, 'scroll-top');
   page.append(up);
   const cleanup = bindHistoryScroll(scroller, up, () => {
     if (deferredRender) { deferredRender = false; renderApp(); }
@@ -1117,7 +1120,7 @@ function contactRow(contact: AccountContact, showServer: boolean): HTMLElement {
   row.onclick = () => openContact(contact);
   row.append(avatar(name, contact.login, 'contact-avatar', photoForContact(contact)));
   const text = element('span', 'contact-text');
-  const details = [showServer ? serverHost(contact.account.server) : '', contact.can_call ? '' : 'Звонки пока недоступны'].filter(Boolean).join(' • ');
+  const details = [showServer ? serverHost(contact.account.server) : '', contact.can_call ? '' : t('text_calls_not_available_yet_305')].filter(Boolean).join(' • ');
   text.append(element('strong', '', name));
   if (details) text.append(element('small', '', details));
   const missedAt = unreadMissedByContact.get(accountKey(contact.account.id, contact.login));
@@ -1138,7 +1141,7 @@ function historyPage(): HTMLElement {
   if (!rows.length && !historyErrors.size) {
     const empty = element('div', 'empty-state');
     const clock = element('span', 'empty-icon', '◷');
-    empty.append(clock, element('h2', '', 'История звонков пока пуста'), element('p', '', 'Здесь появятся входящие и исходящие звонки.'));
+    empty.append(clock, element('h2', '', t('text_no_call_history_yet_277')), element('p', '', t('text_your_incoming_and_outgoing_calls_will_appear_here_278')));
     page.append(empty);
     return page;
   }
@@ -1147,13 +1150,13 @@ function historyPage(): HTMLElement {
   else if (!loadingHistory) {
     const more = allHistory().length > historyVisibleLimit || list.some(a => !a.sessionReplaced && !historyErrors.has(a.id) && (historyCursors.get(a.id) ?? 0) > 0);
     if (more) page.append(historyMoreButton(() => loadMoreHistory()));
-    if (historyErrors.size) page.append(actionButton('Не удалось загрузить историю. Повторить', () => loadMoreHistory(true), 'text-action'));
+    if (historyErrors.size) page.append(actionButton(t('web_could_not_load_history_retry_15'), () => loadMoreHistory(true), 'text-action'));
   }
   return page;
 }
 
 function historyMoreButton(action: () => Promise<void>): HTMLElement {
-  const button = actionButton('Загрузить ещё', action, 'text-action');
+  const button = actionButton(t('web_load_more_16'), action, 'text-action');
   button.dataset.historyMore = 'true';
   return button;
 }
@@ -1183,11 +1186,11 @@ function historyRow(item: HistoryItem | AccountHistory, showPeer: boolean): HTML
   if (account) row.onclick = () => {
     const contact = findContact(account.id, item.peer_login);
     if (contact) openContact(contact);
-    else notice('Контакт больше недоступен');
+    else notice(t('text_contact_no_longer_available_211'));
   };
   if (showPeer) row.append(avatar(name, item.peer_login, 'history-avatar', account ? photoForAccountPeer(account.id, item.peer_login) : ''));
   const text = element('span', 'history-text');
-  text.append(element('strong', '', showPeer ? name : (item.direction === 'incoming' ? 'Входящий' : 'Исходящий')));
+  text.append(element('strong', '', showPeer ? name : (item.direction === 'incoming' ? t('text_incoming_273') : t('text_outgoing_274'))));
   const status = element('small', 'history-status');
   status.append(historyCallIcon(item), document.createTextNode(historyStatus(item)));
   text.append(status);
@@ -1226,27 +1229,28 @@ function aboutScreen(): HTMLElement {
   const entries = aboutServerEntries();
   for (const { account } of entries) ensureAboutServerDetails(account);
   if (!updateReport && !checkingUpdates && !updateError) void checkAppUpdates(false);
+  body.append(languageButton());
   body.append(aboutApplicationCard());
   for (const entry of entries) {
-    body.append(aboutInfoCard('Сервер', [
-      ['Адрес', serverAddress(entry.server)],
+    body.append(aboutInfoCard(t('text_server_106'), [
+      [t('text_address_107'), serverAddress(entry.server)],
     ], [
-      ['Версия API', entry.state.details?.api_version ? String(entry.state.details.api_version) : 'Не указана'],
-      ['Коммит', entry.state.details?.commit?.trim() || 'Не указан'],
+      [t('text_api_version_109'), entry.state.details?.api_version ? String(entry.state.details.api_version) : t('text_not_specified_110')],
+      [t('text_commit_105'), entry.state.details?.commit?.trim() || t('text_not_specified_108')],
     ]));
     body.append(aboutServerStatusCard(entry.state));
   }
-  return appPage(body, { title: 'О программе', back: () => goBack({ name: 'home' }), className: 'about-app-page' });
+  return appPage(body, { title: t('text_about_102'), back: () => goBack({ name: 'home' }), className: 'about-app-page' });
 }
 
 function aboutApplicationCard(): HTMLElement {
-  const card = aboutInfoCard('Приложение', [], [
-    ['Версия', `web-версия · ${webCommit}`],
-    ['Собрано', buildTime(webBuild)],
+  const card = aboutInfoCard(t('text_application_103'), [], [
+    [t('text_version_104'), t('web_web_version_value_17', webCommit)],
+    [t('web_built_18'), buildTime(webBuild)],
   ]);
   card.append(aboutUpdateStatusRow());
   if (canUpdateApplication(updateReport)) {
-    const update = actionButton('Обновить приложение', updateWebApplication, 'primary wide about-update-button');
+    const update = actionButton(t('web_update_app_19'), updateWebApplication, 'primary wide about-update-button');
     update.disabled = checkingUpdates || updatingApp || Boolean(current);
     card.append(update);
   }
@@ -1256,16 +1260,16 @@ function aboutApplicationCard(): HTMLElement {
 function aboutUpdateStatusRow(): HTMLElement {
   const status = updateReport ? updateStatus(updateReport) : undefined;
   const kind = !checkingUpdates && !updateError ? status?.kind || '' : '';
-  const label = updatingApp ? 'Устанавливаем обновление…'
-    : checkingUpdates ? 'Проверяем версию…'
-      : updateError || status?.kind === 'unknown' ? 'Не удалось проверить'
-        : status?.kind === 'update' ? 'Доступна новая версия'
-          : 'Актуальная версия';
+  const label = updatingApp ? t('web_installing_update_20')
+    : checkingUpdates ? t('web_checking_version_21')
+      : updateError || status?.kind === 'unknown' ? t('web_could_not_check_22')
+        : status?.kind === 'update' ? t('web_new_version_available_23')
+          : t('web_up_to_date_24');
   const row = element('div', `about-update-row ${kind}`.trim());
   row.setAttribute('role', 'status');
   if (updateError || status?.text) row.title = updateError || status?.text || '';
   row.append(element('span', 'about-update-status', label));
-  const check = iconButton('Проверить обновления', 'refresh', checkAppUpdates, 'about-check-button');
+  const check = iconButton(t('web_check_for_updates_25'), 'refresh', checkAppUpdates, 'about-check-button');
   check.disabled = checkingUpdates || updatingApp;
   row.append(check);
   return row;
@@ -1276,7 +1280,7 @@ async function checkAppUpdates(showProgress = true): Promise<void> {
   checkingUpdates = true; updateError = '';
   if (showProgress && route.name === 'about') renderApp();
   try { updateReport = await inspectUpdates(base, [...list]); }
-  catch { updateError = 'Не удалось проверить обработчики. Проверьте подключение и повторите попытку.'; }
+  catch { updateError = t('web_could_not_check_background_services_check_your_connection_and_try_26'); }
   finally { checkingUpdates = false; if (route.name === 'about') renderApp(); }
 }
 
@@ -1285,11 +1289,11 @@ async function updateWebApplication(): Promise<void> {
   updatingApp = true; updateError = ''; renderApp();
   try {
     const latest = await fetchBuildVersions(base);
-    if (!('serviceWorker' in navigator)) throw new Error('Service Worker недоступен');
+    if (!('serviceWorker' in navigator)) throw new Error(t('web_service_worker_unavailable_27'));
     shellRegistration = await navigator.serviceWorker.register(new URL('shell-worker.js', base), { scope: base, updateViaCache: 'none' });
     await shellRegistration.update();
     if (shellRegistration.installing) await waitForWorker(shellRegistration.installing, ['installed', 'activated']);
-    if (current) throw new Error('Обновление готово. Завершите звонок и нажмите «Обновить приложение» ещё раз.');
+    if (current) throw new Error(t('web_update_ready_end_the_call_and_tap_update_app_again_28'));
     // A newer main bundle knows which push code to register. Do not downgrade
     // its registrations using a stale page's embedded worker fingerprint.
     if (latest.build === webBuild) {
@@ -1298,7 +1302,7 @@ async function updateWebApplication(): Promise<void> {
       await Promise.all(list.filter(account => !account.sessionReplaced && account.pushConfigId)
         .map(account => updatePushWorker(account, base)));
     }
-    if (current) throw new Error('Обновление готово. Повторите после завершения звонка.');
+    if (current) throw new Error(t('web_update_ready_try_again_after_the_call_29'));
     const waiting = shellRegistration.waiting;
     if (waiting) {
       waiting.postMessage({ type: 'activate-update' });
@@ -1306,7 +1310,7 @@ async function updateWebApplication(): Promise<void> {
     }
     if (!current) location.reload();
   } catch (error) {
-    updateError = error instanceof Error ? error.message : 'Не удалось обновить приложение';
+    updateError = error instanceof Error ? error.message : t('web_could_not_update_the_app_30');
   } finally {
     updatingApp = false;
     if (route.name === 'about') renderApp();
@@ -1361,19 +1365,19 @@ function aboutServerStatusCard(state: AboutServerState): HTMLElement {
   else if (status.kind === 'incompatible') mark.textContent = '!';
   else mark.append(icon('serverUnavailable'));
   const text = element('span', 'about-status-text');
-  text.append(element('strong', '', 'Состояние сервера'), element('span', '', status.text));
+  text.append(element('strong', '', t('text_server_status_111')), element('span', '', status.text));
   card.append(mark, text);
   return card;
 }
 
 function aboutServerStatus(state: AboutServerState): { kind: 'checking' | 'available' | 'incompatible' | 'unavailable'; text: string } {
-  if (state.loading) return { kind: 'checking', text: 'Проверяем подключение…' };
+  if (state.loading) return { kind: 'checking', text: t('text_checking_connection_282') };
   if (state.error) return { kind: 'unavailable', text: state.error };
   const details = state.details;
-  if (!details) return { kind: 'unavailable', text: 'Сервер недоступен. Проверьте адрес и подключение к сети' };
-  if (details.service !== 'tinitalk' || details.status !== 'ok') return { kind: 'unavailable', text: 'По этому адресу нет сервера TiniTalk' };
-  if (!details.features?.includes('browser_v1')) return { kind: 'incompatible', text: 'Сервер несовместим с этой версией приложения' };
-  return { kind: 'available', text: 'Сервер TiniTalk доступен' };
+  if (!details) return { kind: 'unavailable', text: t('text_server_unavailable_check_the_address_and_your_connection_285') };
+  if (details.service !== 'tinitalk' || details.status !== 'ok') return { kind: 'unavailable', text: t('text_no_tinitalk_server_at_this_address_284') };
+  if (!details.features?.includes('browser_v1')) return { kind: 'incompatible', text: t('text_the_server_is_incompatible_with_this_app_version_18') };
+  return { kind: 'available', text: t('text_tinitalk_server_available_283') };
 }
 
 function ensureAboutServerDetails(account: Account): void {
@@ -1383,12 +1387,12 @@ function ensureAboutServerDetails(account: Account): void {
   aboutServers.set(server, { loading: true });
   void fetch(new URL('/healthz', server), { cache: 'no-store', signal: AbortSignal.timeout(8000) })
     .then(async response => {
-      if (!response.ok) throw new Error('По этому адресу нет сервера TiniTalk');
+      if (!response.ok) throw new Error(t('text_no_tinitalk_server_at_this_address_284'));
       return await response.json() as ServerHealth;
     })
     .then(details => { aboutServers.set(server, { loading: false, details }); })
     .catch(error => {
-      aboutServers.set(server, { loading: false, error: error instanceof Error ? error.message : 'Сервер недоступен. Проверьте адрес и подключение к сети' });
+      aboutServers.set(server, { loading: false, error: error instanceof Error ? error.message : t('text_server_unavailable_check_the_address_and_your_connection_285') });
     })
     .finally(() => { if (route.name === 'about') renderApp(); });
 }
@@ -1398,15 +1402,15 @@ function profileScreen(): HTMLElement {
   const accountsBlock = element('div', 'account-list');
   for (const account of list) accountsBlock.append(accountCard(account));
   body.append(accountsBlock);
-  body.append(actionButton('＋ Добавить', () => navigate({ name: 'add-account' }), 'text-action list-add'));
-  return appPage(body, { title: 'Профиль', back: () => goBack({ name: 'home' }) });
+  body.append(actionButton(t('text_add_303'), () => navigate({ name: 'add-account' }), 'text-action list-add'));
+  return appPage(body, { title: t('text_profile_308'), back: () => goBack({ name: 'home' }) });
 }
 
 function accountCard(account: Account): HTMLElement {
   const card = element('article', 'account-card');
   const top = element('div', 'profile-account-top');
   top.append(element('strong', '', account.login));
-  const remove = iconButton(account.sessionReplaced ? 'Удалить' : 'Выйти', account.sessionReplaced ? 'delete' : 'logout',
+  const remove = iconButton(account.sessionReplaced ? t('text_delete_239') : t('text_sign_out_323'), account.sessionReplaced ? 'delete' : 'logout',
     () => confirmRemoveAccount(account), 'logout-button');
   top.append(remove);
   const server = element('p', 'profile-server', serverAddress(account.server));
@@ -1416,7 +1420,7 @@ function accountCard(account: Account): HTMLElement {
   else if (status.kind !== 'available') statusRow.append(icon('serverUnavailable', 'status-icon'));
   statusRow.append(element('span', '', status.text));
   card.append(top, server, statusRow, account.sessionReplaced
-    ? actionButton('Войти снова', () => navigate({ name: 'login', accountId: account.id }), 'primary profile-notification-button')
+    ? actionButton(t('text_sign_in_again_113'), () => navigate({ name: 'login', accountId: account.id }), 'primary profile-notification-button')
     : profileAccountActions(account));
   return card;
 }
@@ -1444,7 +1448,7 @@ async function loadProfilePasswordAction(account: Account, actions: HTMLElement)
     account.passwordSet = profile.password_set;
     await saveAccount(account);
     if (!stillCurrent()) return;
-    actions.append(actionButton(profile.password_set ? 'Сменить пароль' : 'Задать пароль',
+    actions.append(actionButton(profile.password_set ? t('text_change_password_326') : t('text_set_password_327'),
       () => changePasswordDialog(account), 'secondary profile-password-button'));
   } catch {
     // The account's existing connection status conveys connectivity problems.
@@ -1455,7 +1459,7 @@ async function loadProfilePasswordAction(account: Account, actions: HTMLElement)
 function notificationButton(account: Account): HTMLButtonElement {
   const unsupported = pushSupport();
   const enabled = notifications.get(account.id) === true;
-  const button = actionButton(enabled ? 'Отключить уведомления' : 'Включить уведомления', async () => {
+  const button = actionButton(enabled ? t('web_disable_notifications_31') : t('web_enable_notifications_32'), async () => {
     if (unsupported) {
       notice(unsupported);
       return;
@@ -1463,29 +1467,29 @@ function notificationButton(account: Account): HTMLButtonElement {
     if (enabled) {
       await disablePush(account, base);
       notifications.set(account.id, false);
-      notice('Уведомления отключены.');
+      notice(t('web_notifications_disabled_33'));
     } else {
       await enablePush(account, base);
       notifications.set(account.id, await pushEnabled(account, base).catch(() => false));
-      notice(notifications.get(account.id) ? 'Уведомления включены.' : 'Не удалось включить уведомления.');
+      notice(notifications.get(account.id) ? t('web_notifications_enabled_34') : t('web_could_not_enable_notifications_35'));
     }
     renderApp();
   }, `profile-notification-button ${enabled ? 'secondary' : 'primary'}`);
   if (unsupported) {
     button.classList.remove('primary');
     button.classList.add('secondary');
-    button.textContent = 'Уведомления недоступны';
+    button.textContent = t('web_notifications_unavailable_36');
     button.title = unsupported;
   }
   return button;
 }
 
 function profileAccountStatus(account: Account): { kind: 'checking' | 'available' | 'unavailable'; text: string } {
-  if (account.sessionReplaced) return { kind: 'unavailable', text: 'Нужно войти снова' };
+  if (account.sessionReplaced) return { kind: 'unavailable', text: t('web_sign_in_again_37') };
   const status = states.get(account.id);
-  if (!status || status === 'Подключение…') return { kind: 'checking', text: 'Проверяем…' };
-  if (status === 'На связи') return { kind: 'available', text: 'Сервер доступен' };
-  return { kind: 'unavailable', text: status === 'Нет связи' ? 'Сервер недоступен' : status };
+  if (!status || status === 'web_connecting_38') return { kind: 'checking', text: t('text_checking_325') };
+  if (status === 'web_online_6') return { kind: 'available', text: t('text_server_available_119') };
+  return { kind: 'unavailable', text: status === 'web_offline_7' ? t('text_server_unavailable_120') : t(status) };
 }
 
 async function preparePasswordAccount(account: Account): Promise<void> {
@@ -1500,19 +1504,19 @@ async function preparePasswordAccount(account: Account): Promise<void> {
 
 async function confirmRemoveAccount(account: Account): Promise<void> {
   const replaced = account.sessionReplaced === true;
-  const modal = dialog(replaced ? 'Удалить аккаунт из списка?' : 'Выйти из аккаунта?');
+  const modal = dialog(replaced ? t('web_remove_account_from_the_list_39') : t('text_sign_out_of_this_account_321'));
   modal.body.append(element('p', '', replaced
-    ? `Убрать «${account.login}» из списка аккаунтов на этом устройстве?`
-    : 'Чтобы снова принимать звонки, потребуется войти ещё раз.'));
-  modal.actions.append(actionButton('Отмена', () => closeDialog(modal), 'secondary'));
-  modal.actions.append(actionButton(replaced ? 'Удалить' : 'Выйти', async () => {
+    ? t('web_remove_value_from_the_accounts_on_this_device_40', account.login)
+    : t('text_you_will_need_to_sign_in_again_to_receive_calls_322')));
+  modal.actions.append(actionButton(t('text_cancel_12'), () => closeDialog(modal), 'secondary'));
+  modal.actions.append(actionButton(replaced ? t('text_delete_239') : t('text_sign_out_323'), async () => {
     await closeDialog(modal, 'remove');
     await removeAccount(account);
   }, 'danger'));
 }
 
 async function removeAccount(account: Account): Promise<void> {
-  if (current?.account.id === account.id) throw new Error('Сначала завершите звонок.');
+  if (current?.account.id === account.id) throw new Error(t('text_end_the_call_first_32'));
   if (removingAccounts.has(account)) return;
   if (!account.sessionReplaced) beginCredentialRotation(account);
   removingAccounts.add(account);
@@ -1551,30 +1555,30 @@ async function deletePhotosForAccount(accountId: string): Promise<void> {
 function updateFavoriteButton(button: HTMLButtonElement, key: string): void {
   const starred = favorites.keys.includes(key);
   button.classList.toggle('selected', starred);
-  button.setAttribute('aria-label', starred ? 'Убрать из избранных' : 'Добавить в избранные');
+  button.setAttribute('aria-label', starred ? t('text_remove_from_favorites_225') : t('text_add_to_favorites_226'));
   button.setAttribute('aria-pressed', String(starred));
 }
 
 async function changePasswordDialog(account: Account): Promise<void> {
-  if (current?.account.id === account.id) { notice('Сначала завершите звонок.'); return; }
+  if (current?.account.id === account.id) { notice(t('text_end_the_call_first_32')); return; }
   await preparePasswordAccount(account);
-  if (!account.passwordAuth) throw new Error('Для входа по паролю нужно обновить сервер.');
-  if (account.passwordSet === undefined) throw new Error('Не удалось проверить, задан ли пароль. Попробуйте ещё раз.');
+  if (!account.passwordAuth) throw new Error(t('web_update_the_server_to_sign_in_with_a_password_41'));
+  if (account.passwordSet === undefined) throw new Error(t('web_could_not_check_whether_a_password_is_set_try_again_42'));
   const installing = account.passwordSet === false;
-  const modal = dialog(installing ? 'Задать пароль' : 'Сменить пароль');
+  const modal = dialog(installing ? t('text_set_password_327') : t('text_change_password_326'));
   const form = element('form', 'material-form password-form');
   form.noValidate = true;
-  if (!installing) form.append(inputField('Текущий пароль', 'current_password', 'password'));
-  form.append(inputField('Новый пароль', 'new_password', 'password'),
-    inputField('Повторите пароль', 'confirm_password', 'password'));
+  if (!installing) form.append(inputField(t('text_current_password_328'), 'current_password', 'password'));
+  form.append(inputField(t('text_new_password_319'), 'new_password', 'password'),
+    inputField(t('text_repeat_password_320'), 'confirm_password', 'password'));
   const hint = element('small', 'supporting-text', installing
-    ? 'Не менее 8 символов. Рекомендуем сочетать строчные и заглавные буквы с цифрами.'
-    : 'Введите текущий пароль. Новый пароль — не менее 8 символов. Рекомендуем сочетать строчные и заглавные буквы с цифрами.');
+    ? t('text_at_least_8_characters_we_recommend_combining_lowercase_and_upperc_318')
+    : t('web_enter_your_current_password_the_new_password_must_have_at_least_8_43'));
   const error = element('p', 'form-error');
   error.hidden = true;
   form.append(hint, error);
-  const cancel = actionButton('Отмена', () => closeDialog(modal), 'secondary');
-  const submit = element('button', 'primary', 'Сохранить');
+  const cancel = actionButton(t('text_cancel_12'), () => closeDialog(modal), 'secondary');
+  const submit = element('button', 'primary', t('text_save_245'));
   submit.type = 'button';
   let busy = false;
   let retryUntil = 0;
@@ -1600,7 +1604,7 @@ async function changePasswordDialog(account: Account): Promise<void> {
       const confirmation = String(data.get('confirm_password'));
       const validation = personalPasswordError(next);
       if (validation) throw new Error(validation);
-      if (next !== confirmation) throw new Error('Пароли не совпадают.');
+      if (next !== confirmation) throw new Error(t('text_passwords_do_not_match_310'));
       const enteredCurrent = data.get('current_password');
       const currentPassword = typeof enteredCurrent === 'string' && enteredCurrent ? enteredCurrent : account.token;
       beginCredentialRotation(account);
@@ -1617,21 +1621,21 @@ async function changePasswordDialog(account: Account): Promise<void> {
       endCredentialRotation(account);
       connectAccount(account);
       await closeDialog(modal, 'remove');
-      notice('Пароль изменён. На других устройствах нужно войти снова.');
+      notice(t('web_password_changed_sign_in_again_on_other_devices_44'));
       if (account.pushConfigId) void restorePushRegistration(account);
     })().catch(err => {
       if (issued) {
         endCredentialRotation(account);
         void closeDialog(modal, 'remove');
         connectAccount(account);
-        notice('Пароль сохранён. Подключение будет восстановлено, когда появится связь.');
+        notice(t('web_password_saved_the_connection_will_resume_when_you_are_back_onlin_45'));
         return;
       }
       if (err instanceof OperationError) {
         endCredentialRotation(account);
         requireAccountLogin(account);
         void closeDialog(modal, 'remove');
-        notice('Не удалось получить ответ сервера. Попробуйте войти с новым паролем. Если он не подходит — с прежним.');
+        notice(t('web_no_response_from_the_server_try_signing_in_with_your_new_password_46'));
         return;
       }
       endCredentialRotation(account, true);
@@ -1662,8 +1666,8 @@ function contactScreen(accountId: string, login: string): HTMLElement {
   const contact = findContact(accountId, login);
   if (!contact) {
     const body = element('main', 'empty-state');
-    body.append(element('h2', '', 'Контакт недоступен'), element('p', '', 'Обновите список контактов.'));
-    return appPage(body, { title: 'Контакт', back: () => goBack({ name: 'home' }) });
+    body.append(element('h2', '', t('text_contact_unavailable_51')), element('p', '', t('web_refresh_your_contacts_47')));
+    return appPage(body, { title: t('text_contact_224'), back: () => goBack({ name: 'home' }) });
   }
   const name = contactDisplayName(contact);
   const menu = contactMenu(contact);
@@ -1672,7 +1676,7 @@ function contactScreen(accountId: string, login: string): HTMLElement {
     const position = favorites.keys.indexOf(key);
     favorites.set(key, position < 0);
     renderApp();
-    if (position >= 0) notice('Убрано из избранных', () => { favorites.set(key, true, position); renderApp(); });
+    if (position >= 0) notice(t('text_removed_from_favorites_299'), () => { favorites.set(key, true, position); renderApp(); });
   }, 'favorite-toggle');
   star.append(favoriteStar());
   updateFavoriteButton(star, accountKey(accountId, login));
@@ -1685,19 +1689,19 @@ function contactScreen(accountId: string, login: string): HTMLElement {
   const call = actionButton(contactActionLabel(contact), () => contactCall(contact), `primary call-wide ${!contact.can_call ? 'call-unavailable' : ''}`.trim(), 'call');
   call.disabled = Boolean(current && !samePeer(contact, current));
   body.append(call);
-  body.append(element('h3', 'section-title', 'История звонков'));
+  body.append(element('h3', 'section-title', t('text_call_history_233')));
   const rows = contactHistory.get(accountKey(accountId, login));
   const key = accountKey(accountId, login);
   if (!rows) {
     if (!contactHistoryErrors.has(key)) body.append(loadingBlock());
     if (!loadingContactHistory.has(key) && !contactHistoryErrors.has(key)) void loadContactHistory(contact, true).catch(failure);
   } else if (!rows.length) {
-    body.append(contactHistoryMessage('Звонков с этим контактом пока не было'));
+    body.append(contactHistoryMessage(t('text_no_calls_with_this_contact_yet_236')));
   } else {
     body.append(historyRows(rows, false));
   }
   if (contactHistoryErrors.has(key)) {
-    body.append(actionButton('Не удалось загрузить историю. Повторить', () => loadContactHistory(contact, true, Boolean(rows && contactHistoryCursors.get(key))), 'text-action'));
+    body.append(actionButton(t('web_could_not_load_history_retry_15'), () => loadContactHistory(contact, true, Boolean(rows && contactHistoryCursors.get(key))), 'text-action'));
   } else if (rows && loadingContactHistory.has(key)) body.append(loadingBlock());
   else if (rows && (contactHistoryCursors.get(key) ?? 0) > 0) body.append(historyMoreButton(() => loadContactHistory(contact, false, true)));
   const page = appPage(body, { title: '', back: () => goBack({ name: 'home' }), menu: actions });
@@ -1711,7 +1715,7 @@ function contactScreen(accountId: string, login: string): HTMLElement {
 function contactMenu(contact: AccountContact): HTMLElement {
   const holder = element('div', 'menu-holder');
   const closeMenu = () => holder.classList.remove('open');
-  const opener = iconButton(`Действия контакта ${contactDisplayName(contact)}`, 'more', () => {
+  const opener = iconButton(t('text_actions_for_value_227', contactDisplayName(contact)), 'more', () => {
     if (holder.classList.contains('open')) {
       dismissActiveOverlay();
       return;
@@ -1720,9 +1724,9 @@ function contactMenu(contact: AccountContact): HTMLElement {
     registerActiveOverlay(closeMenu);
   });
   const menu = element('div', 'popup-menu');
-  menu.append(menuItem('Переименовать', 'edit', () => { closeActiveOverlay(false); renameDialog(contact); }));
-  menu.append(menuItem('Изменить фото', 'photoCamera', () => { closeActiveOverlay(false); photoSheet(contact); }));
-  menu.append(menuItem('Удалить контакт', 'delete', () => { closeActiveOverlay(false); deleteDialog(contact); }, 'danger-text'));
+  menu.append(menuItem(t('text_rename_228'), 'edit', () => { closeActiveOverlay(false); renameDialog(contact); }));
+  menu.append(menuItem(t('text_change_photo_229'), 'photoCamera', () => { closeActiveOverlay(false); photoSheet(contact); }));
+  menu.append(menuItem(t('text_delete_contact_232'), 'delete', () => { closeActiveOverlay(false); deleteDialog(contact); }, 'danger-text'));
   holder.append(opener, menu);
   return holder;
 }
@@ -1754,10 +1758,10 @@ function photoSheet(contact: AccountContact): void {
     if (!file) return;
     void openPhotoEditor(contact, file, overlay).catch(failure);
   };
-  panel.append(element('h2', '', 'Фото контакта'));
-  panel.append(actionButton('Выбрать', () => fileInput.click(), 'primary wide'));
+  panel.append(element('h2', '', t('text_contact_photo_214')));
+  panel.append(actionButton(t('web_choose_48'), () => fileInput.click(), 'primary wide'));
   if (contactPhotosByKey.has(key)) {
-    panel.append(actionButton('Удалить фото', async () => {
+    panel.append(actionButton(t('text_remove_photo_217'), async () => {
       await deleteContactPhoto(key);
       contactPhotosByKey.delete(key);
       await closeSheet(overlay, 'remove');
@@ -1774,10 +1778,10 @@ function photoSheet(contact: AccountContact): void {
 }
 
 async function openPhotoEditor(contact: AccountContact, file: File, sheet: HTMLElement): Promise<void> {
-  if (!file.type.startsWith('image/')) throw new Error('Выберите изображение.');
+  if (!file.type.startsWith('image/')) throw new Error(t('web_choose_an_image_49'));
   const source = await readFileDataUrl(file);
   const image = await loadImage(source);
-  if (!image.naturalWidth || !image.naturalHeight) throw new Error('Не удалось открыть изображение');
+  if (!image.naturalWidth || !image.naturalHeight) throw new Error(t('text_could_not_open_the_image_220'));
   if (!sheet.isConnected) return;
   closeActiveOverlay(false);
   showPhotoEditor(contact, image);
@@ -1785,7 +1789,7 @@ async function openPhotoEditor(contact: AccountContact, file: File, sheet: HTMLE
 
 function showPhotoEditor(contact: AccountContact, image: HTMLImageElement): void {
   const overlay = element('section', 'photo-editor-overlay');
-  const title = element('h2', '', 'Настройте фото');
+  const title = element('h2', '', t('text_adjust_photo_218'));
   const stage = element('div', 'photo-editor-stage');
   const viewport = element('div', 'photo-crop-viewport');
   const preview = element('img');
@@ -1794,8 +1798,8 @@ function showPhotoEditor(contact: AccountContact, image: HTMLImageElement): void
   preview.src = image.src;
   const ring = element('span', 'photo-crop-ring');
   const actions = element('div', 'photo-editor-actions');
-  const cancel = actionButton('Отмена', () => closePhotoEditor(), 'photo-editor-cancel');
-  const done = actionButton('Готово', async () => {
+  const cancel = actionButton(t('text_cancel_12'), () => closePhotoEditor(), 'photo-editor-cancel');
+  const done = actionButton(t('text_done_219'), async () => {
     done.disabled = true;
     done.classList.add('saving');
     done.replaceChildren(element('span', 'tiny-spinner'));
@@ -1806,7 +1810,7 @@ function showPhotoEditor(contact: AccountContact, image: HTMLImageElement): void
     } catch (error) {
       if (done.isConnected) {
         done.classList.remove('saving');
-        done.replaceChildren(document.createTextNode('Готово'));
+        done.replaceChildren(document.createTextNode(t('text_done_219')));
       }
       throw error;
     }
@@ -1966,7 +1970,7 @@ function renderContactPhotoDataUrl(image: HTMLImageElement, transform: CropTrans
   canvas.width = 512;
   canvas.height = 512;
   const context = canvas.getContext('2d');
-  if (!context) throw new Error('Не удалось подготовить фото');
+  if (!context) throw new Error(t('web_could_not_prepare_the_photo_50'));
   context.drawImage(
     image,
     Math.round(source.left),
@@ -2053,7 +2057,7 @@ function minCropScale(imageWidth: number, imageHeight: number, viewport: CropVie
 function readFileDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('Не удалось открыть изображение'));
+    reader.onerror = () => reject(reader.error ?? new Error(t('text_could_not_open_the_image_220')));
     reader.onload = () => resolve(String(reader.result ?? ''));
     reader.readAsDataURL(file);
   });
@@ -2063,7 +2067,7 @@ function loadImage(source: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error('Не удалось открыть изображение'));
+    image.onerror = () => reject(new Error(t('text_could_not_open_the_image_220')));
     image.src = source;
   });
 }
@@ -2090,7 +2094,7 @@ function currentAudioOutputId(): string {
 
 function currentAudioOutputLabel(): string {
   const current = currentAudioOutputId();
-  return audioOutputs.find(output => output.id === current)?.label ?? audioOutputs[0]?.label ?? 'Устройство';
+  return audioOutputs.find(output => output.id === current)?.label ?? audioOutputs[0]?.label ?? t('text_device_191');
 }
 
 async function refreshAudioOutputs(render = false): Promise<void> {
@@ -2111,7 +2115,7 @@ async function refreshAudioOutputs(render = false): Promise<void> {
         id: device.deviceId || 'default',
         label: audioOutputLabel(device, index),
       }));
-      if (!audioOutputs.length) audioOutputs = [{ id: 'default', label: 'Устройство по умолчанию' }];
+      if (!audioOutputs.length) audioOutputs = [{ id: 'default', label: t('web_default_device_51') }];
     })
     .finally(() => { audioOutputsLoading = undefined; });
   await audioOutputsLoading;
@@ -2120,14 +2124,14 @@ async function refreshAudioOutputs(render = false): Promise<void> {
 
 function audioOutputLabel(device: MediaDeviceInfo, index: number): string {
   const raw = device.label.trim();
-  const lower = raw.toLocaleLowerCase('ru-RU');
-  if (device.deviceId === 'default') return raw || 'Устройство по умолчанию';
-  if (device.deviceId === 'communications') return raw || 'Устройство связи';
+  const lower = raw.toLocaleLowerCase(currentLocale());
+  if (device.deviceId === 'default') return raw || t('web_default_device_51');
+  if (device.deviceId === 'communications') return raw || t('web_communication_device_52');
   if (lower.includes('bluetooth')) return raw || 'Bluetooth';
-  if (lower.includes('headset') || lower.includes('headphone') || lower.includes('науш')) return raw || 'Наушники';
-  if (lower.includes('speaker') || lower.includes('динами')) return raw || 'Динамик';
-  if (lower.includes('earpiece') || lower.includes('phone') || lower.includes('телефон')) return raw || 'Телефон';
-  return raw || `Устройство ${index + 1}`;
+  if (lower.includes('headset') || lower.includes('headphone') || lower.includes('науш')) return raw || t('text_headphones_189');
+  if (lower.includes('speaker') || lower.includes('динами')) return raw || t('text_speaker_188');
+  if (lower.includes('earpiece') || lower.includes('phone') || lower.includes('телефон')) return raw || t('text_phone_187');
+  return raw || t('web_device_value_56', index + 1);
 }
 
 async function toggleAudioOutput(): Promise<void> {
@@ -2152,8 +2156,8 @@ async function toggleAudioOutput(): Promise<void> {
   if (audioOutputs.length > 1) audioOutputSheet();
   else {
     audioOutputUnavailableDialog(
-      'Других устройств звука не видно',
-      'Браузер не показывает web-приложению отдельные варианты вроде громкого динамика, телефона или наушников. Переключите звук через системное меню телефона.',
+      t('web_no_other_audio_devices_found_57'),
+      t('web_the_browser_does_not_expose_separate_options_for_the_speaker_earp_58'),
     );
   }
 }
@@ -2179,7 +2183,7 @@ async function promptAudioOutputSelection(): Promise<void> {
 }
 
 async function selectAudioOutputById(id: string, label?: string): Promise<void> {
-  const output = audioOutputs.find(item => item.id === id) ?? { id, label: label || 'Выбранное устройство' };
+  const output = audioOutputs.find(item => item.id === id) ?? { id, label: label || t('web_selected_device_59') };
   await selectAudioOutput(output);
 }
 
@@ -2211,31 +2215,31 @@ async function selectAudioOutput(output: AudioOutputDevice): Promise<void> {
 
 function audioOutputErrorText(error: unknown): string {
   if (error instanceof DOMException) {
-    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') return 'Браузер не разрешил выбрать устройство звука.';
-    if (error.name === 'NotFoundError') return 'Это устройство звука больше недоступно.';
-    if (error.name === 'AbortError') return 'Не удалось переключить устройство звука.';
+    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') return t('web_the_browser_did_not_allow_audio_device_selection_60');
+    if (error.name === 'NotFoundError') return t('web_this_audio_device_is_no_longer_available_61');
+    if (error.name === 'AbortError') return t('web_could_not_switch_audio_output_62');
   }
-  return 'Не удалось переключить устройство звука.';
+  return t('web_could_not_switch_audio_output_62');
 }
 
 function audioOutputUnsupportedDialog(): void {
   audioOutputUnavailableDialog(
-    'Переключение звука недоступно',
-    'Этот браузер не даёт web-приложению управлять выводом на громкий или разговорный динамик. TiniTalk может переключать звук только там, где браузер поддерживает выбор аудиовыхода.',
+    t('web_audio_switching_unavailable_63'),
+    t('web_this_browser_does_not_let_web_apps_choose_the_speaker_or_earpiece_64'),
   );
 }
 
 function audioOutputUnavailableDialog(title: string, message: string): void {
   const modal = dialog(title);
   modal.body.append(element('p', '', message));
-  modal.actions.append(actionButton('Понятно', () => closeDialog(modal), 'primary'));
+  modal.actions.append(actionButton(t('text_ok_61'), () => closeDialog(modal), 'primary'));
 }
 
 function audioOutputSheet(): void {
   if (!audioOutputSelectionSupported()) return;
   const overlay = element('div', 'sheet-overlay');
   const panel = element('section', 'bottom-sheet audio-output-sheet');
-  panel.append(element('h2', '', 'Куда выводить звук'));
+  panel.append(element('h2', '', t('text_audio_output_185')));
   const current = currentAudioOutputId();
   for (const output of audioOutputs) {
     const selected = output.id === current;
@@ -2258,9 +2262,9 @@ function audioOutputSheet(): void {
 }
 
 function contactActionLabel(contact: AccountContact): string {
-  if (current && samePeer(contact, current)) return 'Вернуться к звонку';
-  if (current) return 'Сначала завершите текущий звонок';
-  return 'Позвонить';
+  if (current && samePeer(contact, current)) return t('text_return_to_call_206');
+  if (current) return t('text_end_the_current_call_first_207');
+  return t('text_call_208');
 }
 
 function samePeer(contact: AccountContact, call: ActiveCall): boolean {
@@ -2280,22 +2284,22 @@ async function contactCall(contact: AccountContact): Promise<void> {
 }
 
 function unavailableCallDialog(contact: AccountContact): void {
-  const modal = dialog('Пока нельзя позвонить');
-  modal.body.append(element('p', '', `Позвонить можно после того, как ${contactDisplayName(contact)} добавит вас в свой список контактов.`));
-  modal.actions.append(actionButton('Понятно', () => closeDialog(modal), 'primary'));
+  const modal = dialog(t('text_cannot_call_yet_53'));
+  modal.body.append(element('p', '', t('text_you_can_call_once_value_adds_you_to_their_contacts_54', contactDisplayName(contact))));
+  modal.actions.append(actionButton(t('text_ok_61'), () => closeDialog(modal), 'primary'));
 }
 
 function addContactScreen(): HTMLElement {
   const body = element('main', 'form-page');
   const form = element('form', 'material-form');
   form.noValidate = true;
-  const accountField = list.length > 1 ? selectField('Сервер', 'account', list.map(account => ({ value: account.id, label: `${serverAddress(account.server)} · ${account.login}` }))) : null;
+  const accountField = list.length > 1 ? selectField(t('text_server_106'), 'account', list.map(account => ({ value: account.id, label: `${serverAddress(account.server)} · ${account.login}` }))) : null;
   if (accountField) form.append(accountField);
-  form.append(inputField('Логин', 'login', 'text'));
-  form.append(inputField('Имя в контактах', 'name', 'text'));
+  form.append(inputField(t('text_username_116'), 'login', 'text'));
+  form.append(inputField(t('text_name_in_your_contacts_127'), 'name', 'text'));
   const error = element('p', 'form-error');
   error.hidden = true;
-  const submit = element('button', 'primary wide', 'Добавить');
+  const submit = element('button', 'primary wide', t('text_add_114'));
   submit.type = 'submit';
   form.append(error, submit);
   form.onsubmit = event => {
@@ -2305,8 +2309,8 @@ function addContactScreen(): HTMLElement {
       const account = list.find(item => item.id === String(data.get('account') || list[0]?.id));
       const login = String(data.get('login')).trim();
       const name = String(data.get('name')).trim();
-      if (!account || !login || !name) throw new Error('Заполните логин и имя контакта.');
-      if ([...name].length > 64) throw new Error('Имя контакта должно быть не длиннее 64 символов.');
+      if (!account || !login || !name) throw new Error(t('web_enter_a_username_and_contact_name_65'));
+      if ([...name].length > 64) throw new Error(t('web_the_contact_name_must_be_no_longer_than_64_characters_66'));
       submit.disabled = true;
       await api(account, `/api/contacts/${encodeURIComponent(login)}`, 'PUT', { custom_name: name });
       tab = 'contacts';
@@ -2318,7 +2322,7 @@ function addContactScreen(): HTMLElement {
     }).finally(() => { submit.disabled = false; });
   };
   body.append(form);
-  return appPage(body, { title: 'Добавить контакт', back: () => goBack({ name: 'home' }), className: 'form-app-page' });
+  return appPage(body, { title: t('text_add_contact_125'), back: () => goBack({ name: 'home' }), className: 'form-app-page' });
 }
 
 function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTMLElement {
@@ -2332,22 +2336,22 @@ function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTM
     brand = element('div', 'login-brand');
     brand.append(appMark('52px'));
     const title = element('div');
-    title.append(element('h1', '', 'TiniTalk'), element('p', '', 'Звонки для своих'));
+    title.append(element('h1', '', 'TiniTalk'), element('p', '', t('text_calls_for_your_circle_288')));
     brand.append(title);
     form.append(brand);
   }
-  form.append(inputField('Логин', 'login', 'text', true));
-  form.append(inputField('Пароль', 'token', 'password', true));
-  const server = inputField('Адрес сервера', 'server', 'text', true, 'talk.example.com');
-  const serverStatus = element('small', 'supporting-text', 'Введите адрес сервера');
+  form.append(inputField(t('text_username_116'), 'login', 'text', true));
+  form.append(inputField(t('text_password_117'), 'token', 'password', true));
+  const server = inputField(t('text_server_address_118'), 'server', 'text', true, 'talk.example.com');
+  const serverStatus = element('small', 'supporting-text', t('text_enter_a_server_address_281'));
   server.append(serverStatus);
   form.append(server);
   if (reauth?.sessionReplaced) {
-    form.append(element('p', 'reauth-explanation', 'Предыдущий вход завершён. Войдите снова, чтобы принимать звонки здесь.'));
+    form.append(element('p', 'reauth-explanation', t('web_your_previous_session_ended_sign_in_again_to_receive_calls_here_67')));
   }
   const error = element('p', 'form-error');
   error.hidden = true;
-  const submit = element('button', 'primary wide', mode === 'login' ? 'Войти' : 'Добавить');
+  const submit = element('button', 'primary wide', mode === 'login' ? t('text_sign_in_115') : t('text_add_114'));
   submit.type = 'submit';
   let pendingSetup: PendingPasswordSetup | undefined;
   let retryUntil = 0;
@@ -2387,29 +2391,29 @@ function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTM
         clearTimeout(retryTimer);
         retryUntil = 0;
         error.hidden = true;
-        submit.textContent = mode === 'login' ? 'Войти' : 'Добавить';
+        submit.textContent = mode === 'login' ? t('text_sign_in_115') : t('text_add_114');
         form.replaceChildren(...loginFields);
         loginHost.append(form);
         flow.replaceChildren(loginView);
         updateSubmit();
       });
       form.replaceChildren();
-      form.append(element('p', 'reauth-explanation', 'Не менее 8 символов. Рекомендуем сочетать строчные и заглавные буквы с цифрами.'),
-        inputField('Новый пароль', 'new_password', 'password'),
-        inputField('Повторите пароль', 'confirm_password', 'password'), error, submit);
+      form.append(element('p', 'reauth-explanation', t('text_at_least_8_characters_we_recommend_combining_lowercase_and_upperc_318')),
+        inputField(t('text_new_password_319'), 'new_password', 'password'),
+        inputField(t('text_repeat_password_320'), 'confirm_password', 'password'), error, submit);
       const body = element('main', 'form-page');
       body.append(form);
       flow.replaceChildren(appPage(body, {
-        title: 'Придумайте пароль', back: () => { if (!accountSubmission) back(); }, className: 'form-app-page',
+        title: t('text_choose_a_password_317'), back: () => { if (!accountSubmission) back(); }, className: 'form-app-page',
       }));
-      submit.textContent = 'Войти';
+      submit.textContent = t('text_sign_in_115');
       form.querySelector<HTMLInputElement>('input[name="new_password"]')?.focus();
     })().catch(err => {
       if (pendingSetup && err instanceof OperationError) {
         closeActiveOverlay();
         screen.dataset.viewKey = '';
         renderApp();
-        notice('Не удалось получить ответ сервера. Попробуйте войти с новым паролем.');
+        notice(t('web_no_response_from_the_server_try_signing_in_with_your_new_password_68'));
         return;
       }
       showCredentialError(error, err, () => {
@@ -2440,7 +2444,7 @@ function credentialsScreen(mode: 'login' | 'add-account', reauth?: Account): HTM
   } else {
     const body = element('main', 'form-page');
     body.append(form);
-    flow.append(appPage(body, { title: reauth ? 'Войти снова' : 'Добавить аккаунт', back: () => goBack({ name: 'profile' }), className: 'form-app-page' }));
+    flow.append(appPage(body, { title: reauth ? t('text_sign_in_again_113') : t('text_add_account_112'), back: () => goBack({ name: 'profile' }), className: 'form-app-page' }));
   }
   const previousDispose = disposeView;
   disposeView = () => { previousDispose(); clearTimeout(retryTimer); };
@@ -2475,7 +2479,7 @@ function inputField(label: string, name: string, type: string, paste = false, pl
   input.autocapitalize = 'none';
   input.spellcheck = false;
   const field = inputFieldShell(label, input);
-  if (paste) field.querySelector('.input-box')!.append(iconButton('Вставить', 'paste', async () => pasteIntoField(input)));
+  if (paste) field.querySelector('.input-box')!.append(iconButton(t('text_paste_124'), 'paste', async () => pasteIntoField(input)));
   return field;
 }
 
@@ -2497,7 +2501,7 @@ function selectField(label: string, name: string, options: { value: string; labe
 }
 
 async function pasteIntoField(input: HTMLInputElement): Promise<void> {
-  if (!navigator.clipboard?.readText) throw new Error('Буфер обмена недоступен.');
+  if (!navigator.clipboard?.readText) throw new Error(t('web_clipboard_unavailable_69'));
   const value = await navigator.clipboard.readText();
   const form = input.form;
   if (!form) return;
@@ -2543,11 +2547,11 @@ function wireServerCheck(form: HTMLFormElement, status: HTMLElement): void {
     try {
       server = normalizeServer(input.value);
     } catch {
-      status.textContent = 'Введите адрес сервера';
+      status.textContent = t('text_enter_a_server_address_281');
       status.dataset.state = 'neutral';
       return;
     }
-    status.textContent = 'Проверяем подключение…';
+    status.textContent = t('text_checking_connection_282');
     status.dataset.state = 'neutral';
     timer = setTimeout(() => {
       void checkServer(server).then(result => {
@@ -2561,12 +2565,12 @@ function wireServerCheck(form: HTMLFormElement, status: HTMLElement): void {
 async function checkServer(server: string): Promise<{ state: string; message: string }> {
   try {
     const response = await fetch(new URL('/healthz', server), { cache: 'no-store', signal: AbortSignal.timeout(8000) });
-    if (!response.ok) return { state: 'bad', message: 'По этому адресу нет сервера TiniTalk' };
+    if (!response.ok) return { state: 'bad', message: t('text_no_tinitalk_server_at_this_address_284') };
     const health = await response.json() as { features?: string[] };
-    if (!health.features?.includes('browser_v1')) return { state: 'warn', message: 'Сервер несовместим с этой версией приложения' };
-    return { state: 'ok', message: 'Сервер TiniTalk доступен' };
+    if (!health.features?.includes('browser_v1')) return { state: 'warn', message: t('text_the_server_is_incompatible_with_this_app_version_18') };
+    return { state: 'ok', message: t('text_tinitalk_server_available_283') };
   } catch {
-    return { state: 'bad', message: 'Сервер недоступен. Проверьте адрес и подключение к сети' };
+    return { state: 'bad', message: t('text_server_unavailable_check_the_address_and_your_connection_285') };
   }
 }
 
@@ -2575,7 +2579,7 @@ async function submitAccount(form: HTMLFormElement, mode: 'login' | 'add-account
   const server = normalizeServer(String(data.get('server')));
   const login = String(data.get('login')).trim();
   const password = String(data.get('token'));
-  if (!login || !password) throw new Error('Заполните логин и пароль.');
+  if (!login || !password) throw new Error(t('web_enter_your_username_and_password_70'));
   const previous = accountForLogin(list, server, login);
   const loginStillValid = () => !previous || (list.includes(previous) && !removingAccounts.has(previous));
   if (!loginStillValid()) return;
@@ -2601,7 +2605,7 @@ async function submitPasswordSetup(form: HTMLFormElement, mode: 'login' | 'add-a
   const confirmation = String(data.get('confirm_password'));
   const validation = personalPasswordError(password);
   if (validation) throw new Error(validation);
-  if (password !== confirmation) throw new Error('Пароли не совпадают.');
+  if (password !== confirmation) throw new Error(t('text_passwords_do_not_match_310'));
   const loginStillValid = () => !setup.previous || (list.includes(setup.previous) && !removingAccounts.has(setup.previous));
   if (!loginStillValid()) return;
   const pushPermission = requestPushPermission();
@@ -2633,7 +2637,7 @@ async function finishAccountLogin(form: HTMLFormElement, mode: 'login' | 'add-ac
     await persistAndClaim(account, passwordAuth, stillCurrent, install);
   } catch (error) {
     if (!staged || !(error instanceof OperationError)) throw error;
-    notice('Вход сохранён. Подключение будет восстановлено, когда появится связь.');
+    notice(t('web_sign_in_saved_the_connection_will_resume_when_you_are_back_online_71'));
   }
   if (!stillCurrent()) return;
   if (!staged) install();
@@ -2654,10 +2658,10 @@ async function finishAccountLogin(form: HTMLFormElement, mode: 'login' | 'add-ac
   }).catch(() => {
     if (!stillSignedIn()) return;
     notifications.set(account.id, false);
-    notice('Не удалось подключить уведомления. Попробуйте включить их в профиле.');
+    notice(t('web_could_not_enable_notifications_try_enabling_them_in_your_profile_8'));
   }).finally(() => { if (route.name === 'profile') renderApp(); });
   await refreshAll(false);
-  if (!previous && mode === 'add-account') notice('Аккаунт добавлен.');
+  if (!previous && mode === 'add-account') notice(t('web_account_added_72'));
 }
 
 async function refreshPasswordState(account: Account, known?: boolean): Promise<void> {
@@ -2916,29 +2920,29 @@ function openContact(contact: AccountContact): void {
 }
 
 function renameDialog(contact: AccountContact): void {
-  const modal = dialog('Изменить имя');
+  const modal = dialog(t('text_edit_name_242'));
   const input = element('input');
   input.value = contactDisplayName(contact);
   input.maxLength = 64;
   const error = element('p', 'form-error');
   error.hidden = true;
-  const save = actionButton('Сохранить', async () => {
+  const save = actionButton(t('text_save_245'), async () => {
     const name = input.value.trim();
-    if (!name) throw new Error('Введите имя.');
+    if (!name) throw new Error(t('text_enter_a_name_244'));
     await api<Contact>(contact.account, `/api/contacts/${encodeURIComponent(contact.login)}/name`, 'PUT', { custom_name: name });
     await closeDialog(modal, 'remove');
     await refreshContacts();
     replaceRoute({ name: 'contact', accountId: contact.account.id, login: contact.login });
   }, 'primary');
-  modal.body.append(inputFieldShell('Имя контакта', input), error);
-  modal.actions.append(actionButton('Отмена', () => closeDialog(modal), 'secondary'), save);
+  modal.body.append(inputFieldShell(t('text_contact_name_243'), input), error);
+  modal.actions.append(actionButton(t('text_cancel_12'), () => closeDialog(modal), 'secondary'), save);
 }
 
 function deleteDialog(contact: AccountContact): void {
-  const modal = dialog('Удалить контакт?');
-  modal.body.append(element('p', '', `Удалить «${contactDisplayName(contact)}» из списка контактов?`));
-  modal.actions.append(actionButton('Отмена', () => closeDialog(modal), 'secondary'));
-  modal.actions.append(actionButton('Удалить', async () => {
+  const modal = dialog(t('text_delete_contact_237'));
+  modal.body.append(element('p', '', t('text_remove_value_from_your_contacts_238', contactDisplayName(contact))));
+  modal.actions.append(actionButton(t('text_cancel_12'), () => closeDialog(modal), 'secondary'));
+  modal.actions.append(actionButton(t('text_delete_239'), async () => {
     await api(contact.account, `/api/contacts/${encodeURIComponent(contact.login)}`, 'DELETE');
     favorites.removeContact(accountKey(contact.account.id, contact.login));
     const key = contactPhotoKey(contact.account.id, contact.login);
@@ -2992,12 +2996,12 @@ function loadingBlock(): HTMLElement {
 function contactsRequiringServerSubtitle(contacts: AccountContact[]): Set<string> {
   const groups = new Map<string, AccountContact[]>();
   for (const contact of contacts) {
-    const key = contactDisplayName(contact).toLocaleLowerCase('ru-RU');
+    const key = contactDisplayName(contact).toLocaleLowerCase(currentLocale());
     groups.set(key, [...(groups.get(key) ?? []), contact]);
   }
   const result = new Set<string>();
   for (const group of groups.values()) {
-    if (new Set(group.map(contact => serverHost(contact.account.server).toLocaleLowerCase('ru-RU'))).size > 1) {
+    if (new Set(group.map(contact => serverHost(contact.account.server).toLocaleLowerCase(currentLocale()))).size > 1) {
       for (const contact of group) result.add(accountKey(contact.account.id, contact.login));
     }
   }
@@ -3007,31 +3011,31 @@ function contactsRequiringServerSubtitle(contacts: AccountContact[]): Set<string
 const noAnswerOutcomes = new Set(['unreachable', 'unanswered', 'cancelled_before_ringing', 'cancelled_after_ringing', 'interrupted_before_answer']);
 
 function historyStatus(item: HistoryItem): string {
-  if (item.outcome === 'completed') return `Разговор · ${historyDuration(item.duration_seconds)}`;
-  if (item.outcome === 'interrupted') return `Связь прервалась · ${historyDuration(item.duration_seconds)}`;
+  if (item.outcome === 'completed') return t('text_call_value_253', historyDuration(item.duration_seconds));
+  if (item.outcome === 'interrupted') return t('text_connection_lost_value_254', historyDuration(item.duration_seconds));
   if (noAnswerOutcomes.has(item.outcome)) {
-    if (item.direction === 'incoming') return item.reached ? 'Пропущенный' : 'Пропущенный (не в сети)';
-    return item.reached ? 'Неотвеченный' : 'Неотвеченный (не в сети)';
+    if (item.direction === 'incoming') return item.reached ? t('text_missed_255') : t('text_missed_offline_256');
+    return item.reached ? t('text_unanswered_257') : t('text_unanswered_offline_258');
   }
   if (item.direction === 'incoming') {
-    if (item.outcome === 'busy') return 'Пропущенный (вы были заняты)';
-    if (item.outcome === 'rejected') return item.reply_code ? replyStatus(item.reply_code, true) : 'Вы отклонили вызов';
-    if (item.outcome === 'connection_failed') return 'Связь не установлена';
-    return 'Вызов завершён';
+    if (item.outcome === 'busy') return t('text_missed_you_were_busy_259');
+    if (item.outcome === 'rejected') return item.reply_code ? replyStatus(item.reply_code, true) : t('text_you_declined_the_call_260');
+    if (item.outcome === 'connection_failed') return t('text_connection_not_established_261');
+    return t('text_call_ended_262');
   }
-  if (item.outcome === 'busy') return 'Занято';
-  if (item.outcome === 'rejected') return item.reply_code ? replyStatus(item.reply_code, false) : 'Вызов отклонён';
-  if (item.outcome === 'connection_failed') return 'Связь не установлена';
-  return 'Вызов завершён';
+  if (item.outcome === 'busy') return t('text_busy_91');
+  if (item.outcome === 'rejected') return item.reply_code ? replyStatus(item.reply_code, false) : t('text_call_declined_263');
+  if (item.outcome === 'connection_failed') return t('text_connection_not_established_261');
+  return t('text_call_ended_262');
 }
 
 function replyStatus(code: string, sent: boolean): string {
-  const reply = callReplies.find(item => item.code === code);
-  return reply ? (sent ? reply.sentHistory : reply.receivedHistory) : (sent ? 'Вы отклонили вызов' : 'Вызов отклонён');
+  const reply = callReplies().find(item => item.code === code);
+  return reply ? (sent ? reply.sentHistory : reply.receivedHistory) : (sent ? t('text_you_declined_the_call_260') : t('text_call_declined_263'));
 }
 
 function replyResultText(code: unknown): string {
-  return typeof code === 'string' ? callReplies.find(item => item.code === code)?.result ?? '' : '';
+  return typeof code === 'string' ? callReplies().find(item => item.code === code)?.result ?? '' : '';
 }
 
 function historyColorClass(item: HistoryItem): string {
@@ -3045,14 +3049,14 @@ function historyDayLabel(startedAt: number): string {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const day = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  if (day === today) return 'сегодня';
+  if (day === today) return t('text_today_264');
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
-  if (day === yesterday) return 'вчера';
-  return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) });
+  if (day === yesterday) return t('text_yesterday_265');
+  return date.toLocaleDateString(currentLocale(), { day: 'numeric', month: 'long', ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) });
 }
 
 function historyTime(startedAt: number): string {
-  return new Date(startedAt * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return new Date(startedAt * 1000).toLocaleTimeString(currentLocale(), { hour: '2-digit', minute: '2-digit' });
 }
 
 function historyDuration(seconds: number): string {
@@ -3068,16 +3072,16 @@ function missedContactSubtitle(startedAt: number): string {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const day = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  if (day === today) return `Пропущенный в ${historyTime(startedAt)}`;
-  if (day === today - 86400_000) return 'Пропущенный вчера';
-  return `Пропущенный ${date.toLocaleDateString('ru-RU')}`;
+  if (day === today) return t('text_missed_at_value_266', historyTime(startedAt));
+  if (day === today - 86400_000) return t('text_missed_yesterday_267');
+  return t('text_missed_value_268', date.toLocaleDateString(currentLocale()));
 }
 
 function createCall(account: Account, id: string, peer: string, peerLogin: string, incoming: boolean): ActiveCall {
   dismissEndedCall(false);
   const value: ActiveCall = {
     account, id, peer, peerLogin, incoming, started: incoming, accepted: false, seq: 0,
-    status: incoming ? 'Входящий звонок' : 'Пробуем связаться…',
+    status: incoming ? 'text_incoming_call_62' : 'text_trying_to_connect_5',
     security: { state: 'establishing' },
     transportRoute: 'unknown',
     video: { allowed: false, requested: false, sending: false, remoteSending: false, canSwitchCamera: false, facing: 'front' },
@@ -3088,7 +3092,7 @@ function createCall(account: Account, id: string, peer: string, peerLogin: strin
     (type, payload) => { if (current === value) connections.get(account.id)!.send(id, type, payload); },
     status => {
       if (current !== value) return;
-      if (status === 'Разговор') markCallConnected(value);
+      if (status === 'web_in_call_73') markCallConnected(value);
       else value.status = status;
       renderCall();
     },
@@ -3123,7 +3127,7 @@ function createCall(account: Account, id: string, peer: string, peerLogin: strin
 
 function markCallConnected(call: ActiveCall): void {
   call.accepted = true;
-  call.status = 'Разговор';
+  call.status = 'web_in_call_73';
   call.connectedAt ??= Date.now();
   clearTimeout(call.expiry);
   startCallTicker();
@@ -3168,7 +3172,7 @@ function endedSnapshot(call: ActiveCall, status: string, explanation = ''): Ende
     accountId: call.account.id,
     peer: call.peer || 'TiniTalk',
     peerLogin: call.peerLogin || call.peer,
-    status: detail ? 'Звонок завершён' : status,
+    status: detail ? t('text_call_ended_93') : status,
     detail,
     explanation,
   };
@@ -3204,17 +3208,17 @@ function finishCurrentCall(status: string, keepTerminal = false, explanation = '
 function callToneState(call: ActiveCall, endReason?: CallToneEndReason): CallToneState {
   const direction = call.incoming ? 'incoming' : 'outgoing';
   if (endReason) return { direction, phase: 'ended', connected: Boolean(call.connectedAt), endReason };
-  if (call.connectedAt) return { direction, phase: 'active', connected: true, reconnecting: call.status === 'Восстанавливаем связь…' };
+  if (call.connectedAt) return { direction, phase: 'active', connected: true, reconnecting: call.status === 'text_reconnecting_131' };
   if (call.accepted || call.answering) return { direction, phase: 'active', connected: false };
-  if (!call.incoming && call.status === 'Ждём ответа…') return { direction, phase: 'ringing', connected: false };
+  if (!call.incoming && call.status === 'text_waiting_for_an_answer_4') return { direction, phase: 'ringing', connected: false };
   return { direction, phase: call.incoming ? 'ringing' : 'connecting', connected: false, expiresAt: call.incomingExpiresAt };
 }
 
 function inferredCallEndReason(call: ActiveCall, status: string): CallToneEndReason {
   if (call.connectedAt) return 'remote_hangup';
-  if (status === 'Занято') return 'busy';
-  if (status === 'Звонок отклонён') return 'rejected';
-  if (status === 'Нет ответа') return 'timed_out';
+  if (status === t('text_busy_91')) return 'busy';
+  if (status === t('text_call_declined_193')) return 'rejected';
+  if (status === t('text_no_answer_194')) return 'timed_out';
   return call.incoming ? 'remote_hangup' : 'cancelled';
 }
 
@@ -3234,17 +3238,17 @@ function signalFailureToneReason(error: Error): CallToneEndReason {
 }
 
 function terminalStatus(call: ActiveCall, type: string): string {
-  if (call.connectedAt) return 'Звонок завершён';
-  if (type === 'call.busy') return 'Занято';
-  if (type === 'call.reject') return call.incoming ? 'Звонок завершён' : 'Звонок отклонён';
-  if (type === 'call.expire') return call.incoming ? 'Звонок завершён' : 'Нет ответа';
-  return 'Звонок завершён';
+  if (call.connectedAt) return t('text_call_ended_93');
+  if (type === 'call.busy') return t('text_busy_91');
+  if (type === 'call.reject') return call.incoming ? t('text_call_ended_93') : t('text_call_declined_193');
+  if (type === 'call.expire') return call.incoming ? t('text_call_ended_93') : t('text_no_answer_194');
+  return t('text_call_ended_93');
 }
 
 async function outgoing(account: Account, contact: Contact): Promise<void> {
-  if (removingAccounts.has(account) || !list.includes(account)) throw new Error('Аккаунт отключается.');
+  if (removingAccounts.has(account) || !list.includes(account)) throw new Error(t('web_disconnecting_account_74'));
   if (account.sessionReplaced) { navigate({ name: 'login', accountId: account.id }); return; }
-  if (current) throw new Error('Сначала завершите текущий звонок.');
+  if (current) throw new Error(t('text_end_the_current_call_first_207'));
   const call = createCall(account, crypto.randomUUID(), contactDisplayName(contact), contact.login, false);
   current = call;
   renderCall();
@@ -3262,7 +3266,7 @@ async function outgoing(account: Account, contact: Contact): Promise<void> {
       const connection = connections.get(account.id)!;
       connection.clearCall(call.id);
       connection.send(call.id, 'call.cancel');
-      finishCurrentCall('Нет ответа', true, '', 'timed_out');
+      finishCurrentCall(t('text_no_answer_194'), true, '', 'timed_out');
     }, 47000);
   } catch (error) {
     if (current === call) {
@@ -3287,7 +3291,7 @@ async function accept(): Promise<void> {
     if (current !== call) return;
     call.accepted = true;
     clearTimeout(call.expiry);
-    call.status = 'Соединяемся…';
+    call.status = 'text_connecting_130';
     connections.get(call.account.id)!.send(call.id, 'call.accept', { supports_video: true, supports_call_sas: true });
     void closeCallNotification(call.account.id, call.id, base).catch(() => undefined);
     renderCall();
@@ -3305,7 +3309,7 @@ function hangup(endReason?: CallToneEndReason): void {
   const connection = connections.get(call.account.id)!;
   connection.clearCall(call.id);
   connection.send(call.id, call.accepted ? 'call.end' : call.incoming ? 'call.reject' : 'call.cancel');
-  finishCurrentCall('Звонок завершён', true, '', endReason ?? (call.connectedAt ? 'local_hangup' : 'cancelled'));
+  finishCurrentCall(t('text_call_ended_93'), true, '', endReason ?? (call.connectedAt ? 'local_hangup' : 'cancelled'));
 }
 
 function rejectWithReply(code: CallReplyCode): void {
@@ -3314,7 +3318,7 @@ function rejectWithReply(code: CallReplyCode): void {
   const connection = connections.get(call.account.id)!;
   connection.clearCall(call.id);
   connection.send(call.id, 'call.reject', { reply_code: code });
-  finishCurrentCall('Звонок завершён', true, '', 'rejected');
+  finishCurrentCall(t('text_call_ended_93'), true, '', 'rejected');
 }
 
 function endLocal(keepTerminal = false): void {
@@ -3397,7 +3401,7 @@ function applyVideoControlsVisibility(): void {
 }
 
 function audioRecoveryButton(call: ActiveCall): HTMLButtonElement {
-  const button = element('button', 'primary call-audio-retry', 'Включить звук');
+  const button = element('button', 'primary call-audio-retry', t('web_enable_sound_75'));
   button.type = 'button';
   button.onclick = () => {
     if (current !== call) return;
@@ -3453,28 +3457,28 @@ function renderCall(): void {
     view.append(duration);
     view.append(securityPanel(call.security));
   } else if (call.accepted) {
-    view.append(element('p', 'call-detail', call.status));
+    view.append(element('p', 'call-detail', t(call.status)));
   }
   const actions = element('div', `call-actions ${incomingPending ? 'incoming-actions' : ''}`);
   if (incomingPending) {
-    actions.append(incomingCallAction('Ответить', 'answer', accept));
-    actions.append(incomingCallAction('Отклонить', 'end', hangup, true));
+    actions.append(incomingCallAction(t('text_answer_64'), 'answer', accept));
+    actions.append(incomingCallAction(t('text_decline_63'), 'end', hangup, true));
     view.append(element('span', 'call-spacer'), actions, incomingReplySheet());
   } else {
     if (!call.incoming && !call.accepted) {
-      actions.append(roundCallAction('Камера', 'videoCamera', 'disabled', () => undefined, true));
+      actions.append(roundCallAction(t('text_camera_175'), 'videoCamera', 'disabled', () => undefined, true));
     } else {
       const cameraDisabled = !call.video.allowed;
-      actions.append(roundCallAction('Камера', 'videoCamera', call.video.requested ? 'camera-active' : cameraDisabled ? 'disabled' : 'neutral', () => toggleCamera(call), cameraDisabled));
+      actions.append(roundCallAction(t('text_camera_175'), 'videoCamera', call.video.requested ? 'camera-active' : cameraDisabled ? 'disabled' : 'neutral', () => toggleCamera(call), cameraDisabled));
     }
-    if (audioOutputSelectionSupported()) actions.append(roundCallAction('Звук', 'volume', 'neutral', toggleAudioOutput));
-    actions.append(roundCallAction('Микрофон', microphoneControlIcon(call.muted), call.muted ? 'active' : 'neutral', () => {
+    if (audioOutputSelectionSupported()) actions.append(roundCallAction(t('text_audio_181'), 'volume', 'neutral', toggleAudioOutput));
+    actions.append(roundCallAction(t('text_microphone_178'), microphoneControlIcon(call.muted), call.muted ? 'active' : 'neutral', () => {
       call.muted = !call.muted;
       call.media.mute(call.muted);
       renderCall();
     }));
-    actions.append(roundCallAction(call.accepted ? 'Завершить' : 'Отменить', 'call', 'end rotated', hangup));
-    if (call.video.failure) view.append(element('p', 'call-video-warning', 'Не удалось включить камеру'));
+    actions.append(roundCallAction(call.accepted ? t('text_end_call_98') : t('text_undo_196'), 'call', 'end rotated', hangup));
+    if (call.video.failure) view.append(element('p', 'call-video-warning', t('text_could_not_turn_on_the_camera_172')));
     view.append(element('span', 'call-spacer'), actions);
   }
   callContent.append(view);
@@ -3521,35 +3525,35 @@ function videoCallScreen(call: ActiveCall): HTMLElement {
   }
 
   const controls = element('div', 'video-controls');
-  if (call.video.failure && !call.video.sending) controls.append(element('p', 'call-video-warning', 'Не удалось включить камеру'));
+  if (call.video.failure && !call.video.sending) controls.append(element('p', 'call-video-warning', t('text_could_not_turn_on_the_camera_172')));
   const actions = element('div', 'call-actions video-actions');
   if (call.video.sending && call.video.canSwitchCamera) {
-    actions.append(roundCallAction('Повернуть', 'switchCamera', 'neutral', () => {
+    actions.append(roundCallAction(t('text_rotate_173'), 'switchCamera', 'neutral', () => {
       restartVideoControlsAutoHide(call);
       return switchCamera(call);
     }));
   }
-  actions.append(roundCallAction('Камера', 'videoCamera', call.video.requested ? 'camera-active' : 'neutral', () => {
+  actions.append(roundCallAction(t('text_camera_175'), 'videoCamera', call.video.requested ? 'camera-active' : 'neutral', () => {
     restartVideoControlsAutoHide(call);
     return toggleCamera(call);
   }));
   if (audioOutputSelectionSupported()) {
-    actions.append(roundCallAction('Звук', 'volume', 'neutral', () => {
+    actions.append(roundCallAction(t('text_audio_181'), 'volume', 'neutral', () => {
       restartVideoControlsAutoHide(call);
       return toggleAudioOutput();
     }));
   }
-  actions.append(roundCallAction('Микрофон', microphoneControlIcon(call.muted), call.muted ? 'active' : 'neutral', () => {
+  actions.append(roundCallAction(t('text_microphone_178'), microphoneControlIcon(call.muted), call.muted ? 'active' : 'neutral', () => {
     restartVideoControlsAutoHide(call);
     call.muted = !call.muted;
     call.media.mute(call.muted);
     renderCall();
   }));
-  actions.append(roundCallAction('Завершить', 'call', 'end rotated', () => {
+  actions.append(roundCallAction(t('text_end_call_98'), 'call', 'end rotated', () => {
     restartVideoControlsAutoHide(call);
     hangup();
   }));
-  if (audioOutputSelectionSupported()) controls.append(element('p', 'video-route-label', `Звук: ${currentAudioOutputLabel()}`));
+  if (audioOutputSelectionSupported()) controls.append(element('p', 'video-route-label', t('text_audio_value_166', currentAudioOutputLabel())));
   controls.append(actions);
   view.append(stage, controls);
   return view;
@@ -3704,8 +3708,8 @@ function endedCallScreen(call: EndedCall): HTMLElement {
 }
 
 function callStatusText(call: ActiveCall): string {
-  if (call.connectedAt && call.status === 'Разговор') return 'Идёт разговор';
-  return call.accepted ? call.status : call.incoming ? 'Входящий звонок' : call.status;
+  if (call.connectedAt && call.status === 'web_in_call_73') return t('text_in_a_call_133');
+  return call.accepted ? t(call.status) : call.incoming ? t('text_incoming_call_62') : t(call.status);
 }
 
 function callDurationText(durationMs: number): string {
@@ -3722,7 +3726,7 @@ function transportRouteIndicator(route: CallTransportRoute): HTMLElement {
   const box = element('span', `call-route ${route}`);
   if (route === 'unknown') return box;
   box.setAttribute('role', 'img');
-  box.ariaLabel = route === 'turn' ? 'Соединение через TURN' : 'Прямое соединение';
+  box.ariaLabel = route === 'turn' ? t('text_connection_via_turn_168') : t('text_direct_connection_167');
   box.append(routePhoneIcon(), routeArrowIcon());
   if (route === 'turn') box.append(routeServerIcon(), routeArrowIcon());
   box.append(routePhoneIcon());
@@ -3754,13 +3758,13 @@ function securityPanel(security: CallSecurityState): HTMLElement {
   if (security.state === 'ready') {
     const emoji = securityEmoji(security.code).join(' ');
     panel.textContent = emoji;
-    panel.ariaLabel = "\u041a\u043e\u0434 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u0438: " + emoji;
+    panel.ariaLabel = t('web_security_code_76') + emoji;
   } else if (security.state === 'failed') {
-    panel.textContent = "\u0421\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e";
+    panel.textContent = t('text_connection_is_not_secure_142');
   } else if (security.state === 'unavailable') {
-    panel.textContent = "\u041d\u0435 \u0443\u0434\u0430\u0451\u0442\u0441\u044f \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u044f";
+    panel.textContent = t('text_cannot_verify_connection_security_140');
   } else {
-    panel.textContent = "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u044f\u2026";
+    panel.textContent = t('text_checking_connection_security_141');
   }
   panel.onclick = () => securityDialog(security);
   return panel;
@@ -3769,46 +3773,46 @@ function securityPanel(security: CallSecurityState): HTMLElement {
 function securityDialog(security: CallSecurityState): void {
   const modal = dialog(securityDetailsTitle(security));
   modal.body.append(element('p', '', securityDetailsText(security)));
-  modal.actions.append(actionButton("\u041f\u043e\u043d\u044f\u0442\u043d\u043e", () => closeDialog(modal), 'primary'));
+  modal.actions.append(actionButton(t('text_ok_61'), () => closeDialog(modal), 'primary'));
 }
 
 function securityDetailsTitle(security: CallSecurityState): string {
-  if (security.state === 'ready') return "\u041a\u043e\u0434 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u0438";
-  if (security.state === 'unavailable') return "\u041d\u0435 \u0443\u0434\u0430\u0451\u0442\u0441\u044f \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c";
-  if (security.state === 'failed') return "\u0421\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e";
-  return "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u044f";
+  if (security.state === 'ready') return t('text_security_code_146');
+  if (security.state === 'unavailable') return t('text_cannot_verify_security_147');
+  if (security.state === 'failed') return t('text_connection_is_not_secure_142');
+  return t('text_checking_connection_security_145');
 }
 
 function securityDetailsText(security: CallSecurityState): string {
   if (security.state === 'ready') {
-    return "\u0421\u0440\u0430\u0432\u043d\u0438\u0442\u0435 \u0432\u0441\u0435 5 \u044d\u043c\u043e\u0434\u0437\u0438 \u0441 \u0441\u043e\u0431\u0435\u0441\u0435\u0434\u043d\u0438\u043a\u043e\u043c. \u0415\u0441\u043b\u0438 \u043e\u043d\u0438 \u0441\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442, \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u0437\u0430\u0449\u0438\u0449\u0435\u043d\u043e. \u0415\u0441\u043b\u0438 \u043e\u0442\u043b\u0438\u0447\u0430\u0435\u0442\u0441\u044f \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u0438\u043d \u044d\u043c\u043e\u0434\u0437\u0438, \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0437\u0432\u043e\u043d\u043e\u043a.";
+    return t('web_compare_all_5_emoji_with_the_other_person_if_they_match_the_conne_77');
   }
   if (security.state === 'unavailable') {
     return securityUnavailableText(security.reason);
   }
   if (security.state === 'failed') {
-    return securityFailureText(security.reason) + "\n\n\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0437\u0432\u043e\u043d\u043e\u043a \u0438 \u043d\u0435 \u0441\u043e\u043e\u0431\u0449\u0430\u0439\u0442\u0435 \u043a\u043e\u043d\u0444\u0438\u0434\u0435\u043d\u0446\u0438\u0430\u043b\u044c\u043d\u044b\u0435 \u0434\u0430\u043d\u043d\u044b\u0435.";
+    return securityFailureText(security.reason) + t('text_n_nend_the_call_and_do_not_share_confidential_information_153');
   }
-  return "\u0422\u0435\u043b\u0435\u0444\u043e\u043d\u044b \u043e\u0431\u043c\u0435\u043d\u0438\u0432\u0430\u044e\u0442\u0441\u044f \u0432\u0440\u0435\u043c\u0435\u043d\u043d\u044b\u043c\u0438 \u043a\u043b\u044e\u0447\u0430\u043c\u0438 \u0438 \u043f\u0440\u043e\u0432\u0435\u0440\u044f\u044e\u0442 \u0441\u0435\u0440\u0442\u0438\u0444\u0438\u043a\u0430\u0442\u044b WebRTC.";
+  return t('text_the_phones_exchange_temporary_keys_and_verify_webrtc_certificates_148');
 }
 
 function securityUnavailableText(reason: CallSecurityUnavailableReason): string {
-  if (reason === 'server_unsupported') return "\u0421\u0435\u0440\u0432\u0435\u0440 TiniTalk \u0443\u0441\u0442\u0430\u0440\u0435\u043b. \u041f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u043d\u0435 \u043c\u043e\u0436\u0435\u0442 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c \u044d\u0442\u043e\u0433\u043e \u0437\u0432\u043e\u043d\u043a\u0430.";
-  return "\u041f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0441\u043e\u0431\u0435\u0441\u0435\u0434\u043d\u0438\u043a\u0430 \u0443\u0441\u0442\u0430\u0440\u0435\u043b\u043e. \u0411\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c \u044d\u0442\u043e\u0433\u043e \u0437\u0432\u043e\u043d\u043a\u0430 \u043d\u0435\u043b\u044c\u0437\u044f \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c.";
+  if (reason === 'server_unsupported') return t('text_the_tinitalk_server_is_out_of_date_the_app_cannot_verify_the_secu_151');
+  return t('text_the_other_person_s_app_is_out_of_date_the_security_of_this_call_c_152');
 }
 
 function securityFailureText(reason: CallSecurityFailureReason): string {
   switch (reason) {
-    case 'exchange_timeout': return "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u0438 \u043d\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u0430\u0441\u044c \u0432 \u043e\u0442\u0432\u0435\u0434\u0451\u043d\u043d\u043e\u0435 \u0432\u0440\u0435\u043c\u044f. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
-    case 'transport_timeout': return "\u0417\u0430\u0449\u0438\u0449\u0451\u043d\u043d\u043e\u0435 \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043d\u0435 \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u043b\u043e\u0441\u044c \u0432 \u043e\u0442\u0432\u0435\u0434\u0451\u043d\u043d\u043e\u0435 \u0432\u0440\u0435\u043c\u044f. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
-    case 'transport_failed': return "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u0437\u0430\u0449\u0438\u0449\u0451\u043d\u043d\u043e\u0435 \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
-    case 'unexpected_message': return "\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438 \u043f\u0440\u0438\u0448\u043b\u0438 \u0432 \u043d\u0435\u043f\u0440\u0430\u0432\u0438\u043b\u044c\u043d\u043e\u043c \u043f\u043e\u0440\u044f\u0434\u043a\u0435 \u0438\u043b\u0438 \u0431\u044b\u043b\u0438 \u043f\u043e\u0432\u0440\u0435\u0436\u0434\u0435\u043d\u044b. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
-    case 'invalid_fingerprint': return "\u0421\u0435\u0440\u0442\u0438\u0444\u0438\u043a\u0430\u0442 \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u044f \u0441\u043e\u0434\u0435\u0440\u0436\u0438\u0442 \u043e\u0448\u0438\u0431\u043a\u0443. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
-    case 'fingerprint_mismatch': return "\u0421\u0435\u0440\u0442\u0438\u0444\u0438\u043a\u0430\u0442 \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u044f \u043d\u0435 \u0441\u043e\u0432\u043f\u0430\u043b \u0441 \u0434\u0430\u043d\u043d\u044b\u043c\u0438 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
-    case 'commitment_mismatch': return "\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0438\u0441\u044c \u043f\u043e\u0441\u043b\u0435 \u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0432\u043e\u043d\u043a\u0430. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
-    case 'fingerprint_changed': return "\u0421\u0435\u0440\u0442\u0438\u0444\u0438\u043a\u0430\u0442 \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u044f \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f \u0432\u043e \u0432\u0440\u0435\u043c\u044f \u0437\u0432\u043e\u043d\u043a\u0430. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
-    case 'invalid_public_key': return "\u041f\u043e\u043b\u0443\u0447\u0435\u043d \u043d\u0435\u043f\u0440\u0430\u0432\u0438\u043b\u044c\u043d\u044b\u0439 \u043a\u043b\u044e\u0447 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u0438. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
-    case 'internal_error': return "\u041f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u0438. \u0417\u0432\u043e\u043d\u043e\u043a \u043d\u0435\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u0435\u043d.";
+    case 'exchange_timeout': return t('text_the_security_check_timed_out_the_call_is_not_secure_154');
+    case 'transport_timeout': return t('text_a_secure_connection_was_not_established_in_time_the_call_is_not_s_155');
+    case 'transport_failed': return t('text_could_not_establish_a_secure_connection_the_call_is_not_secure_156');
+    case 'unexpected_message': return t('text_verification_data_arrived_out_of_order_or_was_corrupted_the_call__157');
+    case 'invalid_fingerprint': return t('text_the_connection_certificate_is_invalid_the_call_is_not_secure_158');
+    case 'fingerprint_mismatch': return t('text_the_connection_certificate_does_not_match_the_verification_data_t_159');
+    case 'commitment_mismatch': return t('text_verification_data_changed_after_the_call_started_the_call_is_not__160');
+    case 'fingerprint_changed': return t('text_the_connection_certificate_changed_during_the_call_the_call_is_no_161');
+    case 'invalid_public_key': return t('text_an_invalid_security_key_was_received_the_call_is_not_secure_162');
+    case 'internal_error': return t('text_the_security_check_failed_the_call_is_not_secure_163');
   }
 }
 
@@ -3993,10 +3997,10 @@ function incomingReplySheet(): HTMLElement {
   }
 
   scrim.type = 'button';
-  scrim.setAttribute('aria-label', 'Закрыть варианты ответа');
+  scrim.setAttribute('aria-label', t('call_reply_close'));
   scrim.onclick = close;
   handle.type = 'button';
-  handle.append(element('span', 'incoming-reply-grip'), element('span', '', 'Ответить сообщением'));
+  handle.append(element('span', 'incoming-reply-grip'), element('span', '', t('call_reply_sheet_title')));
   handle.onclick = event => {
     if (suppressClick) {
       event.preventDefault();
@@ -4039,12 +4043,12 @@ function incomingReplySheet(): HTMLElement {
     settle(openState);
   };
 
-  for (const [index, reply] of callReplies.entries()) {
+  for (const [index, reply] of callReplies().entries()) {
     const row = element('button', 'incoming-reply-option', reply.text);
     row.type = 'button';
     row.onclick = () => rejectWithReply(reply.code);
     listBox.append(row);
-    if (index < callReplies.length - 1) listBox.append(element('span', 'incoming-reply-divider'));
+    if (index < callReplies().length - 1) listBox.append(element('span', 'incoming-reply-divider'));
   }
 
   panel.append(listBox);
@@ -4067,13 +4071,13 @@ async function receive(account: Account, event: SignalEvent): Promise<void> {
     if (Date.now() > event.sent_at + 45000) return;
     const login = String(event.payload.caller_login || '');
     const contact = contactsByAccount.get(account.id)?.find(item => item.login === login);
-    current = createCall(account, event.call_id, contact ? contactDisplayName(contact) : login || 'Входящий звонок', login, true);
+    current = createCall(account, event.call_id, contact ? contactDisplayName(contact) : login || t('text_incoming_call_62'), login, true);
     const call = current;
     call.incomingExpiresAt = event.sent_at + 45000;
     call.expiry = setTimeout(() => {
       if (current !== call || call.accepted) return;
       connections.get(account.id)?.clearCall(call.id);
-      finishCurrentCall('Звонок завершён', true, '', 'timed_out');
+      finishCurrentCall(t('text_call_ended_93'), true, '', 'timed_out');
     }, Math.max(0, event.sent_at + 45000 - Date.now()));
     const notificationAction = takePendingNotificationAction(account.id, call.id);
     connections.get(account.id)!.send(call.id, 'call.ringing');
@@ -4100,7 +4104,7 @@ async function receive(account: Account, event: SignalEvent): Promise<void> {
   if (event.type === 'call.accept') {
     call.accepted = true;
     clearTimeout(call.expiry);
-    call.status = 'Соединяемся…';
+    call.status = 'text_connecting_130';
     renderCall();
   }
   if (event.type === 'call.connected') {
@@ -4108,7 +4112,7 @@ async function receive(account: Account, event: SignalEvent): Promise<void> {
     renderCall();
   }
   if (event.type === 'call.ringing') {
-    call.status = 'Ждём ответа…';
+    call.status = 'text_waiting_for_an_answer_4';
     renderCall();
   }
   if (event.type.startsWith('rtc.')) await call.media.receive(event);
@@ -4127,7 +4131,7 @@ async function syncPushCall(accountId: string, callId: string): Promise<void> {
   if (current && !matchesIncoming()) return;
   const state = await notificationCallState(account, callId);
   if (state === 'ended') {
-    if (matchesIncoming()) finishCurrentCall('Звонок завершён', false, '', 'cancelled');
+    if (matchesIncoming()) finishCurrentCall(t('text_call_ended_93'), false, '', 'cancelled');
   } else if (state === 'incoming' && !current) {
     const connection = connections.get(accountId);
     if (!connection) return;
@@ -4162,14 +4166,14 @@ async function openCall(accountId: string, callId: string, action?: Notification
 async function restoreNotificationCall(accountId: string, callId: string, action?: NotificationCallAction): Promise<boolean | void> {
   const account = list.find(item => item.id === accountId);
   if (!account) {
-    notice('Эта учётка больше не добавлена.');
+    notice(t('web_this_account_has_been_removed_78'));
     return;
   }
   if (account.sessionReplaced) { navigate({ name: 'login', accountId: account.id }); return; }
   replaceRoute({ name: 'home' });
   if (current) {
     if (current.account.id !== accountId || current.id !== callId) {
-      notice('Сначала завершите текущий звонок.');
+      notice(t('text_end_the_current_call_first_207'));
       return;
     }
     const requested = takePendingNotificationAction(accountId, callId) ?? action;
@@ -4181,13 +4185,13 @@ async function restoreNotificationCall(accountId: string, callId: string, action
   }
   const record = await readPush(callKey(accountId, callId)).catch(() => undefined);
   if (record && !canOpenIncoming(record, account)) {
-    notice('Звонок уже завершён или принят на другом устройстве.');
+    notice(t('web_the_call_has_already_ended_or_was_answered_on_another_device_79'));
     return;
   }
   // A declarative fallback can be opened without a local inbox record, and an
   // Apple notification can outlive the ringing call. Verify it with its server.
   if (!await isActiveNotificationCall(account, callId)) {
-    notice('Звонок уже завершён или принят на другом устройстве.');
+    notice(t('web_the_call_has_already_ended_or_was_answered_on_another_device_79'));
     return;
   }
   const resumed = current as ActiveCall | null; // Signaling may have resumed it during the HTTP await.
@@ -4271,7 +4275,7 @@ function startAppClient(): void {
     applyPopstate(event.state);
   });
   window.addEventListener('hashchange', () => { void openHash().catch(failure); });
-  window.addEventListener('online', () => { for (const account of list) connectAndResume(account); });
+  window.addEventListener('online', () => { for (const account of list) connectAndResume(account); syncNotificationLanguages(); });
   window.addEventListener('pagehide', () => incomingVisibility.suspend());
   window.addEventListener('pageshow', () => incomingVisibility.resume());
   document.addEventListener('freeze', () => incomingVisibility.suspend());
@@ -4284,6 +4288,7 @@ function startAppClient(): void {
     else incomingVisibility.resume();
     if (!document.hidden) {
       callTones.resumeOnForeground();
+      syncNotificationLanguages();
       if (route.name === 'about' && !updatingApp) void checkAppUpdates();
       for (const account of list) connectAndResume(account);
       if (list.length) void refreshAll(false).catch(() => undefined);
@@ -4294,7 +4299,7 @@ function startAppClient(): void {
   if (navigator.locks) {
     void navigator.locks.request('tinitalk-pwa-client', { ifAvailable: true }, async lock => {
       if (!lock) {
-        notice('TiniTalk уже открыт в другом окне. Используйте его или закройте и обновите эту страницу.');
+        notice(t('web_tinitalk_is_already_open_in_another_window_use_it_or_close_it_and_80'));
         screen.hidden = true;
         return;
       }
@@ -4306,4 +4311,67 @@ function startAppClient(): void {
   }
 }
 
-if (!showInstallationScreen(root, base)) startAppClient();
+function languageButton(): HTMLElement {
+  const selected = languages.find(language => language.tag === selectedLanguage());
+  const button = actionButton('', showLanguagePicker, 'language-setting');
+  const current = element('span', 'language-current', selected?.name || systemLanguageLabel());
+  button.append(element('span', 'language-label', t('language_title')), current);
+  return button;
+}
+
+function systemLanguageLabel(): string {
+  return translate(resolveLanguage(browserLanguages().slice(0, 1)), 'language_system');
+}
+
+function showLanguagePicker(): void {
+  const modal = dialog(t('language_title'));
+  modal.body.classList.add('language-options');
+  modal.body.setAttribute('role', 'radiogroup');
+  modal.body.setAttribute('aria-label', t('language_title'));
+  const collator = new Intl.Collator(browserLanguages()[0] || 'en');
+  const choices = [{ tag: '' as const, name: systemLanguageLabel(), flag: 'system' },
+    ...[...languages].sort((a, b) => collator.compare(a.name, b.name))];
+  for (const choice of choices) {
+    const active = choice.tag === selectedLanguage();
+    const button = actionButton('', async () => {
+      await closeDialog(modal, 'remove');
+      await selectLanguage(choice.tag);
+    }, `language-option${active ? ' selected' : ''}`);
+    button.setAttribute('role', 'radio');
+    button.setAttribute('aria-checked', String(active));
+    const flag = element('span', `language-flag flag-${choice.flag}`);
+    flag.setAttribute('aria-hidden', 'true');
+    if (!choice.tag) flag.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2H17Q19 2 19 4V20Q19 22 17 22H7Q5 22 5 20V4Q5 2 7 2ZM10 18H14"/></svg>';
+    const name = element('span', 'language-name', choice.name);
+    name.lang = choice.tag || resolveLanguage(browserLanguages().slice(0, 1));
+    const check = element('span', 'language-check');
+    if (active) check.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12L10 17L19 7"/></svg>';
+    check.setAttribute('aria-hidden', 'true');
+    button.append(flag, name, check);
+    modal.body.append(button);
+  }
+  modal.actions.append(actionButton(t('text_cancel_12'), modal.close, 'text-action'));
+}
+
+let displayLanguage = currentLanguage();
+function syncNotificationLanguages(): void {
+  for (const account of list) {
+    if (removingAccounts.has(account) || rotatingCredentials.has(account)) continue;
+    // Retry after reconnect/foreground; do not interrupt calls with background errors.
+    void syncPushLanguage(account, base).catch(() => undefined);
+  }
+}
+let appStarted = false;
+onLanguageChange(() => {
+  if (!appStarted) return;
+  syncNotificationLanguages();
+  if (endedCall) {
+    endedCall.status = relocalize(endedCall.status, displayLanguage);
+    endedCall.detail = relocalize(endedCall.detail, displayLanguage);
+    endedCall.explanation = relocalize(endedCall.explanation, displayLanguage);
+  }
+  displayLanguage = currentLanguage();
+  delete screen.dataset.viewKey;
+  renderApp();
+});
+if (!showInstallationScreen(root, base)) { appStarted = true; startAppClient(); }

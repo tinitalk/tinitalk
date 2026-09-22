@@ -2,8 +2,33 @@ package webpush
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestSubscriptionLanguagePersistence(t *testing.T) {
+	for _, language := range []string{"", "de", "zh-Hans", "future-language", strings.Repeat("x", 36)} {
+		raw, _ := json.Marshal(map[string]any{"endpoint": "https://web.push.apple.com/token", "client_type": "web", "language": language,
+			"keys": map[string]string{"p256dh": "BEkDdNnpEcD8M4mRGOFJWTDJ4GkDI5Xs3vpIOrAaBZKRCVv6V3sB3CFujTFiD6DHda7W8pCyChJDU205otrbCAw", "auth": "AAAAAAAAAAAAAAAAAAAAAA"}})
+		parsed, canonical, err := ParseSubscription(raw)
+		if len(language) > 35 {
+			if err == nil {
+				t.Fatal("oversized language accepted")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stored Subscription
+		if err = json.Unmarshal([]byte(canonical), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if parsed.Language != language || stored.Language != language {
+			t.Fatal("language lost")
+		}
+	}
+}
 
 func TestBrowserNotificationURLValidationAndPersistence(t *testing.T) {
 	for _, tc := range []struct {

@@ -1,3 +1,4 @@
+import { t, type Message } from './i18n';
 import { OperationError } from './userErrors';
 import { api, APIError } from './api';
 import type { Account, SignalEvent } from './model';
@@ -15,19 +16,19 @@ export class SignalConnection {
   private pending = new Map<string, { event: SignalEvent; expires: number }>();
   private delivery = Promise.resolve();
   private foregroundCallNotifications = false;
-  constructor(public account: Account, private receive: (event: SignalEvent) => Promise<void>, private changed: (status: string) => void, private failed: (error: Error, callId?: string) => void, private resume: () => Resume, private acknowledged: (event: SignalEvent) => void = () => undefined) {}
+  constructor(public account: Account, private receive: (event: SignalEvent) => Promise<void>, private changed: (status: Message) => void, private failed: (error: Error, callId?: string) => void, private resume: () => Resume, private acknowledged: (event: SignalEvent) => void = () => undefined) {}
   get connected(): boolean { return this.socket?.readyState === WebSocket.OPEN; }
   connect(): Promise<void> {
     if (this.connected) return Promise.resolve();
     if (this.opening) return this.opening;
-    if (this.stopped) return Promise.reject(new Error('Подключение отключено. Войдите снова.'));
+    if (this.stopped) return Promise.reject(new Error(t('web_disconnected_sign_in_again_126')));
     clearTimeout(this.timer);
     this.timer = undefined;
     this.opening = this.open().finally(() => { this.opening = undefined; });
     return this.opening;
   }
   private async open(): Promise<void> {
-    this.changed('Подключение…');
+    this.changed('web_connecting_38');
     try {
       const result = await api<{ ticket: string; foreground_call_notifications?: boolean; contact_changes?: boolean }>(this.account, '/api/browser/socket-ticket', 'POST', {});
       if (this.stopped) return;
@@ -39,12 +40,12 @@ export class SignalConnection {
       const socket = new WebSocket(url, ['tinitalk.browser.v1', `ticket.${result.ticket}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => { socket.close(); reject(new OperationError('network', new Error('Сервер не отвечает'))); }, 12000);
+        const timeout = setTimeout(() => { socket.close(); reject(new OperationError('network', new Error(t('web_server_is_not_responding_127')))); }, 12000);
         socket.onopen = () => {
           clearTimeout(timeout);
           if (this.stopped || socket !== this.socket) { socket.close(); resolve(); return; }
           this.attempt = 0;
-          this.changed('На связи');
+          this.changed('web_online_6');
           for (const [id, pending] of this.pending) {
             if (pending.expires <= Date.now()) this.pending.delete(id);
             else socket.send(JSON.stringify(pending.event));
@@ -53,12 +54,12 @@ export class SignalConnection {
           if (active) this.send(active.id, 'call.resume', { last_seq: active.seq });
           resolve();
         };
-        socket.onerror = () => { clearTimeout(timeout); reject(new OperationError('network', new Error('Не удалось подключиться к серверу'))); };
+        socket.onerror = () => { clearTimeout(timeout); reject(new OperationError('network', new Error(t('text_could_not_connect_to_the_server_27')))); };
         socket.onclose = () => {
-          clearTimeout(timeout); reject(new OperationError('network', new Error('Соединение закрыто')));
+          clearTimeout(timeout); reject(new OperationError('network', new Error(t('web_connection_closed_128'))));
           if (socket !== this.socket) return;
           this.socket = undefined;
-          this.changed(this.stopped ? 'Вход завершён' : 'Нет связи');
+          this.changed(this.stopped ? 'web_signed_out_129' : 'web_offline_7');
           this.schedule();
         };
         socket.onmessage = event => {
@@ -75,7 +76,7 @@ export class SignalConnection {
             if (typeof frame.event_id === 'string') this.pending.delete(frame.event_id);
             const code = typeof frame.code === 'string' ? frame.code : undefined;
             const callId = typeof frame.call_id === 'string' ? frame.call_id : undefined;
-            this.failed(new SignalError(code === 'busy' ? 'Абонент занят' : frame.error, code, callId), callId);
+            this.failed(new SignalError(code === 'busy' ? t('web_the_person_is_busy_130') : frame.error, code, callId), callId);
             return;
           }
           if (typeof frame.type !== 'string' || typeof frame.call_id !== 'string' || !frame.payload || typeof frame.payload !== 'object') return;
@@ -83,8 +84,8 @@ export class SignalConnection {
         };
       });
     } catch (error) {
-      if (error instanceof APIError && error.status === 401) { this.stopped = true; this.changed(error.message); this.failed(error); }
-      else { this.changed('Нет связи'); this.schedule(); }
+      if (error instanceof APIError && error.status === 401) { this.stopped = true; this.changed('web_sign_in_again_37'); this.failed(error); }
+      else { this.changed('web_offline_7'); this.schedule(); }
       throw error;
     }
   }
@@ -94,7 +95,7 @@ export class SignalConnection {
   }
   send(callId: string, type: string, payload: Record<string, unknown> = {}): string {
     const event: SignalEvent = { id: crypto.randomUUID(), call_id: callId, type, sent_at: Date.now(), payload };
-    if (this.pending.size >= 256) throw new Error('Слишком много неподтверждённых событий.');
+    if (this.pending.size >= 256) throw new Error(t('web_too_many_unacknowledged_events_131'));
     this.pending.set(event.id, { event, expires: Date.now() + 20000 });
     if (this.connected) this.socket!.send(JSON.stringify(event));
     else void this.connect().catch(() => undefined);

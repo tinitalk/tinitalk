@@ -29,19 +29,20 @@ func webPushPayload(subscription webpush.Subscription, data map[string]string) (
 	}
 	accountID := params.Get("account")
 	callID := data["call_id"]
-	title := "Выполнен вход на другом устройстве"
-	body := "Откройте TiniTalk, чтобы проверить аккаунт"
+	language, messages := fallbackMessages(subscription.Language)
+	title := messages.Session
+	body := messages.Account
 	tag := accountID + ":session"
 	if data["type"] == "incoming_call" {
 		caller := data["caller"]
 		if caller == "" {
 			caller = data["caller_login"]
 		}
-		title = "📞 Входящий звонок"
+		title = messages.Incoming
 		if caller != "" {
-			title = "📞 " + caller + " звонит"
+			title = strings.ReplaceAll(messages.Caller, "{0}", caller)
 		}
-		body = "Нажмите, чтобы открыть входящий звонок"
+		body = messages.Open
 		params.Set("call", callID)
 		tag = accountID + ":" + callID
 	}
@@ -50,7 +51,7 @@ func webPushPayload(subscription webpush.Subscription, data map[string]string) (
 		"web_push": 8030,
 		"notification": map[string]any{
 			"title": title, "body": body, "navigate": navigate.String(),
-			"tag": tag, "lang": "ru", "silent": false,
+			"tag": tag, "lang": language, "silent": false,
 			"data": map[string]any{
 				"accountId": accountID, "callId": callID, "sessionId": data["target_session_id"],
 				"tinitalk": data,

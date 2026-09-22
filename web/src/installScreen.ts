@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { installationPageURL, isInstalledPWA, launchContext, type LaunchEnvironment, type RelatedApp } from './installation';
 
 type InstallPrompt = Event & {
@@ -39,7 +40,7 @@ export function showInstallationScreen(root: HTMLElement, base: string): boolean
   logo.src = new URL('icon-192.png', base).href;
   logo.alt = ''; logo.width = 64; logo.height = 64;
   const brandText = element('div');
-  brandText.append(element('h1', '', 'TiniTalk'), element('p', '', 'Звонки для своих'));
+  brandText.append(element('h1', '', 'TiniTalk'), element('p', '', t('text_calls_for_your_circle_288')));
   brand.append(logo, brandText);
 
   const status = element('div', 'install-status');
@@ -48,27 +49,27 @@ export function showInstallationScreen(root: HTMLElement, base: string): boolean
   const description = element('p', 'install-description');
   status.append(title, description);
   const button = element('button', 'primary wide');
-  button.type = 'button'; button.textContent = 'Установить приложение';
+  button.type = 'button'; button.textContent = t('web_install_app_84');
   button.setAttribute('aria-controls', 'install-instructions');
   const instructions = element('section', 'install-instructions');
   instructions.id = 'install-instructions';
   const steps = element('ol');
   const texts = context === 'ios-install' ? [
-    'В меню браузера нажмите «Поделиться».',
-    'Выберите «На экран Домой».',
-    'Если есть переключатель «Открывать как веб-приложение», оставьте его включённым. Нажмите «Добавить».',
-    'Откройте TiniTalk значком на главном экране.',
+    t('web_tap_share_in_the_browser_menu_85'),
+    t('web_choose_add_to_home_screen_86'),
+    t('web_if_there_is_an_open_as_web_app_switch_leave_it_on_tap_add_87'),
+    t('web_open_tinitalk_using_its_home_screen_icon_88'),
   ] : [
-    'Откройте меню браузера ⋮.',
-    'Выберите «Установить приложение» или «Добавить на главный экран».',
-    'Подтвердите установку и откройте TiniTalk значком на главном экране.',
+    t('web_open_the_browser_menu_89'),
+    t('web_choose_install_app_or_add_to_home_screen_90'),
+    t('web_confirm_installation_and_open_tinitalk_using_its_home_screen_icon_91'),
   ];
   steps.append(...texts.map(text => element('li', '', text)));
-  instructions.append(element('h3', '', 'Как установить'), steps,
+  instructions.append(element('h3', '', t('web_how_to_install_92')), steps,
     element('p', 'install-help', context === 'ios-install'
-      ? 'Если такого пункта нет, откройте этот сайт в Safari. Во встроенном браузере мессенджера установка может быть недоступна.'
-      : 'Если такого пункта нет, откройте этот сайт в Chrome. Во встроенном браузере мессенджера установка может быть недоступна.'));
-  const existing = element('p', 'install-existing', 'Уже установили? Откройте TiniTalk значком на главном экране.');
+      ? t('web_if_this_option_is_missing_open_this_site_in_safari_installation_m_93')
+      : t('web_if_this_option_is_missing_open_this_site_in_chrome_installation_m_94')));
+  const existing = element('p', 'install-existing', t('web_already_installed_open_tinitalk_using_its_home_screen_icon_95'));
   content.append(brand, status, button, instructions, existing);
   page.append(content); root.replaceChildren(page);
 
@@ -77,9 +78,9 @@ export function showInstallationScreen(root: HTMLElement, base: string): boolean
   let prompting = false;
   let detection = 0;
   function render(): void {
-    title.textContent = installed ? 'Приложение уже установлено' : 'Установите TiniTalk';
-    description.textContent = installed ? 'Откройте TiniTalk значком на главном экране.'
-      : 'На телефоне TiniTalk работает как приложение. Добавьте его на главный экран, чтобы пользоваться звонками.';
+    title.textContent = installed ? t('web_app_already_installed_96') : t('web_install_tinitalk_97');
+    description.textContent = installed ? t('web_open_tinitalk_using_its_home_screen_icon_88')
+      : t('web_on_phones_tinitalk_works_as_an_app_add_it_to_your_home_screen_to__98');
     button.hidden = installed;
     button.disabled = prompting;
     button.setAttribute('aria-expanded', String(showingInstructions && !installed));

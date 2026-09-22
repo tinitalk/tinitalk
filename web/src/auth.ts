@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { OperationError } from './userErrors';
 import type { Account } from './model';
 
@@ -28,8 +29,8 @@ async function health(server: string): Promise<Health> {
   const response = await request(new URL('/healthz', server), requestOptions());
   if (!response.ok) throw new AuthError(response.status, 'auth_busy');
   const result = await response.json().catch(() => { throw new AuthError(503, 'auth_busy'); }) as Health;
-  if (result.service !== 'tinitalk' || result.status !== 'ok') throw new Error('По этому адресу нет сервера TiniTalk.');
-  if (!result.features?.includes('browser_v1')) throw new Error('Этот сервер нужно обновить для подключения PWA.');
+  if (result.service !== 'tinitalk' || result.status !== 'ok') throw new Error(t('text_no_tinitalk_server_at_this_address_284'));
+  if (!result.features?.includes('browser_v1')) throw new Error(t('web_update_this_server_to_connect_the_web_app_4'));
   return result;
 }
 
@@ -99,18 +100,18 @@ export async function logout(account: Account): Promise<void> {
 
 export function personalPasswordError(password: string): string | undefined {
   const length = Array.from(password).length;
-  if (length < 8) return 'Пароль должен содержать не меньше 8 символов.';
-  if (length > 128) return 'Пароль должен содержать не больше 128 символов.';
+  if (length < 8) return t('web_the_password_must_contain_at_least_8_characters_81');
+  if (length > 128) return t('web_the_password_must_contain_no_more_than_128_characters_82');
   return undefined;
 }
 
 export function authErrorMessage(code: AuthErrorCode, retryAfterSeconds?: number): string {
   switch (code) {
-    case 'invalid_credentials': return 'Неверный логин или пароль.';
-    case 'temporary_password_expired': return 'Срок действия пароля истёк. Попросите администратора выдать новый.';
-    case 'temporary_password_locked': return 'Слишком много неверных попыток. Попросите администратора выдать новый пароль.';
-    case 'password_retry_later': return `Слишком много попыток. Повторите через ${retryAfterSeconds ?? 1} сек.`;
-    case 'invalid_password': return 'Пароль должен содержать от 8 до 128 символов.';
-    case 'auth_busy': return 'Сервер занят. Попробуйте чуть позже.';
+    case 'invalid_credentials': return t('text_incorrect_username_or_password_21');
+    case 'temporary_password_expired': return t('text_password_expired_ask_your_administrator_for_a_new_one_311');
+    case 'temporary_password_locked': return t('text_too_many_incorrect_attempts_ask_your_administrator_for_a_new_pass_312');
+    case 'password_retry_later': return t('web_too_many_attempts_try_again_in_value_seconds_83', retryAfterSeconds ?? 1);
+    case 'invalid_password': return t('text_password_must_contain_8_to_128_characters_309');
+    case 'auth_busy': return t('text_the_server_is_busy_try_again_later_315');
   }
 }

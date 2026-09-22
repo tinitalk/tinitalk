@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { afterEach, expect, it, vi } from 'vitest';
 import { closeCallNotification, disablePush, enablePush, isActiveNotificationCall, notificationCallState, requestPushPermission, updatePushWorker } from './push';
 import { accountScope, type Account, type PushRecord } from './model';
@@ -205,7 +206,7 @@ it('does not ask again when the user has already blocked notifications', async (
   vi.stubGlobal('window', { PushManager: {}, Notification: {} });
   vi.stubGlobal('navigator', { serviceWorker: {} });
   vi.stubGlobal('Notification', { permission: 'denied', requestPermission });
-  await expect(enablePush(ringingOwner, 'https://web.example/')).rejects.toThrow('Уведомления не разрешены');
+  await expect(enablePush(ringingOwner, 'https://web.example/')).rejects.toThrow(t('web_notifications_are_not_allowed_117'));
   expect(requestPermission).not.toHaveBeenCalled();
   expect(api).not.toHaveBeenCalled();
 });

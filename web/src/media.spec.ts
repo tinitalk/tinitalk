@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { AudioCall, transportRouteFromStats } from './media';
 import type { SignalEvent } from './model';
@@ -545,7 +546,7 @@ it('releases the captured camera if attaching it to WebRTC fails', async () => {
 
   expect(back.readyState).toBe('ended');
   expect(sender.track).toBeNull();
-  expect(video).toHaveBeenLastCalledWith(expect.objectContaining({ requested: false, sending: false, failure: 'Не удалось включить камеру' }));
+  expect(video).toHaveBeenLastCalledWith(expect.objectContaining({ requested: false, sending: false, failure: t('text_could_not_turn_on_the_camera_172') }));
 });
 
 it('serializes rapid camera switches and sends only the most recently requested camera', async () => {

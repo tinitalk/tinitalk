@@ -1,4 +1,5 @@
-﻿import { OperationError } from './userErrors';
+import { t, type Message } from './i18n';
+import { OperationError } from './userErrors';
 import type { SignalEvent } from './model';
 import {
   CallSASHandshake,
@@ -86,7 +87,7 @@ export class AudioCall {
     private caller: boolean,
     audio: HTMLMediaElement,
     private send: (type: string, payload?: Record<string, unknown>) => void,
-    private status: (text: string) => void,
+    private status: (text: Message) => void,
     private failed: (error: Error) => void,
     private options: AudioCallOptions = {},
   ) {
@@ -207,7 +208,7 @@ export class AudioCall {
       return;
     }
     if ((event.type === 'rtc.offer' || event.type === 'rtc.answer') && this.peer) {
-      if ((event.type === 'rtc.offer') === this.caller) throw new Error('Неожиданное предложение соединения');
+      if ((event.type === 'rtc.offer') === this.caller) throw new Error(t('web_unexpected_connection_offer_99'));
       const remoteSdp = String(payload.sdp);
       if (event.type === 'rtc.offer') await this.sas?.recordRemoteSdp(remoteSdp);
       await this.peer.setRemoteDescription({ type: event.type === 'rtc.offer' ? 'offer' : 'answer', sdp: remoteSdp });
@@ -293,10 +294,10 @@ export class AudioCall {
   }
 
   private createPeer(iceServers: RTCIceServer[]): void {
-    if (!this.stream) throw new Error('Сначала разрешите доступ к микрофону');
+    if (!this.stream) throw new Error(t('web_allow_microphone_access_first_100'));
     const peer = new RTCPeerConnection({ iceServers });
     this.peer = peer;
-    this.terminal = setTimeout(() => this.failed(new Error('Не удалось установить аудиосоединение')), 30000);
+    this.terminal = setTimeout(() => this.failed(new Error(t('web_could_not_establish_an_audio_connection_101'))), 30000);
     this.stream.getTracks().forEach(track => peer.addTrack(track, this.stream!));
     peer.onicecandidate = event => {
       if (event.candidate && !this.closed) this.send('rtc.ice', { candidate: event.candidate.candidate, sdp_mid: event.candidate.sdpMid ?? '0', sdp_mline_index: event.candidate.sdpMLineIndex ?? 0, ...(this.generation ? { restart_id: this.generation } : {}) });
@@ -336,24 +337,24 @@ export class AudioCall {
         clearTimeout(this.recovery); clearTimeout(this.terminal); this.terminal = undefined;
         this.sas?.onTransportConnected();
         this.startRoutePolling(peer);
-        this.status('Разговор');
+        this.status('web_in_call_73');
         if (!this.connectedReported) { this.connectedReported = true; this.send('call.connected'); }
       } else if (peer.connectionState === 'failed') {
         this.sas?.reject('transport_failed');
         this.stopRoutePolling();
         this.publishTransportRoute('unknown');
-        this.status('Восстанавливаем связь…');
+        this.status('text_reconnecting_131');
         clearTimeout(this.recovery);
         this.recovery = setTimeout(() => this.restart(), 2000);
-        this.terminal ??= setTimeout(() => this.failed(new Error('Не удалось восстановить соединение')), 30000);
+        this.terminal ??= setTimeout(() => this.failed(new Error(t('web_could_not_restore_the_connection_102'))), 30000);
       } else if (peer.connectionState === 'disconnected') {
         this.sas?.onTransportUnavailable();
         this.stopRoutePolling();
         this.publishTransportRoute('unknown');
-        this.status('Восстанавливаем связь…');
+        this.status('text_reconnecting_131');
         clearTimeout(this.recovery);
         this.recovery = setTimeout(() => this.restart(), 2000);
-        this.terminal ??= setTimeout(() => this.failed(new Error('Не удалось восстановить соединение')), 30000);
+        this.terminal ??= setTimeout(() => this.failed(new Error(t('web_could_not_restore_the_connection_102'))), 30000);
       }
     };
   }
@@ -415,15 +416,15 @@ export class AudioCall {
 
   private async startCamera(revision: number, facing: CallVideoFacing): Promise<void> {
     if (!this.videoAllowed) {
-      await this.cameraFailed('Видео недоступно для этого звонка');
+      await this.cameraFailed(t('web_video_is_unavailable_for_this_call_103'));
       return;
     }
     if (!this.videoSender) {
-      await this.cameraFailed('Камера ещё готовится');
+      await this.cameraFailed(t('web_camera_is_still_starting_104'));
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      await this.cameraFailed('Камера недоступна. Откройте приложение по HTTPS.');
+      await this.cameraFailed(t('web_camera_unavailable_open_the_app_over_https_105'));
       throw new OperationError('camera', new Error('HTTPS required'));
     }
     const sender = this.videoSender;
@@ -437,13 +438,13 @@ export class AudioCall {
       stream = await this.openCameraStream(facing);
       if (!this.cameraUpdateCurrent(revision)) return;
       const track = stream.getVideoTracks()[0];
-      if (!track) throw new Error('Камера не вернула видеопоток');
+      if (!track) throw new Error(t('web_camera_returned_no_video_stream_106'));
       track.contentHint = 'motion';
       await sender.replaceTrack(track);
       if (!this.cameraUpdateCurrent(revision)) return;
       await this.configureVideoSender();
       if (!this.cameraUpdateCurrent(revision)) return;
-      if (track.readyState === 'ended') throw new Error('Камера перестала передавать видео');
+      if (track.readyState === 'ended') throw new Error(t('web_camera_stopped_sending_video_107'));
       this.localVideoStream = stream;
       this.localVideoTrack = track;
       stream = undefined;
@@ -458,7 +459,7 @@ export class AudioCall {
       await this.refreshCameraAvailability();
     } catch (error) {
       if (this.cameraUpdateCurrent(revision)) {
-        await this.cameraFailed('Не удалось включить камеру');
+        await this.cameraFailed(t('text_could_not_turn_on_the_camera_172'));
         throw error instanceof OperationError ? error : new OperationError('camera', error);
       }
     } finally {

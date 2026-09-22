@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { account, readPush, savePush } from './storage';
 import { callKey, type Account, type PushRecord } from './model';
@@ -56,6 +57,13 @@ function staysInBackground(): void {
 }
 
 const appleUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/26.0 Mobile/15E148 Safari/604.1';
+
+it('uses the saved language for an incoming notification without an open app', async () => {
+  clients = [];
+  vi.stubGlobal('caches', { open: async () => ({ match: async () => new Response('ja') }) });
+  const notification = await incomingNotification('Mozilla/5.0 (Windows NT 10.0) Chrome/130.0.0.0');
+  expect(notification.actions).toEqual([{ action: 'answer', title: '応答' }, { action: 'reject', title: '拒否' }]);
+});
 
 it('opens the lock owner instead of a visible duplicate tab', async () => {
   const duplicateFocus = vi.fn(), duplicateMessage = vi.fn();
@@ -124,7 +132,7 @@ it('remembers an in-app answer before the delayed Apple invite arrives', async (
   expect(close).toHaveBeenCalledOnce();
   await dispatch('push', { data: { json: () => ({ type: 'incoming_call', call_id: callId, target_session_id: owner.sessionId, expires_at: new Date(Date.now() + 30000).toISOString() }) } });
   expect(inbox?.type).toBe('call_cancel');
-  expect(showNotification.mock.calls[0][0]).toBe('Звонок уже завершён');
+  expect(showNotification.mock.calls[0][0]).toBe(t('web_the_call_has_already_ended_122'));
   expect(postMessage.mock.calls.some(([message]) => message.type === 'open-call')).toBe(false);
 });
 
@@ -321,7 +329,7 @@ it('does not trust a reject action from an old two-button notification on affect
   vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/152.0.0.0 Mobile Safari/537.36' });
   await dispatch('notificationclick', { action: 'reject', notification: {
     close: vi.fn(),
-    actions: [{ action: 'answer', title: 'Принять' }, { action: 'reject', title: 'Отклонить' }],
+    actions: [{ action: 'answer', title: t('web_answer_125') }, { action: 'reject', title: t('text_decline_63') }],
     data: { accountId: owner.id, callId, sessionId: owner.sessionId },
   } });
   expect(request).not.toHaveBeenCalled();
@@ -336,7 +344,7 @@ it.each([
   vi.stubGlobal('navigator', { userAgent });
   await dispatch('notificationclick', { action: 'reject', notification: {
     close: vi.fn(),
-    actions: [{ action: 'answer', title: 'Принять' }, { action: 'reject', title: 'Отклонить' }],
+    actions: [{ action: 'answer', title: t('web_answer_125') }, { action: 'reject', title: t('text_decline_63') }],
     data: { accountId: owner.id, callId, sessionId: owner.sessionId },
   } });
   expect(request).toHaveBeenCalledOnce();
@@ -346,7 +354,7 @@ it.each([
 it.each([true, false])('accepts by tapping the single-button Android notification body (existing window: %s)', async hasWindow => {
   if (!hasWindow) clients = [];
   const notification = await incomingNotification('Mozilla/5.0 (Linux; Android 10; K) Chrome/152.0.0.0 Mobile Safari/537.36');
-  expect(notification.actions).toEqual([{ action: 'reject', title: 'Отклонить' }]);
+  expect(notification.actions).toEqual([{ action: 'reject', title: t('text_decline_63') }]);
   await dispatch('notificationclick', { action: '', notification });
   expect(request).not.toHaveBeenCalled();
   if (hasWindow) {
@@ -366,7 +374,7 @@ it('quietly rejects from the single button without confusing it with a body tap'
 
 it.each(['answer', 'reject', ''])('keeps two Windows buttons and their separate actions: %s', async action => {
   const notification = await incomingNotification('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/152.0.0.0 Safari/537.36');
-  expect(notification.actions).toEqual([{ action: 'answer', title: 'Принять' }, { action: 'reject', title: 'Отклонить' }]);
+  expect(notification.actions).toEqual([{ action: 'answer', title: t('web_answer_125') }, { action: 'reject', title: t('text_decline_63') }]);
   showNotification.mockClear();
   await dispatch('notificationclick', { action, notification });
   if (action === 'reject') {
