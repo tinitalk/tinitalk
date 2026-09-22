@@ -1,5 +1,9 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import org.tinitalk.call.CallUiState
 
 data class ContactCallAction(
@@ -16,18 +20,18 @@ fun contactCallAction(
     canCall: Boolean = true,
 ): ContactCallAction = when {
     ongoingCall?.peer?.login == contactLogin ->
-        ContactCallAction("Вернуться к звонку", enabled = true, opensCurrentCall = true)
+        ContactCallAction(appString(R.string.text_return_to_call_206), enabled = true, opensCurrentCall = true)
     ongoingCall != null -> ContactCallAction(
-        "Сначала завершите текущий звонок",
+        appString(R.string.text_end_the_current_call_first_207),
         enabled = false,
         opensCurrentCall = false,
     )
     !canCall -> ContactCallAction(
-        "Позвонить",
+        appString(R.string.text_call_208),
         enabled = true,
         opensCurrentCall = false,
         explainsUnavailableContact = true,
     )
-    !internetAvailable -> ContactCallAction("Нет подключения", enabled = false, opensCurrentCall = false)
-    else -> ContactCallAction("Позвонить", enabled = true, opensCurrentCall = false)
+    !internetAvailable -> ContactCallAction(appString(R.string.text_no_connection_58), enabled = false, opensCurrentCall = false)
+    else -> ContactCallAction(appString(R.string.text_call_208), enabled = true, opensCurrentCall = false)
 }

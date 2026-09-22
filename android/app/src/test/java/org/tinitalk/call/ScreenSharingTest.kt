@@ -14,7 +14,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(application = Application::class, sdk = [34])
+@Config(application = org.tinitalk.i18n.LocalizedTestApplication::class, sdk = [34])
 class ScreenSharingTest {
     private val callId = "00000000-0000-0000-0000-000000000099"
     private val sent = mutableListOf<SignalEvent>()

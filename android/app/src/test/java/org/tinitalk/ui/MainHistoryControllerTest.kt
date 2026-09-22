@@ -10,6 +10,8 @@ import org.tinitalk.data.*
 import org.tinitalk.missed.MissedCallsRefreshId
 import kotlin.coroutines.CoroutineContext
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class MainHistoryControllerTest {
     @Test fun leavingContactDiscardsItsPendingResponse() = with(Fixture()) {
         controller.showContact(AccountPeerKey(account.id, "bob"))

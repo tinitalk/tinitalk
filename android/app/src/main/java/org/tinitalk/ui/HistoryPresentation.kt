@@ -1,5 +1,9 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.call.CallReplyCode
 import androidx.annotation.StringRes
@@ -15,14 +19,9 @@ fun historyBadgeText(count: Int): String? = when {
 }
 
 fun historyTabDescription(count: Int): String {
-    if (count <= 0) return "История"
-    val calls = when {
-        count % 100 in 11..14 -> "пропущенных вызовов"
-        count % 10 == 1 -> "пропущенный вызов"
-        count % 10 in 2..4 -> "пропущенных вызова"
-        else -> "пропущенных вызовов"
-    }
-    return "История, $count $calls"
+    if (count <= 0) return appString(R.string.text_history_251)
+    val calls = org.tinitalk.i18n.AppLanguage.quantity(R.plurals.missed_calls_count, count)
+    return appString(R.string.text_history_value_value_252, calls)
 }
 
 private val NoAnswerOutcomes = setOf(
@@ -80,28 +79,28 @@ fun historyReplySummaryRes(item: CallHistoryItem): Int? {
 }
 
 fun historyStatus(item: CallHistoryItem): String {
-    if (item.outcome == "completed") return "Разговор · ${historyDuration(item.durationSeconds)}"
-    if (item.outcome == "interrupted") return "Связь прервалась · ${historyDuration(item.durationSeconds)}"
+    if (item.outcome == "completed") return appString(R.string.text_call_value_253, historyDuration(item.durationSeconds))
+    if (item.outcome == "interrupted") return appString(R.string.text_connection_lost_value_254, historyDuration(item.durationSeconds))
     if (item.outcome in NoAnswerOutcomes) {
         return if (item.direction == "incoming") {
-            if (item.reached) "Пропущенный" else "Пропущенный (не в сети)"
+            if (item.reached) appString(R.string.text_missed_255) else appString(R.string.text_missed_offline_256)
         } else {
-            if (item.reached) "Неотвеченный" else "Неотвеченный (не в сети)"
+            if (item.reached) appString(R.string.text_unanswered_257) else appString(R.string.text_unanswered_offline_258)
         }
     }
     return if (item.direction == "incoming") {
         when (item.outcome) {
-            "busy" -> "Пропущенный (вы были заняты)"
-            "rejected" -> "Вы отклонили вызов"
-            "connection_failed" -> "Связь не установлена"
-            else -> "Вызов завершён"
+            "busy" -> appString(R.string.text_missed_you_were_busy_259)
+            "rejected" -> appString(R.string.text_you_declined_the_call_260)
+            "connection_failed" -> appString(R.string.text_connection_not_established_261)
+            else -> appString(R.string.text_call_ended_262)
         }
     } else {
         when (item.outcome) {
-            "busy" -> "Занято"
-            "rejected" -> "Вызов отклонён"
-            "connection_failed" -> "Связь не установлена"
-            else -> "Вызов завершён"
+            "busy" -> appString(R.string.text_busy_91)
+            "rejected" -> appString(R.string.text_call_declined_263)
+            "connection_failed" -> appString(R.string.text_connection_not_established_261)
+            else -> appString(R.string.text_call_ended_262)
         }
     }
 }
@@ -114,12 +113,12 @@ fun historyDayLabel(
     val date = Instant.ofEpochSecond(startedAt).atZone(zone).toLocalDate()
     val today = now.atZone(zone).toLocalDate()
     return when (date) {
-        today -> "сегодня"
-        today.minusDays(1) -> "вчера"
+        today -> appString(R.string.text_today_264)
+        today.minusDays(1) -> appString(R.string.text_yesterday_265)
         else -> date.format(
             DateTimeFormatter.ofPattern(
-                if (date.year == today.year) "d MMMM" else "d MMMM yyyy",
-                RussianLocale,
+                android.text.format.DateFormat.getBestDateTimePattern(HistoryLocale, if (date.year == today.year) "MMMMd" else "yMMMMd"),
+                HistoryLocale,
             ),
         )
     }
@@ -136,9 +135,9 @@ fun missedContactSubtitle(
     val call = Instant.ofEpochSecond(startedAt).atZone(zone)
     val today = now.atZone(zone).toLocalDate()
     return when (call.toLocalDate()) {
-        today -> "Пропущенный в ${call.format(TimeFormatter)}"
-        today.minusDays(1) -> "Пропущенный вчера"
-        else -> "Пропущенный ${call.format(ContactDateFormatter)}"
+        today -> appString(R.string.text_missed_at_value_266, call.format(TimeFormatter))
+        today.minusDays(1) -> appString(R.string.text_missed_yesterday_267)
+        else -> appString(R.string.text_missed_value_268, call.format(ContactDateFormatter))
     }
 }
 
@@ -148,12 +147,14 @@ private fun historyDuration(seconds: Long): String {
     val minutes = (safe % 3600) / 60
     val remainingSeconds = safe % 60
     return if (hours > 0) {
-        "%d:%02d:%02d".format(RussianLocale, hours, minutes, remainingSeconds)
+        "%d:%02d:%02d".format(HistoryLocale, hours, minutes, remainingSeconds)
     } else {
-        "%d:%02d".format(RussianLocale, minutes, remainingSeconds)
+        "%d:%02d".format(HistoryLocale, minutes, remainingSeconds)
     }
 }
 
-private val RussianLocale = Locale.forLanguageTag("ru-RU")
-private val TimeFormatter = DateTimeFormatter.ofPattern("HH:mm", RussianLocale)
-private val ContactDateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy", RussianLocale)
+private val HistoryLocale: Locale get() = org.tinitalk.i18n.AppLanguage.locale
+private val TimeFormatter: DateTimeFormatter get() = DateTimeFormatter.ofPattern("HH:mm", HistoryLocale)
+private val ContactDateFormatter: DateTimeFormatter get() = DateTimeFormatter.ofPattern(
+    android.text.format.DateFormat.getBestDateTimePattern(HistoryLocale, "yyyyMMdd"), HistoryLocale,
+)

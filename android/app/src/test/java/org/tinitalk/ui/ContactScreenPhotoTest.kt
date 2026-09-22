@@ -1,5 +1,8 @@
 package org.tinitalk.ui
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -66,7 +69,7 @@ class ContactScreenPhotoTest {
     private val contact = Contact(login = "alex", displayName = "Алексей")
 
     @Test
-    @Config(qualifiers = "w360dp-h800dp")
+    @Config(qualifiers = "ru-w360dp-h800dp")
     fun scrollingPinsIdentityAndReturnButtonRestoresTheProfile() {
         render {
             ContactScreen(
@@ -92,18 +95,18 @@ class ContactScreenPhotoTest {
         }
         val expanded = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
         saveHeaderPreview("expanded")
-        composeRule.onNodeWithContentDescription("В начало").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_to_top_204)).assertDoesNotExist()
         composeRule.onNode(hasScrollAction()).performTouchInput {
             swipeUp(startY = centerY, endY = centerY - 150f, durationMillis = 1_000)
         }
         saveHeaderPreview("snapped")
-        composeRule.onNodeWithContentDescription("В начало").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_to_top_204)).assertIsDisplayed()
         val snapped = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
         assertTrue("A short drag should fully collapse the header", snapped.width < expanded.width / 2)
         composeRule.onNode(hasScrollAction()).performTouchInput {
             swipeDown(startY = centerY, endY = centerY + 80f, durationMillis = 1_000)
         }
-        composeRule.onNodeWithContentDescription("В начало").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_to_top_204)).assertDoesNotExist()
         val reopened = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
         assertEquals("A reverse drag should fully expand the header", expanded.width, reopened.width, 1f)
         composeRule.onNode(hasScrollAction()).performScrollToIndex(10)
@@ -121,24 +124,24 @@ class ContactScreenPhotoTest {
         composeRule.onNode(hasScrollAction()).performScrollToIndex(15)
         assertEquals(dayBounds.top, composeRule.onNodeWithText(day).fetchSemanticsNode().boundsInRoot.top, 1f)
         composeRule.onNodeWithText("Алексей").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("В начало").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_to_top_204)).assertIsDisplayed()
 
         // The photo sheet must still work after the large profile item leaves the list.
-        composeRule.onNodeWithContentDescription("Действия контакта Алексей").performClick()
-        composeRule.onNodeWithText("Изменить фото").performClick()
-        composeRule.onNodeWithText("Выбрать из галереи").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_actions_for_value_227, "Алексей")).performClick()
+        composeRule.onNodeWithText(appString(R.string.text_change_photo_229)).performClick()
+        composeRule.onNodeWithText(appString(R.string.text_choose_from_gallery_215)).assertIsDisplayed().performClick()
 
-        composeRule.onNodeWithContentDescription("В начало").performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_to_top_204)).performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("В начало").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_to_top_204)).assertDoesNotExist()
         val restored = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
         assertEquals(expanded.top, restored.top, 1f)
         assertEquals(expanded.width, restored.width, 1f)
-        composeRule.onNodeWithText("Позвонить").assertIsDisplayed()
+        composeRule.onNodeWithText(appString(R.string.text_call_208)).assertIsDisplayed()
         composeRule.onNode(hasScrollAction()).performTouchInput {
             swipeUp(startY = centerY, endY = centerY - 150f, durationMillis = 80)
         }
-        composeRule.onNodeWithText("Позвонить").assertIsNotDisplayed()
+        composeRule.onNodeWithText(appString(R.string.text_call_208)).assertIsNotDisplayed()
     }
 
     private fun saveHeaderPreview(name: String) {
@@ -148,7 +151,7 @@ class ContactScreenPhotoTest {
     }
 
     @Test
-    @Config(qualifiers = "w320dp-h720dp")
+    @Config(qualifiers = "ru-w320dp-h720dp")
     fun longNameWithLargeTextStaysBetweenBackAndMenuWhenCollapsed() {
         val name = "Александра Константинопольская"
         var backPressed = false
@@ -180,13 +183,13 @@ class ContactScreenPhotoTest {
         saveHeaderPreview("large-text-collapsed")
         val avatar = composeRule.onNodeWithTag("contact-profile-avatar").fetchSemanticsNode().boundsInRoot
         val label = composeRule.onNodeWithText(name).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        val menu = composeRule.onNodeWithContentDescription("Действия контакта $name").fetchSemanticsNode().boundsInRoot
+        val menu = composeRule.onNodeWithContentDescription(appString(R.string.text_actions_for_value_227, name)).fetchSemanticsNode().boundsInRoot
         assertTrue("Name must clear the avatar", label.left >= avatar.right)
         assertTrue("Name must clear the menu", label.right <= menu.left)
-        composeRule.onNodeWithContentDescription("Действия контакта $name").performClick()
-        composeRule.onNodeWithText("Переименовать").assertIsDisplayed().performClick()
-        composeRule.onNodeWithText("Отмена").performClick()
-        composeRule.onNodeWithContentDescription("Назад").performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_actions_for_value_227, name)).performClick()
+        composeRule.onNodeWithText(appString(R.string.text_rename_228)).assertIsDisplayed().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_cancel_12)).performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_101)).performClick()
         assertTrue(backPressed)
     }
 
@@ -210,17 +213,17 @@ class ContactScreenPhotoTest {
             )
         }
 
-        composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
-        composeRule.onNodeWithText("На главный экран").assertExists()
+        composeRule.onNode(hasContentDescription(appString(R.string.text_actions_for_value_227, "Алексей"))).performClick()
+        composeRule.onNodeWithText(appString(R.string.text_add_to_home_screen_231)).assertExists()
         assertEquals(2, refreshRequests)
         composeRule.runOnIdle { pinned.value = true }
-        composeRule.onNodeWithText("Уже на главном экране").performClick()
+        composeRule.onNodeWithText(appString(R.string.text_already_on_home_screen_230)).performClick()
         assertEquals(1, pinRequests)
 
         composeRule.runOnIdle { pinned.value = false }
         composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
-        composeRule.onNodeWithText("На главный экран").assertExists()
-        composeRule.onNodeWithText("Уже на главном экране").assertDoesNotExist()
+        composeRule.onNodeWithText(appString(R.string.text_add_to_home_screen_231)).assertExists()
+        composeRule.onNodeWithText(appString(R.string.text_already_on_home_screen_230)).assertDoesNotExist()
         assertEquals(3, refreshRequests)
     }
 
@@ -249,18 +252,18 @@ class ContactScreenPhotoTest {
             )
         }
 
-        composeRule.onNode(hasContentDescription("Действия контакта Алексей")).assertExists().performClick()
-        composeRule.onNodeWithText("Переименовать").assertExists()
+        composeRule.onNode(hasContentDescription(appString(R.string.text_actions_for_value_227, "Алексей"))).assertExists().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_rename_228)).assertExists()
         composeRule.onNodeWithTag("contact-menu-rename").assertHeightIsAtLeast(58.dp).assertWidthIsAtLeast(260.dp)
         composeRule.onNodeWithTag("contact-menu-photo").assertHeightIsAtLeast(58.dp).assertWidthIsAtLeast(260.dp)
         composeRule.onNodeWithTag("contact-profile-avatar").assertWidthIsAtLeast(208.dp).assertHeightIsAtLeast(208.dp)
-        composeRule.onNodeWithText("Изменить фото").assertExists().performClick()
-        composeRule.onNodeWithText("Выбрать из галереи").assertExists().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_change_photo_229)).assertExists().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_choose_from_gallery_215)).assertExists().performClick()
         assertEquals(ContactPhotoSource.Gallery, selectedSource)
 
         composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
-        composeRule.onNodeWithText("Изменить фото").assertExists().performClick()
-        composeRule.onNodeWithText("Удалить фото").assertExists().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_change_photo_229)).assertExists().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_remove_photo_217)).assertExists().performClick()
         assertEquals(true, removeCalled)
         composeRule.onNode(hasText("Фото хранится только на этом устройстве")).assertDoesNotExist()
     }
@@ -287,8 +290,8 @@ class ContactScreenPhotoTest {
         }
 
         composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
-        composeRule.onNodeWithText("Изменить фото").assertExists().performClick()
-        composeRule.onNodeWithText("Удалить фото").assertDoesNotExist()
+        composeRule.onNodeWithText(appString(R.string.text_change_photo_229)).assertExists().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_remove_photo_217)).assertDoesNotExist()
     }
 
     @Test
@@ -369,11 +372,11 @@ class ContactScreenPhotoTest {
         }
 
         composeRule.onNode(hasContentDescription("Имя контакта: Алексей. Нажмите, чтобы изменить")).assertDoesNotExist()
-        composeRule.onNode(hasContentDescription("Имя контакта: Алексей")).assertExists()
+        composeRule.onNode(hasContentDescription(appString(R.string.text_contact_name_value_203, "Алексей"))).assertExists()
         composeRule.onNode(hasContentDescription("Действия контакта Алексей")).performClick()
-        composeRule.onNodeWithText("Переименовать").assertExists().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_rename_228)).assertExists().performClick()
 
-        composeRule.onNodeWithText("Изменить имя").assertExists()
+        composeRule.onNodeWithText(appString(R.string.text_edit_name_242)).assertExists()
         assertEquals(1, renameHandled)
     }
 
@@ -404,9 +407,9 @@ class ContactScreenPhotoTest {
             )
         }
 
-        composeRule.onNodeWithText("Отмена").assertExists().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_cancel_12)).assertExists().performClick()
         assertEquals(true, cancelled)
-        composeRule.onNodeWithText("Готово").assertExists().performClick()
+        composeRule.onNodeWithText(appString(R.string.text_done_219)).assertExists().performClick()
         assertEquals(true, submitted)
     }
 

@@ -1,5 +1,9 @@
 package org.tinitalk.media
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import android.content.Context
 import android.content.Intent
 import android.graphics.Point
@@ -77,7 +81,7 @@ internal class WebRtcScreenController(
                     videoSource.capturerObserver.onCapturerStarted(success)
                     if (!success) {
                         Log.e("TiniTalkScreen", "capturer reported start failure")
-                        stop("Не удалось начать показ экрана")
+                        stop(appString(R.string.text_could_not_start_screen_sharing_1))
                     }
                 }
                 override fun onCapturerStopped() { videoSource.capturerObserver.onCapturerStopped() }
@@ -108,7 +112,7 @@ internal class WebRtcScreenController(
             displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
         } catch (failure: Exception) {
             Log.e("TiniTalkScreen", "capture start failed", failure)
-            stopOnQueue("Не удалось начать показ экрана")
+            stopOnQueue(appString(R.string.text_could_not_start_screen_sharing_1))
         }
     }
 
@@ -123,7 +127,7 @@ internal class WebRtcScreenController(
 
     private fun refreshSenderOnQueue() {
         if (!stopped && started && !paused && lease?.refresh() != true) {
-            stopOnQueue("Не удалось восстановить показ экрана. Включите его ещё раз.")
+            stopOnQueue(appString(R.string.text_could_not_resume_screen_sharing_start_it_again_47))
         }
     }
 
@@ -139,7 +143,7 @@ internal class WebRtcScreenController(
             capturer?.changeCaptureFormat(w, h, WebRtcPolicy.screenCaptureFps)
         }.onFailure {
             Log.e("TiniTalkScreen", "capture resize failed: ${w}x$h", it)
-            stopOnQueue("Показ экрана остановлен")
+            stopOnQueue(appString(R.string.text_screen_sharing_stopped_48))
         }
     }
 
@@ -162,7 +166,7 @@ internal class WebRtcScreenController(
             .onFailure { Log.e("TiniTalkScreen", "capture stop failed", it) }
         if (!awaitingPeerClose) runCatching { resources.close() }
             .onFailure { Log.e("TiniTalkScreen", "capture cleanup failed", it) }
-        onStopped(message ?: released?.failure?.let { "Показ экрана остановлен" })
+        onStopped(message ?: released?.failure?.let { appString(R.string.text_screen_sharing_stopped_48) })
     }
 
     // Called on the media control queue after the peer has released its sender.

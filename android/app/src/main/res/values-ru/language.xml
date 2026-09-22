@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_cancel">Отменить</string>
+    <string name="language_title">Язык</string>
+    <string name="language_system">Как в системе</string>
+    <plurals name="missed_calls_count">
+        <item quantity="one">%1$d пропущенный вызов</item>
+        <item quantity="few">%1$d пропущенных вызова</item>
+        <item quantity="many">%1$d пропущенных вызовов</item>
+        <item quantity="other">%1$d пропущенных вызовов</item>
+    </plurals>
+    <plurals name="calls_count">
+        <item quantity="one">%1$d звонок</item>
+        <item quantity="few">%1$d звонка</item>
+        <item quantity="many">%1$d звонков</item>
+        <item quantity="other">%1$d звонков</item>
+    </plurals>
+    <plurals name="contacts_count">
+        <item quantity="one">%1$d контакта</item>
+        <item quantity="few">%1$d контактов</item>
+        <item quantity="many">%1$d контактов</item>
+        <item quantity="other">%1$d контактов</item>
+    </plurals>
+</resources>

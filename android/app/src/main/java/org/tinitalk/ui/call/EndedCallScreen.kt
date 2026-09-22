@@ -1,5 +1,9 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,17 +34,17 @@ fun EndedCallScreen(
     val explanation = when {
         reply != null -> stringResource(reply.resultTextRes)
         direction == CallDirection.Outgoing && durationText == null && reason == CallEndReason.NotInContacts ->
-            "Вас ещё не добавили в контакты"
+            appString(R.string.text_you_have_not_been_added_to_contacts_yet_92)
         else -> null
     }
     CallScreenSurface(
-        status = if (durationText != null) "Звонок завершён" else when (reason) {
-            CallEndReason.Busy -> "Занято"
+        status = if (durationText != null) appString(R.string.text_call_ended_93) else when (reason) {
+            CallEndReason.Busy -> appString(R.string.text_busy_91)
             CallEndReason.NotInContacts, CallEndReason.Failed, CallEndReason.ConnectionLost ->
-                if (direction == CallDirection.Outgoing) "Не удалось связаться" else "Звонок завершён"
-            CallEndReason.Rejected -> if (direction == CallDirection.Outgoing) "Звонок отклонён" else "Звонок завершён"
-            CallEndReason.TimedOut -> if (direction == CallDirection.Outgoing) "Нет ответа" else "Звонок завершён"
-            else -> "Звонок завершён"
+                if (direction == CallDirection.Outgoing) appString(R.string.text_could_not_connect_192) else appString(R.string.text_call_ended_93)
+            CallEndReason.Rejected -> if (direction == CallDirection.Outgoing) appString(R.string.text_call_declined_193) else appString(R.string.text_call_ended_93)
+            CallEndReason.TimedOut -> if (direction == CallDirection.Outgoing) appString(R.string.text_no_answer_194) else appString(R.string.text_call_ended_93)
+            else -> appString(R.string.text_call_ended_93)
         },
         peerName = peerName,
         contactAddress = contactAddress,

@@ -1,5 +1,9 @@
 package org.tinitalk.call
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import android.content.Intent
 import android.util.Log
 import com.google.gson.JsonObject
@@ -626,7 +630,7 @@ class ForegroundCallController(
         }
         if (failure.callId == videoState.callId && failure.eventId == screenStartEventId && screenStartEventId != null) {
             Log.w("TiniTalkScreen", "screen request rejected by server: ${failure.code}")
-            stopScreen(failure.callId, if (failure.code == "screen_share_busy") "Собеседник уже показывает экран" else "Не удалось начать показ экрана")
+            stopScreen(failure.callId, if (failure.code == "screen_share_busy") appString(R.string.text_the_other_person_is_already_sharing_their_screen_0) else appString(R.string.text_could_not_start_screen_sharing_1))
             return
         }
         negotiation.onSignalFailure(failure)
@@ -649,7 +653,7 @@ class ForegroundCallController(
                 if (videoState.screen.localId == shareId && !videoState.screen.sending) {
                     Log.w("TiniTalkScreen", "screen start timed out: cameraReady=${screenCameraReadyId == shareId} " +
                         "serverReady=${videoState.screen.ready} captureSubmitted=$screenStartSubmitted")
-                    stopScreen(nextCallId, "Не удалось начать показ экрана. Попробуйте ещё раз.")
+                    stopScreen(nextCallId, appString(R.string.text_could_not_start_screen_sharing_try_again_2))
                 }
             }
         }
@@ -673,7 +677,7 @@ class ForegroundCallController(
                 screen = videoState.screen.copy(remoteId = null, ready = false),
             ))
             if (videoState.screen.requested && wasPreparing) {
-                stopScreen(event.callId, if (videoState.screen.sending) null else "Не удалось начать показ экрана")
+                stopScreen(event.callId, if (videoState.screen.sending) null else appString(R.string.text_could_not_start_screen_sharing_1))
             }
             return
         }
@@ -686,7 +690,7 @@ class ForegroundCallController(
             remoteId = remote, ready = event.payload["ready"]?.asBoolean == true,
         )))
         if (remote != null && videoState.screen.requested) {
-            stopScreen(event.callId, "Собеседник уже показывает экран")
+            stopScreen(event.callId, appString(R.string.text_the_other_person_is_already_sharing_their_screen_0))
         }
         if (screenPreparationId != shareId) {
             screenPreparationId = shareId
@@ -720,7 +724,7 @@ class ForegroundCallController(
         try {
             if (!prepareScreenStart(nextCallId)) {
                 Log.w("TiniTalkScreen", "screen foreground preparation failed")
-                stopScreen(nextCallId, "Не удалось начать показ экрана")
+                stopScreen(nextCallId, appString(R.string.text_could_not_start_screen_sharing_1))
                 return
             }
             val screen = session as? ScreenMediaSession ?: error("screen session missing")
@@ -731,7 +735,7 @@ class ForegroundCallController(
             screen.setScreenPaused(videoState.networkGated)
         } catch (failure: Exception) {
             Log.e("TiniTalkScreen", "screen session start failed", failure)
-            stopScreen(nextCallId, "Не удалось начать показ экрана")
+            stopScreen(nextCallId, appString(R.string.text_could_not_start_screen_sharing_1))
         }
     }
 

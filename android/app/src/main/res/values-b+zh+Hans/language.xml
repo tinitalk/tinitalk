@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_cancel">取消</string>
+    <string name="language_title">语言</string>
+    <string name="language_system">跟随系统</string>
+    <plurals name="missed_calls_count">
+        <item quantity="other">%1$d个未接来电</item>
+    </plurals>
+    <plurals name="calls_count">
+        <item quantity="other">%1$d次通话</item>
+    </plurals>
+    <plurals name="contacts_count">
+        <item quantity="other">%1$d位联系人</item>
+    </plurals>
+</resources>

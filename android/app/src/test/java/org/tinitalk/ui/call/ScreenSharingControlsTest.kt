@@ -1,5 +1,8 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import android.app.Application
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -36,7 +39,7 @@ import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(application = Application::class, sdk = [35], qualifiers = "w360dp-h800dp")
+@Config(application = org.tinitalk.i18n.LocalizedTestApplication::class, sdk = [35], qualifiers = "ru-w360dp-h800dp")
 class ScreenSharingControlsTest {
     @get:Rule val compose = createEmptyComposeRule()
 
@@ -91,15 +94,15 @@ class ScreenSharingControlsTest {
             if (receiving) compose.runOnIdle {
                 screen.value = ScreenShareState(allowed = true, remoteId = "share", ready = true)
             }
-            compose.onNodeWithText("Камера").assertDoesNotExist()
-            compose.onNodeWithText("Показ экрана").assertDoesNotExist()
-            compose.onNodeWithText("Показать экран").assertDoesNotExist()
-            compose.onNodeWithText("Остановить показ").assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_camera_175)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_screen_sharing_139)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_share_screen_165)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_stop_sharing_97)).assertDoesNotExist()
             compose.onNodeWithText("Остановить").assertDoesNotExist()
             if (!receiving) {
-                compose.onNodeWithContentDescription("Остановить показ экрана").assertIsDisplayed()
+                compose.onNodeWithContentDescription(appString(R.string.text_stop_screen_sharing_164)).assertIsDisplayed()
             } else {
-                compose.onNodeWithContentDescription("Остановить показ экрана").assertDoesNotExist()
+                compose.onNodeWithContentDescription(appString(R.string.text_stop_screen_sharing_164)).assertDoesNotExist()
             }
             val positions = listOf("Звук", "Микрофон", "Завершить").map { label ->
                 compose.onNodeWithText(label).assertIsDisplayed().fetchSemanticsNode().boundsInRoot.center.x
@@ -128,9 +131,9 @@ class ScreenSharingControlsTest {
                 }
             }
         }
-        compose.onNodeWithContentDescription("Показать экран").assertIsDisplayed()
-        compose.onNodeWithText("Показать экран").assertDoesNotExist()
-        compose.onNodeWithText("Остановить показ").assertDoesNotExist()
+        compose.onNodeWithContentDescription(appString(R.string.text_share_screen_165)).assertIsDisplayed()
+        compose.onNodeWithText(appString(R.string.text_share_screen_165)).assertDoesNotExist()
+        compose.onNodeWithText(appString(R.string.text_stop_sharing_97)).assertDoesNotExist()
         compose.onNodeWithText("Остановить").assertDoesNotExist()
         activity.pause().stop().destroy()
     }
@@ -155,9 +158,9 @@ class ScreenSharingControlsTest {
             }
         }
 
-        compose.onNodeWithContentDescription("Показать экран").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Остановить показ экрана").assertDoesNotExist()
-        compose.onNodeWithText("Показать экран").assertDoesNotExist()
+        compose.onNodeWithContentDescription(appString(R.string.text_share_screen_165)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(appString(R.string.text_stop_screen_sharing_164)).assertDoesNotExist()
+        compose.onNodeWithText(appString(R.string.text_share_screen_165)).assertDoesNotExist()
         compose.onNodeWithText("Остановить").assertDoesNotExist()
         activity.pause().stop().destroy()
     }
@@ -185,9 +188,9 @@ class ScreenSharingControlsTest {
 
         compose.runOnIdle { screen.value = screen.value.copy(sending = true) }
         compose.waitUntil(timeoutMillis = 5_000) {
-            compose.onAllNodesWithText("Показ экрана начат").fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithText(appString(R.string.text_screen_sharing_started_129)).fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithText("Показ экрана начат").assertIsDisplayed()
+        compose.onNodeWithText(appString(R.string.text_screen_sharing_started_129)).assertIsDisplayed()
         activity.pause().stop().destroy()
     }
 
@@ -213,13 +216,13 @@ class ScreenSharingControlsTest {
             }
         }
 
-        compose.onNodeWithText("Остановить показ").assertDoesNotExist()
+        compose.onNodeWithText(appString(R.string.text_stop_sharing_97)).assertDoesNotExist()
         compose.onNodeWithText("Остановить").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Остановить показ экрана").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription(appString(R.string.text_stop_screen_sharing_164)).assertIsDisplayed().performClick()
         compose.waitUntil(timeoutMillis = 5_000) {
-            compose.onAllNodesWithText("Показ экрана остановлен").fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithText(appString(R.string.text_screen_sharing_stopped_48)).fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithText("Показ экрана остановлен").assertIsDisplayed()
+        compose.onNodeWithText(appString(R.string.text_screen_sharing_stopped_48)).assertIsDisplayed()
         assertEquals(1, stopRequests)
         activity.pause().stop().destroy()
     }
@@ -248,7 +251,7 @@ class ScreenSharingControlsTest {
         val avatarCenterBefore = compose.onNodeWithTag("call-peer-avatar")
             .fetchSemanticsNode().boundsInRoot.center.y
         compose.runOnIdle { screenAllowed.value = true }
-        compose.onNodeWithContentDescription("Показать экран").assertIsDisplayed()
+        compose.onNodeWithContentDescription(appString(R.string.text_share_screen_165)).assertIsDisplayed()
         val avatarCenterAfter = compose.onNodeWithTag("call-peer-avatar")
             .fetchSemanticsNode().boundsInRoot.center.y
 
@@ -277,9 +280,9 @@ class ScreenSharingControlsTest {
                 }
             }
         }
-        compose.onNodeWithContentDescription("Показать экран").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Остановить показ экрана").assertDoesNotExist()
-        compose.onNodeWithText("Остановить показ").assertDoesNotExist()
+        compose.onNodeWithContentDescription(appString(R.string.text_share_screen_165)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(appString(R.string.text_stop_screen_sharing_164)).assertDoesNotExist()
+        compose.onNodeWithText(appString(R.string.text_stop_sharing_97)).assertDoesNotExist()
         compose.onNodeWithText("Остановить").assertDoesNotExist()
         activity.pause().stop().destroy()
     }

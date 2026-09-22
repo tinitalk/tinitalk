@@ -1,5 +1,8 @@
 package org.tinitalk
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
@@ -32,7 +35,7 @@ import org.tinitalk.telecom.IncomingCallController
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w384dp-h853dp-mdpi")
+@Config(sdk = [35], qualifiers = "ru-w384dp-h853dp-mdpi")
 class CallActivityEndedResultTest {
     @get:Rule val compose = createEmptyComposeRule()
     private val context = RuntimeEnvironment.getApplication()
@@ -70,12 +73,12 @@ class CallActivityEndedResultTest {
         CallUiStateStore.begin(key, peer, CallDirection.Outgoing, CallPhase.Connecting)
         val activity = Robolectric.buildActivity(CallActivity::class.java, outgoingIntent()).setup()
         try {
-            compose.onNodeWithText("Пробуем связаться…").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_trying_to_connect_5)).assertIsDisplayed()
             compose.runOnIdle {
                 CallUiStateStore.sync(CallSnapshot(CallPhase.Ringing, key.callId, 1, key.accountId))
             }
-            compose.onNodeWithText("Ждём ответа…").assertIsDisplayed()
-            compose.onNodeWithText("Пробуем связаться…").assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_waiting_for_an_answer_4)).assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_trying_to_connect_5)).assertDoesNotExist()
         } finally { activity.pause().stop().destroy() }
     }
 
@@ -84,20 +87,20 @@ class CallActivityEndedResultTest {
             CallUiStateStore.begin(key, peer, CallDirection.Outgoing, CallPhase.Connecting)
             val activity = Robolectric.buildActivity(CallActivity::class.java, outgoingIntent()).setup()
             try {
-                compose.onNodeWithText("Пробуем связаться…").assertIsDisplayed()
+                compose.onNodeWithText(appString(R.string.text_trying_to_connect_5)).assertIsDisplayed()
                 if (phase == CallPhase.Ringing) {
                     compose.runOnIdle {
                         CallUiStateStore.sync(CallSnapshot(CallPhase.Ringing, key.callId, 1, key.accountId))
                     }
-                    compose.onNodeWithText("Ждём ответа…").assertIsDisplayed()
+                    compose.onNodeWithText(appString(R.string.text_waiting_for_an_answer_4)).assertIsDisplayed()
                 }
                 compose.runOnIdle {
                     CallUiStateStore.sync(CallSnapshot(CallPhase.Ended, key.callId, 2, key.accountId), CallEndReason.TimedOut)
                 }
                 val title = if (phase == CallPhase.Connecting) "Не удалось связаться" else "Нет ответа"
                 compose.onNodeWithText(title).assertIsDisplayed()
-                compose.onNodeWithText("Пробуем связаться…").assertDoesNotExist()
-                compose.onNodeWithText("Ждём ответа…").assertDoesNotExist()
+                compose.onNodeWithText(appString(R.string.text_trying_to_connect_5)).assertDoesNotExist()
+                compose.onNodeWithText(appString(R.string.text_waiting_for_an_answer_4)).assertDoesNotExist()
                 compose.onNodeWithText("00:00").assertDoesNotExist()
                 CallUiStateStore.reset(key)
                 advanceTimeBy(2_000)
@@ -115,13 +118,13 @@ class CallActivityEndedResultTest {
         try {
             val timerBounds = compose.onNodeWithText("01:05").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
             endConversation(reason, direction)
-            compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_call_ended_93)).assertIsDisplayed()
             assertEquals(timerBounds, compose.onNodeWithText("01:05").assertIsDisplayed().fetchSemanticsNode().boundsInRoot)
             advanceTimeBy(1_000)
             CallUiStateStore.reset(key)
             advanceTimeBy(1_000)
             assertFalse(activity.get().isFinishing)
-            compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_call_ended_93)).assertIsDisplayed()
             compose.onNodeWithText("01:05").assertIsDisplayed()
             advanceTimeBy(1_200)
             compose.waitForIdle()
@@ -138,7 +141,7 @@ class CallActivityEndedResultTest {
         activity.pause().saveInstanceState(saved).stop().destroy()
         val recreated = Robolectric.buildActivity(CallActivity::class.java, originalIntent).create(saved).start().resume().visible()
         try {
-            compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_call_ended_93)).assertIsDisplayed()
             compose.onNodeWithText("01:05").assertIsDisplayed()
             advanceTimeBy(2_000)
             assertFalse(recreated.get().isFinishing)
@@ -240,11 +243,11 @@ class CallActivityEndedResultTest {
                 incoming.activityIntent(context, IncomingCallController.ActionIncoming, next),
             ).savedIntent
             activity.newIntent(nextIntent).resume().visible()
-            compose.onNodeWithText("Входящий звонок").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_incoming_call_62)).assertIsDisplayed()
             compose.runOnIdle { auth.upsert(session) }
             advanceTimeBy(4_000)
             assertFalse(activity.get().isFinishing)
-            compose.onNodeWithText("Входящий звонок").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_incoming_call_62)).assertIsDisplayed()
         } finally {
             incoming.finishTerminalPresentation(context, next.owner) {}
             activity.pause().stop().destroy()
@@ -260,7 +263,7 @@ class CallActivityEndedResultTest {
             val next = AccountCallKey(key.accountId, "next-call")
             CallUiStateStore.begin(next, peer, CallDirection.Outgoing, CallPhase.Ringing)
             activity.newIntent(outgoingIntent(next))
-            compose.onNodeWithText("Звонок завершён").assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_call_ended_93)).assertDoesNotExist()
             compose.onNodeWithText("01:05").assertDoesNotExist()
             advanceTimeBy(6_000)
             assertFalse(activity.get().isFinishing)
@@ -304,12 +307,12 @@ class CallActivityEndedResultTest {
         val intent = Shadows.shadowOf(incoming.activityIntent(context, IncomingCallController.ActionIncoming, invite)).savedIntent
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
         try {
-            compose.onNodeWithText("Входящий звонок").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_incoming_call_62)).assertIsDisplayed()
             compose.runOnIdle {
                 auth.upsert(session)
                 incoming.reject(context, invite)
             }
-            compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_call_ended_93)).assertIsDisplayed()
             compose.onNodeWithText("00:00").assertDoesNotExist()
             advanceTimeBy(2_000)
             assertFalse(activity.get().isFinishing)
@@ -424,11 +427,11 @@ class CallActivityEndedResultTest {
         try {
             compose.runOnIdle { incoming.finishTerminalPresentation(context, invite.owner) {} }
             ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS)
-            compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_call_ended_93)).assertIsDisplayed()
             val next = AccountCallKey(key.accountId, "next-call")
             CallUiStateStore.begin(next, peer, CallDirection.Outgoing, CallPhase.Ringing)
             activity.newIntent(outgoingIntent(next))
-            compose.onNodeWithText("Ждём ответа…").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_waiting_for_an_answer_4)).assertIsDisplayed()
             advanceTimeBy(4_000)
             ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS)
             assertFalse(activity.get().isFinishing)
@@ -442,7 +445,7 @@ class CallActivityEndedResultTest {
         try {
             compose.runOnIdle { incoming.finishTerminalPresentation(context, invite.owner) {} }
             ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS)
-            compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_call_ended_93)).assertIsDisplayed()
             compose.runOnIdle {
                 auth.remove(key.accountId)
                 incoming.admitIncoming(context, next)
@@ -451,7 +454,7 @@ class CallActivityEndedResultTest {
                 incoming.activityIntent(context, IncomingCallController.ActionIncoming, next),
             ).savedIntent
             activity.newIntent(nextIntent)
-            compose.onNodeWithText("Входящий звонок").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_incoming_call_62)).assertIsDisplayed()
             compose.runOnIdle { auth.upsert(session) }
             advanceTimeBy(4_000)
             assertFalse(activity.get().isFinishing)
@@ -471,7 +474,7 @@ class CallActivityEndedResultTest {
         incoming.admitIncoming(context, invite)
         val intent = Shadows.shadowOf(incoming.activityIntent(context, IncomingCallController.ActionIncoming, invite)).savedIntent
         return Robolectric.buildActivity(CallActivity::class.java, intent).setup().also {
-            compose.onNodeWithText("Входящий звонок").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_incoming_call_62)).assertIsDisplayed()
             assertEquals(CallPhase.Idle, CallUiStateStore.snapshot().phase)
             compose.runOnIdle { auth.upsert(session) }
         }
@@ -480,7 +483,7 @@ class CallActivityEndedResultTest {
     private fun assertIncomingResult(activity: ActivityController<CallActivity>) {
         compose.waitForIdle()
         assertFalse("Incoming result closed before its reading time", activity.get().isFinishing)
-        compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
+        compose.onNodeWithText(appString(R.string.text_call_ended_93)).assertIsDisplayed()
         compose.onNodeWithText("Bob").assertIsDisplayed()
         compose.onNodeWithText("00:00").assertDoesNotExist()
         assertEquals("Presentation must not create a call runtime", CallPhase.Idle, CallUiStateStore.snapshot().phase)

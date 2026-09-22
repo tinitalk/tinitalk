@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_reply_cannot_talk">"现在不方便接听"</string>
+    <string name="call_reply_call_me_later">"请稍后再打"</string>
+    <string name="call_reply_will_call_back">"我稍后回电"</string>
+    <string name="call_reply_result_cannot_talk">"现在不方便接听"</string>
+    <string name="call_reply_result_call_me_later">"请您稍后再打"</string>
+    <string name="call_reply_result_will_call_back">"稍后会回电"</string>
+    <string name="call_reply_history_cannot_talk">"不方便接听"</string>
+    <string name="call_reply_history_call_me_later">"请您稍后再打"</string>
+    <string name="call_reply_history_will_call_back">"会稍后回电"</string>
+    <string name="call_reply_history_sent_cannot_talk">"您表示不方便接听"</string>
+    <string name="call_reply_history_sent_call_me_later">"您请对方稍后再打"</string>
+    <string name="call_reply_history_sent_will_call_back">"您表示会稍后回电"</string>
+    <string name="call_reply_sheet_title">"以消息回复"</string>
+    <string name="call_reply_open">"显示回复选项"</string>
+    <string name="call_reply_close">"隐藏回复选项"</string>
+    <string name="call_reply_select">"拒接并回复：%1$s"</string>
+    <string name="call_reply_result_title">"通话回复"</string>
+    <string name="call_reply_send_failed">"无法发送回复"</string>
+    <string name="call_reply_send_unconfirmed">"无法确认回复是否已发送"</string>
+    <string name="call_reply_sent">"回复已发送"</string>
+</resources>

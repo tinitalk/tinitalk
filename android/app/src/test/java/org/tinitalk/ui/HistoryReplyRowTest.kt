@@ -1,5 +1,8 @@
 package org.tinitalk.ui
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
@@ -52,7 +55,7 @@ class HistoryReplyRowTest {
                     }
                     val expected = if (incoming) sent[index] else received[index]
                     composeRule.onNodeWithText(expected, useUnmergedTree = true).assertExists()
-                    composeRule.onNodeWithText(if (incoming) "Вы отклонили вызов" else "Вызов отклонён").assertDoesNotExist()
+                    composeRule.onNodeWithText(if (incoming) appString(R.string.text_you_declined_the_call_260) else appString(R.string.text_call_declined_263)).assertDoesNotExist()
                     val prefix = if (general) "Alice" else if (incoming) "Входящий" else "Исходящий"
                     composeRule.onNodeWithContentDescription("$prefix, $expected, ${historyTime(row.value.startedAt)}").performClick()
                 }

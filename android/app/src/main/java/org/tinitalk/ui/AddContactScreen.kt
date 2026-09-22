@@ -1,5 +1,7 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -98,10 +100,10 @@ internal fun AddContactScreen(
                 ) {
                     CompositionLocalProvider(LocalRippleConfiguration provides null) {
                         IconButton(onClick = onBack, enabled = !loading) {
-                            Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "Назад")
+                            Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = appString(R.string.text_back_101))
                         }
                     }
-                    Text("Добавить контакт", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(appString(R.string.text_add_contact_125), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
@@ -113,8 +115,8 @@ internal fun AddContactScreen(
                                 value = selectedAccount?.let { serverAddress(it.serverUrl) }.orEmpty(),
                                 onValueChange = {},
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Сервер") },
-                                placeholder = { Text("Выберите сервер") },
+                                label = { Text(appString(R.string.text_server_106)) },
+                                placeholder = { Text(appString(R.string.text_choose_a_server_126)) },
                                 trailingIcon = {
                                     Icon(
                                         painterResource(R.drawable.ic_chevron_right),
@@ -141,7 +143,7 @@ internal fun AddContactScreen(
                             onInputChanged()
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Логин") },
+                        label = { Text(appString(R.string.text_username_116)) },
                         enabled = !loading,
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
@@ -154,9 +156,9 @@ internal fun AddContactScreen(
                             onInputChanged()
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Имя в контактах") },
+                        label = { Text(appString(R.string.text_name_in_your_contacts_127)) },
                         supportingText = if (nameLength > 64) {
-                            { Text("Не больше 64 символов") }
+                            { Text(appString(R.string.text_up_to_64_characters_128)) }
                         } else {
                             null
                         },
@@ -190,7 +192,7 @@ internal fun AddContactScreen(
                         if (loading) {
                             CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                         } else {
-                            Text("Добавить", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                            Text(appString(R.string.text_add_114), fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -201,7 +203,7 @@ internal fun AddContactScreen(
     if (serverMenuVisible) {
         ModalBottomSheet(onDismissRequest = { serverMenuVisible = false }) {
             Text(
-                "Выберите сервер",
+                appString(R.string.text_choose_a_server_126),
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,

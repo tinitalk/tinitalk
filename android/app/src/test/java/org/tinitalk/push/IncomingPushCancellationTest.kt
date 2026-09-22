@@ -21,7 +21,7 @@ import org.tinitalk.telecom.IncomingCallController
 import java.time.Instant
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class)
+@Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class IncomingPushCancellationTest {
     private val context = RuntimeEnvironment.getApplication()
     private val account = AccountRecord(AccountId("push-end-account"),

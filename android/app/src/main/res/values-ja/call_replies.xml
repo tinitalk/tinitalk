@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_reply_cannot_talk">"今は話せません"</string>
+    <string name="call_reply_call_me_later">"後でかけ直してください"</string>
+    <string name="call_reply_will_call_back">"後でかけ直します"</string>
+    <string name="call_reply_result_cannot_talk">"今は話せません"</string>
+    <string name="call_reply_result_call_me_later">"後でかけ直してほしいそうです"</string>
+    <string name="call_reply_result_will_call_back">"後でかけ直すそうです"</string>
+    <string name="call_reply_history_cannot_talk">"話せませんでした"</string>
+    <string name="call_reply_history_call_me_later">"後でかけ直すよう依頼されました"</string>
+    <string name="call_reply_history_will_call_back">"後でかけ直すとのことです"</string>
+    <string name="call_reply_history_sent_cannot_talk">"話せないと伝えました"</string>
+    <string name="call_reply_history_sent_call_me_later">"後でかけ直すよう依頼しました"</string>
+    <string name="call_reply_history_sent_will_call_back">"後でかけ直すと伝えました"</string>
+    <string name="call_reply_sheet_title">"メッセージで返信"</string>
+    <string name="call_reply_open">"返信の候補を表示"</string>
+    <string name="call_reply_close">"返信の候補を隠す"</string>
+    <string name="call_reply_select">"拒否して返信：%1$s"</string>
+    <string name="call_reply_result_title">"通話への返信"</string>
+    <string name="call_reply_send_failed">"返信を送信できませんでした"</string>
+    <string name="call_reply_send_unconfirmed">"返信の送信を確認できませんでした"</string>
+    <string name="call_reply_sent">"返信を送信しました"</string>
+</resources>

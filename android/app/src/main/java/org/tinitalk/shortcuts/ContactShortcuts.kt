@@ -1,5 +1,7 @@
 package org.tinitalk.shortcuts
 
+import org.tinitalk.i18n.appString
+
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -119,7 +121,7 @@ internal class ContactShortcuts(
             val contact = contacts[peer]
             if (contact == null) {
                 val hasAccount = accounts.any { it.id == peer.accountId }
-                val label = if (hasAccount) "Контакт удалён" else "Нет учётной записи"
+                val label = if (hasAccount) appString(R.string.text_contact_deleted_84) else appString(R.string.text_no_account_85)
                 if (shortcut.isEnabled || shortcut.shortLabel.toString() != label) {
                     // Do not leave the deleted personal photo and name on the launcher.
                     updated += ShortcutInfo.Builder(context, shortcut.id)
@@ -130,9 +132,9 @@ internal class ContactShortcuts(
                         .build()
                 }
                 if (shortcut.isEnabled) disabled[shortcut.id] = if (hasAccount) {
-                    "Контакт удалён из вашей телефонной книги."
+                    appString(R.string.text_the_contact_was_removed_from_your_contact_list_86)
                 } else {
-                    "Вы вышли из учётной записи. Добавьте ярлык заново после входа в TiniTalk."
+                    appString(R.string.text_you_signed_out_add_the_shortcut_again_after_signing_in_to_tinital_87)
                 }
                 lastVisuals.remove(shortcut.id)
                 return@forEach
@@ -183,7 +185,7 @@ internal class ContactShortcuts(
         return ShortcutInfo.Builder(context, "call:${intent.data}")
             .setActivity(ComponentName(context, MainActivity::class.java))
             .setShortLabel(contact.displayName.ifBlank { contact.login })
-            .setLongLabel("Позвонить: ${contact.displayName.ifBlank { contact.login }}")
+            .setLongLabel(appString(R.string.text_call_value_88, contact.displayName.ifBlank { contact.login }))
             .setIcon(contactIcon(contact, photo))
             .setIntent(intent)
             .build()

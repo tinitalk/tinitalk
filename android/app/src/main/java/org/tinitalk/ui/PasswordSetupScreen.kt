@@ -1,5 +1,7 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -93,34 +95,34 @@ internal fun PasswordSetupScreen(
             ) {
                 CompositionLocalProvider(LocalRippleConfiguration provides null) {
                     IconButton(onClick = onBack, enabled = !loading) {
-                        Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "Назад")
+                        Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = appString(R.string.text_back_101))
                     }
                 }
-                Text("Придумайте пароль", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(appString(R.string.text_choose_a_password_317), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
             Column(Modifier.align(Alignment.CenterHorizontally).widthIn(max = 468.dp).fillMaxWidth().padding(24.dp)) {
                 Text(
-                    "Не менее 8 символов. Рекомендуем сочетать строчные и заглавные буквы с цифрами.",
+                    appString(R.string.text_at_least_8_characters_we_recommend_combining_lowercase_and_upperc_318),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(20.dp))
                 OutlinedTextField(
                     password, { password = it; validationMessage = null }, Modifier.fillMaxWidth(),
-                    label = { Text("Новый пароль") }, singleLine = true, enabled = !loading,
+                    label = { Text(appString(R.string.text_new_password_319)) }, singleLine = true, enabled = !loading,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
                 )
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     confirmation, { confirmation = it; validationMessage = null }, Modifier.fillMaxWidth(),
-                    label = { Text("Повторите пароль") }, singleLine = true, enabled = !loading,
+                    label = { Text(appString(R.string.text_repeat_password_320)) }, singleLine = true, enabled = !loading,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { submit() }),
                 )
                 (validationMessage ?: if (retryAtMillis > 0) {
-                    if (retry > 0) "Повторите через $retry с" else "Можно попробовать ещё раз"
+                    if (retry > 0) appString(R.string.text_try_again_in_value_s_122, retry) else appString(R.string.text_you_can_try_again_123)
                 } else errorMessage)?.let { message ->
                     Spacer(Modifier.height(14.dp))
                     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.errorContainer) {
@@ -130,7 +132,7 @@ internal fun PasswordSetupScreen(
                 Spacer(Modifier.height(20.dp))
                 Button(onClick = submit, enabled = canSubmit, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp)) {
                     if (loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                    else Text("Войти", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    else Text(appString(R.string.text_sign_in_115), fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

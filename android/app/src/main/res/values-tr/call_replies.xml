@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_reply_cannot_talk">"Konuşamıyorum"</string>
+    <string name="call_reply_call_me_later">"Lütfen daha sonra arayın"</string>
+    <string name="call_reply_will_call_back">"Sizi geri arayacağım"</string>
+    <string name="call_reply_result_cannot_talk">"şu anda konuşamıyor"</string>
+    <string name="call_reply_result_call_me_later">"daha sonra aramanızı istiyor"</string>
+    <string name="call_reply_result_will_call_back">"sizi geri arayacak"</string>
+    <string name="call_reply_history_cannot_talk">"Konuşamadı"</string>
+    <string name="call_reply_history_call_me_later">"Daha sonra aramanızı istedi"</string>
+    <string name="call_reply_history_will_call_back">"Sizi geri arayacak"</string>
+    <string name="call_reply_history_sent_cannot_talk">"Konuşamadınız"</string>
+    <string name="call_reply_history_sent_call_me_later">"Daha sonra aramasını istediniz"</string>
+    <string name="call_reply_history_sent_will_call_back">"Geri arayacağınızı söylediniz"</string>
+    <string name="call_reply_sheet_title">"Mesajla yanıtla"</string>
+    <string name="call_reply_open">"Yanıt seçeneklerini göster"</string>
+    <string name="call_reply_close">"Yanıt seçeneklerini gizle"</string>
+    <string name="call_reply_select">"Mesajla reddet: %1$s"</string>
+    <string name="call_reply_result_title">"Arama yanıtı"</string>
+    <string name="call_reply_send_failed">"Yanıt gönderilemedi"</string>
+    <string name="call_reply_send_unconfirmed">"Yanıtın gönderildiği doğrulanamadı"</string>
+    <string name="call_reply_sent">"Yanıt gönderildi"</string>
+</resources>

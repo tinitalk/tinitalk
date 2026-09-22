@@ -25,12 +25,15 @@
         android:roundIcon="@mipmap/ic_launcher_system_badge"
         android:theme="@style/AppTheme"
         android:label="TiniTalk"
+        android:localeConfig="@xml/locales_config"
+        tools:targetApi="33"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:supportsRtl="true">
         <activity
             android:name=".MainActivity"
+            android:configChanges="locale|layoutDirection"
             android:icon="@mipmap/ic_launcher"
             android:exported="true">
             <intent-filter>
@@ -46,6 +49,7 @@
             android:taskAffinity="" />
         <activity
             android:name=".CallActivity"
+            android:configChanges="locale|layoutDirection"
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleTop"

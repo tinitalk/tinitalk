@@ -23,7 +23,7 @@ import androidx.exifinterface.media.ExifInterface
 
 @RunWith(RobolectricTestRunner::class)
 // The processor does not need TinitalkApplication, whose asynchronous startup purge shares its draft directory.
-@Config(sdk = [35], application = Application::class)
+@Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class ContactPhotoProcessorTest {
     @get:Rule
     val temp = TemporaryFolder()

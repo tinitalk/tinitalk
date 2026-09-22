@@ -1,5 +1,7 @@
 package org.tinitalk
 
+import org.tinitalk.i18n.appString
+
 import androidx.core.net.toUri
 import android.Manifest
 import android.app.NotificationManager
@@ -97,7 +99,7 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.CompletableFuture
 
-private const val SessionReplacedMessage = "Вход выполнен на другом устройстве"
+private val SessionReplacedMessage: String get() = appString(R.string.text_signed_in_on_another_device_8)
 
 class MainActivity : ComponentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -336,16 +338,16 @@ class MainActivity : ComponentActivity() {
                     shortcutToConfirm?.let { contact ->
                         AlertDialog(
                             onDismissRequest = { shortcutToConfirm = null },
-                            title = { Text("Ярлык уже добавлен") },
-                            text = { Text("Ярлык контакта «${contact.displayName}» уже добавлен на главный экран. Добавить ещё один?") },
+                            title = { Text(appString(R.string.text_shortcut_already_added_9)) },
+                            text = { Text(appString(R.string.text_a_shortcut_for_value_is_already_on_your_home_screen_add_another_10, contact.displayName)) },
                             confirmButton = {
                                 TextButton(onClick = {
                                     shortcutToConfirm = null
                                     pinContact(contact, allowDuplicate = true)
-                                }) { Text("Добавить ещё") }
+                                }) { Text(appString(R.string.text_add_another_11)) }
                             },
                             dismissButton = {
-                                TextButton(onClick = { shortcutToConfirm = null }) { Text("Отмена") }
+                                TextButton(onClick = { shortcutToConfirm = null }) { Text(appString(R.string.text_cancel_12)) }
                             },
                         )
                     }
@@ -507,7 +509,7 @@ class MainActivity : ComponentActivity() {
             if (!isCurrentSessionRequest(generation, authGeneration)) return@runOnUiThread
             screenState = screenState.copy(passwordSetupRequired = false)
             restoreContacts()
-            Toast.makeText(this, "Вход сохранён. Восстанавливаем подключение", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, appString(R.string.text_sign_in_saved_reconnecting_13), Toast.LENGTH_LONG).show()
         }
         return true
     }
@@ -560,7 +562,7 @@ class MainActivity : ComponentActivity() {
                 val supported = withContext(Dispatchers.IO) { runCatching { contactShortcuts.isSupported() } }
                 if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
                 if (supported.getOrNull() == false) {
-                    Toast.makeText(this@MainActivity, "Этот главный экран не поддерживает добавление ярлыков", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, appString(R.string.text_this_home_screen_does_not_support_shortcuts_14), Toast.LENGTH_LONG).show()
                     return@launch
                 }
                 val prepared = withContext(Dispatchers.IO) {
@@ -579,7 +581,7 @@ class MainActivity : ComponentActivity() {
                     runCatching { contactShortcuts.requestPin(shortcut.info) }.getOrDefault(false)
                 }
                 if (!requested && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                    Toast.makeText(this@MainActivity, "Не удалось добавить ярлык. Проверьте контакт и попробуйте ещё раз.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, appString(R.string.text_could_not_add_the_shortcut_check_the_contact_and_try_again_15), Toast.LENGTH_LONG).show()
                 }
             } finally {
                 pinningShortcut = false
@@ -660,7 +662,7 @@ class MainActivity : ComponentActivity() {
                     ),
                     contactsRefreshing = false,
                     contactsRefreshErrorMessage = if (showProgress && !updated) {
-                        "Не удалось обновить контакты"
+                        appString(R.string.text_could_not_refresh_contacts_16)
                     } else {
                         null
                     },
@@ -700,24 +702,24 @@ class MainActivity : ComponentActivity() {
     private fun showError(error: Throwable) {
         val message = when (error) {
             is ServerCompatibilityException -> when (error.problem) {
-                CompatibilityProblem.WrongServer -> "По этому адресу нет сервера TiniTalk. Проверьте адрес"
-                CompatibilityProblem.ServerOutdated -> "Сервер несовместим с этой версией приложения"
-                CompatibilityProblem.AppOutdated -> "Приложение TiniTalk устарело. Установите новую версию"
-                CompatibilityProblem.Unavailable -> "Сервер TiniTalk временно недоступен"
+                CompatibilityProblem.WrongServer -> appString(R.string.text_no_tinitalk_server_at_this_address_check_the_address_17)
+                CompatibilityProblem.ServerOutdated -> appString(R.string.text_the_server_is_incompatible_with_this_app_version_18)
+                CompatibilityProblem.AppOutdated -> appString(R.string.text_tinitalk_is_out_of_date_install_the_latest_version_19)
+                CompatibilityProblem.Unavailable -> appString(R.string.text_the_tinitalk_server_is_temporarily_unavailable_20)
             }
             is ApiException -> if (error.errorCode != null) {
                 passwordAuthErrorMessage(error)
             } else if (
                 error.code == 401 && error.authReason == SessionReplacedReason
             ) SessionReplacedMessage else when (error.code) {
-                401 -> "Неверный логин или пароль"
-                404 -> "Сервер TiniTalk не найден"
-                else -> "Сервер вернул ошибку ${error.code}"
+                401 -> appString(R.string.text_incorrect_username_or_password_21)
+                404 -> appString(R.string.text_tinitalk_server_not_found_22)
+                else -> appString(R.string.text_the_server_returned_error_value_23, error.code)
             }
-            is UnknownHostException -> "Сервер не найден. Проверьте адрес и подключение к сети"
-            is SocketTimeoutException -> "Сервер не отвечает. Попробуйте ещё раз"
-            is MalformedURLException -> "Проверьте адрес сервера"
-            else -> "Не удалось подключиться к серверу"
+            is UnknownHostException -> appString(R.string.text_server_not_found_check_the_address_and_your_connection_24)
+            is SocketTimeoutException -> appString(R.string.text_the_server_is_not_responding_try_again_25)
+            is MalformedURLException -> appString(R.string.text_check_the_server_address_26)
+            else -> appString(R.string.text_could_not_connect_to_the_server_27)
         }
         runOnUiThread {
             authGeneration++
@@ -811,11 +813,11 @@ class MainActivity : ComponentActivity() {
         val account = repository.accounts().firstOrNull { it.id == accountId } ?: return
         val key = AccountPeerKey(accountId, login.trim())
         if (account.session.login == key.login) {
-            screenState = screenState.copy(addContactErrorMessage = "Нельзя добавить свой аккаунт в контакты")
+            screenState = screenState.copy(addContactErrorMessage = appString(R.string.text_you_cannot_add_your_own_account_to_contacts_28))
             return
         }
         if (screenState.accountContacts.any { it.peerKey == key }) {
-            screenState = screenState.copy(addContactErrorMessage = "Этот контакт уже есть в вашей телефонной книге")
+            screenState = screenState.copy(addContactErrorMessage = appString(R.string.text_this_contact_is_already_in_your_contact_list_29))
             return
         }
         contactsGeneration++
@@ -925,7 +927,7 @@ class MainActivity : ComponentActivity() {
                 )
                 if (stagedAddition) {
                     refreshContacts(showProgress = false)
-                    Toast.makeText(this, "Вход сохранён. Восстанавливаем подключение", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, appString(R.string.text_sign_in_saved_reconnecting_13), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -983,8 +985,8 @@ class MainActivity : ComponentActivity() {
                 removal.exceptionOrNull()?.let { error ->
                     val message = when (error) {
                         is UnknownHostException, is SocketTimeoutException ->
-                            "Не удалось отозвать вход на сервере. Аккаунт остался на устройстве"
-                        else -> "Не удалось выйти: сервер не подтвердил отзыв входа"
+                            appString(R.string.text_could_not_revoke_sign_in_on_the_server_the_account_remains_on_thi_30)
+                        else -> appString(R.string.text_could_not_sign_out_the_server_did_not_confirm_it_31)
                     }
                     Toast.makeText(this, message, Toast.LENGTH_LONG).show()
                 }
@@ -1002,12 +1004,12 @@ class MainActivity : ComponentActivity() {
 
     private fun changePassword(accountId: AccountId, currentPassword: String, newPassword: String) {
         if (!network.available) {
-            screenState = screenState.copy(passwordChangeErrorMessage = "Нет подключения к интернету")
+            screenState = screenState.copy(passwordChangeErrorMessage = appString(R.string.text_no_internet_connection_3))
             return
         }
         if (screenState.passwordChanging || accountRemovalInProgress) return
         if (callUiState.phase != CallPhase.Idle && callUiState.phase != CallPhase.Ended) {
-            screenState = screenState.copy(passwordChangeErrorMessage = "Сначала завершите звонок")
+            screenState = screenState.copy(passwordChangeErrorMessage = appString(R.string.text_end_the_call_first_32))
             return
         }
         val previous = repository.accounts().firstOrNull { it.id == accountId } ?: return
@@ -1024,7 +1026,7 @@ class MainActivity : ComponentActivity() {
                             passwordChangeCompletionKey = screenState.passwordChangeCompletionKey + 1,
                             accounts = repository.accounts().toAccountSummaries(),
                         )
-                        Toast.makeText(this, "Пароль сохранён", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, appString(R.string.text_password_saved_33), Toast.LENGTH_SHORT).show()
                     }
                 }
                 .onFailure { error ->
@@ -1038,7 +1040,7 @@ class MainActivity : ComponentActivity() {
                                 accounts = repository.accounts().toAccountSummaries(),
                             )
                             refreshContacts(showProgress = false)
-                            Toast.makeText(this, "Пароль сохранён. Восстанавливаем подключение", Toast.LENGTH_LONG).show()
+                            Toast.makeText(this, appString(R.string.text_password_saved_reconnecting_34), Toast.LENGTH_LONG).show()
                             return@runOnUiThread
                         }
                         if (error is PasswordSignInRequiredException) {
@@ -1057,7 +1059,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showPasswordSignInRecovery(account: org.tinitalk.data.AccountRecord) {
         val remaining = repository.accounts()
-        val message = "Не удалось получить ответ сервера. Войдите с новым паролем. Если он не подходит — используйте прежние данные для входа."
+        val message = appString(R.string.text_no_response_from_the_server_sign_in_with_your_new_password_if_it__35)
         pruneRemovedAccount(account.id, remaining, clearFavorites = false)
         if (remaining.isEmpty()) {
             resetToLogin(message)
@@ -1256,7 +1258,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showNoInternetMessage() {
-        Toast.makeText(this, "Нет подключения к интернету", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, appString(R.string.text_no_internet_connection_3), Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -1268,49 +1270,49 @@ private fun List<org.tinitalk.data.AccountRecord>.aboutServerUrl(): String =
     configuredAboutServerUrl(map { it.session.url })
 
 private fun userErrorMessage(error: Throwable): String = when (error) {
-    is org.tinitalk.data.DuplicateAccountException -> "Аккаунт с этого сервера уже добавлен"
+    is org.tinitalk.data.DuplicateAccountException -> appString(R.string.text_an_account_from_this_server_is_already_added_36)
     is ServerCompatibilityException -> when (error.problem) {
-        CompatibilityProblem.WrongServer -> "По этому адресу нет сервера TiniTalk. Проверьте адрес"
+        CompatibilityProblem.WrongServer -> appString(R.string.text_no_tinitalk_server_at_this_address_check_the_address_17)
         CompatibilityProblem.ServerOutdated -> error.serverUrl
             ?.takeIf(String::isNotBlank)
             ?.let { server ->
-                "Сервер $server пока не поддерживает несколько аккаунтов. Добавить ещё один аккаунт сейчас нельзя."
+                appString(R.string.text_server_value_does_not_support_multiple_accounts_yet_you_cannot_ad_37, server)
             }
-            ?: "Сервер несовместим с этой версией приложения"
-        CompatibilityProblem.AppOutdated -> "Приложение TiniTalk устарело. Установите новую версию"
-        CompatibilityProblem.Unavailable -> "Сервер TiniTalk временно недоступен"
+            ?: appString(R.string.text_the_server_is_incompatible_with_this_app_version_18)
+        CompatibilityProblem.AppOutdated -> appString(R.string.text_tinitalk_is_out_of_date_install_the_latest_version_19)
+        CompatibilityProblem.Unavailable -> appString(R.string.text_the_tinitalk_server_is_temporarily_unavailable_20)
     }
     is ApiException -> if (error.errorCode != null) {
         passwordAuthErrorMessage(error)
     } else if (error.code == 401) {
-        "Неверный логин или пароль"
+        appString(R.string.text_incorrect_username_or_password_21)
     } else {
-        "Сервер вернул ошибку ${error.code}"
+        appString(R.string.text_the_server_returned_error_value_23, error.code)
     }
-    else -> "Не удалось подключиться к серверу"
+    else -> appString(R.string.text_could_not_connect_to_the_server_27)
 }
 
 private fun passwordSetupRecoveryMessage(): String =
-    "Не удалось получить ответ сервера. Вернитесь ко входу и попробуйте новый пароль."
+    appString(R.string.text_no_response_from_the_server_return_to_sign_in_and_try_your_new_pa_38)
 
 private fun contactAddError(error: Throwable, login: String, serverUrl: String): String = when (error) {
-    is ServerCompatibilityException -> "Сервер ${serverUrl.removePrefix("https://")} необходимо обновить, чтобы добавлять контакты"
+    is ServerCompatibilityException -> appString(R.string.text_server_value_needs_an_update_to_add_contacts_39, serverUrl.removePrefix("https://"))
     is ApiException -> when (error.code) {
-        400 -> "Проверьте логин и имя контакта"
-        404 -> "Пользователь «$login» не найден на сервере ${serverUrl.removePrefix("https://")}. Проверьте логин"
-        409 -> "Этот контакт уже есть в вашей телефонной книге"
-        else -> "Сервер вернул ошибку ${error.code}"
+        400 -> appString(R.string.text_check_the_contact_username_and_name_40)
+        404 -> appString(R.string.text_user_value_was_not_found_on_server_value_check_the_username_41, login, serverUrl.removePrefix("https://"))
+        409 -> appString(R.string.text_this_contact_is_already_in_your_contact_list_29)
+        else -> appString(R.string.text_the_server_returned_error_value_23, error.code)
     }
-    is UnknownHostException -> "Сервер не найден. Проверьте подключение к интернету"
-    is SocketTimeoutException -> "Сервер не отвечает. Попробуйте ещё раз"
-    else -> "Не удалось добавить контакт. Проверьте соединение"
+    is UnknownHostException -> appString(R.string.text_server_not_found_check_your_internet_connection_42)
+    is SocketTimeoutException -> appString(R.string.text_the_server_is_not_responding_try_again_25)
+    else -> appString(R.string.text_could_not_add_the_contact_check_your_connection_43)
 }
 
 private fun contactRemoveError(error: Throwable): String = when (error) {
-    is ServerCompatibilityException -> "Сервер необходимо обновить, чтобы удалять контакты"
-    is SocketTimeoutException -> "Сервер не отвечает. Попробуйте ещё раз"
-    is UnknownHostException -> "Нет связи с сервером. Проверьте интернет"
-    else -> "Не удалось удалить контакт. Попробуйте ещё раз"
+    is ServerCompatibilityException -> appString(R.string.text_the_server_needs_an_update_to_delete_contacts_44)
+    is SocketTimeoutException -> appString(R.string.text_the_server_is_not_responding_try_again_25)
+    is UnknownHostException -> appString(R.string.text_no_connection_to_the_server_check_your_internet_connection_45)
+    else -> appString(R.string.text_could_not_delete_the_contact_try_again_46)
 }
 
 private fun MainScreenState.withContactUpdates(updates: Map<org.tinitalk.data.AccountPeerKey, Contact>): MainScreenState {

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_reply_cannot_talk">"Nie mogę rozmawiać"</string>
+    <string name="call_reply_call_me_later">"Proszę zadzwonić później"</string>
+    <string name="call_reply_will_call_back">"Oddzwonię"</string>
+    <string name="call_reply_result_cannot_talk">"nie może teraz rozmawiać"</string>
+    <string name="call_reply_result_call_me_later">"prosi o telefon później"</string>
+    <string name="call_reply_result_will_call_back">"oddzwoni"</string>
+    <string name="call_reply_history_cannot_talk">"Nie można było rozmawiać"</string>
+    <string name="call_reply_history_call_me_later">"Prośba o telefon później"</string>
+    <string name="call_reply_history_will_call_back">"Obietnica oddzwonienia"</string>
+    <string name="call_reply_history_sent_cannot_talk">"Nie można było rozmawiać"</string>
+    <string name="call_reply_history_sent_call_me_later">"Twoja prośba o telefon później"</string>
+    <string name="call_reply_history_sent_will_call_back">"Twoja obietnica oddzwonienia"</string>
+    <string name="call_reply_sheet_title">"Odpowiedz wiadomością"</string>
+    <string name="call_reply_open">"Pokaż odpowiedzi"</string>
+    <string name="call_reply_close">"Ukryj odpowiedzi"</string>
+    <string name="call_reply_select">"Odrzuć z odpowiedzią: %1$s"</string>
+    <string name="call_reply_result_title">"Odpowiedź na połączenie"</string>
+    <string name="call_reply_send_failed">"Nie udało się wysłać odpowiedzi"</string>
+    <string name="call_reply_send_unconfirmed">"Nie udało się potwierdzić wysłania odpowiedzi"</string>
+    <string name="call_reply_sent">"Odpowiedź wysłana"</string>
+</resources>

@@ -1,5 +1,9 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -68,14 +72,14 @@ fun ContactPhotoActionSheet(
             modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("Фото контакта", style = MaterialTheme.typography.titleLarge)
+            Text(appString(R.string.text_contact_photo_214), style = MaterialTheme.typography.titleLarge)
             Button(
                 onClick = onGallery,
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(18.dp),
             ) {
-                Text("Выбрать из галереи")
+                Text(appString(R.string.text_choose_from_gallery_215))
             }
             Button(
                 onClick = onFiles,
@@ -83,7 +87,7 @@ fun ContactPhotoActionSheet(
                 modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(18.dp),
             ) {
-                Text("Выбрать из файлов")
+                Text(appString(R.string.text_choose_from_files_216))
             }
             if (hasPhoto) {
                 TextButton(
@@ -91,7 +95,7 @@ fun ContactPhotoActionSheet(
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                 ) {
-                    Text("Удалить фото")
+                    Text(appString(R.string.text_remove_photo_217))
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -125,7 +129,7 @@ fun ContactPhotoCropOverlay(
             modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Настройте фото", style = MaterialTheme.typography.titleLarge)
+            Text(appString(R.string.text_adjust_photo_218), style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(18.dp))
             Box(
                 modifier = Modifier
@@ -195,7 +199,7 @@ fun ContactPhotoCropOverlay(
                     enabled = state.phase != ContactPhotoEditorPhase.Saving,
                     modifier = Modifier.weight(1f).height(54.dp),
                 ) {
-                    Text("Отмена")
+                    Text(appString(R.string.text_cancel_12))
                 }
                 Button(
                     onClick = { onDone(crop) },
@@ -207,7 +211,7 @@ fun ContactPhotoCropOverlay(
                     if (state.phase == ContactPhotoEditorPhase.Saving) {
                         CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
                     } else {
-                        Text("Готово")
+                        Text(appString(R.string.text_done_219))
                     }
                 }
             }

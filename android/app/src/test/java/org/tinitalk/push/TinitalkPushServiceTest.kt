@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config
 import org.unifiedpush.android.connector.FailedReason
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class)
+@Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class TinitalkPushServiceTest {
     @Test
     fun registrationCallbackDoesNotWaitForAccountStorage() {

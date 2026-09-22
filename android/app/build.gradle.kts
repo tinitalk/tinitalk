@@ -40,6 +40,8 @@ val commitHash = runCatching {
 }.getOrDefault("unknown")
 
 android {
+    // Keep all translations available for the in-app picker, including offline installs.
+    bundle { language { enableSplit = false } }
     namespace = "org.tinitalk"
     compileSdk = 37
 

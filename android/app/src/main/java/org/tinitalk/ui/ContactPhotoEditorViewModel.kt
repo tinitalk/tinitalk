@@ -1,5 +1,9 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Handler
@@ -307,8 +311,8 @@ class ContactPhotoEditorViewModel(
 }
 
 internal fun contactPhotoMessage(reason: ContactPhotoFailure): String = when (reason) {
-    ContactPhotoFailure.CannotOpen -> "Не удалось открыть изображение"
-    ContactPhotoFailure.TooLarge -> "Изображение слишком большое"
-    ContactPhotoFailure.NoSpace -> "Недостаточно места для сохранения фото"
-    ContactPhotoFailure.CannotSave -> "Не удалось сохранить фото"
+    ContactPhotoFailure.CannotOpen -> appString(R.string.text_could_not_open_the_image_220)
+    ContactPhotoFailure.TooLarge -> appString(R.string.text_the_image_is_too_large_221)
+    ContactPhotoFailure.NoSpace -> appString(R.string.text_not_enough_space_to_save_the_photo_222)
+    ContactPhotoFailure.CannotSave -> appString(R.string.text_could_not_save_the_photo_223)
 }

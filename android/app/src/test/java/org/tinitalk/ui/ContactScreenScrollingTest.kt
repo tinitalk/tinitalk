@@ -24,7 +24,7 @@ import org.tinitalk.ui.theme.TiniTalkTheme
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w320dp-h720dp")
+@Config(sdk = [35], qualifiers = "ru-w320dp-h720dp")
 class ContactScreenScrollingTest {
     @get:Rule val composeRule = createEmptyComposeRule()
 

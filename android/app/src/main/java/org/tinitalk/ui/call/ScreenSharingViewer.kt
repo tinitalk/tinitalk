@@ -1,5 +1,9 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -77,9 +81,9 @@ internal fun ScreenSharingViewer(
     // Keep both the image and our panels outside the phone's system bars and cutouts.
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding().clipToBounds()) {
         val status = when {
-            connectionHealth == ConnectionHealth.Reconnecting || connectionHealth == ConnectionHealth.Connecting -> "Восстанавливаем связь…"
-            !frameVisible -> "Подключаем показ…"
-            else -> "Идёт показ экрана"
+            connectionHealth == ConnectionHealth.Reconnecting || connectionHealth == ConnectionHealth.Connecting -> appString(R.string.text_reconnecting_131)
+            !frameVisible -> appString(R.string.text_connecting_screen_sharing_197)
+            else -> appString(R.string.text_screen_sharing_in_progress_198)
         }
         val layout = callControlLayout(
             videoAllowed = false, videoModeActive = false,
@@ -203,7 +207,7 @@ private fun ScreenImage(
                     val translation = limitedPan(zoom)
                     translationX = translation.x; translationY = translation.y
                 },
-                contentDescription = "Экран собеседника",
+                contentDescription = appString(R.string.text_the_other_person_s_screen_199),
                 keepLastFrame = true,
                 onFrameSizeChanged = { w, h -> if (w > 0 && h > 0) aspect = w.toFloat() / h },
                 onFrameVisibilityChanged = { frameVisible = it },
@@ -233,13 +237,13 @@ private fun ScreenImage(
         if (!frameVisible) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(Modifier.size(28.dp), color = Color.White, strokeWidth = 2.dp)
-                Text("Ожидаем изображение…", Modifier.padding(12.dp), color = Color.White)
+                Text(appString(R.string.text_waiting_for_video_200), Modifier.padding(12.dp), color = Color.White)
             }
         }
         if (controlsVisible && zoom > 1f) TextButton(
             onClick = { currentInteraction(); zoom = 1f; pan = Offset.Zero },
             modifier = Modifier.align(Alignment.CenterEnd).background(Color.Black.copy(alpha = 0.65f)),
-        ) { Text("Целиком", color = Color.White) }
+        ) { Text(appString(R.string.text_fit_to_screen_201), color = Color.White) }
     }
     LaunchedEffect(frameVisible) { onFrameVisibilityChanged(frameVisible) }
 }

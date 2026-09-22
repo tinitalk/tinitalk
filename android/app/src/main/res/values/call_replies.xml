@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="call_reply_cannot_talk">Не могу говорить</string>
-    <string name="call_reply_call_me_later">Перезвоните мне позднее</string>
-    <string name="call_reply_will_call_back">Я вам перезвоню</string>
-    <string name="call_reply_result_cannot_talk">сейчас не может говорить</string>
-    <string name="call_reply_result_call_me_later">просит перезвонить позже</string>
-    <string name="call_reply_result_will_call_back">обещает перезвонить позже</string>
-    <string name="call_reply_history_cannot_talk">Не могли говорить</string>
-    <string name="call_reply_history_call_me_later">Просили перезвонить позже</string>
-    <string name="call_reply_history_will_call_back">Обещали перезвонить</string>
-    <string name="call_reply_history_sent_cannot_talk">Вы не могли говорить</string>
-    <string name="call_reply_history_sent_call_me_later">Вы просили перезвонить позже</string>
-    <string name="call_reply_history_sent_will_call_back">Вы обещали перезвонить</string>
-    <string name="call_reply_sheet_title">Ответить сообщением</string>
-    <string name="call_reply_open">Открыть варианты ответа</string>
-    <string name="call_reply_close">Закрыть варианты ответа</string>
-    <string name="call_reply_select">Отклонить звонок с ответом: %1$s</string>
-    <string name="call_reply_result_title">Ответ на звонок</string>
-    <string name="call_reply_send_failed">Не удалось отправить ответ</string>
-    <string name="call_reply_send_unconfirmed">Не удалось подтвердить отправку ответа</string>
-    <string name="call_reply_sent">Ответ отправлен</string>
+    <string name="call_reply_cannot_talk">"I cannot talk"</string>
+    <string name="call_reply_call_me_later">"Please call me later"</string>
+    <string name="call_reply_will_call_back">"I will call you back"</string>
+    <string name="call_reply_result_cannot_talk">"cannot talk right now"</string>
+    <string name="call_reply_result_call_me_later">"asks you to call later"</string>
+    <string name="call_reply_result_will_call_back">"will call you back"</string>
+    <string name="call_reply_history_cannot_talk">"Could not talk"</string>
+    <string name="call_reply_history_call_me_later">"Asked you to call later"</string>
+    <string name="call_reply_history_will_call_back">"Will call you back"</string>
+    <string name="call_reply_history_sent_cannot_talk">"You could not talk"</string>
+    <string name="call_reply_history_sent_call_me_later">"You asked them to call later"</string>
+    <string name="call_reply_history_sent_will_call_back">"You said you would call back"</string>
+    <string name="call_reply_sheet_title">"Reply with a message"</string>
+    <string name="call_reply_open">"Show reply options"</string>
+    <string name="call_reply_close">"Hide reply options"</string>
+    <string name="call_reply_select">"Decline with reply: %1$s"</string>
+    <string name="call_reply_result_title">"Call reply"</string>
+    <string name="call_reply_send_failed">"Could not send the reply"</string>
+    <string name="call_reply_send_unconfirmed">"Could not confirm the reply was sent"</string>
+    <string name="call_reply_sent">"Reply sent"</string>
 </resources>
