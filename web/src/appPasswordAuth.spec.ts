@@ -1,3 +1,4 @@
+import { localizedFunction } from './testI18n';
 import { expect, it, vi } from 'vitest';
 import * as ts from 'typescript';
 import appSource from './app.ts?raw';
@@ -16,7 +17,7 @@ function profilePasswordActionHarness(api: ReturnType<typeof vi.fn>) {
   const code = functionCode(['loadProfilePasswordAction']);
   const account = {id:'a', token:'token', sessionId:'session', passwordAuth:true, passwordSet:true};
   const actions = {isConnected:true, append:vi.fn()};
-  const load = new Function('api', 'account', `
+  const load = localizedFunction('api', 'account', `
     const list = [account], removingAccounts = new Set(), rotatingCredentials = new Set();
     const saveAccount = async () => {}, actionButton = label => label;
     ${code}
@@ -82,7 +83,7 @@ it('persists a newly issued token before claiming a browser session', async () =
   const saveAccount = vi.fn(async account => { order.push(`save:${account.token}:${account.sessionId}`); });
   const claim = vi.fn(async account => { order.push(`claim:${account.token}`); account.sessionId = 'session'; });
   const code = functionCode(['persistAndClaim']);
-  const run = new Function('saveAccount', 'claim', `${code}; return persistAndClaim;`)(saveAccount, claim);
+  const run = localizedFunction('saveAccount', 'claim', `${code}; return persistAndClaim;`)(saveAccount, claim);
   const account = { token: 'issued', sessionId: '' };
 
   await run(account, true, () => true);
@@ -95,7 +96,7 @@ it('activates legacy-server accounts only after the browser session is claimed',
   const saveAccount = vi.fn(async () => { order.push('save'); });
   const claim = vi.fn(async account => { order.push('claim'); account.sessionId = 'legacy-session'; });
   const code = functionCode(['persistAndClaim']);
-  const run = new Function('saveAccount', 'claim', `${code}; return persistAndClaim;`)(saveAccount, claim);
+  const run = localizedFunction('saveAccount', 'claim', `${code}; return persistAndClaim;`)(saveAccount, claim);
   const account = {token:'legacy-token', sessionId:''};
   await run(account, false, () => true, () => order.push('install'));
   expect(order).toEqual(['claim', 'save']);
@@ -109,7 +110,7 @@ it.each([false, true, undefined])('confirms logout normally regardless of passwo
   const element = vi.fn((_tag, _className, text) => text);
   const actionButton = vi.fn((label, action) => ({label, action}));
   const closeDialog = vi.fn(), removeAccount = vi.fn();
-  const confirm = new Function('dialog', 'element', 'actionButton', 'closeDialog', 'removeAccount', `
+  const confirm = localizedFunction('dialog', 'element', 'actionButton', 'closeDialog', 'removeAccount', `
     ${code}
     return confirmRemoveAccount;
   `)(dialog, element, actionButton, closeDialog, removeAccount);
@@ -129,7 +130,7 @@ it('ends the server session before removing local account data', async () => {
   const code = functionCode(['removeAccount']);
   const order: string[] = [];
   const account = { id: 'a', passwordAuth: true };
-  const app = new Function('logout', 'account', 'order', `
+  const app = localizedFunction('logout', 'account', 'order', `
     const current = null, removingAccounts = new Set(), base = '/', list = [account];
     const beginCredentialRotation = () => {}, endCredentialRotation = () => {};
     const disablePush = async () => {}, connections = new Map(), deleteAccount = async () => { order.push('delete'); };
@@ -147,7 +148,7 @@ it('ends the server session before removing local account data', async () => {
 
 it('preserves password whitespace when parsing pasted credentials', () => {
   const code = functionCode(['splitAccountAddress', 'splitCredentials']);
-  const parse = new Function(`
+  const parse = localizedFunction(`
     const normalizeServer = value => value;
     ${code}
     return splitCredentials;
@@ -161,7 +162,7 @@ it('disconnects and identity-guards an account during credential rotation', () =
   const code = functionCode(['beginCredentialRotation', 'markSessionReplaced']);
   const stop = vi.fn(), saveAccount = vi.fn();
   const account = { id: 'a', sessionId: 'old-session', token: 'old-token' };
-  const app = new Function('stop', 'saveAccount', 'account', `
+  const app = localizedFunction('stop', 'saveAccount', 'account', `
     const list = [account], rotatingCredentials = new Set(), connections = new Map([['a', {stop}]]);
     const removingAccounts = new Set();
     const clearUnread = () => {}, states = new Map(), contactsByAccount = new Map();
@@ -184,7 +185,7 @@ it('records whether the authenticated account has a personal password', async ()
   const code = functionCode(['refreshPasswordState']);
   const api = vi.fn().mockResolvedValue({ password_set: false });
   const saveAccount = vi.fn().mockResolvedValue(undefined);
-  const refresh = new Function('api', 'saveAccount', `${code}; return refreshPasswordState;`)(api, saveAccount);
+  const refresh = localizedFunction('api', 'saveAccount', `${code}; return refreshPasswordState;`)(api, saveAccount);
   const account: { passwordAuth: boolean; passwordSet?: boolean; sessionId: string } = { passwordAuth: true, sessionId: 'claimed' };
 
   await refresh(account);
@@ -200,7 +201,7 @@ it('installs a saved token in memory before claim and keeps it if the connection
   const saved: unknown[] = [];
   const claim = vi.fn(async () => { order.push('claim'); throw new Error('offline'); });
   const saveAccount = vi.fn(async account => { saved.push({...account}); order.push('save'); });
-  const run = new Function('saveAccount', 'claim', `${code}; return persistAndClaim;`)(saveAccount, claim);
+  const run = localizedFunction('saveAccount', 'claim', `${code}; return persistAndClaim;`)(saveAccount, claim);
   const account = {token: 'new-token', sessionId: ''};
   await expect(run(account, true, () => true, () => order.push('install'))).rejects.toThrow('offline');
   expect(order).toEqual(['save', 'install', 'claim']);
@@ -212,7 +213,7 @@ it('resumes a saved token by claiming only, without exchanging a password again'
   const account = {id:'a', token:'issued', sessionId:'', passwordAuth:true};
   const claim = vi.fn(async a => { a.sessionId = 'claimed'; });
   const connectAccount = vi.fn();
-  const run = new Function('account', 'claim', 'connectAccount', `
+  const run = localizedFunction('account', 'claim', 'connectAccount', `
     const list=[account], activatingAccounts=new Set(), removingAccounts=new Set(), states=new Map();
     const saveAccount=async()=>{}, refreshPasswordState=async()=>{}, refreshAll=async()=>{}, renderApp=()=>{};
     ${code}

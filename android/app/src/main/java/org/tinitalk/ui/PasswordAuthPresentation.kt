@@ -1,12 +1,16 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import android.os.SystemClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
 import org.tinitalk.data.ApiException
 
-internal const val PersonalPasswordLengthMessage = "Пароль должен содержать от 8 до 128 символов"
+internal val PersonalPasswordLengthMessage: String get() = appString(R.string.text_password_must_contain_8_to_128_characters_309)
 
 internal fun passwordRetryDeadline(error: Throwable): Long =
     (error as? ApiException)?.takeIf { it.code == 429 }?.retryAfterSeconds
@@ -31,21 +35,21 @@ internal fun personalPasswordError(password: String): String? {
 }
 
 internal fun passwordConfirmationError(password: String, confirmation: String): String? =
-    "Пароли не совпадают".takeUnless { password == confirmation }
+    appString(R.string.text_passwords_do_not_match_310).takeUnless { password == confirmation }
 
 internal fun passwordAuthErrorMessage(error: ApiException): String = when (error.errorCode) {
-    "invalid_credentials" -> "Неверный логин или пароль"
-    "temporary_password_expired" -> "Срок действия пароля истёк. Попросите администратора выдать новый"
-    "temporary_password_locked" -> "Слишком много неверных попыток. Попросите администратора выдать новый пароль"
+    "invalid_credentials" -> appString(R.string.text_incorrect_username_or_password_21)
+    "temporary_password_expired" -> appString(R.string.text_password_expired_ask_your_administrator_for_a_new_one_311)
+    "temporary_password_locked" -> appString(R.string.text_too_many_incorrect_attempts_ask_your_administrator_for_a_new_pass_312)
     "password_retry_later" -> error.retryAfterSeconds?.coerceAtLeast(1)?.let {
-        "Слишком много попыток. Повторите через $it с"
-    } ?: "Слишком много попыток. Повторите позже"
+        appString(R.string.text_too_many_attempts_try_again_in_value_s_313, it)
+    } ?: appString(R.string.text_too_many_attempts_try_again_later_314)
     "invalid_password" -> PersonalPasswordLengthMessage
-    "auth_busy" -> "Сервер занят. Попробуйте чуть позже"
+    "auth_busy" -> appString(R.string.text_the_server_is_busy_try_again_later_315)
     else -> when (error.code) {
-        401 -> "Неверный логин или пароль"
-        429 -> error.retryAfterSeconds?.coerceAtLeast(1)?.let { "Повторите через $it с" }
-            ?: "Слишком много попыток. Повторите позже"
-        else -> "Сервер вернул ошибку ${error.code}"
+        401 -> appString(R.string.text_incorrect_username_or_password_21)
+        429 -> error.retryAfterSeconds?.coerceAtLeast(1)?.let { appString(R.string.text_try_again_in_value_s_316, it) }
+            ?: appString(R.string.text_too_many_attempts_try_again_later_314)
+        else -> appString(R.string.text_the_server_returned_error_value_23, error.code)
     }
 }

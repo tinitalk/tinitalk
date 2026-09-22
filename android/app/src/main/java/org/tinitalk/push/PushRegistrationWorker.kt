@@ -1,5 +1,7 @@
 package org.tinitalk.push
 
+import org.tinitalk.i18n.appString
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -192,14 +194,14 @@ class PushRegistrationWorker(
         manager.createNotificationChannel(
             NotificationChannel(
                 ForegroundChannelId,
-                "Подключение TiniTalk",
+                appString(R.string.text_tinitalk_connection_82),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply { setShowBadge(false) },
         )
         val notification = Notification.Builder(applicationContext, ForegroundChannelId)
             .setSmallIcon(R.drawable.ic_server_available)
             .setContentTitle("TiniTalk")
-            .setContentText("Обновляем подключение к серверу")
+            .setContentText(appString(R.string.text_updating_the_server_connection_83))
             .setCategory(Notification.CATEGORY_SERVICE)
             .setOnlyAlertOnce(true)
             .setOngoing(true)

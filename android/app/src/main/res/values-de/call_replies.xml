@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_reply_cannot_talk">"Ich kann nicht sprechen"</string>
+    <string name="call_reply_call_me_later">"Bitte später anrufen"</string>
+    <string name="call_reply_will_call_back">"Ich rufe zurück"</string>
+    <string name="call_reply_result_cannot_talk">"kann gerade nicht sprechen"</string>
+    <string name="call_reply_result_call_me_later">"bittet um einen späteren Anruf"</string>
+    <string name="call_reply_result_will_call_back">"ruft zurück"</string>
+    <string name="call_reply_history_cannot_talk">"Konnte nicht sprechen"</string>
+    <string name="call_reply_history_call_me_later">"Bat um einen späteren Anruf"</string>
+    <string name="call_reply_history_will_call_back">"Hat einen Rückruf zugesagt"</string>
+    <string name="call_reply_history_sent_cannot_talk">"Du konntest nicht sprechen"</string>
+    <string name="call_reply_history_sent_call_me_later">"Du hast um einen späteren Anruf gebeten"</string>
+    <string name="call_reply_history_sent_will_call_back">"Du hast einen Rückruf zugesagt"</string>
+    <string name="call_reply_sheet_title">"Mit Nachricht antworten"</string>
+    <string name="call_reply_open">"Antwortmöglichkeiten öffnen"</string>
+    <string name="call_reply_close">"Antwortmöglichkeiten schließen"</string>
+    <string name="call_reply_select">"Mit Antwort ablehnen: %1$s"</string>
+    <string name="call_reply_result_title">"Anrufantwort"</string>
+    <string name="call_reply_send_failed">"Antwort konnte nicht gesendet werden"</string>
+    <string name="call_reply_send_unconfirmed">"Versand der Antwort konnte nicht bestätigt werden"</string>
+    <string name="call_reply_sent">"Antwort gesendet"</string>
+</resources>

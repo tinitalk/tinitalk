@@ -1,5 +1,7 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
 import android.content.ClipboardManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -98,10 +100,10 @@ internal fun AddAccountScreen(
                 ) {
                     CompositionLocalProvider(LocalRippleConfiguration provides null) {
                         IconButton(onClick = onBack, enabled = !loading) {
-                            Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "Назад")
+                            Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = appString(R.string.text_back_101))
                         }
                     }
-                    Text(if (signInRecovery == null) "Добавить аккаунт" else "Войти снова", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(if (signInRecovery == null) appString(R.string.text_add_account_112) else appString(R.string.text_sign_in_again_113), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
                 Column(
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp)
@@ -109,7 +111,7 @@ internal fun AddAccountScreen(
                 ) {
                     Spacer(Modifier.height(20.dp))
                     AccountCredentialsForm(
-                        credentials, loading, errorMessage, internetAvailable, if (signInRecovery == null) "Добавить" else "Войти", keyboardVisible,
+                        credentials, loading, errorMessage, internetAvailable, if (signInRecovery == null) appString(R.string.text_add_114) else appString(R.string.text_sign_in_115), keyboardVisible,
                         onAdd, onCheckServer, retryAtMillis,
                     )
                 }
@@ -216,7 +218,7 @@ internal fun AccountCredentialsForm(
             setLogin(value, pasted)
         },
         Modifier.fillMaxWidth(),
-        label = { Text("Логин") },
+        label = { Text(appString(R.string.text_username_116)) },
         trailingIcon = if (login.isEmpty()) {
             {
                 PasteButton(enabled = !loading) {
@@ -235,7 +237,7 @@ internal fun AccountCredentialsForm(
         token,
         { token = it },
         Modifier.fillMaxWidth(),
-        label = { Text("Пароль") },
+        label = { Text(appString(R.string.text_password_117)) },
         trailingIcon = if (token.isEmpty()) {
             { PasteButton(enabled = !loading) { paste { token = it } } }
         } else {
@@ -252,7 +254,7 @@ internal fun AccountCredentialsForm(
         url,
         { url = it; checkingServer = true; serverCheckResult = null },
         Modifier.fillMaxWidth(),
-        label = { Text("Адрес сервера") }, placeholder = { Text("talk.example.com") },
+        label = { Text(appString(R.string.text_server_address_118)) }, placeholder = { Text("talk.example.com") },
         supportingText = { Text(presentation.message, color = when (presentation.indicator) { ServerCheckIndicator.Available -> CallAnswerGreen; ServerCheckIndicator.Incompatible -> BrandGold; else -> MaterialTheme.colorScheme.onSurfaceVariant }) },
         trailingIcon = {
             if (url.isEmpty()) {
@@ -266,15 +268,15 @@ internal fun AccountCredentialsForm(
             } else {
                 when (presentation.indicator) {
                     ServerCheckIndicator.Checking -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                    ServerCheckIndicator.Available -> Icon(painterResource(R.drawable.ic_server_available), "Сервер доступен", tint = CallAnswerGreen)
-                    ServerCheckIndicator.Unavailable -> Icon(painterResource(R.drawable.ic_server_unavailable), "Сервер недоступен", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    ServerCheckIndicator.Incompatible -> Icon(painterResource(R.drawable.ic_server_incompatible), "Несовместимая версия", tint = BrandGold)
+                    ServerCheckIndicator.Available -> Icon(painterResource(R.drawable.ic_server_available), appString(R.string.text_server_available_119), tint = CallAnswerGreen)
+                    ServerCheckIndicator.Unavailable -> Icon(painterResource(R.drawable.ic_server_unavailable), appString(R.string.text_server_unavailable_120), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    ServerCheckIndicator.Incompatible -> Icon(painterResource(R.drawable.ic_server_incompatible), appString(R.string.text_incompatible_version_121), tint = BrandGold)
                 }
             }
         }, singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { submit() }),
     )
     (if (retryAtMillis > 0) {
-        if (retry > 0) "Повторите через $retry с" else "Можно попробовать ещё раз"
+        if (retry > 0) appString(R.string.text_try_again_in_value_s_122, retry) else appString(R.string.text_you_can_try_again_123)
     } else errorMessage)?.let {
         Spacer(Modifier.height(14.dp))
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.errorContainer) { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium) }
@@ -290,7 +292,7 @@ private fun PasteButton(enabled: Boolean, onClick: () -> Unit) {
     IconButton(onClick = onClick, enabled = enabled) {
         Icon(
             painterResource(R.drawable.ic_paste),
-            contentDescription = "Вставить",
+            contentDescription = appString(R.string.text_paste_124),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

@@ -1,5 +1,9 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import kotlin.math.roundToInt
 
 internal const val CompactCallActionSizeDp = 64
@@ -189,7 +193,7 @@ internal fun weakNetworkVideoMessage(
     cameraRequested: Boolean,
     networkGated: Boolean,
 ): String? = if (videoAllowed && cameraRequested && networkGated) {
-    "Видео временно приостановлено — слабая связь"
+    appString(R.string.text_video_paused_weak_connection_202)
 } else {
     null
 }

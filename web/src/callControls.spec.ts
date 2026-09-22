@@ -1,3 +1,4 @@
+import { localizedFunction } from './testI18n';
 import { expect, it, vi } from 'vitest';
 import * as ts from 'typescript';
 import appSource from './app.ts?raw';
@@ -13,7 +14,7 @@ it('invokes audio recovery directly in the button gesture and ignores an ended c
   const node = source.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'audioRecoveryButton')!;
   const code = ts.transpileModule(node.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const resumeAudio = vi.fn(async () => {});
-  const app = new Function('resumeAudio', `
+  const app = localizedFunction('resumeAudio', `
     const call = {media:{resumeAudio}}, element = () => ({});
     let current = call;
     ${code}

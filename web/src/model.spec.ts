@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { t } from './i18n';
 import { accountForLogin, accountFromScope, accountIdentity, accountScope, callKey, canOpenIncoming, deepLink, normalizeServer, type Account, type PushRecord } from './model';
 
 describe('one account per server', () => {
   const account: Account = { id: 'family', server: 'https://family.example', login: 'alice', token: 'test', name: 'Alice', deviceId: 'phone', sessionId: 'session' };
 
   it.each(['family.example', 'https://FAMILY.example/', 'https://family.example:443'])('rejects another login on the same server: %s', server => {
-    expect(() => accountForLogin([account], server, 'bob')).toThrow('Аккаунт с этого сервера уже добавлен');
+    expect(() => accountForLogin([account], server, 'bob')).toThrow(t('text_an_account_from_this_server_is_already_added_36'));
   });
   it('allows an account on a different server', () => {
     expect(accountForLogin([account], 'other.example', 'alice')).toBeUndefined();

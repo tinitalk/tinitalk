@@ -1,5 +1,8 @@
 package org.tinitalk.ui
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
@@ -35,7 +38,7 @@ import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w360dp-h800dp")
+@Config(sdk = [35], qualifiers = "ru-w360dp-h800dp")
 class MainScreenContactNavigationTest {
     @get:Rule
     val composeRule = createEmptyComposeRule()
@@ -113,39 +116,39 @@ class MainScreenContactNavigationTest {
         assertEquals(request, handled)
         assertEquals(second.peerKey, historyPeer)
 
-        composeRule.onNodeWithContentDescription("Добавить в избранные").performClick()
-        composeRule.onNodeWithContentDescription("Убрать из избранных").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Назад").performClick()
-        composeRule.onNodeWithText("Избранные").assertIsDisplayed()
-        composeRule.onNode(hasContentDescription("В избранном", substring = true)).assertDoesNotExist()
-        composeRule.onNodeWithText("Добавить", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_add_to_favorites_226)).performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_remove_from_favorites_225)).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_101)).performClick()
+        composeRule.onNodeWithText(appString(R.string.text_favorites_247)).assertIsDisplayed()
+        composeRule.onNode(hasContentDescription(appString(R.string.text_in_favorites_307), substring = true)).assertDoesNotExist()
+        composeRule.onNodeWithText(appString(R.string.text_add_114), substring = true).assertDoesNotExist()
         composeRule.onNodeWithText("First person").assertDoesNotExist()
-        composeRule.onNodeWithText("Все").performClick()
-        composeRule.onNode(hasContentDescription("В избранном", substring = true)).assertIsDisplayed()
-        composeRule.onNodeWithText("Добавить", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText(appString(R.string.text_all_248)).performClick()
+        composeRule.onNode(hasContentDescription(appString(R.string.text_in_favorites_307), substring = true)).assertIsDisplayed()
+        composeRule.onNodeWithText(appString(R.string.text_add_114), substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("First person").assertIsDisplayed()
-        composeRule.onNode(hasContentDescription("Открыть контакт: Second person", substring = true)).performClick()
+        composeRule.onNode(hasContentDescription(appString(R.string.text_open_contact_value_306, "Second person"), substring = true)).performClick()
         composeRule.waitForIdle()
         composeRule.mainClock.autoAdvance = false
-        composeRule.onNodeWithContentDescription("Убрать из избранных").performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_remove_from_favorites_225)).performClick()
         composeRule.mainClock.advanceTimeBy(250)
-        composeRule.onNodeWithText("Убрано из избранных").assertIsDisplayed()
+        composeRule.onNodeWithText(appString(R.string.text_removed_from_favorites_299)).assertIsDisplayed()
         composeRule.mainClock.advanceTimeBy(3_300)
-        composeRule.onNodeWithText("Убрано из избранных").assertDoesNotExist()
-        composeRule.onNodeWithContentDescription("Добавить в избранные").performClick()
+        composeRule.onNodeWithText(appString(R.string.text_removed_from_favorites_299)).assertDoesNotExist()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_add_to_favorites_226)).performClick()
         composeRule.mainClock.advanceTimeByFrame()
-        composeRule.onNodeWithContentDescription("Убрать из избранных").performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_remove_from_favorites_225)).performClick()
         composeRule.mainClock.advanceTimeBy(250)
-        composeRule.onNodeWithText("Отменить").performClick()
+        composeRule.onNodeWithText(appString(R.string.text_undo_196)).performClick()
         composeRule.mainClock.advanceTimeBy(250)
-        composeRule.onNodeWithContentDescription("Убрать из избранных").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Убрать из избранных").performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_remove_from_favorites_225)).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_remove_from_favorites_225)).performClick()
         composeRule.mainClock.advanceTimeBy(250)
-        composeRule.onNodeWithText("Убрано из избранных").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Назад").performClick()
+        composeRule.onNodeWithText(appString(R.string.text_removed_from_favorites_299)).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_101)).performClick()
         composeRule.mainClock.autoAdvance = true
-        composeRule.onNodeWithText("Убрано из избранных").assertDoesNotExist()
-        composeRule.onNodeWithText("Избранные").assertDoesNotExist()
+        composeRule.onNodeWithText(appString(R.string.text_removed_from_favorites_299)).assertDoesNotExist()
+        composeRule.onNodeWithText(appString(R.string.text_favorites_247)).assertDoesNotExist()
         composeRule.onNode(hasContentDescription("В избранном", substring = true)).assertDoesNotExist()
         composeRule.onNodeWithText("First person").assertIsDisplayed()
 
@@ -226,7 +229,7 @@ class MainScreenContactNavigationTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("История").performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_history_251)).performClick()
         val secondHistoryRow = hasContentDescription("Second person", substring = true) and hasClickAction()
         composeRule.waitUntil(timeoutMillis = 5_000) {
             composeRule.onAllNodes(secondHistoryRow).fetchSemanticsNodes().isNotEmpty()

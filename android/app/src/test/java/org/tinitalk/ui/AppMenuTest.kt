@@ -1,5 +1,8 @@
 package org.tinitalk.ui
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assertCountEquals
@@ -28,7 +31,7 @@ import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w360dp-h800dp")
+@Config(sdk = [35], qualifiers = "ru-w360dp-h800dp")
 class AppMenuTest {
     @get:Rule
     val composeRule = createEmptyComposeRule()
@@ -85,10 +88,10 @@ class AppMenuTest {
         }
 
         composeRule.onAllNodesWithContentDescription("Меню").assertCountEquals(0)
-        composeRule.onNodeWithContentDescription("О программе").performClick()
-        composeRule.onNodeWithText("О программе").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Назад").performClick()
-        composeRule.onNodeWithContentDescription("Профиль").performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_about_102)).performClick()
+        composeRule.onNodeWithText(appString(R.string.text_about_102)).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_back_101)).performClick()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_profile_308)).performClick()
         assertTrue(profileOpened)
 
         activity.pause().stop().destroy()
@@ -122,7 +125,7 @@ class AppMenuTest {
         }
 
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodesWithText("Сервер доступен").fetchSemanticsNodes().size == 2
+            composeRule.onAllNodesWithText(appString(R.string.text_server_available_119)).fetchSemanticsNodes().size == 2
         }
         composeRule.onNodeWithText("API v3 (11111111)").assertIsDisplayed()
         composeRule.onNodeWithText("API v7 (77777777)").assertIsDisplayed()
@@ -134,10 +137,10 @@ class AppMenuTest {
         composeRule.onAllNodesWithText("Мария").assertCountEquals(0)
         composeRule.onAllNodesWithText("alex@one.example").assertCountEquals(0)
         composeRule.onAllNodesWithText("maria@two.example").assertCountEquals(0)
-        composeRule.onAllNodesWithText("Сервер доступен").assertCountEquals(2)
-        composeRule.onAllNodesWithContentDescription("Сервер доступен").assertCountEquals(0)
-        composeRule.onAllNodesWithContentDescription("Выйти").assertCountEquals(2)
-        composeRule.onAllNodesWithText("Выйти").assertCountEquals(0)
+        composeRule.onAllNodesWithText(appString(R.string.text_server_available_119)).assertCountEquals(2)
+        composeRule.onAllNodesWithContentDescription(appString(R.string.text_server_available_119)).assertCountEquals(0)
+        composeRule.onAllNodesWithContentDescription(appString(R.string.text_sign_out_323)).assertCountEquals(2)
+        composeRule.onAllNodesWithText(appString(R.string.text_sign_out_323)).assertCountEquals(0)
 
         activity.pause().stop().destroy()
     }

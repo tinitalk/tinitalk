@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_cancel">취소</string>
+    <string name="language_title">언어</string>
+    <string name="language_system">시스템 언어</string>
+    <plurals name="missed_calls_count">
+        <item quantity="other">부재중 전화 %1$d통</item>
+    </plurals>
+    <plurals name="calls_count">
+        <item quantity="other">통화 %1$d건</item>
+    </plurals>
+    <plurals name="contacts_count">
+        <item quantity="other">연락처 %1$d개</item>
+    </plurals>
+</resources>

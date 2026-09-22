@@ -1,5 +1,8 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -59,7 +62,7 @@ class CallComponentsTest {
         composeRule.onNodeWithText("Сверьте весь код голосом").assertDoesNotExist()
         composeRule.onAllNodesWithTag("security_code_confirm").assertCountEquals(0)
         composeRule.onNodeWithTag("security_code_panel").performClick()
-        composeRule.onNodeWithText("Код безопасности").assertExists()
+        composeRule.onNodeWithText(appString(R.string.text_security_code_146)).assertExists()
         composeRule.onNodeWithText(
             "Сравните все 5 эмодзи с собеседником. Если они совпадают, соединение защищено. " +
                 "Если отличается хотя бы один эмодзи, завершите звонок.",
@@ -73,7 +76,7 @@ class CallComponentsTest {
             CallSecurityState.Failed(CallSecurityFailureReason.FingerprintMismatch),
         )
 
-        composeRule.onNodeWithText("Соединение небезопасно").performClick()
+        composeRule.onNodeWithText(appString(R.string.text_connection_is_not_secure_142)).performClick()
         composeRule.onNodeWithTag("security_code_error_icon").assertExists()
         composeRule.onNodeWithText(
             "Сертификат соединения не совпал с данными проверки. Звонок небезопасен." +
@@ -88,7 +91,7 @@ class CallComponentsTest {
             CallSecurityState.Unavailable(CallSecurityUnavailableReason.PeerUnsupported),
         )
 
-        composeRule.onNodeWithText("Не удаётся подтвердить безопасность соединения").performClick()
+        composeRule.onNodeWithText(appString(R.string.text_cannot_verify_connection_security_140)).performClick()
         composeRule.onNodeWithText(
             "Приложение собеседника устарело. Безопасность этого звонка нельзя подтвердить.",
         ).assertExists()
@@ -111,7 +114,7 @@ class CallComponentsTest {
     }
 
     @Test
-    @Config(qualifiers = "w320dp-h480dp")
+    @Config(qualifiers = "ru-w320dp-h480dp")
     fun securityStatusFitsBelowDurationOnShortAudioScreen() {
         val activity = renderSecurity(
             CallSecurityState.Unavailable(CallSecurityUnavailableReason.PeerUnsupported),
@@ -137,7 +140,7 @@ class CallComponentsTest {
             )
         }
 
-        composeRule.onNodeWithText("Звук").assertDoesNotExist()
+        composeRule.onNodeWithText(appString(R.string.text_audio_181)).assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Выбрать звук").assertExists()
 
         activity.pause().stop().destroy()
@@ -150,11 +153,11 @@ class CallComponentsTest {
             MuteCallAction(muted = muted.value, onMute = { muted.value = it })
         }
 
-        composeRule.onNodeWithContentDescription("Выключить микрофон").assertExists()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_mute_microphone_180)).assertExists()
         composeRule.runOnUiThread { muted.value = true }
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithContentDescription("Включить микрофон").assertExists()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_unmute_microphone_179)).assertExists()
         activity.pause().stop().destroy()
     }
 
@@ -193,7 +196,7 @@ class CallComponentsTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp")
+    @Config(qualifiers = "ru-w411dp-h891dp")
     fun activeAudioCallUsesTheSameLargeAvatarAsIncomingCall() {
         render {
             ActiveCallScreen(
@@ -219,7 +222,7 @@ class CallComponentsTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp")
+    @Config(qualifiers = "ru-w411dp-h891dp")
     fun transportRouteChangesWithoutMovingTheAudioCallAvatar() {
         val route = mutableStateOf(CallTransportRoute.Unknown)
         render {
@@ -246,7 +249,7 @@ class CallComponentsTest {
 
         composeRule.runOnUiThread { route.value = CallTransportRoute.Direct }
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("Прямое соединение").assertExists()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_direct_connection_167)).assertExists()
         assertEquals(
             initialAvatarY,
             composeRule.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot.center.y,
@@ -255,7 +258,7 @@ class CallComponentsTest {
 
         composeRule.runOnUiThread { route.value = CallTransportRoute.Turn }
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("Соединение через TURN").assertExists()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_connection_via_turn_168)).assertExists()
         assertEquals(
             initialAvatarY,
             composeRule.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot.center.y,
@@ -264,7 +267,7 @@ class CallComponentsTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp")
+    @Config(qualifiers = "ru-w411dp-h891dp")
     fun primaryCallStagesKeepTheAvatarAtTheSameVerticalPosition() {
         val stage = mutableStateOf(0)
         render {
@@ -337,7 +340,7 @@ class CallComponentsTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp")
+    @Config(qualifiers = "ru-w411dp-h891dp")
     fun activeCallKeepsDisabledCameraSlotBeforeVideoIsAllowed() {
         render {
             ActiveCallScreen(
@@ -357,12 +360,12 @@ class CallComponentsTest {
             )
         }
 
-        composeRule.onNodeWithContentDescription("Включить камеру").assertIsNotEnabled()
-        composeRule.onNodeWithText("Камера").assertExists()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_turn_camera_on_177)).assertIsNotEnabled()
+        composeRule.onNodeWithText(appString(R.string.text_camera_175)).assertExists()
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp")
+    @Config(qualifiers = "ru-w411dp-h891dp")
     fun outgoingCallShowsDisabledCameraSlotImmediately() {
         render {
             OutgoingCallScreen(
@@ -376,12 +379,12 @@ class CallComponentsTest {
             )
         }
 
-        composeRule.onNodeWithContentDescription("Включить камеру").assertIsNotEnabled()
-        composeRule.onNodeWithText("Камера").assertExists()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_turn_camera_on_177)).assertIsNotEnabled()
+        composeRule.onNodeWithText(appString(R.string.text_camera_175)).assertExists()
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp")
+    @Config(qualifiers = "ru-w411dp-h891dp")
     fun localOnlyVideoKeepsTheAudioCallIdentityLayout() {
         render {
             ActiveCallScreen(
@@ -414,7 +417,7 @@ class CallComponentsTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp")
+    @Config(qualifiers = "ru-w411dp-h891dp")
     fun activeAudioCallUsesTheSameCompactAvatarAsIncomingCall() {
         render {
             val density = LocalDensity.current

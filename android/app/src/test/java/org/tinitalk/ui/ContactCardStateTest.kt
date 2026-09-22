@@ -8,6 +8,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class ContactCardStateTest {
     @Test
     fun callActionReflectsCurrentCall() {

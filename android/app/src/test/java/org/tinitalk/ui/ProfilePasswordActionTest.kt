@@ -1,5 +1,8 @@
 package org.tinitalk.ui
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assertIsEnabled
@@ -25,7 +28,7 @@ import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w400dp-h900dp")
+@Config(sdk = [35], qualifiers = "en-w400dp-h900dp")
 class ProfilePasswordActionTest {
     @get:Rule val compose = createEmptyComposeRule()
 
@@ -54,15 +57,15 @@ class ProfilePasswordActionTest {
         }
         try {
             compose.waitUntil(5_000) {
-                compose.onAllNodesWithText("Задать пароль").fetchSemanticsNodes().isNotEmpty()
+                compose.onAllNodesWithText(appString(R.string.text_set_password_327)).fetchSemanticsNodes().isNotEmpty()
             }
-            compose.onNodeWithContentDescription("Выйти").performClick()
-            compose.onNodeWithText("Выйти из аккаунта?").assertExists()
-            compose.onNodeWithText("Новый пароль").assertDoesNotExist()
-            compose.onNodeWithText("Отмена").performClick()
+            compose.onNodeWithContentDescription(appString(R.string.text_sign_out_323)).performClick()
+            compose.onNodeWithText(appString(R.string.text_sign_out_of_this_account_321)).assertExists()
+            compose.onNodeWithText(appString(R.string.text_new_password_319)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_cancel_12)).performClick()
             compose.runOnIdle { assertEquals(null, removed) }
-            compose.onNodeWithContentDescription("Выйти").performClick()
-            compose.onNodeWithText("Выйти").performClick()
+            compose.onNodeWithContentDescription(appString(R.string.text_sign_out_323)).performClick()
+            compose.onNodeWithText(appString(R.string.text_sign_out_323)).performClick()
             compose.runOnIdle { assertEquals(accountId, removed) }
         } finally {
             activity.pause().stop().destroy()
@@ -93,22 +96,22 @@ class ProfilePasswordActionTest {
         }
         try {
             compose.waitUntil(5_000) {
-                compose.onAllNodesWithText("Проверяем…").fetchSemanticsNodes()
+                compose.onAllNodesWithText(appString(R.string.text_checking_325)).fetchSemanticsNodes()
                 started.count == 0L
             }
-            compose.onNodeWithText("Пароль").assertDoesNotExist()
-            compose.onNodeWithText("Задать пароль").assertDoesNotExist()
-            compose.onNodeWithText("Сменить пароль").assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_password_117)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_set_password_327)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_change_password_326)).assertDoesNotExist()
             release.countDown()
             compose.waitUntil(5_000) {
-                compose.onAllNodesWithText("Сервер доступен").fetchSemanticsNodes().isNotEmpty()
+                compose.onAllNodesWithText(appString(R.string.text_server_available_119)).fetchSemanticsNodes().isNotEmpty()
             }
             if (passwordSet == null) {
-                compose.onNodeWithText("Пароль").assertDoesNotExist()
-                compose.onNodeWithText("Задать пароль").assertDoesNotExist()
-                compose.onNodeWithText("Сменить пароль").assertDoesNotExist()
+                compose.onNodeWithText(appString(R.string.text_password_117)).assertDoesNotExist()
+                compose.onNodeWithText(appString(R.string.text_set_password_327)).assertDoesNotExist()
+                compose.onNodeWithText(appString(R.string.text_change_password_326)).assertDoesNotExist()
             } else {
-                compose.onNodeWithText(if (passwordSet) "Сменить пароль" else "Задать пароль").assertIsEnabled()
+                compose.onNodeWithText(if (passwordSet) appString(R.string.text_change_password_326) else appString(R.string.text_set_password_327)).assertIsEnabled()
             }
         } finally {
             release.countDown()

@@ -1,3 +1,4 @@
+import { localizedFunction } from './testI18n';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import * as ts from 'typescript';
 import appSource from './app.ts?raw';
@@ -37,7 +38,7 @@ type UI = {
   videoElement(className: string, stream: MediaStream): HTMLVideoElement;
   renderCall(): void;
 };
-const createUI = new Function('environment', `
+const createUI = localizedFunction('environment', `
   const {
     audio, remoteVideo, current, root, element, icon, callTones, failure, callLayer, callContent,
     closeSheet, registerActiveOverlay, audioOutputUnsupportedDialog,

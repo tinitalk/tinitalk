@@ -14,7 +14,7 @@ import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountPeerKey
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class)
+@Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class ShortcutCallActivityTest {
     @Test
     fun restoringConsumedRequestDoesNotDialAgain() {

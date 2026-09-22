@@ -48,6 +48,11 @@ class TinitalkApplication : Application() {
     private lateinit var foregroundIncoming: org.tinitalk.push.ForegroundIncomingCalls
     private val mainHandler = Handler(Looper.getMainLooper())
     private var terminated = false
+    private val languageObserver: () -> Unit = {
+        mainHandler.post {
+            if (!terminated) missedCallNotifier.render(missedCalls.snapshot())
+        }
+    }
     private lateinit var authStore: AuthStore
     internal lateinit var missedCalls: MissedCallsRepository
         private set
@@ -80,6 +85,7 @@ class TinitalkApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        org.tinitalk.i18n.AppLanguage.initialize(this)
         contactPhotoStore = ContactPhotoStore(
             filesDir.resolve("contact_photos"),
             object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
@@ -126,10 +132,17 @@ class TinitalkApplication : Application() {
         networkAvailability.observe { foregroundIncoming.networkChanged() }
         runCatching { TelecomCallController(AndroidTelecomRegistrar(this)).registerAudioOnly() }
         AuthSessionEvents.observe(authSessionObserver)
+        org.tinitalk.i18n.AppLanguage.observe(languageObserver)
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        org.tinitalk.i18n.AppLanguage.refresh()
     }
 
     override fun onTerminate() {
         terminated = true
+        org.tinitalk.i18n.AppLanguage.removeObserver(languageObserver)
         AuthSessionEvents.removeObserver(authSessionObserver)
         mainHandler.removeCallbacksAndMessages(null)
         foregroundIncoming.close()

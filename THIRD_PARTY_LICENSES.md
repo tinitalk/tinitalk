@@ -52,6 +52,7 @@ provides them.
 | JetBrains annotations | 23.0.0 | [source](https://github.com/JetBrains/java-annotations/tree/23.0.0) | [Apache-2.0](https://github.com/JetBrains/java-annotations/blob/23.0.0/LICENSE.txt) |
 | JSpecify | 1.0.0 | [source](https://github.com/jspecify/jspecify/tree/v1.0.0) | [Apache-2.0](https://github.com/jspecify/jspecify/blob/v1.0.0/LICENSE) |
 | Twemoji COLR font | 15.0.3 | [source](https://github.com/mrdrogdrog/twemoji-color-font/tree/v15.0.3) | [SIL OFL 1.1](https://github.com/mrdrogdrog/twemoji-color-font/blob/v15.0.3/LICENSE) for the font; [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) for the Twemoji graphics |
+| Twemoji flag graphics (12 unchanged SVGs; Twitter, Inc. and other contributors) | 15.0.3 | [source](https://github.com/jdecked/twemoji/tree/v15.0.3/assets/svg) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | UnifiedPush connector | 3.3.5 | [source](https://codeberg.org/UnifiedPush/android-connector/src/tag/3.3.5) | [Apache-2.0](https://codeberg.org/UnifiedPush/android-connector/src/tag/3.3.5/LICENSE) |
 | UnifiedPush embedded FCM distributor | 3.1.0 | [source](https://codeberg.org/UnifiedPush/android-embedded_fcm_distributor/src/tag/3.1.0) | [LGPL-2.1 in source](https://codeberg.org/UnifiedPush/android-embedded_fcm_distributor/src/tag/3.1.0/LICENSE); Apache-2.0 in published metadata (see below) |
 | WebRTC SDK Android wrapper | 150.7871.01 | [source](https://github.com/webrtc-sdk/android/tree/v150.7871.01) | [MIT](https://github.com/webrtc-sdk/android/blob/v150.7871.01/LICENSE) |

@@ -1,5 +1,7 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -157,13 +159,13 @@ fun ContactScreen(
                             ) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_arrow_back),
-                                    contentDescription = "Назад",
+                                    contentDescription = appString(R.string.text_back_101),
                                 )
                             }
                         }
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            "Контакт",
+                            appString(R.string.text_contact_224),
                             modifier = Modifier.weight(1f).then(titleModifier),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
@@ -171,7 +173,7 @@ fun ContactScreen(
                         IconButton(onClick = onToggleFavorite, modifier = Modifier.size(48.dp)) {
                             Icon(
                                 painterResource(if (favorite) R.drawable.ic_star else R.drawable.ic_star_outline),
-                                contentDescription = if (favorite) "Убрать из избранных" else "Добавить в избранные",
+                                contentDescription = if (favorite) appString(R.string.text_remove_from_favorites_225) else appString(R.string.text_add_to_favorites_226),
                                 tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -185,7 +187,7 @@ fun ContactScreen(
                             ) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_more_vert),
-                                    contentDescription = "Действия контакта $name",
+                                    contentDescription = appString(R.string.text_actions_for_value_227, name),
                                 )
                             }
                             DropdownMenu(
@@ -196,7 +198,7 @@ fun ContactScreen(
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            "Переименовать",
+                                            appString(R.string.text_rename_228),
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.SemiBold,
                                         )
@@ -220,7 +222,7 @@ fun ContactScreen(
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            "Изменить фото",
+                                            appString(R.string.text_change_photo_229),
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.SemiBold,
                                         )
@@ -243,7 +245,7 @@ fun ContactScreen(
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            if (shortcutPinned == true) "Уже на главном экране" else "На главный экран",
+                                            if (shortcutPinned == true) appString(R.string.text_already_on_home_screen_230) else appString(R.string.text_add_to_home_screen_231),
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.SemiBold,
                                         )
@@ -267,7 +269,7 @@ fun ContactScreen(
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            "Удалить контакт",
+                                            appString(R.string.text_delete_contact_232),
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             color = CallRejectRed,
@@ -392,7 +394,7 @@ fun ContactScreen(
                     }
                     item(key = "contact-history-title") {
                         Text(
-                            "История звонков",
+                            appString(R.string.text_call_history_233),
                             modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp, bottom = 4.dp),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
@@ -402,7 +404,7 @@ fun ContactScreen(
                         item(key = "contact-history-error") {
                             ContactHistoryMessage(
                                 message = history.errorMessage,
-                                action = "Повторить".takeIf { internetAvailable },
+                                action = appString(R.string.text_retry_234).takeIf { internetAvailable },
                                 onAction = onRetryHistory,
                                 error = true,
                             )
@@ -410,7 +412,7 @@ fun ContactScreen(
                     }
                     when {
                         !internetAvailable && history.items.isEmpty() -> item(key = "contact-history-offline") {
-                            ContactHistoryMessage("История появится после восстановления связи")
+                            ContactHistoryMessage(appString(R.string.text_history_will_appear_when_the_connection_is_restored_235))
                         }
                         !history.loaded && history.items.isEmpty() -> item(key = "contact-history-loading") {
                             Box(
@@ -422,7 +424,7 @@ fun ContactScreen(
                         }
                         history.loaded && history.items.isEmpty() && history.errorMessage == null ->
                             item(key = "contact-history-empty") {
-                                ContactHistoryMessage("Звонков с этим контактом пока не было")
+                                ContactHistoryMessage(appString(R.string.text_no_calls_with_this_contact_yet_236))
                             }
                         else -> history.items.forEachIndexed { index, item ->
                             val day = historyDayLabel(item.startedAt, now, zone)
@@ -506,10 +508,10 @@ fun ContactScreen(
                     onRemoveContactDismissed()
                 }
             },
-            title = { Text("Удалить контакт?") },
+            title = { Text(appString(R.string.text_delete_contact_237)) },
             text = {
                 Column {
-                    Text("Удалить «$name» из списка контактов?")
+                    Text(appString(R.string.text_remove_value_from_your_contacts_238, name))
                     removeErrorMessage?.let { message ->
                         Spacer(Modifier.height(10.dp))
                         Text(message, color = MaterialTheme.colorScheme.error)
@@ -529,7 +531,7 @@ fun ContactScreen(
                             color = Color.White,
                         )
                     } else {
-                        Text("Удалить")
+                        Text(appString(R.string.text_delete_239))
                     }
                 }
             },
@@ -540,7 +542,7 @@ fun ContactScreen(
                         onRemoveContactDismissed()
                     },
                     enabled = !removing,
-                ) { Text("Отмена") }
+                ) { Text(appString(R.string.text_cancel_12)) }
             },
         )
     }
@@ -548,16 +550,15 @@ fun ContactScreen(
     if (unavailableCallVisible) {
         AlertDialog(
             onDismissRequest = { unavailableCallVisible = false },
-            title = { Text("Пока нельзя позвонить") },
+            title = { Text(appString(R.string.text_cannot_call_yet_53)) },
             text = {
                 Text(
-                    "Позвонить можно после того, как $name добавит вас " +
-                        "в свой список контактов.",
+                    appString(R.string.text_you_can_call_once_value_adds_you_to_their_contacts_54, name),
                 )
             },
             confirmButton = {
                 Button(onClick = { unavailableCallVisible = false }) {
-                    Text("Понятно")
+                    Text(appString(R.string.text_ok_61))
                 }
             },
         )
@@ -611,7 +612,7 @@ private fun RenameContactDialog(
 
     AlertDialog(
         onDismissRequest = { if (!saving) onDismiss() },
-        title = { Text("Изменить имя") },
+        title = { Text(appString(R.string.text_edit_name_242)) },
         text = {
             Column {
                 OutlinedTextField(
@@ -621,13 +622,13 @@ private fun RenameContactDialog(
                         if (errorMessage != null) onErrorCleared()
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Имя контакта") },
+                    label = { Text(appString(R.string.text_contact_name_243)) },
                     singleLine = true,
                     enabled = !saving && internetAvailable,
                     isError = value.isBlank() || errorMessage != null,
                     supportingText = {
                         when {
-                            value.isBlank() -> Text("Введите имя")
+                            value.isBlank() -> Text(appString(R.string.text_enter_a_name_244))
                             errorMessage != null -> Text(errorMessage.orEmpty())
                         }
                     },
@@ -646,12 +647,12 @@ private fun RenameContactDialog(
                         color = MaterialTheme.colorScheme.onPrimary,
                     )
                 } else {
-                    Text("Сохранить")
+                    Text(appString(R.string.text_save_245))
                 }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !saving) { Text("Отмена") }
+            TextButton(onClick = onDismiss, enabled = !saving) { Text(appString(R.string.text_cancel_12)) }
         },
     )
 }

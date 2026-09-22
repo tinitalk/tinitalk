@@ -8,6 +8,39 @@ import (
 	"tinitalk/internal/webpush"
 )
 
+func TestFallbackLanguages(t *testing.T) {
+	for _, language := range []string{"en", "ru", "pl", "de", "es", "fr", "pt", "it", "tr", "ja", "ko", "zh-Hans", "", "unknown"} {
+		for _, event := range []string{"incoming_call", "session_replaced"} {
+			t.Run(language+"/"+event, func(t *testing.T) {
+				subscription := webpush.Subscription{ClientType: "web", Endpoint: "https://web.push.apple.com/token", WebAppURL: "https://web.example/#account=a", Language: language}
+				raw, err := webPushPayload(subscription, map[string]string{"type": event, "caller": "Alice", "call_id": "c"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got struct {
+					Notification struct{ Title, Body, Lang string }
+				}
+				if err := json.Unmarshal(raw, &got); err != nil {
+					t.Fatal(err)
+				}
+				want, messages := fallbackMessages(language)
+				if got.Notification.Lang != want || got.Notification.Body == "" || got.Notification.Title == "" {
+					t.Fatalf("invalid fallback: %s", raw)
+				}
+				if event == "session_replaced" && got.Notification.Title != messages.Session {
+					t.Fatalf("wrong session title: %s", raw)
+				}
+				if (language == "" || language == "unknown") && got.Notification.Lang != "en" {
+					t.Fatal("missing English fallback")
+				}
+			})
+		}
+	}
+	if len(fallbackTranslations) != 12 {
+		t.Fatal("expected 12 languages")
+	}
+}
+
 func TestAppleDeclarativeNotificationCarriesAccountNavigationAndCallData(t *testing.T) {
 	subscription := webpush.Subscription{ClientType: "web", Endpoint: "https://web.push.apple.com/token", WebAppURL: "https://official.example/talk/#account=family-a"}
 	data := map[string]string{"type": "incoming_call", "call_id": "call-1", "caller": "Мама", "caller_login": "alice", "target_session_id": "session", "expires_at": "2026-09-14T12:00:45Z"}
@@ -31,7 +64,7 @@ func TestAppleDeclarativeNotificationCarriesAccountNavigationAndCallData(t *test
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.WebPush != 8030 || got.Notification.Title != "📞 Мама звонит" || got.Notification.Body == "" || got.Notification.Silent == nil || *got.Notification.Silent {
+	if got.WebPush != 8030 || got.Notification.Title != "📞 Мама is calling" || got.Notification.Body == "" || got.Notification.Silent == nil || *got.Notification.Silent {
 		t.Fatalf("missing visible fallback: %s", raw)
 	}
 	if got.Notification.Navigate != "https://official.example/talk/#account=family-a&call=call-1" || got.Notification.Tag != "family-a:call-1" {

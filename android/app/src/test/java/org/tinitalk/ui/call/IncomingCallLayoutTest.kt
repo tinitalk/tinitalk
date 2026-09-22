@@ -29,13 +29,13 @@ import org.tinitalk.ui.theme.TiniTalkTheme
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w360dp-h640dp-mdpi")
+@Config(sdk = [35], qualifiers = "ru-w360dp-h640dp-mdpi")
 class IncomingCallLayoutTest {
     @get:Rule val compose = createEmptyComposeRule()
 
     @Test fun smallScreenKeepsButtonsAboveReplyHandle() = checkLayout()
     @Test fun largeTextKeepsButtonsAboveReplyHandle() = checkLayout(fontScale = 1.8f)
-    @Test @Config(qualifiers = "w360dp-h800dp-mdpi")
+    @Test @Config(qualifiers = "ru-w360dp-h800dp-mdpi")
     fun regularScreenKeepsButtonsAboveReplyHandle() = checkLayout()
     @Test fun ordinaryAnswerSwipeStillAnswersOnSmallScreen() = checkGesture("Ответить")
     @Test fun ordinaryRejectSwipeStillRejectsOnSmallScreen() = checkGesture("Отклонить")

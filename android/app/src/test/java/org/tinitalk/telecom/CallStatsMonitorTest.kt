@@ -19,7 +19,7 @@ import org.tinitalk.media.MediaConnectionState
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class)
+@Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class CallStatsMonitorTest {
     private val main = shadowOf(Looper.getMainLooper())
     private val mediaQueue = ArrayDeque<() -> Unit>()

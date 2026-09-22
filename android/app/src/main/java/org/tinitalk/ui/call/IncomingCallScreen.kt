@@ -1,5 +1,9 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -50,7 +54,7 @@ fun IncomingCallScreen(
             rememberIncomingCallPulse(enabled = !actionLocked && !sheetBlocked)
         }
         CallScreenSurface(
-            status = "Входящий звонок",
+            status = appString(R.string.text_incoming_call_62),
             peerName = caller,
             contactAddress = contactAddress,
             fallbackLogin = fallbackLogin,
@@ -63,7 +67,7 @@ fun IncomingCallScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     SlideCallAction(
-                        label = "Ответить",
+                        label = appString(R.string.text_answer_64),
                         color = CallAnswerGreen,
                         enabled = !actionLocked && !sheetBlocked,
                         pulseProgress = pulseProgress,
@@ -71,7 +75,7 @@ fun IncomingCallScreen(
                         onCommit = { runOnce(onAnswer) },
                     )
                     SlideCallAction(
-                        label = "Отклонить",
+                        label = appString(R.string.text_decline_63),
                         color = CallRejectRed,
                         enabled = !actionLocked && !sheetBlocked,
                         pulseProgress = pulseProgress,

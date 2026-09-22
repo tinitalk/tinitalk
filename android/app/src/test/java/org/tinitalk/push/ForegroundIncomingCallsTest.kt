@@ -29,7 +29,7 @@ import java.time.Instant
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [26, 35], application = Application::class)
+@Config(sdk = [26, 35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class ForegroundIncomingCallsTest {
     private val app = RuntimeEnvironment.getApplication().also {
         shadowOf(it).grantPermissions("${it.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")

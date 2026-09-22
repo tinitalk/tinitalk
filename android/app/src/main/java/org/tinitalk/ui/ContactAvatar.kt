@@ -1,5 +1,9 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -156,7 +160,7 @@ fun ContactAvatar(
                     .fillMaxSize()
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.46f))
-                    .semantics(mergeDescendants = true) { this.contentDescription = "Обновление фото" }
+                    .semantics(mergeDescendants = true) { this.contentDescription = appString(R.string.text_updating_photo_205) }
                     .testTag("contact-avatar-refresh-overlay"),
                 contentAlignment = Alignment.Center,
             ) {

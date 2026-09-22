@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import type { PushRecord } from './model';
 
 // Covers Safari on macOS, iPhone browsers and iPad's desktop user agent. Other
@@ -50,19 +51,19 @@ export function decidePushNotification(input: PushNotificationInput): PushNotifi
       const caller = input.raw.caller || input.record.caller;
       return {
         show: true, openVisibleClient: input.hasVisibleClient, closeExisting: false,
-        title: caller ? `📞 ${caller} звонит` : '📞 Входящий звонок',
-        body: `${input.ownerName || 'TiniTalk'} · Нажмите, чтобы открыть входящий звонок`,
+        title: caller ? t('web_value_is_calling_118', caller) : t('web_incoming_call_119'),
+        body: t('web_value_tap_to_open_the_incoming_call_120', input.ownerName || 'TiniTalk'),
         silent: input.hasVisibleClient,
       };
     }
     if (input.record.type === 'session_replaced') {
       return { show: true, openVisibleClient: false, closeExisting: false,
-        title: 'Выполнен вход на другом устройстве', body: input.ownerName || 'TiniTalk', silent: false };
+        title: t('web_signed_in_on_another_device_121'), body: input.ownerName || 'TiniTalk', silent: false };
     }
     return {
       show: true, openVisibleClient: false, closeExisting: false, silent: true,
-      title: input.record.type === 'incoming_call' || input.record.type === 'call_cancel' ? 'Звонок уже завершён' : 'TiniTalk',
-      body: 'Откройте приложение, чтобы проверить звонки',
+      title: input.record.type === 'incoming_call' || input.record.type === 'call_cancel' ? t('web_the_call_has_already_ended_122') : 'TiniTalk',
+      body: t('web_open_the_app_to_check_your_calls_110'),
     };
   }
   if (incoming && input.hasVisibleClient) {
@@ -74,11 +75,11 @@ export function decidePushNotification(input: PushNotificationInput): PushNotifi
       show: true,
       openVisibleClient: false,
       closeExisting: false,
-      title: input.raw.caller || input.record.caller || 'Входящий звонок',
-      body: `${input.ownerName || 'TiniTalk'} · ${singleAction ? 'Нажмите на уведомление, чтобы принять' : 'Нажмите, чтобы ответить'}`,
-      actions: singleAction ? [{ action: 'reject', title: 'Отклонить' }] : [
-        { action: 'answer' as const, title: 'Принять' },
-        { action: 'reject' as const, title: 'Отклонить' },
+      title: input.raw.caller || input.record.caller || t('text_incoming_call_62'),
+      body: `${input.ownerName || 'TiniTalk'} · ${singleAction ? t('web_tap_the_notification_to_answer_123') : t('web_tap_to_answer_124')}`,
+      actions: singleAction ? [{ action: 'reject', title: t('text_decline_63') }] : [
+        { action: 'answer' as const, title: t('web_answer_125') },
+        { action: 'reject' as const, title: t('text_decline_63') },
       ],
       ...(singleAction ? { defaultAction: 'answer' as const } : {}),
     };
@@ -91,7 +92,7 @@ export function decidePushNotification(input: PushNotificationInput): PushNotifi
       show: true,
       openVisibleClient: false,
       closeExisting: false,
-      title: 'Выполнен вход на другом устройстве',
+      title: t('web_signed_in_on_another_device_121'),
       body: input.ownerName || 'TiniTalk',
     };
   }

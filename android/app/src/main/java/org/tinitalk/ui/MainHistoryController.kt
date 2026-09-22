@@ -1,5 +1,9 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -215,7 +219,7 @@ internal class MainHistoryController(
                 historyNextBefores = reduced.cursors,
                 historyVisibleLimit = targetLimit,
                 historyUnavailableAccounts = unavailable,
-                historyErrorMessage = "Не удалось загрузить историю со всех серверов"
+                historyErrorMessage = appString(R.string.text_could_not_load_history_from_all_servers_279)
                     .takeIf { reduced.items.isEmpty() && unavailable.isNotEmpty() },
             )
             badges.sync(activeOrder)
@@ -270,7 +274,7 @@ internal class MainHistoryController(
                         loaded = true,
                         loading = false,
                         loadingMore = false,
-                        errorMessage = "Не удалось загрузить звонки. Проверьте соединение.",
+                        errorMessage = appString(R.string.text_could_not_load_calls_check_your_connection_280),
                     ),
                 )
                 result.exceptionOrNull()?.let { error ->

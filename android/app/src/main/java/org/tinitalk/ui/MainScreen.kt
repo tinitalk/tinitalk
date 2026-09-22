@@ -1,5 +1,7 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -148,21 +150,21 @@ internal fun serverCheckPresentation(
     internetAvailable: Boolean = true,
 ): ServerCheckPresentation = when {
     !internetAvailable ->
-        ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Нет подключения к интернету")
-    !serverReady -> ServerCheckPresentation(ServerCheckIndicator.Unavailable, "Введите адрес сервера")
-    checking -> ServerCheckPresentation(ServerCheckIndicator.Checking, "Проверяем подключение…")
-    result == null -> ServerCheckPresentation(ServerCheckIndicator.Checking, "Проверяем подключение…")
+        ServerCheckPresentation(ServerCheckIndicator.Unavailable, appString(R.string.text_no_internet_connection_3))
+    !serverReady -> ServerCheckPresentation(ServerCheckIndicator.Unavailable, appString(R.string.text_enter_a_server_address_281))
+    checking -> ServerCheckPresentation(ServerCheckIndicator.Checking, appString(R.string.text_checking_connection_282))
+    result == null -> ServerCheckPresentation(ServerCheckIndicator.Checking, appString(R.string.text_checking_connection_282))
     result == ServerCheckResult.Available ->
-        ServerCheckPresentation(ServerCheckIndicator.Available, "Сервер TiniTalk доступен")
+        ServerCheckPresentation(ServerCheckIndicator.Available, appString(R.string.text_tinitalk_server_available_283))
     result == ServerCheckResult.WrongServer ->
-        ServerCheckPresentation(ServerCheckIndicator.Unavailable, "По этому адресу нет сервера TiniTalk")
+        ServerCheckPresentation(ServerCheckIndicator.Unavailable, appString(R.string.text_no_tinitalk_server_at_this_address_284))
     result == ServerCheckResult.ServerOutdated ->
-        ServerCheckPresentation(ServerCheckIndicator.Incompatible, "Сервер несовместим с этой версией приложения")
+        ServerCheckPresentation(ServerCheckIndicator.Incompatible, appString(R.string.text_the_server_is_incompatible_with_this_app_version_18))
     result == ServerCheckResult.AppOutdated ->
-        ServerCheckPresentation(ServerCheckIndicator.Incompatible, "Приложение TiniTalk устарело. Установите новую версию")
+        ServerCheckPresentation(ServerCheckIndicator.Incompatible, appString(R.string.text_tinitalk_is_out_of_date_install_the_latest_version_19))
     else -> ServerCheckPresentation(
         ServerCheckIndicator.Unavailable,
-        "Сервер недоступен. Проверьте адрес и подключение к сети",
+        appString(R.string.text_server_unavailable_check_the_address_and_your_connection_285),
     )
 }
 
@@ -271,7 +273,7 @@ internal fun mergeAccountContacts(
 )
 
 internal fun sortAccountContacts(contacts: List<AccountContact>): List<AccountContact> {
-    val names = Collator.getInstance(Locale.forLanguageTag("ru")).apply { strength = Collator.PRIMARY }
+    val names = Collator.getInstance(org.tinitalk.i18n.AppLanguage.locale).apply { strength = Collator.PRIMARY }
     return contacts.sortedWith(Comparator { first, second ->
         names.compare(first.displayName.trim(), second.displayName.trim())
             .takeIf { it != 0 }
@@ -535,7 +537,7 @@ fun MainScreen(
 private fun OfflineBanner(modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier.fillMaxWidth().semantics {
-            contentDescription = "Нет подключения к интернету. Звонки и обновление данных недоступны"
+            contentDescription = appString(R.string.text_no_internet_connection_calls_and_updates_are_unavailable_286)
         },
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.errorContainer,
@@ -554,13 +556,13 @@ private fun OfflineBanner(modifier: Modifier = Modifier) {
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Нет подключения к интернету",
+                    appString(R.string.text_no_internet_connection_3),
                     color = MaterialTheme.colorScheme.onErrorContainer,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "Звонки и обновление данных недоступны",
+                    appString(R.string.text_calls_and_updates_are_unavailable_287),
                     color = MaterialTheme.colorScheme.onErrorContainer,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -621,12 +623,12 @@ private fun LoginScreen(
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text("TiniTalk", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                        Text("Звонки для своих", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(appString(R.string.text_calls_for_your_circle_288), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Spacer(Modifier.height(if (sharedKeyboardVisible) 16.dp else 28.dp))
                 AccountCredentialsForm(
-                    credentials, loading, errorMessage, internetAvailable, "Войти", sharedKeyboardVisible,
+                    credentials, loading, errorMessage, internetAvailable, appString(R.string.text_sign_in_115), sharedKeyboardVisible,
                     onSignIn, onCheckServer, retryAtMillis,
                 )
                 Spacer(Modifier.height(6.dp))
@@ -652,29 +654,29 @@ private fun PermissionsScreen(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         ) {
             Spacer(Modifier.height(22.dp))
-            Text("Разрешите звонки", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text(appString(R.string.text_enable_calling_289), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Эти разрешения нужны, чтобы вы слышали собеседника и не пропускали входящие звонки.",
+                appString(R.string.text_these_permissions_let_you_hear_the_other_person_and_receive_incom_290),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(24.dp))
             PermissionItem(
-                title = "Уведомления",
-                description = "Показывать входящие и активные звонки",
+                title = appString(R.string.text_notifications_291),
+                description = appString(R.string.text_show_incoming_and_active_calls_292),
                 granted = permissions.notificationsGranted,
                 onRequest = onRequestNotifications,
             )
             PermissionItem(
-                title = "Микрофон",
-                description = "Передавать ваш голос во время разговора",
+                title = appString(R.string.text_microphone_178),
+                description = appString(R.string.text_transmit_your_voice_during_calls_293),
                 granted = permissions.microphoneGranted,
                 onRequest = onRequestMicrophone,
             )
             PermissionItem(
-                title = "Полноэкранные оповещения",
-                description = "Показывать звонок поверх экрана блокировки",
+                title = appString(R.string.text_full_screen_alerts_294),
+                description = appString(R.string.text_show_calls_over_the_lock_screen_295),
                 granted = permissions.fullScreenIntentGranted,
                 onRequest = onRequestFullScreenCalls,
             )
@@ -684,7 +686,7 @@ private fun PermissionsScreen(
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 shape = RoundedCornerShape(16.dp),
             ) {
-                Text("Проверить снова")
+                Text(appString(R.string.text_check_again_296))
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -719,9 +721,9 @@ private fun PermissionItem(
                 )
                 Spacer(Modifier.width(12.dp))
                 if (granted) {
-                    Text("Разрешено", color = CallAnswerGreen, fontWeight = FontWeight.SemiBold)
+                    Text(appString(R.string.text_allowed_297), color = CallAnswerGreen, fontWeight = FontWeight.SemiBold)
                 } else {
-                    FilledTonalButton(onClick = onRequest) { Text("Разрешить") }
+                    FilledTonalButton(onClick = onRequest) { Text(appString(R.string.text_allow_60)) }
                 }
             }
             Spacer(Modifier.height(4.dp))
@@ -925,7 +927,7 @@ private fun HomeScreen(
                                     val contact = visibleContacts.firstOrNull { it.peerKey == peer }
                                     if (contact == null) {
                                         snackbarScope.launch {
-                                            snackbarHostState.showSnackbar("Контакт больше недоступен")
+                                            snackbarHostState.showSnackbar(appString(R.string.text_contact_no_longer_available_211))
                                         }
                                     } else {
                                         selectedContactAccountId = contact.accountId.value
@@ -946,7 +948,7 @@ private fun HomeScreen(
                                     modifier = Modifier.size(28.dp),
                                 )
                             },
-                            label = { Text("Контакты") },
+                            label = { Text(appString(R.string.text_contacts_298)) },
                         )
                         NavigationBarItem(
                             selected = pagerState.currentPage == 1,
@@ -966,7 +968,7 @@ private fun HomeScreen(
                                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text("История", maxLines = 1)
+                                    Text(appString(R.string.text_history_251), maxLines = 1)
                                     historyBadgeText(state.unreadMissedCount)?.let { count ->
                                         Badge(
                                             modifier = Modifier.clearAndSetSemantics { },
@@ -999,7 +1001,7 @@ private fun HomeScreen(
                     if (adding && favoriteKeys.size == 1) showFavorites = true
                     if (!adding) snackbarScope.launch {
                         snackbarHostState.currentSnackbarData?.dismiss()
-                        val result = snackbarHostState.showSnackbar("Убрано из избранных", actionLabel = "Отменить")
+                        val result = snackbarHostState.showSnackbar(appString(R.string.text_removed_from_favorites_299), actionLabel = appString(R.string.text_undo_196))
                         if (result == androidx.compose.material3.SnackbarResult.ActionPerformed &&
                             latestVisibleContacts.any { it.peerKey == contact.peerKey } &&
                             favoritesStore.load().none { it == contact.peerKey }) {
@@ -1126,16 +1128,16 @@ private fun ContactsPage(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        if (internetAvailable) "Контактов пока нет" else "Нет подключения к интернету",
+                        if (internetAvailable) appString(R.string.text_no_contacts_yet_300) else appString(R.string.text_no_internet_connection_3),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
                         if (internetAvailable) {
-                            "Добавьте первый контакт."
+                            appString(R.string.text_add_your_first_contact_301)
                         } else {
-                            "Контакты появятся после восстановления связи."
+                            appString(R.string.text_contacts_will_appear_when_the_connection_is_restored_302)
                         },
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1207,20 +1209,20 @@ internal fun AddListButton(
             disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
         ),
     ) {
-        Text("＋ Добавить", style = MaterialTheme.typography.bodyLarge)
+        Text(appString(R.string.text_add_303), style = MaterialTheme.typography.bodyLarge)
     }
 }
 
 @Composable
 private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
     val status = when {
-        state.connectionHealth == ConnectionHealth.Reconnecting -> "Восстанавливаем связь…"
-        state.connectionHealth == ConnectionHealth.Poor -> "Слабая сеть"
-        state.phase == CallPhase.Active && state.connectionHealth == ConnectionHealth.Connecting -> "Соединяемся…"
-        state.phase == CallPhase.Active -> "Идёт разговор"
-        state.direction == CallDirection.Incoming -> "Входящий звонок"
-        state.phase == CallPhase.Ringing -> "Ждём ответа…"
-        else -> "Пробуем связаться…"
+        state.connectionHealth == ConnectionHealth.Reconnecting -> appString(R.string.text_reconnecting_131)
+        state.connectionHealth == ConnectionHealth.Poor -> appString(R.string.text_weak_connection_132)
+        state.phase == CallPhase.Active && state.connectionHealth == ConnectionHealth.Connecting -> appString(R.string.text_connecting_130)
+        state.phase == CallPhase.Active -> appString(R.string.text_in_a_call_133)
+        state.direction == CallDirection.Incoming -> appString(R.string.text_incoming_call_62)
+        state.phase == CallPhase.Ringing -> appString(R.string.text_waiting_for_an_answer_4)
+        else -> appString(R.string.text_trying_to_connect_5)
     }
     Surface(
         onClick = onOpen,
@@ -1256,7 +1258,7 @@ private fun OngoingCallBanner(state: CallUiState, onOpen: () -> Unit) {
                 )
             }
             Text(
-                text = "Открыть",
+                text = appString(R.string.text_open_304),
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -1277,7 +1279,7 @@ private fun ContactRow(
     val missedSubtitle = latestUnreadMissedAt?.let(::missedContactSubtitle)
     val detailsSubtitle = listOfNotNull(
         serverHostname,
-        "Звонки пока недоступны".takeIf { !contact.canCall },
+        appString(R.string.text_calls_not_available_yet_305).takeIf { !contact.canCall },
     ).joinToString(" • ").takeIf(String::isNotEmpty)
     val rowHeight = 82.dp
     val avatarInset = 4.dp
@@ -1285,7 +1287,7 @@ private fun ContactRow(
     Surface(
         onClick = { onOpen(contact) },
         modifier = modifier.fillMaxWidth().semantics {
-            contentDescription = listOfNotNull("Открыть контакт: $name", "В избранном".takeIf { showFavoriteBadge }, detailsSubtitle, missedSubtitle)
+            contentDescription = listOfNotNull(appString(R.string.text_open_contact_value_306, name), appString(R.string.text_in_favorites_307).takeIf { showFavoriteBadge }, detailsSubtitle, missedSubtitle)
                 .joinToString(". ")
         },
         shape = RoundedCornerShape(rowHeight / 2),
@@ -1395,7 +1397,7 @@ private fun AppPage(
                         modifier = Modifier
                             .heightIn(min = 48.dp)
                             .clickable(onClick = onAbout)
-                            .semantics { contentDescription = "О программе" },
+                            .semantics { contentDescription = appString(R.string.text_about_102) },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         AppMark(42.dp)
@@ -1409,7 +1411,7 @@ private fun AppPage(
                         painter = painterResource(
                             if (multipleAccounts) R.drawable.ic_contacts else R.drawable.ic_person,
                         ),
-                        contentDescription = "Профиль",
+                        contentDescription = appString(R.string.text_profile_308),
                         modifier = Modifier.size(26.dp),
                         tint = Color.White,
                     )

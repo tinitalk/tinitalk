@@ -1,5 +1,9 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,7 +25,7 @@ fun OutgoingCallScreen(
     callee: String,
     contactAddress: ContactAddress? = null,
     fallbackLogin: String = callee,
-    status: String = "Звоним…",
+    status: String = appString(R.string.text_calling_195),
     muted: Boolean,
     currentEndpoint: AudioEndpoint?,
     availableEndpoints: List<AudioEndpoint>,
@@ -68,7 +72,7 @@ fun OutgoingCallScreen(
                 buttonSize = buttonSize,
             )
             RoundCallAction(
-                label = "Отменить",
+                label = appString(R.string.call_cancel),
                 modifier = Modifier.weight(1f),
                 color = CallRejectRed,
                 onClick = onCancel,

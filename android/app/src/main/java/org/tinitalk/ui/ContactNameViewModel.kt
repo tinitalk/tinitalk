@@ -1,5 +1,9 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
@@ -39,7 +43,7 @@ class ContactNameViewModel : ViewModel() {
         Thread {
             runCatching {
                 repository.updateContactName(key.accountId, key.login, customName)?.contact
-                    ?: error("Сеанс завершён")
+                    ?: error(appString(R.string.text_session_ended_209))
             }.onSuccess { contact ->
                 mainHandler.post {
                     if (currentOperation != operationId) return@post
@@ -79,9 +83,9 @@ class ContactNameViewModel : ViewModel() {
 
 private fun contactNameError(error: Throwable): String = when (error) {
     is ApiException -> when (error.code) {
-        400 -> "Проверьте имя контакта"
-        404 -> "Контакт больше недоступен"
-        else -> "Не удалось сохранить имя. Попробуйте ещё раз"
+        400 -> appString(R.string.text_check_the_contact_name_210)
+        404 -> appString(R.string.text_contact_no_longer_available_211)
+        else -> appString(R.string.text_could_not_save_the_name_try_again_212)
     }
-    else -> "Не удалось сохранить имя. Проверьте соединение"
+    else -> appString(R.string.text_could_not_save_the_name_check_your_connection_213)
 }

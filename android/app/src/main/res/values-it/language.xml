@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_cancel">Annulla</string>
+    <string name="language_title">Lingua</string>
+    <string name="language_system">Lingua di sistema</string>
+    <plurals name="missed_calls_count">
+        <item quantity="one">%1$d chiamata persa</item>
+        <item quantity="many">%1$d chiamate perse</item>
+        <item quantity="other">%1$d chiamate perse</item>
+    </plurals>
+    <plurals name="calls_count">
+        <item quantity="one">%1$d chiamata</item>
+        <item quantity="many">%1$d chiamate</item>
+        <item quantity="other">%1$d chiamate</item>
+    </plurals>
+    <plurals name="contacts_count">
+        <item quantity="one">%1$d contatto</item>
+        <item quantity="many">%1$d contatti</item>
+        <item quantity="other">%1$d contatti</item>
+    </plurals>
+</resources>

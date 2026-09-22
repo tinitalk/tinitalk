@@ -1,3 +1,4 @@
+import { localizedFunction } from './testI18n';
 import { expect, it } from 'vitest';
 import * as ts from 'typescript';
 import appSource from './app.ts?raw';
@@ -10,7 +11,7 @@ it.each([false, true])('updates the favorite button while history is pending (in
   const stored = new Map<string, string>();
   const favorites = new Favorites({ getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value); } });
   if (initiallyStarred) favorites.set('a:anna', true);
-  const app = new Function('favorites', `
+  const app = localizedFunction('favorites', `
     class Node {
       children = []; attributes = {}; scrollTop = 170;
       classes = new Set();
@@ -63,7 +64,7 @@ it.each([false, true])('updates the favorite button while history is pending (in
 it('keeps the scrolled contact mounted while history reloads or the header is moving', () => {
   const source = ts.createSourceFile('app.ts', appSource, ts.ScriptTarget.ES2022, true);
   const code = ts.transpileModule(source.statements.filter(node => ts.isFunctionDeclaration(node) && node.name?.text === 'renderApp').map(node => node.getText(source)).join('\n'), {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
-  const app = new Function(`
+  const app = localizedFunction(`
     const account = {id:'a'}, list = [account], route = {name:'contact',accountId:'a',login:'anna'}, tab = 'contacts';
     let contactGesture = false, deferredRender = false, busy = false, loads = 0;
     const contactHistory = new Map(), contactHistoryErrors = new Set(), loadingContactHistory = new Set();

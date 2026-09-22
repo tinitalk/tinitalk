@@ -1,5 +1,7 @@
 package org.tinitalk
 
+import org.tinitalk.i18n.appString
+
 import androidx.core.net.toUri
 import android.Manifest
 import android.content.BroadcastReceiver
@@ -160,7 +162,7 @@ class CallActivity : ComponentActivity() {
                 pendingOutgoingStart && outgoingLogin != null &&
                 (servicePhase == CallPhase.Idle || servicePhase == CallPhase.Ended)
             ) {
-                Toast.makeText(this, "Нет подключения к интернету", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, appString(R.string.text_no_internet_connection_3), Toast.LENGTH_SHORT).show()
                 finish()
             }
         }
@@ -441,7 +443,7 @@ class CallActivity : ComponentActivity() {
                             callee = peerName,
                             contactAddress = contactAddress,
                             fallbackLogin = fallbackLogin,
-                            status = if (visibleState.phase == CallPhase.Ringing) "Ждём ответа…" else "Пробуем связаться…",
+                            status = if (visibleState.phase == CallPhase.Ringing) appString(R.string.text_waiting_for_an_answer_4) else appString(R.string.text_trying_to_connect_5),
                             muted = visibleState.muted,
                             currentEndpoint = visibleState.currentAudioEndpoint,
                             availableEndpoints = visibleState.availableAudioEndpoints,
@@ -566,7 +568,7 @@ class CallActivity : ComponentActivity() {
             screenPermissionLauncher.launch(getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
         } catch (_: Exception) {
             pendingScreenCallKey = null
-            Toast.makeText(this, "Не удалось открыть разрешение на показ экрана", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, appString(R.string.text_could_not_open_screen_sharing_permission_6), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -685,9 +687,9 @@ class CallActivity : ComponentActivity() {
                 OutgoingCallStartResult.Offline,
                 OutgoingCallStartResult.Unavailable -> {
                     val message = if (started == OutgoingCallStartResult.Offline) {
-                        "Нет подключения к интернету"
+                        appString(R.string.text_no_internet_connection_3)
                     } else {
-                        "Не удалось начать звонок"
+                        appString(R.string.text_could_not_start_the_call_7)
                     }
                     Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
                     outgoingLogin = null

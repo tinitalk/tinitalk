@@ -1,7 +1,11 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +30,15 @@ import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.Role
+import org.tinitalk.i18n.AppLanguage
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -54,6 +67,61 @@ internal fun AboutScreen(
     onCheckServer: (String) -> ServerCheckDetails,
     onBack: () -> Unit,
 ) {
+    var languagePicker by remember { mutableStateOf(false) }
+    if (languagePicker) {
+        AlertDialog(
+            onDismissRequest = { languagePicker = false },
+            title = { Text(appString(R.string.language_title)) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()).selectableGroup(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    (listOf("" to AppLanguage.systemLanguageLabel()) + AppLanguage.sortedLanguages()).forEach { (tag, label) ->
+                        val selected = AppLanguage.selection == tag
+                        val shape = RoundedCornerShape(16.dp)
+                        Surface(
+                            shape = shape,
+                            color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)) else null,
+                            modifier = Modifier.fillMaxWidth().clip(shape).selectable(
+                                selected = selected,
+                                role = Role.RadioButton,
+                                onClick = { languagePicker = false; AppLanguage.select(tag) },
+                            ),
+                        ) {
+                            Row(
+                                modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Box(Modifier.width(32.dp).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
+                                    if (tag.isEmpty()) Icon(
+                                        painterResource(R.drawable.ic_language_device), contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(26.dp),
+                                    ) else Text(languageFlag(tag), fontSize = 26.sp)
+                                }
+                                Text(
+                                    label, modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                )
+                                Box(Modifier.size(22.dp)) {
+                                    if (selected) Icon(
+                                        painterResource(R.drawable.ic_language_selected), contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { languagePicker = false }) { Text(appString(R.string.text_cancel_12)) } },
+        )
+    }
     var details by remember(serverUrl) { mutableStateOf<ServerCheckDetails?>(null) }
     var checking by remember(serverUrl) { mutableStateOf(serverUrl.isNotBlank()) }
     val presentation = serverCheckPresentation(
@@ -98,13 +166,13 @@ internal fun AboutScreen(
                         IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_arrow_back),
-                                contentDescription = "Назад",
+                                contentDescription = appString(R.string.text_back_101),
                             )
                         }
                     }
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "О программе",
+                        appString(R.string.text_about_102),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -129,24 +197,40 @@ internal fun AboutScreen(
                             )
                         }
                     }
+                    item(key = "about-language") {
+                        Surface(
+                            onClick = { languagePicker = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(22.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                        ) {
+                            Column(Modifier.padding(20.dp)) {
+                                Text(appString(R.string.language_title), style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    AppLanguage.supported[AppLanguage.selection] ?: AppLanguage.systemLanguageLabel(),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
                     item(key = "about-app") {
                         AboutInfoCard(
-                            title = "Приложение",
+                            title = appString(R.string.text_application_103),
                             inlineValues = listOf(
-                                "Версия" to BuildConfig.VERSION_NAME,
-                                "Коммит" to BuildConfig.COMMIT_HASH,
+                                appString(R.string.text_version_104) to BuildConfig.VERSION_NAME,
+                                appString(R.string.text_commit_105) to BuildConfig.COMMIT_HASH,
                             ),
                         )
                     }
                     if (serverUrl.isNotBlank()) item(key = "about-server") {
                         AboutInfoCard(
-                            title = "Сервер",
+                            title = appString(R.string.text_server_106),
                             values = listOf(
-                                "Адрес" to serverUrl.ifBlank { "Не указан" },
+                                appString(R.string.text_address_107) to serverUrl.ifBlank { appString(R.string.text_not_specified_108) },
                             ),
                             inlineValues = listOf(
-                                "Версия API" to (details?.apiVersion?.toString() ?: "Не указана"),
-                                "Коммит" to (details?.commit ?: "Не указан"),
+                                appString(R.string.text_api_version_109) to (details?.apiVersion?.toString() ?: appString(R.string.text_not_specified_110)),
+                                appString(R.string.text_commit_105) to (details?.commit ?: appString(R.string.text_not_specified_108)),
                             ),
                         )
                     }
@@ -157,6 +241,22 @@ internal fun AboutScreen(
             }
         }
     }
+}
+
+private fun languageFlag(tag: String): String = when (tag) {
+    "en" -> "🇬🇧"
+    "ru" -> "🇷🇺"
+    "pl" -> "🇵🇱"
+    "de" -> "🇩🇪"
+    "es" -> "🇪🇸"
+    "fr" -> "🇫🇷"
+    "pt" -> "🇧🇷"
+    "it" -> "🇮🇹"
+    "tr" -> "🇹🇷"
+    "ja" -> "🇯🇵"
+    "ko" -> "🇰🇷"
+    "zh-Hans" -> "🇨🇳"
+    else -> "🌐"
 }
 
 @Composable
@@ -257,7 +357,7 @@ private fun ServerStatusCard(presentation: ServerCheckPresentation) {
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Состояние сервера",
+                    appString(R.string.text_server_status_111),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )

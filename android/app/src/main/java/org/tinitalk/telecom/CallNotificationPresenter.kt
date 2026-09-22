@@ -1,5 +1,7 @@
 package org.tinitalk.telecom
 
+import org.tinitalk.i18n.appString
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -55,9 +57,19 @@ internal class CallNotificationPresenter(
 ) {
     private var photoRevisionJob: Job? = null
     @Volatile private var closed = false
+    private val languageObserver: () -> Unit = {
+        handler.post {
+            val state = currentState()
+            if (!closed && canRefresh() && state.callKey == currentOwner()?.key && state.phase != CallPhase.Idle) {
+                ensureChannel()
+                show(state)
+            }
+        }
+    }
 
     fun observePhotos() {
         if (closed || photoRevisionJob != null) return
+        org.tinitalk.i18n.AppLanguage.observe(languageObserver)
         photoRevisionJob = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
             photoLoader.revisions.drop(1).collect {
                 handler.post { refreshNotificationAfterPhotoRevision() }
@@ -67,6 +79,7 @@ internal class CallNotificationPresenter(
 
     fun close() {
         closed = true
+        org.tinitalk.i18n.AppLanguage.removeObserver(languageObserver)
         photoRevisionJob?.cancel()
         photoRevisionJob = null
     }
@@ -90,7 +103,7 @@ internal class CallNotificationPresenter(
         state.peer?.contactAddress?.takeIf { liveCall }?.let { address ->
             if (bitmap == null) enqueueNotificationPhotoRefresh(state, address)
         }
-        val builder = Notification.Builder(context, ChannelId)
+        val builder = Notification.Builder(org.tinitalk.i18n.AppLanguage.context(context), ChannelId)
         val content = PendingIntent.getActivity(
             context,
             0,
@@ -106,15 +119,15 @@ internal class CallNotificationPresenter(
         val peerName = state.peer?.displayName?.takeIf(String::isNotBlank) ?: "TiniTalk"
         bitmap?.let(builder::setLargeIcon)
         val status = when (state.phase) {
-            CallPhase.Ringing -> if (state.direction == CallDirection.Outgoing) "Ждём ответа…" else "Входящий звонок"
-            CallPhase.Connecting -> "Пробуем связаться…"
-            CallPhase.Active -> if (state.muted) "Микрофон выключен" else "Звонок идёт"
+            CallPhase.Ringing -> if (state.direction == CallDirection.Outgoing) appString(R.string.text_waiting_for_an_answer_4) else appString(R.string.text_incoming_call_62)
+            CallPhase.Connecting -> appString(R.string.text_trying_to_connect_5)
+            CallPhase.Active -> if (state.muted) appString(R.string.text_microphone_muted_89) else appString(R.string.text_call_in_progress_90)
             CallPhase.Ended -> when (state.endReason) {
-                CallEndReason.Busy -> "Занято"
-                CallEndReason.NotInContacts -> "Вас ещё не добавили в контакты"
-                else -> "Звонок завершён"
+                CallEndReason.Busy -> appString(R.string.text_busy_91)
+                CallEndReason.NotInContacts -> appString(R.string.text_you_have_not_been_added_to_contacts_yet_92)
+                else -> appString(R.string.text_call_ended_93)
             }
-            CallPhase.Idle -> "Звонок"
+            CallPhase.Idle -> appString(R.string.text_call_94)
         }
         builder
             .setSmallIcon(callNotificationIcon(state))
@@ -129,8 +142,8 @@ internal class CallNotificationPresenter(
                 actionIntent(ActionScreenStop),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            builder.setContentText(if (screen.sending) "Вы показываете экран" else "Подготовка показа экрана…")
-                .addAction(Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(context, R.drawable.ic_screen_share), "Остановить показ", stop).build())
+            builder.setContentText(if (screen.sending) appString(R.string.text_you_are_sharing_your_screen_95) else appString(R.string.text_preparing_screen_sharing_96))
+                .addAction(Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(context, R.drawable.ic_screen_share), appString(R.string.text_stop_sharing_97), stop).build())
         }
         state.connectedAtElapsedMs?.takeIf { state.phase == CallPhase.Active }?.let { connectedAt ->
             val elapsed = (SystemClock.elapsedRealtime() - connectedAt).coerceAtLeast(0L)
@@ -150,7 +163,7 @@ internal class CallNotificationPresenter(
             )
         } else if (liveCall) {
             @Suppress("DEPRECATION")
-            builder.addAction(Notification.Action.Builder(R.drawable.ic_call, "Завершить", hangUp).build())
+            builder.addAction(Notification.Action.Builder(R.drawable.ic_call, appString(R.string.text_end_call_98), hangUp).build())
         }
         return builder.build()
     }
@@ -184,7 +197,7 @@ internal class CallNotificationPresenter(
         return builder
             .setSmallIcon(R.drawable.ic_call_active)
             .setContentTitle("TiniTalk")
-            .setContentText("Завершаем звонок…")
+            .setContentText(appString(R.string.text_ending_call_99))
             .setCategory(Notification.CATEGORY_SERVICE)
             .setOngoing(true)
             .setShowWhen(false)
@@ -194,7 +207,7 @@ internal class CallNotificationPresenter(
     fun ensureChannel() {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
-            NotificationChannel(ChannelId, "Активные звонки", NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(ChannelId, appString(R.string.text_active_calls_100), NotificationManager.IMPORTANCE_LOW),
         )
     }
 

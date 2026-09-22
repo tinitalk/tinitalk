@@ -5,6 +5,8 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import org.tinitalk.data.ApiException
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class PasswordAuthPresentationTest {
     @Test
     fun credentialPastePreservesPasswordWhitespace() {

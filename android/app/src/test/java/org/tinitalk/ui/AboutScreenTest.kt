@@ -1,5 +1,8 @@
 package org.tinitalk.ui
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.hasText
@@ -21,7 +24,7 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(
     sdk = [35],
-    qualifiers = "w240dp-h1000dp",
+    qualifiers = "ru-w240dp-h1000dp",
 )
 class AboutScreenTest {
     @get:Rule
@@ -48,13 +51,13 @@ class AboutScreenTest {
             }
         }
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodes(hasText("Коммит", substring = true))
+            composeRule.onAllNodes(hasText(appString(R.string.text_commit_105), substring = true))
                 .fetchSemanticsNodes().size == 2
         }
 
-        val versions = composeRule.onAllNodes(hasText("Версия", substring = true))
+        val versions = composeRule.onAllNodes(hasText(appString(R.string.text_version_104), substring = true))
             .fetchSemanticsNodes().sortedBy { it.boundsInRoot.top }
-        val commits = composeRule.onAllNodes(hasText("Коммит", substring = true))
+        val commits = composeRule.onAllNodes(hasText(appString(R.string.text_commit_105), substring = true))
             .fetchSemanticsNodes().sortedBy { it.boundsInRoot.top }
 
         assertEquals(2, versions.size)
@@ -89,7 +92,7 @@ class AboutScreenTest {
         }
 
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodes(hasText("Нет подключения к интернету"))
+            composeRule.onAllNodes(hasText(appString(R.string.text_no_internet_connection_3)))
                 .fetchSemanticsNodes().isNotEmpty()
         }
         assertEquals(0, checks)

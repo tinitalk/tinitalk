@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_reply_cannot_talk">"No puedo hablar"</string>
+    <string name="call_reply_call_me_later">"Llámame más tarde"</string>
+    <string name="call_reply_will_call_back">"Te llamaré luego"</string>
+    <string name="call_reply_result_cannot_talk">"no puede hablar ahora"</string>
+    <string name="call_reply_result_call_me_later">"pide que llames más tarde"</string>
+    <string name="call_reply_result_will_call_back">"te llamará luego"</string>
+    <string name="call_reply_history_cannot_talk">"No podía hablar"</string>
+    <string name="call_reply_history_call_me_later">"Pidió que llamaras más tarde"</string>
+    <string name="call_reply_history_will_call_back">"Prometió devolver la llamada"</string>
+    <string name="call_reply_history_sent_cannot_talk">"No podías hablar"</string>
+    <string name="call_reply_history_sent_call_me_later">"Pediste que llamaran más tarde"</string>
+    <string name="call_reply_history_sent_will_call_back">"Prometiste devolver la llamada"</string>
+    <string name="call_reply_sheet_title">"Responder con un mensaje"</string>
+    <string name="call_reply_open">"Mostrar respuestas"</string>
+    <string name="call_reply_close">"Ocultar respuestas"</string>
+    <string name="call_reply_select">"Rechazar con respuesta: %1$s"</string>
+    <string name="call_reply_result_title">"Respuesta a la llamada"</string>
+    <string name="call_reply_send_failed">"No se pudo enviar la respuesta"</string>
+    <string name="call_reply_send_unconfirmed">"No se pudo confirmar el envío de la respuesta"</string>
+    <string name="call_reply_sent">"Respuesta enviada"</string>
+</resources>

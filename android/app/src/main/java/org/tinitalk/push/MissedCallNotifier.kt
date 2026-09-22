@@ -1,5 +1,7 @@
 package org.tinitalk.push
 
+import org.tinitalk.i18n.appString
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -124,7 +126,7 @@ internal class MissedCallNotifier(
                 builder.addAction(
                     Notification.Action.Builder(
                         Icon.createWithResource(context, R.drawable.ic_call),
-                        "Перезвонить",
+                        appString(R.string.text_call_back_69),
                         redial,
                     ).build(),
                 )
@@ -171,20 +173,20 @@ internal class MissedCallNotifier(
         targets.take(MaxMissedSummaryLines).forEach { target ->
             style.addLine(
                 when (val missedCount = target.missedCount) {
-                    null -> "${target.name ?: target.login} — пропущенные звонки"
+                    null -> appString(R.string.text_value_missed_calls_70, target.name ?: target.login)
                     1 -> target.name ?: target.login
-                    else -> "${target.name ?: target.login} — $missedCount ${callsWord(missedCount)}"
+                    else -> "${target.name ?: target.login} — ${callsText(missedCount)}"
                 },
             )
         }
         builder
             .setSmallIcon(R.drawable.ic_call_missed)
-            .setContentTitle(if (displayCount == 1) "Пропущенный звонок" else "Пропущенные звонки")
+            .setContentTitle(if (displayCount == 1) appString(R.string.text_missed_call_71) else appString(R.string.text_missed_calls_72))
             .setContentText(
-                if (contactCount > 1) "$displayCount ${missedCallsWord(displayCount)} от $contactCount ${contactsWord(contactCount)}"
-                else "$displayCount ${missedCallsWord(displayCount)}",
+                if (contactCount > 1) appString(R.string.text_value_value_from_value_value_73, missedCallsText(displayCount), contactsText(contactCount))
+                else missedCallsText(displayCount),
             )
-            .setStyle(style.setSummaryText("$displayCount ${missedCallsWord(displayCount)}"))
+            .setStyle(style.setSummaryText(missedCallsText(displayCount)))
             .setCategory(if (Build.VERSION.SDK_INT >= 31) Notification.CATEGORY_MISSED_CALL else Notification.CATEGORY_CALL)
             .setContentIntent(openApp)
             .setAutoCancel(false)
@@ -352,46 +354,26 @@ internal class MissedCallNotifier(
 
     private fun ensureMissedChannel() {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(MissedChannelId, "Пропущенные звонки", NotificationManager.IMPORTANCE_LOW).apply {
+            NotificationChannel(MissedChannelId, appString(R.string.text_missed_calls_72), NotificationManager.IMPORTANCE_LOW).apply {
                 setShowBadge(true)
             },
         )
     }
 
     private fun missedTargetText(count: Int?): String = when (count) {
-        null -> "Пропущенные звонки"
-        1 -> "Пропущенный звонок"
-        else -> "$count ${missedCallsWord(count)}"
+        null -> appString(R.string.text_missed_calls_72)
+        1 -> appString(R.string.text_missed_call_71)
+        else -> missedCallsText(count)
     }
 
-    private fun missedCallsWord(count: Int): String {
-        val lastTwo = count % 100
-        if (lastTwo in 11..14) return "пропущенных вызовов"
-        return when (count % 10) {
-            1 -> "пропущенный вызов"
-            2, 3, 4 -> "пропущенных вызова"
-            else -> "пропущенных вызовов"
-        }
-    }
+    private fun missedCallsText(count: Int): String =
+        org.tinitalk.i18n.AppLanguage.quantity(R.plurals.missed_calls_count, count)
 
-    private fun callsWord(count: Int): String {
-        val lastTwo = count % 100
-        if (lastTwo in 11..14) return "звонков"
-        return when (count % 10) {
-            1 -> "звонок"
-            2, 3, 4 -> "звонка"
-            else -> "звонков"
-        }
-    }
+    private fun callsText(count: Int): String =
+        org.tinitalk.i18n.AppLanguage.quantity(R.plurals.calls_count, count)
 
-    private fun contactsWord(count: Int): String {
-        val lastTwo = count % 100
-        if (lastTwo in 11..14) return "контактов"
-        return when (count % 10) {
-            1 -> "контакта"
-            else -> "контактов"
-        }
-    }
+    private fun contactsText(count: Int): String =
+        org.tinitalk.i18n.AppLanguage.quantity(R.plurals.contacts_count, count)
 
     companion object {
         private const val MissedChannelId = "missed_calls_v2"

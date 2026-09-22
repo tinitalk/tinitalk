@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_cancel">Annuler</string>
+    <string name="language_title">Langue</string>
+    <string name="language_system">Langue du système</string>
+    <plurals name="missed_calls_count">
+        <item quantity="one">%1$d appel manqué</item>
+        <item quantity="many">%1$d appels manqués</item>
+        <item quantity="other">%1$d appels manqués</item>
+    </plurals>
+    <plurals name="calls_count">
+        <item quantity="one">%1$d appel</item>
+        <item quantity="many">%1$d appels</item>
+        <item quantity="other">%1$d appels</item>
+    </plurals>
+    <plurals name="contacts_count">
+        <item quantity="one">%1$d contact</item>
+        <item quantity="many">%1$d contacts</item>
+        <item quantity="other">%1$d contacts</item>
+    </plurals>
+</resources>

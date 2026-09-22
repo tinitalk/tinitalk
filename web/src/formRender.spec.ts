@@ -1,3 +1,4 @@
+import { localizedFunction } from './testI18n';
 import { expect, it } from 'vitest';
 import * as ts from 'typescript';
 import appSource from './app.ts?raw';
@@ -48,7 +49,7 @@ it.each(['add-account', 'login', 'add-contact'])('keeps entered values on backgr
   const source = ts.createSourceFile('app.ts', appSource, ts.ScriptTarget.ES2022, true);
   const names = ['renderApp', 'credentialsScreen', 'credentialsReady', 'addContactScreen', 'element'];
   const code = ts.transpileModule(source.statements.filter(n => ts.isFunctionDeclaration(n) && names.includes(n.name!.text)).map(n => n.getText(source)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const app = new Function('Node', 'routeName', `
+  const app = localizedFunction('Node', 'routeName', `
     const webCommit = '12345678';
     const owner = {id:'a', login:'alice', server:'https://family.example', sessionReplaced:routeName === 'login'};
     const list = [owner], screen = new Node('screen'), document = {createElement: tag => new Node(tag)};
@@ -81,7 +82,7 @@ it.each(['login', 'add-account'])('opens a separate password screen for %s and r
   const source = ts.createSourceFile('app.ts', appSource, ts.ScriptTarget.ES2022, true);
   const names = ['credentialsScreen', 'credentialsReady', 'element'];
   const code = ts.transpileModule(source.statements.filter(n => ts.isFunctionDeclaration(n) && names.includes(n.name!.text)).map(n => n.getText(source)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const app = new Function('Node', 'mode', `
+  const app = localizedFunction('Node', 'mode', `
     const document = {createElement: tag => new Node(tag)}, screen = new Node('screen');
     const list = [], webCommit = 'abc123', appMark = () => new Node('mark');
     let accountSubmission, disposeView = () => {}, activeOverlayClose, pageBack, submitted;

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthError, authenticate, changePassword, logout, personalPasswordError } from './auth';
 import type { Account } from './model';
 import { OperationError } from './userErrors';
+import { t } from './i18n';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -72,11 +73,11 @@ describe('authenticate', () => {
   it('does not send credentials to a wrong-service or incompatible health response', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(Response.json({ service: 'not-tinitalk', status: 'ok', features: [] }));
     vi.stubGlobal('fetch', fetch);
-    await expect(authenticate('https://wrong.example', 'alice', 'secret')).rejects.toThrow('TiniTalk');
+    await expect(authenticate('https://wrong.example', 'alice', 'secret')).rejects.toThrow(t('text_no_tinitalk_server_at_this_address_284'));
     expect(fetch).toHaveBeenCalledTimes(1);
 
     fetch.mockReset().mockResolvedValueOnce(Response.json({ service: 'tinitalk', status: 'ok', features: [] }));
-    await expect(authenticate('https://old.example', 'alice', 'old-token')).rejects.toThrow('обновить');
+    await expect(authenticate('https://old.example', 'alice', 'old-token')).rejects.toThrow(t('web_update_this_server_to_connect_the_web_app_4'));
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

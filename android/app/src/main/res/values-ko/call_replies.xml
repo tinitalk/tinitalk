@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_reply_cannot_talk">"지금 통화할 수 없습니다"</string>
+    <string name="call_reply_call_me_later">"나중에 전화해 주세요"</string>
+    <string name="call_reply_will_call_back">"다시 전화하겠습니다"</string>
+    <string name="call_reply_result_cannot_talk">"지금 통화할 수 없습니다"</string>
+    <string name="call_reply_result_call_me_later">"나중에 전화해 달라고 합니다"</string>
+    <string name="call_reply_result_will_call_back">"다시 전화하겠다고 합니다"</string>
+    <string name="call_reply_history_cannot_talk">"통화할 수 없었음"</string>
+    <string name="call_reply_history_call_me_later">"나중에 전화해 달라고 요청함"</string>
+    <string name="call_reply_history_will_call_back">"다시 전화하겠다고 함"</string>
+    <string name="call_reply_history_sent_cannot_talk">"통화할 수 없다고 알림"</string>
+    <string name="call_reply_history_sent_call_me_later">"나중에 전화해 달라고 요청함"</string>
+    <string name="call_reply_history_sent_will_call_back">"다시 전화하겠다고 알림"</string>
+    <string name="call_reply_sheet_title">"메시지로 응답"</string>
+    <string name="call_reply_open">"응답 옵션 표시"</string>
+    <string name="call_reply_close">"응답 옵션 숨기기"</string>
+    <string name="call_reply_select">"거절 후 응답: %1$s"</string>
+    <string name="call_reply_result_title">"통화 응답"</string>
+    <string name="call_reply_send_failed">"응답을 보내지 못했습니다"</string>
+    <string name="call_reply_send_unconfirmed">"응답 전송 여부를 확인하지 못했습니다"</string>
+    <string name="call_reply_sent">"응답을 보냈습니다"</string>
+</resources>

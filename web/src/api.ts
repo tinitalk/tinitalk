@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { OperationError } from './userErrors';
 import type { Account } from './model';
 
@@ -21,9 +22,9 @@ export async function api<T>(account: Account, path: string, method = 'GET', bod
     // Password resets revoke the token itself, so there may be no session
     // reason header. Both kinds of 401 require an explicit new login.
     if (response.status === 401) sessionReplacedHandler?.(account, sessionId);
-    const message = replaced ? 'Учётка открыта на другом устройстве. Войдите снова.'
-      : response.status === 401 ? 'Вход завершён. Войдите снова.'
-        : `Сервер ответил ${response.status}: ${(await response.text()).slice(0, 180)}`;
+    const message = replaced ? t('web_this_account_is_open_on_another_device_sign_in_again_0')
+      : response.status === 401 ? t('web_you_have_been_signed_out_sign_in_again_1')
+        : t('web_server_returned_value_value_2', response.status, (await response.text()).slice(0, 180));
     throw new APIError(response.status, message, replaced);
   }
   if (response.status === 204) return undefined as T;

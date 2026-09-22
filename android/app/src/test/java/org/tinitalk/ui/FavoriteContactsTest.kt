@@ -1,5 +1,8 @@
 package org.tinitalk.ui
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -31,7 +34,7 @@ import org.tinitalk.data.*
 import org.tinitalk.ui.theme.TiniTalkTheme
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], qualifiers = "w360dp-h800dp")
+@Config(sdk = [35], qualifiers = "ru-w360dp-h800dp")
 class FavoriteContactsTest {
     @get:Rule val composeRule = createEmptyComposeRule()
 
@@ -45,9 +48,9 @@ class FavoriteContactsTest {
                 FavoriteContactTabs(favorites) { favorites = it }
             }
         }
-        composeRule.onNodeWithText("Избранные").assertHeightIsEqualTo(36.dp).assertIsSelected()
-        composeRule.onNodeWithText("Все").performClick().assertIsSelected()
-        composeRule.onNodeWithText("Избранные").assertIsNotSelected()
+        composeRule.onNodeWithText(appString(R.string.text_favorites_247)).assertHeightIsEqualTo(36.dp).assertIsSelected()
+        composeRule.onNodeWithText(appString(R.string.text_all_248)).performClick().assertIsSelected()
+        composeRule.onNodeWithText(appString(R.string.text_favorites_247)).assertIsNotSelected()
         activity.pause().stop().destroy()
     }
 

@@ -4,6 +4,8 @@ import org.tinitalk.data.ServerCheckResult
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class ServerCheckPresentationTest {
     @Test
     fun presentsServerHealthWithDistinctIndicatorsAndMessages() {

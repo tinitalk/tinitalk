@@ -1,3 +1,4 @@
+import { t } from './i18n';
 export type Account = {
   id: string; server: string; login: string; token: string; name: string;
   deviceId: string; sessionId: string; pushConfigId?: string; sessionReplaced?: boolean; passwordAuth?: true; passwordSet?: boolean;
@@ -29,7 +30,7 @@ export function normalizeServer(value: string): string {
   const url = new URL(value.includes('://') ? value.trim() : `https://${value.trim()}`);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if ((url.protocol !== 'https:' && !(local && url.protocol === 'http:')) || url.username || url.password || url.search || url.hash || (url.pathname !== '/' && url.pathname !== '')) {
-    throw new Error('Укажите HTTPS-адрес сервера без пути, пароля и параметров.');
+    throw new Error(t('web_enter_an_https_server_address_without_a_path_password_or_query_pa_108'));
   }
   return url.origin;
 }
@@ -40,10 +41,10 @@ export function accountForLogin(accounts: readonly Account[], server: string, lo
   const existing = accounts.filter(account => normalizeServer(account.server) === origin);
   if (!existing.length) return undefined;
   if (existing.length === 1 && existing[0].sessionReplaced && existing[0].login.trim() === login.trim()) return existing[0];
-  throw new Error('Аккаунт с этого сервера уже добавлен');
+  throw new Error(t('text_an_account_from_this_server_is_already_added_36'));
 }
 export function accountScope(base: string, id: string): string {
-  if (!/^[a-zA-Z0-9-]+$/.test(id)) throw new Error('Некорректный идентификатор учётки');
+  if (!/^[a-zA-Z0-9-]+$/.test(id)) throw new Error(t('web_invalid_account_identifier_109'));
   return new URL(`notifications/${id}/`, base).href;
 }
 export function accountFromScope(scope: string): string | null {

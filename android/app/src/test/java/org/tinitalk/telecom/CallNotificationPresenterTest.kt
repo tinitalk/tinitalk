@@ -26,7 +26,7 @@ import org.tinitalk.data.ContactPhotoReader
 import org.tinitalk.push.ContactPhotoNotificationLoader
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class)
+@Config(sdk = [35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class CallNotificationPresenterTest {
     private val context: Context = RuntimeEnvironment.getApplication()
     private val manager = context.getSystemService(NotificationManager::class.java)

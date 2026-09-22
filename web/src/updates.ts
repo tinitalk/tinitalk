@@ -1,3 +1,4 @@
+import { t, currentLocale } from './i18n';
 import { accountScope, type Account } from './model';
 
 export const webBuild = import.meta.env.VITE_WEB_BUILD_ID || 'dev';
@@ -42,9 +43,9 @@ export function waitForWorker(worker: ServiceWorker, states: ServiceWorkerState[
     };
     const changed = () => {
       if (states.includes(worker.state)) finish();
-      else if (worker.state === 'redundant') finish(new Error('Не удалось установить обновление'));
+      else if (worker.state === 'redundant') finish(new Error(t('web_could_not_install_the_update_134')));
     };
-    const timeout = setTimeout(() => finish(new Error('Обновление ещё не установилось. Повторите проверку.')), 15000);
+    const timeout = setTimeout(() => finish(new Error(t('web_the_update_has_not_been_installed_yet_check_again_135'))), 15000);
     worker.addEventListener('statechange', changed); changed();
   });
 }
@@ -52,13 +53,13 @@ export function waitForWorker(worker: ServiceWorker, states: ServiceWorkerState[
 export async function fetchBuildVersions(base: string): Promise<BuildVersions> {
   let response: Response;
   try { response = await fetch(new URL('version.json', base), { cache: 'no-store', signal: AbortSignal.timeout(8000) }); }
-  catch { throw new Error('Не удалось проверить сборку на сервере. Проверьте подключение к сети.'); }
-  if (!response.ok) throw new Error('Сервер не сообщает время сборки. Проверьте, что новая web-версия опубликована.');
+  catch { throw new Error(t('web_could_not_check_the_server_build_check_your_connection_136')); }
+  if (!response.ok) throw new Error(t('web_the_server_did_not_report_a_build_time_check_that_the_new_web_ver_137'));
   let value;
   try { value = await response.json(); }
-  catch { throw new Error('Сервер вернул неверные сведения о сборке.'); }
+  catch { throw new Error(t('web_the_server_returned_invalid_build_information_138')); }
   if (!value || !['build', 'shell', 'push'].every(key => typeof value[key] === 'string' && value[key].length > 0 && value[key].length < 100)) {
-    throw new Error('Не удалось прочитать сведения о сборке на сервере.');
+    throw new Error(t('web_could_not_read_the_server_build_information_139'));
   }
   return { build: value.build, shell: value.shell, push: value.push };
 }
@@ -66,11 +67,11 @@ export async function fetchBuildVersions(base: string): Promise<BuildVersions> {
 export async function inspectUpdates(base: string, accounts: Account[], build = webBuild): Promise<UpdateReport> {
   const report: UpdateReport = { build, checkedAt: Date.now(), controller: null, workers: [] };
   const latestJob = fetchBuildVersions(base).then(latest => { report.latest = latest; }).catch(error => {
-    report.error = error instanceof Error ? error.message : 'Не удалось связаться с сервером';
+    report.error = error instanceof Error ? error.message : t('web_could_not_reach_the_server_140');
   });
   if (!('serviceWorker' in navigator)) {
     await latestJob;
-    report.error = 'Service Worker недоступен. Откройте установленное приложение по HTTPS.';
+    report.error = t('web_service_worker_unavailable_open_the_installed_app_over_https_141');
     return report;
   }
   const sw = navigator.serviceWorker;
@@ -79,7 +80,7 @@ export async function inspectUpdates(base: string, accounts: Account[], build = 
   ]);
   report.controller = controller;
   const targets = [
-    { scope: base, label: 'Оболочка приложения', kind: 'shell' as const, enabled: true },
+    { scope: base, label: t('web_app_shell_142'), kind: 'shell' as const, enabled: true },
     ...accounts.filter(owner => !owner.sessionReplaced).map(owner => ({ scope: accountScope(base, owner.id), label: `Push · ${owner.login} · ${new URL(owner.server).host}`, kind: 'push' as const, enabled: Boolean(owner.pushConfigId) })),
   ];
   report.workers = await Promise.all(targets.map(async target => {
@@ -98,21 +99,21 @@ export async function inspectUpdates(base: string, accounts: Account[], build = 
 }
 
 export function updateStatus(report: UpdateReport): { kind: 'ready' | 'update' | 'unknown' | 'notifications'; text: string } {
-  if (report.error || !report.latest) return { kind: 'unknown', text: report.error || 'Не удалось проверить обновление' };
+  if (report.error || !report.latest) return { kind: 'unknown', text: report.error || t('web_could_not_check_for_updates_143') };
   const enabled = report.workers.filter(item => item.enabled);
   if (report.build !== report.latest.build || enabled.some(item => item.waiting || item.installing || !item.active || item.active.state !== 'activated')) {
-    return { kind: 'update', text: 'Доступно обновление. Нажмите «Обновить приложение».' };
+    return { kind: 'update', text: t('web_update_available_tap_update_app_144') };
   }
   if (!report.controller || !report.controller.version || enabled.some(item => !item.active?.version)) {
-    return { kind: 'unknown', text: 'Не все обработчики сообщили версию. Нажмите «Обновить приложение».' };
+    return { kind: 'unknown', text: t('web_some_background_services_did_not_report_their_version_tap_update__145') };
   }
   if (report.controller.version !== report.latest.shell || enabled.some(item => item.active?.version !== item.expected)) {
-    return { kind: 'update', text: 'Не все компоненты обновились. Нажмите «Обновить приложение».' };
+    return { kind: 'update', text: t('web_some_components_have_not_updated_tap_update_app_146') };
   }
   if (enabled.some(item => item.kind === 'push' && item.subscribed !== true)) {
-    return { kind: 'notifications', text: 'Сборка обновлена, но подписка на уведомления не подтверждена. Нажмите «Обновить приложение».' };
+    return { kind: 'notifications', text: t('web_the_build_is_updated_but_the_notification_subscription_is_not_con_147') };
   }
-  return { kind: 'ready', text: 'Всё обновлено: приложение и активные обработчики.' };
+  return { kind: 'ready', text: t('web_everything_is_up_to_date_app_and_active_background_services_148') };
 }
 
 export function canUpdateApplication(report: UpdateReport | undefined): boolean {
@@ -124,5 +125,5 @@ export function canUpdateApplication(report: UpdateReport | undefined): boolean 
 
 export function buildTime(value: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' });
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(currentLocale(), { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' });
 }

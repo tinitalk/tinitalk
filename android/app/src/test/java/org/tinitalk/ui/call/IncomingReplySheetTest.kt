@@ -1,5 +1,8 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
@@ -34,7 +37,7 @@ class IncomingReplySheetTest {
     @get:Rule val composeRule = createEmptyComposeRule()
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp-420dpi")
+    @Config(qualifiers = "ru-w411dp-h891dp-420dpi")
     fun visuallyClosedSheetImmediatelyRestoresCallButtonsAfterRepeatedSwipes() {
         var answered = 0
         var rejected = 0
@@ -54,8 +57,8 @@ class IncomingReplySheetTest {
                 composeRule.onNodeWithTag("incoming_reply_handle").performTouchInput {
                     swipe(center, Offset(center.x, center.y - 900f), durationMillis = 500)
                 }
-                composeRule.onNodeWithContentDescription("Ответить").assertIsNotEnabled()
-                composeRule.onNodeWithContentDescription("Отклонить").assertIsNotEnabled()
+                composeRule.onNodeWithContentDescription(appString(R.string.text_answer_64)).assertIsNotEnabled()
+                composeRule.onNodeWithContentDescription(appString(R.string.text_decline_63)).assertIsNotEnabled()
                 val dragTag = if (cycle % 2 == 0) "incoming_reply_handle" else "incoming_reply_cannot_talk"
                 val expandedTop = composeRule.onNodeWithTag("incoming_reply_handle").fetchSemanticsNode().boundsInRoot.top
                 composeRule.mainClock.autoAdvance = false
@@ -76,15 +79,15 @@ class IncomingReplySheetTest {
                 assertEquals(collapsedTop,
                     composeRule.onNodeWithTag("incoming_reply_handle").fetchSemanticsNode().boundsInRoot.top)
                 composeRule.onNodeWithTag("incoming_reply_scrim").assertDoesNotExist()
-                composeRule.onNodeWithContentDescription("Ответить").assertIsEnabled()
-                composeRule.onNodeWithContentDescription("Отклонить").assertIsEnabled()
+                composeRule.onNodeWithContentDescription(appString(R.string.text_answer_64)).assertIsEnabled()
+                composeRule.onNodeWithContentDescription(appString(R.string.text_decline_63)).assertIsEnabled()
                 composeRule.mainClock.autoAdvance = true
                 composeRule.waitForIdle()
             }
             assertEquals(0, answered)
             assertEquals(0, rejected)
             assertEquals(0, replies)
-            composeRule.onNodeWithContentDescription("Ответить").performTouchInput {
+            composeRule.onNodeWithContentDescription(appString(R.string.text_answer_64)).performTouchInput {
                 swipe(center, Offset(center.x, center.y - 420f), durationMillis = 500)
             }
             composeRule.waitForIdle()
@@ -116,7 +119,7 @@ class IncomingReplySheetTest {
         assertEquals(emptyList<CallReplyCode>(), replies)
         assertEquals(0, ordinaryRejects)
         assertEquals(1, silences)
-        composeRule.onNodeWithContentDescription("Отклонить").assertIsNotEnabled()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_decline_63)).assertIsNotEnabled()
         composeRule.onNodeWithTag("incoming_reply_cannot_talk").performClick()
         composeRule.onNodeWithTag("incoming_reply_cannot_talk").performTouchInput { click() }
         assertEquals(listOf(CallReplyCode.CannotTalk), replies)
@@ -177,7 +180,7 @@ class IncomingReplySheetTest {
         composeRule.waitForIdle()
         composeRule.runOnIdle { callId.value = "two" }
         composeRule.onNodeWithTag("incoming_reply_scrim").assertDoesNotExist()
-        composeRule.onNodeWithContentDescription("Отклонить").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithContentDescription(appString(R.string.text_decline_63)).performSemanticsAction(SemanticsActions.OnClick) { it() }
         assertEquals(1, rejected)
         activity.pause().stop().destroy()
     }

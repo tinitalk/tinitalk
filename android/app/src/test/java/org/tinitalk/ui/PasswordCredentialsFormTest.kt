@@ -1,5 +1,8 @@
 package org.tinitalk.ui
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
@@ -24,7 +27,7 @@ import org.tinitalk.ui.theme.TiniTalkTheme
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w400dp-h1100dp")
+@Config(sdk = [35], qualifiers = "en-w400dp-h1100dp")
 class PasswordCredentialsFormTest {
     @get:Rule val compose = createEmptyComposeRule()
 
@@ -45,13 +48,13 @@ class PasswordCredentialsFormTest {
             }
         }
         try {
-            compose.onNodeWithText("Войти снова").assertExists()
+            compose.onNodeWithText(appString(R.string.text_sign_in_again_113)).assertExists()
             compose.onNodeWithText("alice").assertExists()
             compose.onNodeWithText("https://family.example").assertExists()
-            compose.onNodeWithText("Новый пароль").assertDoesNotExist()
-            compose.onNodeWithText("Повторите пароль").assertDoesNotExist()
-            compose.onNodeWithText("Пароль").performScrollTo().performTextInput("new-password")
-            compose.onNodeWithText("Войти").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithText(appString(R.string.text_new_password_319)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_repeat_password_320)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_password_117)).performScrollTo().performTextInput("new-password")
+            compose.onNodeWithText(appString(R.string.text_sign_in_115)).performScrollTo().assertIsEnabled().performClick()
             compose.runOnIdle { assertEquals(listOf("https://family.example", "alice", "new-password"), submitted) }
         } finally { activity.pause().stop().destroy() }
     }
@@ -76,29 +79,28 @@ class PasswordCredentialsFormTest {
             }
         }
         try {
-            compose.onNodeWithText("Логин").performTextInput("alice")
-            compose.onNodeWithText("Пароль").performTextInput("1234 5678")
-            compose.onNodeWithText("Адрес сервера").performTextInput("family.example")
-            compose.onNodeWithText("Добавить").performScrollTo().performClick()
-            compose.onNodeWithText("Придумайте пароль").assertExists()
-            compose.onNodeWithText("Добавить аккаунт").assertDoesNotExist()
-            compose.onNodeWithText("Логин").assertDoesNotExist()
-            compose.onNodeWithText("Пароль").assertDoesNotExist()
-            compose.onNodeWithText("Адрес сервера").assertDoesNotExist()
-            compose.onNodeWithText("Временный пароль", substring = true).assertDoesNotExist()
-            compose.onNodeWithText("Новый пароль").performScrollTo().performTextInput("  личный длинный пароль  ")
-            compose.onNodeWithText("Повторите пароль").performScrollTo().performTextInput("  личный длинный пароль  ")
-            compose.onNodeWithText("Войти").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithText(appString(R.string.text_username_116)).performTextInput("alice")
+            compose.onNodeWithText(appString(R.string.text_password_117)).performTextInput("1234 5678")
+            compose.onNodeWithText(appString(R.string.text_server_address_118)).performTextInput("family.example")
+            compose.onNodeWithText(appString(R.string.text_add_114)).performScrollTo().performClick()
+            compose.onNodeWithText(appString(R.string.text_choose_a_password_317)).assertExists()
+            compose.onNodeWithText(appString(R.string.text_add_account_112)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_username_116)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_password_117)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_server_address_118)).assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_new_password_319)).performScrollTo().performTextInput("  личный длинный пароль  ")
+            compose.onNodeWithText(appString(R.string.text_repeat_password_320)).performScrollTo().performTextInput("  личный длинный пароль  ")
+            compose.onNodeWithText(appString(R.string.text_sign_in_115)).performScrollTo().assertIsEnabled().performClick()
             compose.runOnIdle {
                 assertEquals(listOf("https://family.example", "alice", "1234 5678", "  личный длинный пароль  "), submitted)
             }
-            compose.onNodeWithContentDescription("Назад").performScrollTo().performClick()
+            compose.onNodeWithContentDescription(appString(R.string.text_back_101)).performScrollTo().performClick()
             compose.onNodeWithText("alice").assertExists()
             compose.onNodeWithText("family.example").assertExists()
-            compose.onNodeWithText("Добавить").performScrollTo().assertIsEnabled().performClick()
-            compose.onNodeWithText("Придумайте пароль").assertExists()
+            compose.onNodeWithText(appString(R.string.text_add_114)).performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithText(appString(R.string.text_choose_a_password_317)).assertExists()
             compose.runOnUiThread { activity.get().onBackPressedDispatcher.onBackPressed() }
-            compose.onNodeWithText("Добавить").performScrollTo().assertIsEnabled()
+            compose.onNodeWithText(appString(R.string.text_add_114)).performScrollTo().assertIsEnabled()
         } finally { activity.pause().stop().destroy() }
     }
 }

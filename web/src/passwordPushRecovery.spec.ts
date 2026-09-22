@@ -1,3 +1,4 @@
+import { localizedFunction } from './testI18n';
 import { expect, it, vi } from 'vitest';
 import * as ts from 'typescript';
 import appSource from './app.ts?raw';
@@ -42,7 +43,7 @@ function harness(enabled = true, passwordSet = true) {
   const requireAccountLogin = vi.fn();
   const modal = { body: { append() {} }, actions: { append() {} } };
   const code = functionCode(['changePasswordDialog', 'resumeAccountActivation', 'restorePushRegistration']);
-  const app = new Function('dependencies', `
+  const app = localizedFunction('dependencies', `
     const {account,list,notifications,saveAccount,claim,enablePush,connectAccount,closeDialog,notice,
       changePassword,requireAccountLogin,element,modal,APIError,AuthError,OperationError} = dependencies;
     const base = '/', current = null, route = {name:'profile'}, activatingAccounts = new Set();
@@ -121,7 +122,7 @@ it('defers startup push registration until the saved password session is claimed
   const code = ts.transpileModule(`async function startupPush() { ${loop.getText(source)} }`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const run = new Function('list', 'enablePush', `
+  const run = localizedFunction('list', 'enablePush', `
     const pushSupport = () => null, base = '/', notifications = new Map(), route = {name:'home'};
     const renderApp = () => {}, checkAppUpdates = async () => {};
     ${code}

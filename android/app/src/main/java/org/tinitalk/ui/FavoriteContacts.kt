@@ -1,5 +1,9 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
+import org.tinitalk.R
+
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -60,7 +64,7 @@ internal fun FavoriteContactTabs(favorites: Boolean, onSelect: (Boolean) -> Unit
             cap = StrokeCap.Round,
         )
     }) {
-        listOf("Избранные", "Все").forEachIndexed { index, label ->
+        listOf(appString(R.string.text_favorites_247), appString(R.string.text_all_248)).forEachIndexed { index, label ->
             val selected = favorites == (index == 0)
             Box(
                 modifier = Modifier.weight(1f).heightIn(min = 36.dp).selectable(
@@ -194,10 +198,10 @@ internal fun ReorderableFavoriteContacts(
             itemsIndexed(order, key = { _, key -> accountScopedKey(key.accountId, key.login) }) { index, key ->
                 byKey[key]?.let { contact ->
                     val actions = buildList {
-                        if (index > 0) add(CustomAccessibilityAction("Переместить выше") {
+                        if (index > 0) add(CustomAccessibilityAction(appString(R.string.text_move_up_249)) {
                             saveOrder(order.toMutableList().apply { add(index - 1, removeAt(index)) }); true
                         })
-                        if (index < order.lastIndex) add(CustomAccessibilityAction("Переместить ниже") {
+                        if (index < order.lastIndex) add(CustomAccessibilityAction(appString(R.string.text_move_down_250)) {
                             saveOrder(order.toMutableList().apply { add(index + 1, removeAt(index)) }); true
                         })
                     }

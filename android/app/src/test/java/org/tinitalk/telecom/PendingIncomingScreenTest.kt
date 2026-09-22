@@ -19,7 +19,7 @@ import org.tinitalk.push.IncomingInvite
 import java.time.Instant
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [26, 35], application = Application::class)
+@Config(sdk = [26, 35], application = org.tinitalk.i18n.LocalizedTestApplication::class)
 class PendingIncomingScreenTest {
     private val context = RuntimeEnvironment.getApplication()
     private val admission = CallAdmissionHandoff(CallAdmission())

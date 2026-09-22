@@ -1,5 +1,7 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -91,10 +93,10 @@ internal fun ProfileScreen(
             ) {
                 CompositionLocalProvider(LocalRippleConfiguration provides null) {
                     IconButton(onClick = onBack) {
-                        Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "Назад")
+                        Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = appString(R.string.text_back_101))
                     }
                 }
-                Text("Профиль", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(appString(R.string.text_profile_308), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
             LazyColumn(
                 modifier = Modifier.weight(1f),
@@ -123,15 +125,15 @@ internal fun ProfileScreen(
     pendingRemoval?.let { value ->
         AlertDialog(
             onDismissRequest = { pendingRemoval = null },
-            title = { Text("Выйти из аккаунта?") },
-            text = { Text("Чтобы снова принимать звонки, потребуется войти ещё раз.") },
+            title = { Text(appString(R.string.text_sign_out_of_this_account_321)) },
+            text = { Text(appString(R.string.text_you_will_need_to_sign_in_again_to_receive_calls_322)) },
             confirmButton = {
                 Button(
                     onClick = { pendingRemoval?.let { onRemoveAccount(AccountId(it)) }; pendingRemoval = null },
                     colors = ButtonDefaults.buttonColors(containerColor = CallRejectRed),
-                ) { Text("Выйти") }
+                ) { Text(appString(R.string.text_sign_out_323)) }
             },
-            dismissButton = { TextButton(onClick = { pendingRemoval = null }) { Text("Отмена") } },
+            dismissButton = { TextButton(onClick = { pendingRemoval = null }) { Text(appString(R.string.text_cancel_12)) } },
         )
     }
     passwordAccount?.let { value ->
@@ -165,12 +167,12 @@ private fun ProfileAccountCard(
         internetAvailable = internetAvailable,
     )
     val statusText = when {
-        !internetAvailable -> "Нет интернета"
+        !internetAvailable -> appString(R.string.text_no_internet_324)
         else -> when (presentation.indicator) {
-            ServerCheckIndicator.Checking -> "Проверяем…"
-            ServerCheckIndicator.Available -> "Сервер доступен"
-            ServerCheckIndicator.Unavailable -> "Сервер недоступен"
-            ServerCheckIndicator.Incompatible -> "Несовместимая версия"
+            ServerCheckIndicator.Checking -> appString(R.string.text_checking_325)
+            ServerCheckIndicator.Available -> appString(R.string.text_server_available_119)
+            ServerCheckIndicator.Unavailable -> appString(R.string.text_server_unavailable_120)
+            ServerCheckIndicator.Incompatible -> appString(R.string.text_incompatible_version_121)
         }
     }
     val incompatibleColor = if (isSystemInDarkTheme()) Color(0xFFFFA726) else Color(0xFFC45100)
@@ -216,7 +218,7 @@ private fun ProfileAccountCard(
                 ) {
                     Icon(
                         painterResource(R.drawable.ic_logout),
-                        contentDescription = "Выйти",
+                        contentDescription = appString(R.string.text_sign_out_323),
                         modifier = Modifier.size(24.dp),
                         tint = BrandGold,
                     )
@@ -285,7 +287,7 @@ private fun ProfileAccountCard(
             }
             if (internetAvailable && !checking && details?.result == ServerCheckResult.Available && passwordSet != null) {
                 TextButton(onClick = { onChangePassword(passwordSet) }, modifier = Modifier.align(Alignment.End)) {
-                    Text(if (passwordSet == true) "Сменить пароль" else "Задать пароль")
+                    Text(if (passwordSet == true) appString(R.string.text_change_password_326) else appString(R.string.text_set_password_327))
                 }
             }
         }
@@ -308,15 +310,15 @@ private fun ChangePasswordDialog(
     val retry = retrySeconds(retryAtMillis)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (passwordSet == false) "Задать пароль" else "Сменить пароль") },
+        title = { Text(if (passwordSet == false) appString(R.string.text_set_password_327) else appString(R.string.text_change_password_326)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Не менее 8 символов. Рекомендуем сочетать строчные и заглавные буквы с цифрами.", style = MaterialTheme.typography.bodySmall)
+                Text(appString(R.string.text_at_least_8_characters_we_recommend_combining_lowercase_and_upperc_318), style = MaterialTheme.typography.bodySmall)
                 if (passwordSet != false) {
                     OutlinedTextField(
                         currentPassword,
                         { currentPassword = it; validationMessage = null },
-                        label = { Text("Текущий пароль") },
+                        label = { Text(appString(R.string.text_current_password_328)) },
                         singleLine = true,
                         enabled = !loading,
                         visualTransformation = PasswordVisualTransformation(),
@@ -325,7 +327,7 @@ private fun ChangePasswordDialog(
                 OutlinedTextField(
                     newPassword,
                     { newPassword = it; validationMessage = null },
-                    label = { Text("Новый пароль") },
+                    label = { Text(appString(R.string.text_new_password_319)) },
                     singleLine = true,
                     enabled = !loading,
                     visualTransformation = PasswordVisualTransformation(),
@@ -333,13 +335,13 @@ private fun ChangePasswordDialog(
                 OutlinedTextField(
                     confirmation,
                     { confirmation = it; validationMessage = null },
-                    label = { Text("Повторите пароль") },
+                    label = { Text(appString(R.string.text_repeat_password_320)) },
                     singleLine = true,
                     enabled = !loading,
                     visualTransformation = PasswordVisualTransformation(),
                 )
                 (validationMessage ?: if (retryAtMillis > 0) {
-                    if (retry > 0) "Повторите через $retry с" else "Можно попробовать ещё раз"
+                    if (retry > 0) appString(R.string.text_try_again_in_value_s_122, retry) else appString(R.string.text_you_can_try_again_123)
                 } else errorMessage)?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
@@ -355,9 +357,9 @@ private fun ChangePasswordDialog(
                 },
             ) {
                 if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                else Text("Сохранить")
+                else Text(appString(R.string.text_save_245))
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Отмена") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text(appString(R.string.text_cancel_12)) } },
     )
 }

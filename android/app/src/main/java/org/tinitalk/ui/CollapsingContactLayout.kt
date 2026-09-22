@@ -1,5 +1,7 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.AnimationState
@@ -168,7 +170,7 @@ internal fun CollapsingContactLayout(
                     alpha = 1f - ((fraction - 0.65f) / 0.3f).coerceIn(0f, 1f)
                 }
                 .then(if (compactSemantics) Modifier.clearAndSetSemantics {} else Modifier.semantics {
-                    contentDescription = "Имя контакта: $name"
+                    contentDescription = appString(R.string.text_contact_name_value_203, name)
                 })
                 .drawWithContent {
                     val fraction = progress()
@@ -190,7 +192,7 @@ internal fun CollapsingContactLayout(
                     alpha = ((fraction - 0.65f) / 0.3f).coerceIn(0f, 1f)
                 }
                 .then(if (!compactSemantics) Modifier.clearAndSetSemantics {} else Modifier.semantics {
-                    contentDescription = "Имя контакта: $name"
+                    contentDescription = appString(R.string.text_contact_name_value_203, name)
                 }),
         )
 
@@ -212,7 +214,7 @@ internal fun CollapsingContactLayout(
                 ) {
                     Icon(
                         painterResource(R.drawable.ic_chevron_right),
-                        contentDescription = "В начало",
+                        contentDescription = appString(R.string.text_back_to_top_204),
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(26.dp).graphicsLayer { rotationZ = -90f },
                     )

@@ -1,5 +1,7 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.i18n.appString
+
 import android.content.Context
 import androidx.core.content.edit
 import androidx.compose.animation.AnimatedVisibility
@@ -144,7 +146,7 @@ fun ActiveCallScreen(
         val wasSending = observedScreenSending
         observedScreenSending = screen.sending
         if (screen.sending && !wasSending) {
-            showSharingNotice("Показ экрана начат")
+            showSharingNotice(appString(R.string.text_screen_sharing_started_129))
         }
     }
     LaunchedEffect(sharingNoticeId) {
@@ -153,10 +155,10 @@ fun ActiveCallScreen(
         sharingNoticeVisible = false
     }
     val status = when (connectionHealth) {
-        ConnectionHealth.Connecting -> "Соединяемся…"
-        ConnectionHealth.Reconnecting -> "Восстанавливаем связь…"
-        ConnectionHealth.Poor -> "Слабая сеть"
-        else -> "Идёт разговор"
+        ConnectionHealth.Connecting -> appString(R.string.text_connecting_130)
+        ConnectionHealth.Reconnecting -> appString(R.string.text_reconnecting_131)
+        ConnectionHealth.Poor -> appString(R.string.text_weak_connection_132)
+        else -> appString(R.string.text_in_a_call_133)
     }
     val statusColor = if (connectionHealth == ConnectionHealth.Poor || connectionHealth == ConnectionHealth.Reconnecting) {
         Color(0xFFFFCA6A)
@@ -235,9 +237,9 @@ fun ActiveCallScreen(
                 connectionHealth == ConnectionHealth.Poor
             val sharingStatusText = when {
                 !screen.requested -> null
-                videoState.networkGated -> "Показ приостановлен · восстанавливаем связь"
+                videoState.networkGated -> appString(R.string.text_sharing_paused_reconnecting_134)
                 screen.sending -> null
-                else -> "Готовим показ…"
+                else -> appString(R.string.text_preparing_to_share_135)
             }
             ScreenShareActionOverlay(
                 requested = screen.requested,
@@ -246,7 +248,7 @@ fun ActiveCallScreen(
                 onStart = { confirmSharing = true },
                 onStop = {
                     onStopSharing()
-                    showSharingNotice("Показ экрана остановлен")
+                    showSharingNotice(appString(R.string.text_screen_sharing_stopped_48))
                 },
                 modifier = Modifier.align(Alignment.TopEnd),
             )
@@ -278,15 +280,15 @@ fun ActiveCallScreen(
 
     if (confirmSharing) AlertDialog(
         onDismissRequest = { confirmSharing = false },
-        title = { Text("Показать экран?") },
-        text = { Text("Собеседник увидит выбранное приложение или весь экран, включая уведомления. Показ можно остановить в любой момент.") },
-        confirmButton = { TextButton(onClick = { confirmSharing = false; onShareScreen() }) { Text("Продолжить") } },
-        dismissButton = { TextButton(onClick = { confirmSharing = false }) { Text("Отмена") } },
+        title = { Text(appString(R.string.text_share_your_screen_136)) },
+        text = { Text(appString(R.string.text_the_other_person_will_see_the_selected_app_or_your_entire_screen__137)) },
+        confirmButton = { TextButton(onClick = { confirmSharing = false; onShareScreen() }) { Text(appString(R.string.text_continue_138)) } },
+        dismissButton = { TextButton(onClick = { confirmSharing = false }) { Text(appString(R.string.text_cancel_12)) } },
     )
     sharingError?.let { message -> AlertDialog(
         onDismissRequest = { sharingError = null },
-        title = { Text("Показ экрана") }, text = { Text(message) },
-        confirmButton = { TextButton(onClick = { sharingError = null }) { Text("Понятно") } },
+        title = { Text(appString(R.string.text_screen_sharing_139)) }, text = { Text(message) },
+        confirmButton = { TextButton(onClick = { sharingError = null }) { Text(appString(R.string.text_ok_61)) } },
     ) }
 
     AudioRoutePicker(
@@ -327,7 +329,7 @@ private fun SecurityCodePanel(
     ) {
         when (security) {
             is CallSecurityState.Unavailable -> Text(
-                "Не удаётся подтвердить безопасность соединения",
+                appString(R.string.text_cannot_verify_connection_security_140),
                 modifier = Modifier.fillMaxWidth(),
                 color = accent,
                 style = messageStyle,
@@ -336,7 +338,7 @@ private fun SecurityCodePanel(
                 overflow = TextOverflow.Ellipsis,
             )
             CallSecurityState.Establishing -> Text(
-                "Проверяем безопасность соединения…",
+                appString(R.string.text_checking_connection_security_141),
                 modifier = Modifier.fillMaxWidth(),
                 color = accent,
                 style = messageStyle,
@@ -345,7 +347,7 @@ private fun SecurityCodePanel(
                 overflow = TextOverflow.Ellipsis,
             )
             is CallSecurityState.Failed -> Text(
-                "Соединение небезопасно",
+                appString(R.string.text_connection_is_not_secure_142),
                 modifier = Modifier.fillMaxWidth(),
                 color = accent,
                 style = messageStyle,
@@ -361,7 +363,7 @@ private fun SecurityCodePanel(
                     emoji,
                     modifier = Modifier
                         .testTag("security_code")
-                        .semantics { contentDescription = "Код безопасности: $emoji" },
+                        .semantics { contentDescription = appString(R.string.text_security_code_value_143, emoji) },
                     color = Color.White,
                     fontFamily = SecurityEmojiFont,
                     fontSize = if (compact) 26.sp else 29.sp,
@@ -385,7 +387,7 @@ private fun SecurityCodeDetailsDialog(
             {
                 Icon(
                     painter = painterResource(R.drawable.ic_server_incompatible),
-                    contentDescription = "Предупреждение об опасности",
+                    contentDescription = appString(R.string.text_security_warning_144),
                     modifier = Modifier
                         .size(56.dp)
                         .testTag("security_code_error_icon"),
@@ -397,54 +399,54 @@ private fun SecurityCodeDetailsDialog(
         },
         title = { Text(securityDetailsTitle(security), textAlign = TextAlign.Center) },
         text = { Text(securityDetailsText(security)) },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Понятно") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(appString(R.string.text_ok_61)) } },
     )
 }
 
 private fun securityDetailsTitle(security: CallSecurityState): String = when (security) {
-    CallSecurityState.Establishing -> "Проверяем безопасность соединения"
-    is CallSecurityState.Ready -> "Код безопасности"
-    is CallSecurityState.Unavailable -> "Не удаётся подтвердить безопасность"
-    is CallSecurityState.Failed -> "Соединение небезопасно"
+    CallSecurityState.Establishing -> appString(R.string.text_checking_connection_security_145)
+    is CallSecurityState.Ready -> appString(R.string.text_security_code_146)
+    is CallSecurityState.Unavailable -> appString(R.string.text_cannot_verify_security_147)
+    is CallSecurityState.Failed -> appString(R.string.text_connection_is_not_secure_142)
 }
 
 private fun securityDetailsText(security: CallSecurityState): String = when (security) {
     CallSecurityState.Establishing ->
-        "Телефоны обмениваются временными ключами и проверяют сертификаты WebRTC."
+        appString(R.string.text_the_phones_exchange_temporary_keys_and_verify_webrtc_certificates_148)
     is CallSecurityState.Ready ->
-        "Сравните все 5 эмодзи с собеседником. Если они совпадают, соединение защищено. " +
-            "Если отличается хотя бы один эмодзи, завершите звонок."
+        appString(R.string.text_compare_all_5_emoji_with_the_other_person_if_they_match_the_conne_149) +
+            appString(R.string.text_if_even_one_emoji_is_different_end_the_call_150)
     is CallSecurityState.Unavailable -> when (security.reason) {
         CallSecurityUnavailableReason.ServerUnsupported ->
-            "Сервер TiniTalk устарел. Приложение не может подтвердить безопасность этого звонка."
+            appString(R.string.text_the_tinitalk_server_is_out_of_date_the_app_cannot_verify_the_secu_151)
         CallSecurityUnavailableReason.PeerUnsupported ->
-            "Приложение собеседника устарело. Безопасность этого звонка нельзя подтвердить."
+            appString(R.string.text_the_other_person_s_app_is_out_of_date_the_security_of_this_call_c_152)
     }
     is CallSecurityState.Failed -> securityFailureText(security.reason) +
-        "\n\nЗавершите звонок и не сообщайте конфиденциальные данные."
+        appString(R.string.text_n_nend_the_call_and_do_not_share_confidential_information_153)
 }
 
 private fun securityFailureText(reason: CallSecurityFailureReason): String = when (reason) {
     CallSecurityFailureReason.ExchangeTimeout ->
-        "Проверка безопасности не завершилась в отведённое время. Звонок небезопасен."
+        appString(R.string.text_the_security_check_timed_out_the_call_is_not_secure_154)
     CallSecurityFailureReason.TransportTimeout ->
-        "Защищённое соединение не установилось в отведённое время. Звонок небезопасен."
+        appString(R.string.text_a_secure_connection_was_not_established_in_time_the_call_is_not_s_155)
     CallSecurityFailureReason.TransportFailed ->
-        "Не удалось установить защищённое соединение. Звонок небезопасен."
+        appString(R.string.text_could_not_establish_a_secure_connection_the_call_is_not_secure_156)
     CallSecurityFailureReason.UnexpectedMessage ->
-        "Данные проверки пришли в неправильном порядке или были повреждены. Звонок небезопасен."
+        appString(R.string.text_verification_data_arrived_out_of_order_or_was_corrupted_the_call__157)
     CallSecurityFailureReason.InvalidFingerprint ->
-        "Сертификат соединения содержит ошибку. Звонок небезопасен."
+        appString(R.string.text_the_connection_certificate_is_invalid_the_call_is_not_secure_158)
     CallSecurityFailureReason.FingerprintMismatch ->
-        "Сертификат соединения не совпал с данными проверки. Звонок небезопасен."
+        appString(R.string.text_the_connection_certificate_does_not_match_the_verification_data_t_159)
     CallSecurityFailureReason.CommitmentMismatch ->
-        "Данные проверки изменились после начала звонка. Звонок небезопасен."
+        appString(R.string.text_verification_data_changed_after_the_call_started_the_call_is_not__160)
     CallSecurityFailureReason.FingerprintChanged ->
-        "Сертификат соединения изменился во время звонка. Звонок небезопасен."
+        appString(R.string.text_the_connection_certificate_changed_during_the_call_the_call_is_no_161)
     CallSecurityFailureReason.InvalidPublicKey ->
-        "Получен неправильный ключ безопасности. Звонок небезопасен."
+        appString(R.string.text_an_invalid_security_key_was_received_the_call_is_not_secure_162)
     CallSecurityFailureReason.InternalError ->
-        "Произошла ошибка проверки безопасности. Звонок небезопасен."
+        appString(R.string.text_the_security_check_failed_the_call_is_not_secure_163)
 }
 
 @Composable
@@ -464,8 +466,8 @@ private fun ScreenShareActionOverlay(
     ) {
         if (requested) {
             RoundCallAction(
-                label = "Показ экрана",
-                contentDescription = "Остановить показ экрана",
+                label = appString(R.string.text_screen_sharing_139),
+                contentDescription = appString(R.string.text_stop_screen_sharing_164),
                 color = Color(0xFF315EA8),
                 enabled = enabled,
                 onClick = onStop,
@@ -482,7 +484,7 @@ private fun ScreenShareActionOverlay(
             ) {
                 Icon(
                     painterResource(R.drawable.ic_screen_share),
-                    contentDescription = "Показать экран",
+                    contentDescription = appString(R.string.text_share_screen_165),
                     tint = Color.White.copy(alpha = if (enabled) 0.68f else 0.28f),
                     modifier = Modifier.size(32.dp),
                 )
@@ -626,7 +628,7 @@ private fun RegularAudioActiveCallScreen(
         prominentAvatar = true,
     ) {
         Text(
-            text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
+            text = appString(R.string.text_audio_value_166, audioEndpointLabel(currentEndpoint)),
             color = Color.White.copy(alpha = 0.68f),
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -733,7 +735,7 @@ private fun ConstrainedAudioActiveCallScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
+                text = appString(R.string.text_audio_value_166, audioEndpointLabel(currentEndpoint)),
                 color = Color.White.copy(alpha = 0.72f),
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -762,8 +764,8 @@ private fun CallTransportRouteIndicator(
 ) {
     val description = when (route) {
         CallTransportRoute.Unknown -> null
-        CallTransportRoute.Direct -> "Прямое соединение"
-        CallTransportRoute.Turn -> "Соединение через TURN"
+        CallTransportRoute.Direct -> appString(R.string.text_direct_connection_167)
+        CallTransportRoute.Turn -> appString(R.string.text_connection_via_turn_168)
     }
     val accessibility = if (description == null) {
         Modifier
@@ -973,7 +975,7 @@ private fun VideoActiveCallScreen(
                     strokeWidth = 2.dp,
                 )
                 Text(
-                    text = "Восстанавливаем видео…",
+                    text = appString(R.string.text_restoring_video_169),
                     color = Color.White,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
@@ -1116,7 +1118,7 @@ private fun VideoActiveCallScreen(
                     },
                     onDragEnd = finishPreviewDrag,
                     contentDescription = if (controlsMayAutoHide) {
-                        if (controlsVisible) "Скрыть элементы управления" else "Показать элементы управления"
+                        if (controlsVisible) appString(R.string.text_hide_controls_170) else appString(R.string.text_show_controls_171)
                     } else null,
                     onFrameVisibilityChanged = { localFrameVisible = it },
                 )
@@ -1172,7 +1174,7 @@ private fun VideoActiveCallScreen(
                 }
                 if (videoState.failure != null && !videoState.sending) {
                     Text(
-                        text = "Не удалось включить камеру",
+                        text = appString(R.string.text_could_not_turn_on_the_camera_172),
                         color = Color(0xFFFFCA6A),
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
@@ -1180,7 +1182,7 @@ private fun VideoActiveCallScreen(
                     Spacer(Modifier.height(6.dp))
                 }
                 Text(
-                    text = "Звук: ${audioEndpointLabel(currentEndpoint)}",
+                    text = appString(R.string.text_audio_value_166, audioEndpointLabel(currentEndpoint)),
                     color = Color.White.copy(alpha = 0.72f),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -1378,9 +1380,9 @@ private fun SwitchCameraCallAction(
     buttonSize: Dp = CompactCallActionSizeDp.dp,
 ) {
     RoundCallAction(
-        label = "Повернуть",
+        label = appString(R.string.text_rotate_173),
         modifier = modifier,
-        contentDescription = "Повернуть камеру",
+        contentDescription = appString(R.string.text_switch_camera_174),
         color = Color(0xFF33465F),
         enabled = enabled,
         onClick = onSwitchCamera,
@@ -1399,10 +1401,10 @@ internal fun CameraCallAction(
     enabled: Boolean = true,
 ) {
     RoundCallAction(
-        label = "Камера",
+        label = appString(R.string.text_camera_175),
         modifier = modifier,
         enabled = enabled,
-        contentDescription = if (requested) "Выключить камеру" else "Включить камеру",
+        contentDescription = if (requested) appString(R.string.text_turn_camera_off_176) else appString(R.string.text_turn_camera_on_177),
         color = if (requested) Color(0xFF2A8C76) else Color(0xFF33465F),
         onClick = { onCamera(!requested) },
         iconResource = R.drawable.ic_videocam,
@@ -1419,7 +1421,7 @@ internal fun EndCallAction(
     buttonSize: Dp = if (compact) CompactCallActionSizeDp.dp else 72.dp,
 ) {
     RoundCallAction(
-        label = "Завершить",
+        label = appString(R.string.text_end_call_98),
         modifier = modifier,
         color = CallRejectRed,
         onClick = onEnd,
@@ -1438,9 +1440,9 @@ internal fun MuteCallAction(
     buttonSize: Dp = if (compact) CompactCallActionSizeDp.dp else 72.dp,
 ) {
     RoundCallAction(
-        label = "Микрофон",
+        label = appString(R.string.text_microphone_178),
         modifier = modifier,
-        contentDescription = if (muted) "Включить микрофон" else "Выключить микрофон",
+        contentDescription = if (muted) appString(R.string.text_unmute_microphone_179) else appString(R.string.text_mute_microphone_180),
         color = if (muted) Color(0xFF315EA8) else Color(0xFF33465F),
         onClick = { onMute(!muted) },
         iconResource = R.drawable.ic_mic_off,
@@ -1461,12 +1463,12 @@ internal fun AudioRouteAction(
 ) {
     val directRoute = directAudioRoute(currentEndpoint, availableEndpoints)
     RoundCallAction(
-        label = "Звук",
+        label = appString(R.string.text_audio_181),
         modifier = modifier,
         contentDescription = when (directRoute?.type) {
-            CallEndpointCompat.TYPE_SPEAKER -> "Включить громкую связь"
-            CallEndpointCompat.TYPE_EARPIECE -> "Выключить громкую связь"
-            else -> "Выбрать устройство звука. Сейчас: ${audioEndpointLabel(currentEndpoint)}"
+            CallEndpointCompat.TYPE_SPEAKER -> appString(R.string.text_turn_speakerphone_on_182)
+            CallEndpointCompat.TYPE_EARPIECE -> appString(R.string.text_turn_speakerphone_off_183)
+            else -> appString(R.string.text_choose_audio_device_current_value_184, audioEndpointLabel(currentEndpoint))
         },
         color = Color(0xFF33465F),
         enabled = availableEndpoints.isNotEmpty(),
@@ -1495,7 +1497,7 @@ internal fun AudioRoutePicker(
     if (!visible) return
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Text(
-            text = "Куда выводить звук",
+            text = appString(R.string.text_audio_output_185),
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
@@ -1521,7 +1523,7 @@ internal fun AudioRoutePicker(
                     Text(audioEndpointLabel(endpoint), style = MaterialTheme.typography.titleMedium)
                     if (selected) {
                         Text(
-                            text = "Используется сейчас",
+                            text = appString(R.string.text_currently_in_use_186),
                             color = MaterialTheme.colorScheme.primary,
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -1558,12 +1560,12 @@ internal fun speakerRouteOnCameraPress(
 }
 
 private fun audioEndpointLabel(endpoint: AudioEndpoint?): String = when (endpoint?.type) {
-    CallEndpointCompat.TYPE_EARPIECE -> "Телефон"
-    CallEndpointCompat.TYPE_SPEAKER -> "Динамик"
+    CallEndpointCompat.TYPE_EARPIECE -> appString(R.string.text_phone_187)
+    CallEndpointCompat.TYPE_SPEAKER -> appString(R.string.text_speaker_188)
     CallEndpointCompat.TYPE_BLUETOOTH -> "Bluetooth"
-    CallEndpointCompat.TYPE_WIRED_HEADSET -> "Наушники"
-    CallEndpointCompat.TYPE_STREAMING -> "Другое устройство"
-    else -> "Устройство"
+    CallEndpointCompat.TYPE_WIRED_HEADSET -> appString(R.string.text_headphones_189)
+    CallEndpointCompat.TYPE_STREAMING -> appString(R.string.text_other_device_190)
+    else -> appString(R.string.text_device_191)
 }
 
 private fun audioEndpointIcon(endpoint: AudioEndpoint?): Int = when (endpoint?.type) {

@@ -1,3 +1,4 @@
+import { localizedFunction } from './testI18n';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import * as ts from 'typescript';
 import sourceText from './app.ts?raw';
@@ -27,13 +28,14 @@ it('recovers an incoming call that arrived during an ordinary socket outage', as
   const source = ts.createSourceFile('app.ts', sourceText, ts.ScriptTarget.ES2022, true);
   const names = ['connectAccount', 'connectAndResume', 'resumeActiveCall'];
   const code = ts.transpileModule(source.statements.filter(n => ts.isFunctionDeclaration(n) && names.includes(n.name!.text)).map(n => n.getText(source)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const app = new Function('SignalConnection', 'api', 'APIError', `
+  const app = localizedFunction('SignalConnection', 'api', 'APIError', `
     const account = {id:'a', server:'https://family.example', login:'alice', token:'test', deviceId:'a', sessionId:'s'};
     const list = [account], connections = new Map(), states = new Map(), recoveringAccounts = new Map(), openingNotificationCalls = new Map();
     const rotatingCredentials = new Set();
     let current = null;
     const receive = async () => {}, refreshAccountContacts = async () => {}, renderApp = () => {}, failure = () => {};
     const callKey = (a,b) => a+':'+b;
+    const syncNotificationLanguages = () => {};
     ${code}
     connectAccount(account);
     return {connection: connections.get(account.id)};
@@ -59,7 +61,7 @@ it.each(['', '#account=a&call=call-1&action=answer'])('starts incoming recovery 
   const code = ts.transpileModule(init.getText(source).replace('import.meta.env.PROD', 'false'), {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText;
   const recover = vi.fn(), open = vi.fn().mockResolvedValue(undefined);
   const stalled = () => new Promise(() => {});
-  const run = new Function('recover', 'open', 'stalled', 'hash', `
+  const run = localizedFunction('recover', 'open', 'stalled', 'hash', `
     const list = [], accounts = async () => [{id:'a'}, {id:'b'}], location = {hash};
     const contactPhotos = stalled, pushEnabled = stalled, refreshAll = stalled;
     const contactPhotosByKey = new Map(), notifications = new Map(), connections = new Map();
@@ -83,7 +85,7 @@ it('queues early notifications, coalesces duplicates and retains answer until th
   let ready!: () => void, finish!: (result: boolean) => void;
   const accountsReady = new Promise<void>(resolve => { ready = resolve; });
   const restore = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; }));
-  const app = new Function('accountsReady', 'restoreNotificationCall', `
+  const app = localizedFunction('accountsReady', 'restoreNotificationCall', `
     const openingNotificationCalls = new Map(), pendingNotificationActions = new Map();
     const callKey = (a,b) => a+':'+b;
     ${code}

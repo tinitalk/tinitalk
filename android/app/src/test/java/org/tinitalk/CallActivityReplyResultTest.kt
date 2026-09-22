@@ -1,5 +1,8 @@
 package org.tinitalk
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import android.content.Intent
 import android.os.Bundle
 import android.os.Looper
@@ -49,7 +52,7 @@ class CallActivityReplyResultTest {
         CallReplyResultStore(context).save(CallReplyResult(key, peer, CallReplyCode.CallMeLater))
         val intent = CallActivity.outgoingIntent(context, AccountPeerKey(key.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", key)
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
-        composeRule.onNodeWithText("просит перезвонить позже").assertExists()
+        composeRule.onNodeWithText(appString(R.string.call_reply_result_call_me_later)).assertExists()
         CallUiStateStore.reset()
         advanceTimeBy(2_000)
         assertFalse(activity.get().isFinishing)
@@ -71,7 +74,7 @@ class CallActivityReplyResultTest {
         val intent = CallActivity.outgoingIntent(context, AccountPeerKey(key.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", key)
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
         try {
-            composeRule.onNodeWithText("сейчас не может говорить").assertExists()
+            composeRule.onNodeWithText(appString(R.string.call_reply_result_cannot_talk)).assertExists()
             activity.pause().stop()
             ShadowSystemClock.simulateDeepSleep(Duration.ofHours(2))
             activity.start().resume()
@@ -86,7 +89,7 @@ class CallActivityReplyResultTest {
         val intent = CallActivity.outgoingIntent(context, AccountPeerKey(key.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", key)
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
         try {
-            composeRule.onNodeWithText("обещает перезвонить позже").assertExists()
+            composeRule.onNodeWithText(appString(R.string.call_reply_result_will_call_back)).assertExists()
             composeRule.runOnIdle { activity.get().onBackPressedDispatcher.onBackPressed() }
             assertTrue(activity.get().isFinishing)
             assertNull(CallReplyResultStore(context).load())
@@ -115,7 +118,7 @@ class CallActivityReplyResultTest {
             val next = AccountCallKey(key.accountId, "next-call")
             CallUiStateStore.begin(next, peer, CallDirection.Outgoing, CallPhase.Ringing)
             activity.newIntent(CallActivity.outgoingIntent(context, AccountPeerKey(next.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", next))
-            composeRule.onNodeWithText("сейчас не может говорить").assertDoesNotExist()
+            composeRule.onNodeWithText(appString(R.string.call_reply_result_cannot_talk)).assertDoesNotExist()
             advanceTimeBy(6_000)
             composeRule.waitForIdle()
             assertFalse(activity.get().isFinishing)
@@ -129,7 +132,7 @@ class CallActivityReplyResultTest {
         val intent = CallActivity.outgoingIntent(context, AccountPeerKey(key.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", key)
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
         try {
-            composeRule.onNodeWithText("Звонок отклонён").assertExists()
+            composeRule.onNodeWithText(appString(R.string.text_call_declined_193)).assertExists()
             advanceTimeBy(2_000)
             assertFalse(activity.get().isFinishing)
             advanceTimeBy(1_200)
@@ -155,7 +158,7 @@ class CallActivityReplyResultTest {
         try {
             advanceTimeBy(2_000)
             assertFalse(recreated.get().isFinishing)
-            composeRule.onNodeWithText("просит перезвонить позже").assertExists()
+            composeRule.onNodeWithText(appString(R.string.call_reply_result_call_me_later)).assertExists()
         } finally { recreated.pause().stop().destroy() }
     }
 
@@ -165,7 +168,7 @@ class CallActivityReplyResultTest {
         val next = AccountCallKey(AccountId("another-account"), "next-call")
         val intent = CallActivity.outgoingIntent(context, AccountPeerKey(next.accountId, "bob"), requireNotNull(peer.contactAddress), "Bob", next)
         val activity = Robolectric.buildActivity(CallActivity::class.java, intent).setup()
-        composeRule.onNodeWithText("сейчас не может говорить").assertDoesNotExist()
+        composeRule.onNodeWithText(appString(R.string.call_reply_result_cannot_talk)).assertDoesNotExist()
         assertNull(CallReplyResultStore(context).load())
         activity.pause().stop().destroy()
     }

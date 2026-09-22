@@ -1,5 +1,8 @@
 package org.tinitalk.ui.call
 
+import org.tinitalk.R
+import org.tinitalk.i18n.appString
+
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
@@ -24,7 +27,7 @@ import org.tinitalk.ui.theme.TiniTalkTheme
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w384dp-h853dp-mdpi")
+@Config(sdk = [35], qualifiers = "ru-w384dp-h853dp-mdpi")
 class EndedCallScreenTest {
     @get:Rule val compose = createEmptyComposeRule()
 
@@ -39,21 +42,21 @@ class EndedCallScreenTest {
             }
         }
         try {
-            compose.onNodeWithText("Не удалось связаться").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_could_not_connect_192)).assertIsDisplayed()
             val name = compose.onNodeWithText("Тест Тоби").fetchSemanticsNode().boundsInRoot
-            val explanation = compose.onNodeWithText("Вас ещё не добавили в контакты")
+            val explanation = compose.onNodeWithText(appString(R.string.text_you_have_not_been_added_to_contacts_yet_92))
                 .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
             assertTrue(explanation.top > name.bottom)
             compose.onAllNodes(hasClickAction()).assertCountEquals(0)
             for (failure in listOf(CallEndReason.Failed, CallEndReason.ConnectionLost)) {
                 compose.runOnIdle { reason.value = failure }
-                compose.onNodeWithText("Не удалось связаться").assertIsDisplayed()
-                compose.onNodeWithText("Вас ещё не добавили в контакты").assertDoesNotExist()
+                compose.onNodeWithText(appString(R.string.text_could_not_connect_192)).assertIsDisplayed()
+                compose.onNodeWithText(appString(R.string.text_you_have_not_been_added_to_contacts_yet_92)).assertDoesNotExist()
             }
             compose.runOnIdle { duration.value = "01:05" }
-            compose.onNodeWithText("Звонок завершён").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_call_ended_93)).assertIsDisplayed()
             compose.onNodeWithText("01:05").assertIsDisplayed()
-            compose.onNodeWithText("Не удалось связаться").assertDoesNotExist()
+            compose.onNodeWithText(appString(R.string.text_could_not_connect_192)).assertDoesNotExist()
         } finally { activity.pause().stop().destroy() }
     }
 
@@ -67,7 +70,7 @@ class EndedCallScreenTest {
             }
         }
         try {
-            val statusBounds = compose.onNodeWithText("Звонок отклонён").fetchSemanticsNode().boundsInRoot
+            val statusBounds = compose.onNodeWithText(appString(R.string.text_call_declined_193)).fetchSemanticsNode().boundsInRoot
             val avatarBounds = compose.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot
             val nameBounds = compose.onNodeWithText("Тест Тоби").fetchSemanticsNode().boundsInRoot
             compose.onNodeWithTag("call_reply_result").assertDoesNotExist()
@@ -78,7 +81,7 @@ class EndedCallScreenTest {
             )
             for ((code, text) in replies) {
                 compose.runOnIdle { reply.value = code }
-                assertEquals(statusBounds, compose.onNodeWithText("Звонок отклонён").fetchSemanticsNode().boundsInRoot)
+                assertEquals(statusBounds, compose.onNodeWithText(appString(R.string.text_call_declined_193)).fetchSemanticsNode().boundsInRoot)
                 assertEquals(avatarBounds, compose.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot)
                 assertEquals(nameBounds, compose.onNodeWithText("Тест Тоби").fetchSemanticsNode().boundsInRoot)
                 val message = compose.onNodeWithTag("call_reply_result").assertTextEquals(text)
@@ -89,7 +92,7 @@ class EndedCallScreenTest {
         } finally { activity.pause().stop().destroy() }
     }
 
-    @Test @Config(qualifiers = "w360dp-h640dp-mdpi")
+    @Test @Config(qualifiers = "ru-w360dp-h640dp-mdpi")
     fun longNameAndLargeTextLeaveReplyReadableWithoutDismissButton() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
         activity.get().setContent {
@@ -101,9 +104,9 @@ class EndedCallScreenTest {
             }
         }
         try {
-            compose.onNodeWithText("Звонок отклонён").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.text_call_declined_193)).assertIsDisplayed()
             compose.onNodeWithTag("call_reply_result").performScrollTo().assertIsDisplayed()
-            compose.onNodeWithText("просит перезвонить позже").assertIsDisplayed()
+            compose.onNodeWithText(appString(R.string.call_reply_result_call_me_later)).assertIsDisplayed()
             compose.onAllNodes(hasClickAction()).assertCountEquals(0)
         } finally { activity.pause().stop().destroy() }
     }

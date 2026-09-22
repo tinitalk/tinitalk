@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_cancel">İptal</string>
+    <string name="language_title">Dil</string>
+    <string name="language_system">Sistem dili</string>
+    <plurals name="missed_calls_count">
+        <item quantity="one">%1$d cevapsız arama</item>
+        <item quantity="other">%1$d cevapsız arama</item>
+    </plurals>
+    <plurals name="calls_count">
+        <item quantity="one">%1$d arama</item>
+        <item quantity="other">%1$d arama</item>
+    </plurals>
+    <plurals name="contacts_count">
+        <item quantity="one">%1$d kişi</item>
+        <item quantity="other">%1$d kişi</item>
+    </plurals>
+</resources>

@@ -1,5 +1,7 @@
 package org.tinitalk.push
 
+import org.tinitalk.i18n.appString
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -269,7 +271,7 @@ class IncomingCallNotifier internal constructor(
         // fullScreenIntent. Only use it when publishing through startForeground.
         val useCallStyle = Build.VERSION.SDK_INT >= 31 && foregroundService
         val builder = Notification.Builder(
-            context,
+            org.tinitalk.i18n.AppLanguage.context(context),
             if (mode == IncomingCallPresentationMode.InApp) InAppChannelId else ChannelId,
         )
         val notificationPhoto = bitmap?.let(::roundedNotificationPhoto)
@@ -289,9 +291,9 @@ class IncomingCallNotifier internal constructor(
             @Suppress("DEPRECATION")
             builder
                 .setSmallIcon(R.drawable.ic_call_ringing)
-                .setContentTitle("Входящий звонок")
+                .setContentTitle(appString(R.string.text_incoming_call_62))
                 .setContentText(
-                    if (useCallStyle) "Входящий звонок" else invite.caller.ifEmpty { "TiniTalk" },
+                    if (useCallStyle) appString(R.string.text_incoming_call_62) else invite.caller.ifEmpty { "TiniTalk" },
                 )
                 .setCategory(Notification.CATEGORY_CALL)
                 .setPriority(
@@ -323,14 +325,14 @@ class IncomingCallNotifier internal constructor(
                     .addAction(
                         Notification.Action.Builder(
                             Icon.createWithResource(context, R.drawable.ic_call),
-                            "Отклонить",
+                            appString(R.string.text_decline_63),
                             reject,
                         ).build(),
                     )
                     .addAction(
                         Notification.Action.Builder(
                             Icon.createWithResource(context, R.drawable.ic_call),
-                            "Ответить",
+                            appString(R.string.text_answer_64),
                             answer,
                         ).build(),
                     )
@@ -436,10 +438,10 @@ class IncomingCallNotifier internal constructor(
             context.getSystemService(NotificationManager::class.java).createNotificationChannel(
                 NotificationChannel(
                     InAppChannelId,
-                    "Входящий звонок в приложении",
+                    appString(R.string.text_incoming_call_in_the_app_65),
                     NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "Служебное уведомление во время показа входящего звонка"
+                    description = appString(R.string.text_service_notification_while_the_incoming_call_screen_is_shown_66)
                     enableVibration(false)
                     setSound(null, null)
                     setShowBadge(false)
@@ -452,8 +454,8 @@ class IncomingCallNotifier internal constructor(
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
             .build()
-        val channel = NotificationChannel(ChannelId, "Входящие звонки", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Звонок и вибрация для входящих вызовов"
+        val channel = NotificationChannel(ChannelId, appString(R.string.text_incoming_calls_67), NotificationManager.IMPORTANCE_HIGH).apply {
+            description = appString(R.string.text_ringtone_and_vibration_for_incoming_calls_68)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             enableVibration(true)
             setSound(ringtone, audio)

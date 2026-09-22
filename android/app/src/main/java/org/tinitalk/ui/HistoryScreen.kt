@@ -1,5 +1,7 @@
 package org.tinitalk.ui
 
+import org.tinitalk.i18n.appString
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -187,7 +189,7 @@ fun HistoryScreen(
                 ) {
                     Icon(
                         painterResource(R.drawable.ic_chevron_right),
-                        contentDescription = "В начало",
+                        contentDescription = appString(R.string.text_back_to_top_204),
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(26.dp).graphicsLayer { rotationZ = -90f },
                     )
@@ -261,7 +263,7 @@ private fun HistoryIncompleteBanner(modifier: Modifier = Modifier, onClick: () -
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                "История загружена не полностью",
+                appString(R.string.text_history_partially_loaded_269),
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
@@ -283,15 +285,15 @@ private fun HistoryUnavailableDialog(servers: List<String>, onDismiss: () -> Uni
                     modifier = Modifier.size(24.dp),
                 )
                 Spacer(Modifier.width(10.dp))
-                Text("История загружена не полностью")
+                Text(appString(R.string.text_history_partially_loaded_269))
             }
         },
         text = {
             if (servers.size == 1) {
-                Text("Не удалось получить историю с сервера ${servers[0]}")
+                Text(appString(R.string.text_could_not_load_history_from_server_value_270, servers[0]))
             } else {
                 Column {
-                    Text("Не удалось получить историю с серверов")
+                    Text(appString(R.string.text_could_not_load_history_from_servers_271))
                     Spacer(Modifier.height(12.dp))
                     servers.forEach { server ->
                         Text(server, style = MaterialTheme.typography.bodyMedium)
@@ -300,7 +302,7 @@ private fun HistoryUnavailableDialog(servers: List<String>, onDismiss: () -> Uni
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Закрыть") }
+            TextButton(onClick = onDismiss) { Text(appString(R.string.text_close_272)) }
         },
     )
 }
@@ -313,7 +315,7 @@ internal fun HistoryRow(
     onClick: (() -> Unit)? = null,
 ) {
     val name = contactDisplayName(item.peerName)
-    val direction = if (item.direction == "incoming") "Входящий" else "Исходящий"
+    val direction = if (item.direction == "incoming") appString(R.string.text_incoming_273) else appString(R.string.text_outgoing_274)
     val status = historyReplySummaryRes(item)?.let { androidx.compose.ui.res.stringResource(it) }
         ?: historyStatus(item)
     val missed = isMissedIncoming(item)
@@ -333,7 +335,7 @@ internal fun HistoryRow(
             .then(
                 if (onClick == null) Modifier else Modifier
                     .clip(shape)
-                    .clickable(onClickLabel = "Открыть контакт", onClick = onClick),
+                    .clickable(onClickLabel = appString(R.string.text_open_contact_275), onClick = onClick),
             ),
         shape = shape,
         color = MaterialTheme.colorScheme.surface,
@@ -443,10 +445,10 @@ private fun HistoryOffline() {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Нет подключения к интернету", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text(appString(R.string.text_no_internet_connection_3), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         Text(
-            "История появится после восстановления связи.",
+            appString(R.string.text_history_will_appear_when_the_connection_is_restored_276),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -467,10 +469,10 @@ private fun HistoryEmpty() {
             Text("◷", color = BrandGold, fontSize = 34.sp)
         }
         Spacer(Modifier.height(18.dp))
-        Text("История звонков пока пуста", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text(appString(R.string.text_no_call_history_yet_277), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(7.dp))
         Text(
-            "Здесь появятся входящие и исходящие звонки.",
+            appString(R.string.text_your_incoming_and_outgoing_calls_will_appear_here_278),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

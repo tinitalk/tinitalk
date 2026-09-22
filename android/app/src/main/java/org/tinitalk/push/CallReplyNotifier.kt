@@ -22,14 +22,14 @@ internal class CallReplyNotifier(private val context: Context) {
     fun show(result: CallReplyResult) {
         val login = result.peer.login ?: return
         val manager = context.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(Channel, context.getString(R.string.call_reply_result_title), NotificationManager.IMPORTANCE_DEFAULT))
+        manager.createNotificationChannel(NotificationChannel(Channel, org.tinitalk.i18n.appString(R.string.call_reply_result_title), NotificationManager.IMPORTANCE_DEFAULT))
         val intent = contactOpenIntent(context, AccountPeerKey(result.key.accountId, login), result.key.localId())
         val contentIntent = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification = Notification.Builder(context, Channel)
             .setSmallIcon(R.drawable.ic_call)
             .setContentTitle(result.peer.displayName)
-            .setContentText(context.getString(result.code.textRes))
-            .setStyle(Notification.BigTextStyle().bigText(context.getString(result.code.textRes)))
+            .setContentText(org.tinitalk.i18n.appString(result.code.textRes))
+            .setStyle(Notification.BigTextStyle().bigText(org.tinitalk.i18n.appString(result.code.textRes)))
             .setAutoCancel(true)
             .addExtras(Bundle().apply {
                 putString("reply_account", result.key.accountId.value)
