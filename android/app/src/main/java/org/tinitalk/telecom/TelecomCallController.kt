@@ -36,6 +36,26 @@ enum class TelecomCapabilities {
     AudioOnly,
 }
 
+enum class TelecomActivationResult {
+    Activated,
+    Unavailable,
+    Rejected,
+}
+
+internal suspend fun activateTelecomCall(
+    getControl: suspend () -> CallControlScope?,
+): TelecomActivationResult {
+    val control = getControl() ?: return TelecomActivationResult.Unavailable
+    return try {
+        if (control.setActive() is CallControlResult.Success) TelecomActivationResult.Activated
+        else TelecomActivationResult.Rejected
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (_: Exception) {
+        TelecomActivationResult.Rejected
+    }
+}
+
 data class AudioEndpoint(val id: String, val name: String, val type: Int)
 
 data class AudioEndpointState(
@@ -57,7 +77,7 @@ interface TelecomRegistrar {
     fun addOutgoing(key: AccountCallKey, displayName: String, callbacks: TelecomCallCallbacks)
     fun answer(key: AccountCallKey, onResult: (Boolean) -> Unit = {})
     fun reject(key: AccountCallKey)
-    fun setActive(key: AccountCallKey, onResult: (Boolean) -> Unit = {})
+    fun setActive(key: AccountCallKey, onResult: (TelecomActivationResult) -> Unit = {})
     fun selectEndpoint(key: AccountCallKey, endpointId: String)
     fun cancel(key: AccountCallKey)
 }
@@ -79,7 +99,7 @@ class TelecomCallController(private val registrar: TelecomRegistrar) {
 
     fun reject(key: AccountCallKey) = registrar.reject(key)
 
-    fun setActive(key: AccountCallKey, onResult: (Boolean) -> Unit = {}) = registrar.setActive(key, onResult)
+    fun setActive(key: AccountCallKey, onResult: (TelecomActivationResult) -> Unit = {}) = registrar.setActive(key, onResult)
 
     fun selectEndpoint(key: AccountCallKey, endpointId: String) = registrar.selectEndpoint(key, endpointId)
 
@@ -229,12 +249,13 @@ class AndroidTelecomRegistrar(context: Context) : TelecomRegistrar {
         }
     }
 
-    override fun setActive(key: AccountCallKey, onResult: (Boolean) -> Unit) {
+    override fun setActive(key: AccountCallKey, onResult: (TelecomActivationResult) -> Unit) {
         TelecomSessions.scope.launch {
-            val success = runCatching {
-                TelecomSessions.control(key)?.setActive() is CallControlResult.Success
-            }.getOrDefault(false)
-            onResult(success)
+            val result = activateTelecomCall { TelecomSessions.control(key) }
+            if (result == TelecomActivationResult.Unavailable) {
+                Log.w(TelecomLogTag, "System Telecom unavailable; keeping TiniTalk outgoing call")
+            }
+            onResult(result)
         }
     }
 
@@ -368,8 +389,8 @@ private object TelecomSessions {
     private const val DisconnectAttempts = 3
 }
 
-private class TelecomSession {
-    val control = CompletableDeferred<CallControlScope>()
+internal class TelecomSession {
+    val control = CompletableDeferred<CallControlScope?>()
     private val cancelStarted = AtomicBoolean(false)
     private val forceClosed = AtomicBoolean(false)
     private var owner: Job? = null
@@ -414,6 +435,9 @@ private class TelecomSession {
     }
 
     fun finish() {
+        // addCall can time out before publishing a control. Release early answer/route
+        // waiters as well as callers that look up the session after it is removed.
+        control.complete(null)
         cancelExpiry()
     }
 

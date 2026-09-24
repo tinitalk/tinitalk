@@ -615,8 +615,8 @@ class CallForegroundService : Service() {
                 }
                 routeMediaCallback { it.setActive(true) }
                 val localCallKey = telecomCallKey ?: eventKey
-                telecom.setActive(localCallKey) { success ->
-                    if (!success) {
+                telecom.setActive(localCallKey) { result ->
+                    if (result == TelecomActivationResult.Rejected) {
                         val snapshot = CallServiceState.snapshot()
                         if (snapshot.callKey == eventKey &&
                             snapshot.phase == CallPhase.Active &&

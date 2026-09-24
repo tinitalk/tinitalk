@@ -19,6 +19,7 @@ import org.tinitalk.call.CallAdmission
 import org.tinitalk.call.CallAdmissionHandoff
 import org.tinitalk.telecom.IncomingAnswerClaim
 import org.tinitalk.telecom.IncomingCallController
+import org.tinitalk.telecom.TelecomActivationResult
 import org.tinitalk.telecom.TelecomCallCallbacks
 import org.tinitalk.telecom.TelecomCallController
 import org.tinitalk.telecom.TelecomCapabilities
@@ -300,7 +301,8 @@ class IncomingCallNotifierTest {
         override fun addOutgoing(key: AccountCallKey, displayName: String, callbacks: TelecomCallCallbacks) = Unit
         override fun answer(key: AccountCallKey, onResult: (Boolean) -> Unit) = Unit
         override fun reject(key: AccountCallKey) = Unit
-        override fun setActive(key: AccountCallKey, onResult: (Boolean) -> Unit) = onResult(false)
+        override fun setActive(key: AccountCallKey, onResult: (TelecomActivationResult) -> Unit) =
+            onResult(TelecomActivationResult.Unavailable)
         override fun selectEndpoint(key: AccountCallKey, endpointId: String) = Unit
         override fun cancel(key: AccountCallKey) = Unit
     }

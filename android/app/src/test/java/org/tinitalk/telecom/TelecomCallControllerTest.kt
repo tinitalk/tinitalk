@@ -97,16 +97,16 @@ class TelecomCallControllerTest {
         val registrar = FakeTelecomRegistrar()
         val controller = TelecomCallController(registrar)
         var disconnected = false
-        var activationSucceeded = false
+        var activationResult: TelecomActivationResult? = null
 
         controller.addOutgoing(key("call-2"), "Bob", TelecomCallCallbacks(onDisconnect = { disconnected = true }))
         registrar.outgoingDisconnect?.invoke()
-        controller.setActive(key("call-2")) { activationSucceeded = it }
+        controller.setActive(key("call-2")) { activationResult = it }
 
         assertEquals(key("call-2"), registrar.outgoingCallId)
         assertEquals("Bob", registrar.outgoingDisplayName)
         assertTrue(disconnected)
-        assertTrue(activationSucceeded)
+        assertEquals(TelecomActivationResult.Activated, activationResult)
         assertEquals(key("call-2"), registrar.activeCall)
     }
 
@@ -193,9 +193,9 @@ class TelecomCallControllerTest {
             rejectedCall = key
         }
 
-        override fun setActive(key: AccountCallKey, onResult: (Boolean) -> Unit) {
+        override fun setActive(key: AccountCallKey, onResult: (TelecomActivationResult) -> Unit) {
             activeCall = key
-            onResult(true)
+            onResult(TelecomActivationResult.Activated)
         }
 
         override fun selectEndpoint(key: AccountCallKey, endpointId: String) {
