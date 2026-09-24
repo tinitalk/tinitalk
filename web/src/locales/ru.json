@@ -1,4 +1,7 @@
 {
+  "waiting_calls_title": "Ожидающие вызовы",
+  "waiting_answer_ends_current": "При ответе текущий разговор завершится",
+  "waiting_call_unavailable": "Этот вызов больше недоступен",
   "language_title": "Язык",
   "language_system": "Как в системе",
   "web_this_account_is_open_on_another_device_sign_in_again_0": "Учётка открыта на другом устройстве. Войдите снова.",

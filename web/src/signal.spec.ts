@@ -57,7 +57,7 @@ it('does not send visibility messages to an older family server', async () => {
   await opening;
   expect(connection.sendCallVisibility('call-1', true)).toBe(false);
   expect(socket.sent).toEqual([]);
-  expect(socket.url.search).toBe('');
+  expect(socket.url.search).toBe('?call_waiting=1');
   connection.stop();
 });
 
@@ -81,6 +81,26 @@ it('negotiates contact changes and delivers them outside a call', async () => {
   connection.stop();
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); vi.clearAllMocks(); });
+
+it('never replays a timed-out waiting-call acceptance after reconnection', async () => {
+  vi.useFakeTimers();
+  vi.mocked(api).mockRejectedValue(new Error('offline'));
+  const account: Account = { id: 'a', server: 'https://family.example', login: 'alice', token: 'test', name: 'Alice', deviceId: 'a', sessionId: 's' };
+  const connection = new SignalConnection(account, async () => undefined, vi.fn(), vi.fn(), () => null);
+  const acceptance = connection.sendConfirmed('waiting', 'call.accept', { replace_call_id: 'current' });
+  const failed = expect(acceptance).rejects.toThrow('timed out');
+  await vi.advanceTimersByTimeAsync(8_001);
+  await failed;
+  vi.stubGlobal('WebSocket', FakeSocket);
+  vi.mocked(api).mockResolvedValue({ ticket: 'ticket' });
+  const opening = connection.connect();
+  await Promise.resolve();
+  const socket = FakeSocket.instances.at(-1)!;
+  socket.open();
+  await opening;
+  expect(socket.sent).toEqual([]);
+  connection.stop();
+});
 
 it('retries again after an online event interrupts the previous reconnect timer', async () => {
   vi.useFakeTimers();

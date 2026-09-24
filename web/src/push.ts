@@ -26,8 +26,8 @@ export async function notificationCallState(account: Account, callId: string): P
 export async function isActiveNotificationCall(account: Account, callId: string): Promise<boolean> {
   if (!callId) return false;
   try {
-    const active = await api<{ call_id: string } | undefined>(account, '/api/active-call');
-    return active?.call_id === callId;
+    const active = await api<{ call_id: string; incoming_calls?: {call_id: string}[] } | undefined>(account, '/api/active-call?call_waiting=1');
+    return active?.call_id === callId || active?.incoming_calls?.some(call => call.call_id === callId) === true;
   } catch (error) {
     // Older family servers only support call.resume, which still validates the
     // call before sending an invite. Authentication/network failures propagate.

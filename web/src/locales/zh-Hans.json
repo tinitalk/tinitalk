@@ -1,4 +1,7 @@
 {
+  "waiting_calls_title": "等待中的来电",
+  "waiting_answer_ends_current": "接听将结束当前通话",
+  "waiting_call_unavailable": "此来电已失效",
   "language_title": "语言",
   "language_system": "跟随系统",
   "web_this_account_is_open_on_another_device_sign_in_again_0": "此账号已在另一台设备上打开。请重新登录。",

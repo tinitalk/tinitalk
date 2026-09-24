@@ -14,6 +14,12 @@ function ringingPush(): PushRecord {
   return { id: 'a:call-1', accountId: 'a', callId: 'call-1', sessionId: 's', type: 'incoming_call', caller: 'alice', receivedAt: Date.now(), expiresAt: Date.now() + 30000 };
 }
 
+it('recognizes a waiting invitation even when another call is primary', async () => {
+  vi.mocked(api).mockResolvedValue({call_id:'current', incoming_calls:[{call_id:'waiting'}]});
+  await expect(isActiveNotificationCall(ringingOwner, 'waiting')).resolves.toBe(true);
+  await expect(isActiveNotificationCall(ringingOwner, 'other')).resolves.toBe(false);
+});
+
 it('updates worker code without permission, subscription changes or server requests', async () => {
   const registration = { active: { state: 'activated' } };
   const register = vi.fn(async () => registration);
@@ -79,7 +85,7 @@ it.each([
   const owner: Account = { id: 'family-a', server: 'https://family.example', login: 'bob', token: 'test', name: 'Bob', deviceId: 'd', sessionId: 's' };
   vi.mocked(api).mockResolvedValue(active);
   expect(await isActiveNotificationCall(owner, 'call-1')).toBe(expected);
-  expect(api).toHaveBeenCalledWith(owner, '/api/active-call');
+  expect(api).toHaveBeenCalledWith(owner, '/api/active-call?call_waiting=1');
 });
 
 it('closes only the matching call notification in its own account registration', async () => {

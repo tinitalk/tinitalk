@@ -15,7 +15,7 @@ it('accepts another account while the cancelled outgoing connection is still pen
   const incoming = { id: 'incoming', account: second, incoming: true, media: { capture } };
   const app = new Function('first', 'connecting', 'send', `
     let current = null, localPreviewCallId, localPreviewDragPosition, videoControlsCallId, videoControlsVisible;
-    const list = [first], removingAccounts = new Set();
+    const list = [first], removingAccounts = new Set(), waitingCalls = {};
     const connections = new Map([['a', {connect: connecting, clearCall: () => {}}], ['b', {connect: async () => {}, send}]]);
     const createCall = account => ({account, media: {capture: async () => {}, close: () => {}}});
     const contactDisplayName = () => 'peer', renderCall = () => {}, refreshAudioOutputs = async () => {};

@@ -1,4 +1,7 @@
 {
+  "waiting_calls_title": "Waiting calls",
+  "waiting_answer_ends_current": "Answering will end the current call",
+  "waiting_call_unavailable": "This call is no longer available",
   "language_title": "Language",
   "language_system": "System default",
   "web_this_account_is_open_on_another_device_sign_in_again_0": "This account is open on another device. Sign in again.",

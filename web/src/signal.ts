@@ -16,6 +16,7 @@ export class SignalConnection {
   private pending = new Map<string, { event: SignalEvent; expires: number }>();
   private delivery = Promise.resolve();
   private foregroundCallNotifications = false;
+  private confirmations = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; callId: string }>();
   constructor(public account: Account, private receive: (event: SignalEvent) => Promise<void>, private changed: (status: Message) => void, private failed: (error: Error, callId?: string) => void, private resume: () => Resume, private acknowledged: (event: SignalEvent) => void = () => undefined) {}
   get connected(): boolean { return this.socket?.readyState === WebSocket.OPEN; }
   connect(): Promise<void> {
@@ -33,6 +34,7 @@ export class SignalConnection {
       const result = await api<{ ticket: string; foreground_call_notifications?: boolean; contact_changes?: boolean }>(this.account, '/api/browser/socket-ticket', 'POST', {});
       if (this.stopped) return;
       const url = new URL('/api/browser/socket', this.account.server);
+      url.searchParams.set('call_waiting', '1');
       if (result.contact_changes) url.searchParams.set('contact_changes', '1');
       this.foregroundCallNotifications = result.foreground_call_notifications === true;
       if (this.foregroundCallNotifications) url.searchParams.set('foreground_call_notifications', '1');
@@ -67,12 +69,14 @@ export class SignalConnection {
           let frame: Record<string, unknown>;
           try { frame = JSON.parse(event.data); } catch { return; }
           if (typeof frame.ack === 'string') {
+            this.settle(frame.ack);
             const pending = this.pending.get(frame.ack);
             this.pending.delete(frame.ack);
             if (pending) this.acknowledged(pending.event);
             return;
           }
           if (typeof frame.error === 'string') {
+            if (typeof frame.event_id === 'string') this.settle(frame.event_id, new SignalError(String(frame.error)));
             if (typeof frame.event_id === 'string') this.pending.delete(frame.event_id);
             const code = typeof frame.code === 'string' ? frame.code : undefined;
             const callId = typeof frame.call_id === 'string' ? frame.call_id : undefined;
@@ -110,6 +114,27 @@ export class SignalConnection {
       return true;
     } catch { return false; }
   }
+  sendConfirmed(callId: string, type: string, payload: Record<string, unknown> = {}): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const id = this.send(callId, type, payload);
+      const timer = setTimeout(() => {
+        // A failed switch must not be replayed later against the previous call.
+        this.pending.delete(id);
+        this.settle(id, new Error('Signaling acknowledgement timed out'));
+      }, 8_000);
+      this.confirmations.set(id, { resolve, reject, timer, callId });
+    });
+  }
+  private settle(id: string, error?: Error): void {
+    const pending = this.confirmations.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.confirmations.delete(id);
+    if (error) pending.reject(error); else pending.resolve();
+  }
   clearCall(callId: string): void { for (const [id, value] of this.pending) if (value.event.call_id === callId) this.pending.delete(id); }
-  stop(): void { this.stopped = true; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined; this.pending.clear(); }
+  stop(): void {
+    this.stopped = true; clearTimeout(this.timer); this.timer = undefined; this.socket?.close(); this.socket = undefined; this.pending.clear();
+    for (const id of this.confirmations.keys()) this.settle(id, new Error('Signaling connection closed'));
+  }
 }
