@@ -46,6 +46,7 @@ const createUI = localizedFunction('environment', `
   } = environment;
   const callToneState = () => ({});
   const waitingCalls = {entries: new Map()}, waitingTone = {update() {}}, waitingPromotions = new Set(), list = [];
+  let waitingReply;
   const videoModeActive = () => true;
   const videoCallScreen = () => element('div', 'video-call-screen');
   const incomingVisibility = { refresh() {} };

@@ -163,6 +163,7 @@ let updateError = '';
 let accountSubmission: Promise<void> | undefined;
 let current: ActiveCall | null = null;
 const waitingCalls = new WaitingInvites();
+let waitingReply: {invite: WaitingInvite; close: () => void} | undefined;
 const waitingTone = new WaitingTone();
 let waitingTimer: ReturnType<typeof setTimeout> | undefined;
 const waitingPromotions = new Set<WaitingInvite>();
@@ -194,6 +195,7 @@ const selfPreviewCorners: SelfPreviewCorner[] = ['TopLeft', 'TopRight', 'BottomL
 type IconPath = string | { d: string; fill?: boolean; strokeWidth?: number };
 
 const iconPaths = {
+  mail: ['M20,4H4C2.9,4 2,4.9 2,6v12c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V6c0,-1.1 -0.9,-2 -2,-2zM20,8l-8,5 -8,-5V6l8,5 8,-5v2z'],
   arrowBack: ['M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.42,-1.41L7.83,13H20v-2z'],
   call: ['M6.62,10.79C8.06,13.62 10.38,15.93 13.21,17.38L15.41,15.18C15.68,14.91 16.08,14.82 16.43,14.94C17.55,15.31 18.75,15.5 20,15.5C20.55,15.5 21,15.95 21,16.5V20C21,20.55 20.55,21 20,21C10.61,21 3,13.39 3,4C3,3.45 3.45,3 4,3H7.5C8.05,3 8.5,3.45 8.5,4C8.5,5.25 8.69,6.45 9.06,7.57C9.17,7.92 9.09,8.31 8.81,8.59L6.62,10.79Z'],
   contacts: ['M9,11a4,4 0,1 0,0 -8a4,4 0,0 0,0 8M9,13c-4.42,0 -8,2.24 -8,5v2h16v-2c0,-2.76 -3.58,-5 -8,-5M17.5,11a3,3 0,1 0,0 -6a3,3 0,0 0,0 6M17.5,13c-0.54,0 -1.06,0.04 -1.55,0.11c1.87,1.1 3.05,2.82 3.05,4.89v2h5v-2c0,-2.76 -2.91,-5 -6.5,-5'],
@@ -3437,6 +3439,7 @@ function renderCall(): void {
       connections.get(pending.account.id)?.send(pending.event.call_id, 'call.waiting', {waiting: true});
     }
   }
+  if (waitingReply && (!waitingCalls.has(waitingReply.invite) || waitingCalls.selected || waitingReply.invite.deadline <= Date.now())) waitingReply.close();
   waitingTone.update(current?.connectedAt && !waitingCalls.selected
     ? Math.max(0, ...[...waitingCalls.entries.values()].filter(item => item.confirmed).map(item => item.deadline)) : 0,
     currentAudioOutputId());
@@ -4239,6 +4242,41 @@ async function answerWaiting(invite: WaitingInvite): Promise<void> {
   }
 }
 
+function replyToWaiting(invite: WaitingInvite, code: CallReplyCode): void {
+  if (!waitingCalls.has(invite) || waitingCalls.selected || !invite.confirmed) return;
+  if (invite.deadline <= Date.now()) { rejectWaiting(invite, false); return; }
+  connections.get(invite.account.id)?.send(invite.event.call_id, 'call.reject', {reply_code: code});
+  removeWaiting(invite);
+  promoteWaiting();
+}
+
+function waitingReplySheet(invite: WaitingInvite): void {
+  if (!waitingCalls.has(invite) || waitingCalls.selected || !invite.confirmed || invite.deadline <= Date.now()) return;
+  const overlay = element('div', 'sheet-overlay waiting-reply-overlay');
+  const panel = element('section', 'bottom-sheet');
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-modal', 'true');
+  panel.setAttribute('aria-label', `${t('call_reply_sheet_title')} — ${invite.peer}`);
+  const header = element('div', 'waiting-reply-header');
+  const login = String(invite.event.payload.caller_login || '');
+  const identity = element('div', 'waiting-reply-identity');
+  identity.append(element('h2', '', invite.peer), element('p', '', t('call_reply_sheet_title')));
+  header.append(avatar(invite.peer, login, 'waiting-reply-avatar', photoForAccountPeer(invite.account.id, login)), identity);
+  panel.append(header);
+  const close = registerActiveOverlay(() => { overlay.remove(); waitingReply = undefined; });
+  waitingReply = {invite, close};
+  for (const reply of callReplies()) {
+    panel.append(actionButton(reply.text, () => {
+      close();
+      replyToWaiting(invite, reply.code);
+    }, 'text-action wide'));
+  }
+  overlay.append(panel);
+  overlay.onclick = event => { if (event.target === overlay) close(); };
+  root.append(overlay);
+  panel.querySelector<HTMLButtonElement>('button')?.focus();
+}
+
 function waitingCallsPanel(): HTMLElement {
   const panel = element('section', 'waiting-calls-panel');
   panel.setAttribute('aria-label', t('waiting_calls_title'));
@@ -4253,11 +4291,13 @@ function waitingCallsPanel(): HTMLElement {
     const actions = element('div', 'waiting-call-actions');
     const reject = element('button', 'secondary waiting-call-reject', t('text_busy_91'));
     const answer = element('button', 'primary waiting-call-answer', t('text_answer_64'));
+    const reply = iconButton(t('call_reply_sheet_title'), 'mail', () => waitingReplySheet(pending), 'secondary waiting-call-reply');
+    reply.disabled = Boolean(waitingCalls.selected) || !pending.confirmed;
     reject.disabled = Boolean(waitingCalls.selected);
     answer.disabled = Boolean(waitingCalls.selected) || !pending.confirmed;
     reject.onclick = () => rejectWaiting(pending);
     answer.onclick = () => { void answerWaiting(pending); };
-    actions.append(reject, answer);
+    actions.append(reject, reply, answer);
     row.append(identity, actions);
     panel.append(row);
   }

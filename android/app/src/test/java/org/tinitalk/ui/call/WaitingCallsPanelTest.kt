@@ -17,7 +17,12 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -61,11 +66,72 @@ class WaitingCallsPanelTest {
     private val state = mutableStateOf(WaitingCallsState())
     private val answered = mutableListOf<AccountCallOwner>()
     private val rejected = mutableListOf<AccountCallOwner>()
+    private val replies = mutableListOf<Pair<AccountCallOwner, org.tinitalk.call.CallReplyCode>>()
     private val answer get() = appString(R.string.text_answer_64)
     private val busy get() = appString(R.string.text_busy_91)
 
     @After fun cleanup() {
         activity?.pause()?.stop()?.destroy()
+    }
+
+    @Test fun envelopeOpensChoicesAndRepliesToOnlySelectedCaller() {
+        val first = pending("First")
+        val second = pending("Second", server = "two")
+        render(listOf(first, second))
+        compose.onAllNodesWithContentDescription(appString(R.string.call_reply_sheet_title))[1].performClick()
+        assertTrue(replies.isEmpty())
+        assertTrue(rejected.isEmpty())
+        val reply = org.tinitalk.call.CallReplyCode.WillCallBack
+        compose.onNodeWithText(appString(reply.textRes)).performClick()
+        assertEquals(listOf(second.invite.owner to reply), replies)
+        assertTrue(answered.isEmpty())
+        assertTrue(rejected.isEmpty())
+        compose.onNodeWithText(appString(reply.textRes)).assertDoesNotExist()
+    }
+
+    @Test fun disappearingCallerClosesReplyChoicesWithoutSending() {
+        val first = pending("First")
+        render(listOf(first))
+        compose.onAllNodesWithContentDescription(appString(R.string.call_reply_sheet_title))[0].performClick()
+        compose.onNodeWithText(appString(R.string.call_reply_will_call_back)).assertIsDisplayed()
+        compose.runOnIdle { state.value = WaitingCallsState() }
+        compose.onNodeWithText(appString(R.string.call_reply_will_call_back)).assertDoesNotExist()
+        assertTrue(replies.isEmpty())
+        assertTrue(rejected.isEmpty())
+    }
+
+    @Test fun replyHeaderSeparatesRecipientFromActionAndChoices() {
+        checkReplyHeader(fontScale = 1f)
+    }
+
+    @Test fun replyHeaderWrapsLongRecipientAndTitleWithLargeText() {
+        checkReplyHeader(fontScale = 2f)
+    }
+
+    private fun checkReplyHeader(fontScale: Float) {
+        org.robolectric.RuntimeEnvironment.setFontScale(fontScale)
+        val name = "Александра Константиновна Петрова"
+        render(listOf(pending(name)), fontScale = fontScale)
+        compose.onAllNodesWithContentDescription(appString(R.string.call_reply_sheet_title))[0].performClick()
+        val header = hasAnyAncestor(hasTestTag("waiting-reply-header"))
+        val recipient = compose.onNode(header and hasText(name)).assertIsDisplayed()
+        val title = compose.onNode(header and hasText(appString(R.string.call_reply_sheet_title))).assertIsDisplayed()
+        val image = compose.onNodeWithTag("waiting-reply-content").captureToImage().asAndroidBitmap()
+        val directory = File("build/outputs/waiting-panel").apply { mkdirs() }
+        File(directory, "reply-$fontScale.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        for (label in listOf(recipient, title)) {
+            val layouts = mutableListOf<TextLayoutResult>()
+            label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.single()
+            assertFalse(layout.didOverflowHeight)
+            for (line in 0 until layout.lineCount) {
+                assertFalse(layout.isLineEllipsized(line))
+                assertTrue(layout.getLineRight(line) - layout.getLineLeft(line) <= layout.size.width + 1f)
+            }
+        }
+        assertTrue(recipient.fetchSemanticsNode().boundsInRoot.bottom < title.fetchSemanticsNode().boundsInRoot.top)
+        val choice = compose.onNodeWithText(appString(R.string.call_reply_will_call_back)).assertIsDisplayed()
+        assertTrue(title.fetchSemanticsNode().boundsInRoot.bottom < choice.fetchSemanticsNode().boundsInRoot.top)
     }
 
     @Test fun longNameUsesTwoLinesAboveEqualSizedButtons() {
@@ -100,7 +166,13 @@ class WaitingCallsPanelTest {
         val answerLayouts = mutableListOf<TextLayoutResult>()
         compose.onNodeWithText(answer, useUnmergedTree = true)
             .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(answerLayouts) }
-        assertEquals("The answer label should not wrap inside a word", 1, answerLayouts.single().lineCount)
+        assertEquals("The answer label should fit without splitting the word", 1, answerLayouts.single().lineCount)
+        val answerLayout = answerLayouts.single()
+        assertFalse("The answer label must not be clipped vertically", answerLayout.didOverflowHeight)
+        // Center alignment offsets the line within the paragraph; compare its
+        // actual width, not its right coordinate, with the measured text box.
+        assertTrue("The full answer label must remain visible",
+            answerLayout.getLineRight(0) - answerLayout.getLineLeft(0) <= answerLayout.size.width + 1f)
         compose.onNodeWithText(answer).performScrollTo().assertIsDisplayed().performClick()
         compose.onNodeWithText(busy).performScrollTo().assertIsDisplayed().performClick()
         assertEquals(listOf(call.invite.owner), answered)
@@ -210,6 +282,7 @@ class WaitingCallsPanelTest {
                 TiniTalkTheme(darkTheme = true) {
                     CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
                         WaitingCallsPanel(state.value, onAnswer = { answered += it }, onReject = { rejected += it },
+                            onReply = { owner, code -> replies += owner to code },
                             modifier = Modifier.width(320.dp).heightIn(max = availableHeight))
                     }
                 }

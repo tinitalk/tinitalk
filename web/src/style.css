@@ -1466,8 +1466,39 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .waiting-call-identity { display: flex; gap: 12px; align-items: center; min-width: 0; }
 .waiting-call-avatar { width: 40px; height: 40px; flex: 0 0 40px; font-size: 1rem; border: 0; }
 .waiting-call-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
-.waiting-call-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.waiting-call-actions button { width: 100%; min-height: 48px; margin: 0; padding: 10px 8px; overflow-wrap: anywhere; }
+.waiting-call-actions { display: grid; grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr); gap: 12px; }
+.waiting-call-reply { background: #4a4c50; color: var(--on-surface); }
+.waiting-reply-overlay { z-index: 100; }
+.waiting-reply-overlay .bottom-sheet {
+  max-height: 100%;
+  overflow-y: auto;
+  grid-auto-rows: max-content;
+  gap: 0;
+  padding: 16px 0 calc(24px + env(safe-area-inset-bottom));
+  /* Match the native Material bottom sheet, without changing other sheets. */
+  background: #1d1b20;
+}
+.waiting-reply-overlay .bottom-sheet::before { margin-bottom: 16px; }
+.waiting-reply-overlay .text-action {
+  min-height: 64px;
+  margin: 0;
+  padding: 20px 24px;
+  border-radius: 0;
+  color: var(--on-surface);
+  text-align: start;
+  justify-content: flex-start;
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.5rem;
+  overflow-wrap: anywhere;
+}
+.waiting-reply-header { display: flex; align-items: center; gap: 16px; margin: 0 24px; padding: 4px 0 20px; border-bottom: 1px solid color-mix(in srgb, var(--outline-variant) 50%, transparent); }
+.waiting-reply-avatar { width: 48px; height: 48px; flex: 0 0 48px; font-size: 1.25rem; border: 0; }
+.waiting-reply-identity { min-width: 0; }
+.waiting-reply-identity h2 { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.waiting-reply-identity p { margin: 4px 0 0; color: var(--on-variant); font-size: .875rem; line-height: 1.25rem; }
+.waiting-call-actions button { width: 100%; min-height: 48px; margin: 0; padding: 10px 8px; border-radius: 999px; font-size: .875rem; font-weight: 500; line-height: 1.25rem; overflow-wrap: anywhere; }
+.waiting-call-actions .waiting-call-reply { width: 48px; height: 48px; padding: 0; border-radius: 50%; align-self: center; }
 .waiting-call-reject, .waiting-call-reject:active { background: #4a4c50; color: var(--on-surface); border: 0; box-shadow: none; transform: none; transition: none; -webkit-tap-highlight-color: transparent; }
 .waiting-call-answer { background: var(--brand-gold); color: var(--on-primary); border: 0; }
 

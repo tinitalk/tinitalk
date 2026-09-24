@@ -46,6 +46,7 @@ internal object WaitingCalls {
     fun isAnswering(owner: AccountCallOwner): Boolean = controller?.isAnswering(owner) == true
     fun answer(owner: AccountCallOwner) { controller?.answer(owner) }
     fun reject(owner: AccountCallOwner) { controller?.reject(owner) }
+    fun reply(owner: AccountCallOwner, code: CallReplyCode) { controller?.reply(owner, code) }
     fun mediaRetiring(owner: AccountCallOwner) { controller?.mediaRetiring(owner) }
     fun mediaReleased(owner: AccountCallOwner) { controller?.mediaReleased(owner) }
 }
@@ -256,12 +257,26 @@ internal class WaitingCallsController(
         MissedCountRefreshScheduler(context).enqueue(owner.key.accountId)
     } }
 
-    private fun settleTerminal(owner: AccountCallOwner, type: String, seen: Boolean = false) {
+    fun reply(owner: AccountCallOwner, code: CallReplyCode) { handler.post {
+        val pending = registry.get(owner) ?: return@post
+        if (registry.currentSelection() != null || !pending.acknowledged) return@post
+        if (pending.deadlineElapsedMs <= SystemClock.elapsedRealtime()) {
+            reject(owner, seen = false)
+            return@post
+        }
+        settleTerminal(owner, "call.reject", reply = code)
+        MissedCountRefreshScheduler(context).enqueue(owner.key.accountId)
+    } }
+
+    private fun settleTerminal(owner: AccountCallOwner, type: String, seen: Boolean = false, reply: CallReplyCode? = null) {
         val socket = sockets[owner]
         acceptRequests.remove(owner)?.let { socket?.cancelQueued(it) }
         val request = event(owner, type, JsonObject().apply {
-            addProperty("reason", "busy")
-            if (seen) addProperty("seen", true)
+            if (reply != null) addProperty("reply_code", reply.wireValue)
+            else {
+                addProperty("reason", "busy")
+                if (seen) addProperty("seen", true)
+            }
         })
         // Retain the signaling lease until its terminal packet is settled.
         sockets.remove(owner)

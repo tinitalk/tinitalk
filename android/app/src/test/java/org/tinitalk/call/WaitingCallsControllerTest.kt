@@ -105,6 +105,46 @@ class WaitingCallsControllerTest {
         assertEquals(previous, GlobalCallAdmission.current()!!.owner)
     }
 
+    @Test fun replyRejectsOnlySelectedCallerWithoutBusyOrEndingConversation() {
+        val first = invite()
+        val second = invite(other)
+        val socket = admit(first)
+        val secondSocket = admit(second)
+        controller.reply(first.owner, CallReplyCode.WillCallBack)
+        idle()
+        val rejection = socket.events.single { it.type == "call.reject" }
+        assertEquals("will_call_back", rejection.payload["reply_code"].asString)
+        assertFalse(rejection.payload.has("reason"))
+        assertFalse(secondSocket.events.any { it.type == "call.reject" })
+        assertEquals(listOf(second.owner), state.calls.map { it.invite.owner })
+        assertEquals(previous, GlobalCallAdmission.current()!!.owner)
+        controller.reply(first.owner, CallReplyCode.CallMeLater)
+        idle()
+        assertEquals(1, socket.events.count { it.type == "call.reject" })
+    }
+
+    @Test fun replyAfterCancellationDoesNothing() {
+        val invite = invite()
+        val socket = admit(invite)
+        socket.receive(invite, "call.cancel", 3)
+        idle()
+        controller.reply(invite.owner, CallReplyCode.WillCallBack)
+        idle()
+        assertFalse(socket.events.any { it.type == "call.reject" })
+        assertEquals(previous, GlobalCallAdmission.current()!!.owner)
+    }
+
+    @Test fun replyAfterTimeoutDoesNotSendText() {
+        val invite = invite()
+        val socket = admit(invite)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(16))
+        controller.reply(invite.owner, CallReplyCode.WillCallBack)
+        idle()
+        val rejection = socket.events.single { it.type == "call.reject" }
+        assertFalse(rejection.payload.has("reply_code"))
+        assertFalse(rejection.payload.has("seen"))
+    }
+
     @Test fun rejectedSameServerSelectionNeverStopsCurrentConversation() {
         val invite = invite()
         val socket = admit(invite)

@@ -1,6 +1,18 @@
 package org.tinitalk.ui.call
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import org.tinitalk.call.CallReplyCode
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -33,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.tinitalk.R
@@ -51,16 +64,66 @@ internal fun WaitingCallsPanel(modifier: Modifier = Modifier) {
         WaitingCalls.observe(observer)
         onDispose { WaitingCalls.removeObserver(observer) }
     }
-    WaitingCallsPanel(state, onAnswer = WaitingCalls::answer, onReject = WaitingCalls::reject, modifier = modifier)
+    WaitingCallsPanel(state, onAnswer = WaitingCalls::answer, onReject = WaitingCalls::reject, onReply = WaitingCalls::reply, modifier = modifier)
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 internal fun WaitingCallsPanel(
     state: WaitingCallsState,
     onAnswer: (AccountCallOwner) -> Unit,
     onReject: (AccountCallOwner) -> Unit,
     modifier: Modifier = Modifier,
+    onReply: (AccountCallOwner, CallReplyCode) -> Unit = { _, _ -> },
 ) {
+    val largeText = LocalDensity.current.fontScale >= 1.5f
+    var replyOwner by remember { mutableStateOf<AccountCallOwner?>(null) }
+    val replying = state.calls.firstOrNull { it.invite.owner == replyOwner && it.acknowledged && state.answering == null }
+    LaunchedEffect(replyOwner, replying) {
+        if (replying == null) replyOwner = null
+    }
+    if (replying != null) {
+        ModalBottomSheet(
+            onDismissRequest = { replyOwner = null },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(Modifier.testTag("waiting-reply-content").verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 20.dp)
+                        .testTag("waiting-reply-header"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    val invite = replying.invite
+                    ContactAvatar(
+                        address = invite.callerLogin?.takeIf { it.isNotBlank() }
+                            ?.let { ContactAddress.of(invite.sessionBinding.serverUrl, it) },
+                        displayName = invite.caller,
+                        fallbackLogin = invite.callerLogin,
+                        size = 48.dp,
+                        borderWidth = 0.dp,
+                    )
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(invite.caller, style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.call_reply_sheet_title),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                HorizontalDivider(Modifier.padding(horizontal = 24.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                CallReplyCode.entries.forEach { code ->
+                    Text(stringResource(code.textRes), style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            val owner = replyOwner ?: return@clickable
+                            replyOwner = null
+                            onReply(owner, code)
+                        }.padding(horizontal = 24.dp, vertical = 20.dp))
+                }
+            }
+        }
+    }
     if (state.calls.isEmpty()) return
     BoxWithConstraints(modifier.fillMaxWidth()) {
         // Grow with the callers instead of clipping the second row at a fixed height.
@@ -112,14 +175,14 @@ internal fun WaitingCallsPanel(
                             }
                             Row(
                                 Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(if (largeText) 6.dp else 12.dp),
                             ) {
                                 CompositionLocalProvider(LocalRippleConfiguration provides null) {
                                     Button(
                                         onClick = { onReject(invite.owner) },
                                         enabled = state.answering == null,
                                         modifier = Modifier.weight(1f).heightIn(min = 48.dp).fillMaxHeight(),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
+                                        contentPadding = PaddingValues(horizontal = if (largeText) 2.dp else 8.dp, vertical = 10.dp),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = Color(0xFF4A4C50),
                                             contentColor = MaterialTheme.colorScheme.onSurface,
@@ -129,10 +192,21 @@ internal fun WaitingCallsPanel(
                                     }
                                 }
                                 Button(
+                                    onClick = { replyOwner = invite.owner },
+                                    enabled = state.answering == null && pending.acknowledged,
+                                    modifier = Modifier.width(48.dp).heightIn(min = 48.dp).fillMaxHeight(),
+                                    contentPadding = PaddingValues(0.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A4C50),
+                                        contentColor = MaterialTheme.colorScheme.onSurface),
+                                ) {
+                                    Icon(painterResource(R.drawable.ic_mail), stringResource(R.string.call_reply_sheet_title),
+                                        modifier = Modifier.size(24.dp))
+                                }
+                                Button(
                                     onClick = { onAnswer(invite.owner) },
                                     enabled = state.answering == null && pending.acknowledged,
-                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp).fillMaxHeight(),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
+                                    modifier = Modifier.weight(if (largeText) 1.4f else 1f).heightIn(min = 48.dp).fillMaxHeight(),
+                                    contentPadding = PaddingValues(horizontal = if (largeText) 2.dp else 8.dp, vertical = 10.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = BrandGold,
                                         contentColor = MaterialTheme.colorScheme.onPrimary,

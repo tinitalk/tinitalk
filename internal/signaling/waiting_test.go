@@ -232,6 +232,29 @@ func TestManualWaitingRejectionPreservesHistoryWithoutNewUnread(t *testing.T) {
 	}
 }
 
+func TestWaitingTextReplyIsRejectedNotBusy(t *testing.T) {
+	for _, reply := range []string{"cannot_talk", "call_me_later", "will_call_back"} {
+		t.Run(reply, func(t *testing.T) {
+			h, db, _ := historyHub(t)
+			b := h.Connect("bob")
+			h.EnableCallWaiting(b)
+			e := addWaiting(t, h, b, "alice", 7950)
+			if err := h.HandleClient(b, event(uuid(7953), e.CallID, "call.reject", map[string]any{"reply_code": reply})); err != nil {
+				t.Fatal(err)
+			}
+			page, err := db.CallHistory("bob", 0, 10)
+			if err != nil || len(page.Items) != 1 || page.UnreadMissed != 0 || page.Items[0].Outcome != state.CallOutcomeRejected || page.Items[0].ReplyCode != reply {
+				t.Fatalf("history: %+v %v", page, err)
+			}
+			replay := h.calls[e.CallID].after("alice", 0)
+			var payload map[string]any
+			if err := json.Unmarshal(replay[len(replay)-1].Payload, &payload); err != nil || payload["reply_code"] != reply || payload["reason"] != nil {
+				t.Fatalf("caller reply: %+v %v", payload, err)
+			}
+		})
+	}
+}
+
 func TestWaitingTimeoutStillCreatesUnreadMissedCall(t *testing.T) {
 	h, db, now := historyHub(t)
 	b := h.Connect("bob")

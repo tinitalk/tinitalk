@@ -90,6 +90,35 @@ it('a dismissed invitation cannot reappear after a delayed push or replay', () =
 });
 
 const source = ts.createSourceFile('app.ts', appSource, ts.ScriptTarget.ES2022, true);
+const replyCode = ts.transpileModule(source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'replyToWaiting')!.getText(source), {
+  compilerOptions: {target: ts.ScriptTarget.ES2022},
+}).outputText;
+
+it.each(['live', 'cancelled', 'expired', 'answering'])('handles a waiting text reply safely when %s', state => {
+  const registry = new WaitingInvites(), owner = account();
+  const first = registry.add(owner, event('first'), 'First')!;
+  const second = registry.add(account('b'), event('second'), 'Second')!;
+  acknowledge(registry, first);
+  acknowledge(registry, second);
+  const send = vi.fn(), reject = vi.fn();
+  const reply = new Function('waitingCalls', 'connections', 'rejectWaiting', `
+    const removeWaiting = invite => waitingCalls.remove(invite), promoteWaiting = () => {};
+    ${replyCode}
+    return replyToWaiting;
+  `)(registry, new Map([[owner.id, {send}]]), reject);
+  if (state === 'cancelled') registry.remove(first);
+  if (state === 'expired') first.deadline = Date.now() - 1;
+  if (state === 'answering') registry.select(second);
+  reply(first, 'will_call_back');
+  if (state === 'live') {
+    expect(send).toHaveBeenCalledExactlyOnceWith('first', 'call.reject', {reply_code: 'will_call_back'});
+    reply(first, 'will_call_back');
+    expect(send).toHaveBeenCalledOnce();
+  } else expect(send).not.toHaveBeenCalled();
+  expect(registry.has(second)).toBe(true);
+  if (state === 'expired') expect(reject).toHaveBeenCalledExactlyOnceWith(first, false);
+  else expect(reject).not.toHaveBeenCalled();
+});
 const rejectionCode = ['rejectWaiting', 'tickWaiting'].map(name => ts.transpileModule(
   source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name)!.getText(source),
   {compilerOptions: {target: ts.ScriptTarget.ES2022}},
