@@ -186,7 +186,11 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	defer close(done)
 	go func() {
 		for event := range client.Events() {
-			if err := writeJSON(event); err != nil {
+			var message any = event
+			if event.Acknowledgement != "" {
+				message = map[string]string{"ack": event.Acknowledgement}
+			}
+			if err := writeJSON(message); err != nil {
 				_ = conn.Close()
 				return
 			}
@@ -265,7 +269,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if acknowledgesEvents {
-			if err := writeJSON(map[string]string{"ack": event.ID}); err != nil {
+			if !s.hub.Acknowledge(client, event.ID) {
 				return
 			}
 		}
