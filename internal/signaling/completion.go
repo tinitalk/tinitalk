@@ -95,8 +95,12 @@ func (h *Hub) end(c *call) {
 	c.notifyPushWaiters()
 	c.clearScreen()
 	c.endedAt = h.now()
-	delete(h.activeByUser, c.caller)
-	delete(h.activeByUser, c.callee)
+	for _, user := range []string{c.caller, c.callee} {
+		if h.activeByUser[user] == c.id {
+			delete(h.activeByUser, user)
+		}
+	}
+	h.removeIncoming(c)
 }
 
 func outcomeForEvent(c *call, eventType string) state.CallOutcome {

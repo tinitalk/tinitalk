@@ -151,8 +151,8 @@ type IncomingCallSnapshot struct {
 func (h *Hub) ActiveCallSnapshotForDevice(user, deviceID, sessionID string) (ActiveCallSnapshot, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	callID, ok := h.activeByUser[user]
-	if !ok {
+	callID := h.primaryCallID(user)
+	if callID == "" {
 		return ActiveCallSnapshot{}, errors.New("active call not found")
 	}
 	c := h.calls[callID]

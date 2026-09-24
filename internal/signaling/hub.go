@@ -56,6 +56,7 @@ type Hub struct {
 	calls          map[string]*call
 	callAliases    map[string]string
 	activeByUser   map[string]string
+	incomingByUser map[string]map[string]*call
 	callStartTimes map[string][]time.Time
 	now            func() time.Time
 	notifications  []notification
@@ -85,6 +86,7 @@ func NewHub(notifier Notifier) *Hub {
 		calls:          map[string]*call{},
 		callAliases:    map[string]string{},
 		activeByUser:   map[string]string{},
+		incomingByUser: map[string]map[string]*call{},
 		callStartTimes: map[string][]time.Time{},
 		reservedWake:   map[string]struct{}{},
 		now:            time.Now,
@@ -173,27 +175,21 @@ func (h *Hub) ReplaceSession(user, currentSessionID string) {
 			h.disconnectLocked(client)
 		}
 	}
-	callID, ok := h.activeByUser[user]
-	if !ok {
-		return
+	for _, c := range h.callsForUser(user) {
+		now := h.now()
+		event := protocol.Event{
+			ID:      sessionReplacedID(c.id),
+			CallID:  c.id,
+			Type:    "call.end",
+			SentAt:  now.UnixMilli(),
+			Payload: json.RawMessage(`{"reason":"session_replaced"}`),
+		}
+		outcome := state.CallOutcomeInterruptedBeforeAnswer
+		if c.state == callActive {
+			outcome = disconnectedOutcome(c)
+		}
+		h.completeServerCall(c, event, outcome, now, []string{c.caller, c.callee})
 	}
-	c := h.calls[callID]
-	if c == nil || c.state == callEnded {
-		return
-	}
-	now := h.now()
-	event := protocol.Event{
-		ID:      sessionReplacedID(c.id),
-		CallID:  c.id,
-		Type:    "call.end",
-		SentAt:  now.UnixMilli(),
-		Payload: json.RawMessage(`{"reason":"session_replaced"}`),
-	}
-	outcome := state.CallOutcomeInterruptedBeforeAnswer
-	if c.state == callActive {
-		outcome = disconnectedOutcome(c)
-	}
-	h.completeServerCall(c, event, outcome, now, []string{c.caller, c.callee})
 }
 
 func (h *Hub) Connected(client *Client) bool {
@@ -228,7 +224,7 @@ func (h *Hub) disconnectLocked(client *Client) {
 	}
 	wasOnline := client.online
 	client.closed = true
-	if c := h.calls[h.activeByUser[client.user]]; c != nil && c.callee == client.user {
+	for _, c := range h.incomingByUser[client.user] {
 		c.notifyPushWaiters()
 	}
 	delete(h.clients[client.user], client)
@@ -468,6 +464,7 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	}
 	if event.Type == "call.accept" {
 		c.state = callActive
+		h.activateCall(c)
 		c.notifyPushWaiters()
 		for _, participant := range []string{c.caller, c.callee} {
 			if !h.hasOnlineCallClient(c, participant) {
@@ -606,7 +603,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	if payload.CalleeID == sender {
 		return errors.New("cannot call yourself")
 	}
-	if callID, ok := h.activeByUser[sender]; ok {
+	if callID := h.primaryCallID(sender); callID != "" {
 		existing := h.calls[callID]
 		if existing != nil {
 			if _, seen := existing.seen[event.ID]; seen {
@@ -633,7 +630,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 			return ErrNotInContacts
 		}
 	}
-	if _, ok := h.activeByUser[payload.CalleeID]; ok {
+	if h.primaryCallID(payload.CalleeID) != "" {
 		if h.history != nil {
 			if err := h.history.RecordBusyCall(event.CallID, sender, payload.CalleeID, h.now()); err != nil {
 				return err
@@ -669,7 +666,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	c.remember(event.ID)
 	h.calls[event.CallID] = c
 	h.activeByUser[sender] = event.CallID
-	h.activeByUser[payload.CalleeID] = event.CallID
+	h.addIncoming(c)
 
 	incoming := event
 	incoming.Type = "call.incoming"
@@ -720,6 +717,7 @@ func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Even
 	h.callAliases[source.CallID] = c.id
 	c.aliases = append(c.aliases, source.CallID)
 	c.state = callActive
+	h.activateCall(c)
 	c.notifyPushWaiters()
 	for _, participant := range []string{c.caller, c.callee} {
 		if !h.hasOnlineCallClient(c, participant) {
@@ -1147,8 +1145,8 @@ func (h *Hub) ActiveCall(user string) (string, error) {
 func (h *Hub) ActiveCallForDevice(user, deviceID string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	callID, ok := h.activeByUser[user]
-	if !ok {
+	callID := h.primaryCallID(user)
+	if callID == "" {
 		return "", fmt.Errorf("active call not found")
 	}
 	c := h.calls[callID]
