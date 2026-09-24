@@ -111,6 +111,10 @@ class SignalSocket(
         enqueue(PendingEvent(event.id, event.encode(), null, onResult, event.type, event.callId))
     }
 
+    override fun cancelQueued(eventId: String) {
+        synchronized(pending) { pending.removeAll { it.id == eventId } }
+    }
+
     private fun enqueue(queued: PendingEvent) {
         var failedSocket: WebSocket? = null
         var failedAttempt: SocketAttempt? = null
@@ -427,7 +431,7 @@ class SignalSocket(
             base.startsWith("http://") -> "ws://" + base.removePrefix("http://")
             else -> base
         }
-        return "$ws/api/socket"
+        return "$ws/api/socket?call_waiting=1"
     }
 
     private fun basicAuth(): String {

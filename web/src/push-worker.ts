@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
 import { t, loadWorkerLanguage } from './i18n';
-import { accountFromScope, callKey, canOpenIncoming, deepLink, type PushRecord } from './model';
+import { accountFromScope, accountKey, callKey, canOpenIncoming, deepLink, type PushRecord } from './model';
 import { api, APIError } from './api';
 import { decidePushNotification, hasNotificationActionCollision, usesAppleWebPush } from './pushNotificationPolicy';
-import { account, readPush, savePush, prunePushes } from './storage';
+import { account, contactPhoto, readPush, savePush, prunePushes } from './storage';
 import { reportWorkerVersion } from './workerVersion';
 import { isInstallationPageURL } from './installation';
 
@@ -101,9 +101,13 @@ async function handlePush(event: PushEvent): Promise<void> {
   }
   if (decision.closeExisting) await closeNotifications(key);
   if (decision.show) {
+    const photo = record.type === 'incoming_call' && isCurrent && record.caller
+      ? await contactPhoto(accountKey(id, record.caller)).catch(() => undefined) : undefined;
+    const photoIcon = photo?.accountId === id && photo.login === record.caller && photo.dataUrl.startsWith('data:image/')
+      ? photo.dataUrl : undefined;
     const options: NotificationOptionsWithActions = {
       body: decision.body || owner?.name || 'TiniTalk',
-      tag: key, icon: new URL('icon-192.png', base).href,
+      tag: key, icon: photoIcon || new URL('icon-192.png', base).href,
       data: { accountId: id, callId, sessionId: owner?.sessionId, ...(decision.defaultAction ? { defaultAction: decision.defaultAction } : {}) },
     };
     if (decision.actions?.length) options.actions = decision.actions;

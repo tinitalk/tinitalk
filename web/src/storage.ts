@@ -28,6 +28,7 @@ export const deleteAccount = (id: string) => transaction('accounts', 'readwrite'
 export const savePush = (value: PushRecord) => transaction('inbox', 'readwrite', s => s.put(value));
 export const readPush = (id: string) => transaction<PushRecord | undefined>('inbox', 'readonly', s => s.get(id));
 export const contactPhotos = () => transaction<ContactPhoto[]>('contact_photos', 'readonly', s => s.getAll());
+export const contactPhoto = (id: string) => transaction<ContactPhoto | undefined>('contact_photos', 'readonly', s => s.get(id));
 export const saveContactPhoto = (value: ContactPhoto) => transaction('contact_photos', 'readwrite', s => s.put(value));
 export const deleteContactPhoto = (id: string) => transaction('contact_photos', 'readwrite', s => s.delete(id));
 export async function prunePushes(removedAccount?: string): Promise<void> {

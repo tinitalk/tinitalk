@@ -1,9 +1,9 @@
 import { t } from './i18n';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { account, readPush, savePush } from './storage';
+import { account, contactPhoto, readPush, savePush } from './storage';
 import { callKey, type Account, type PushRecord } from './model';
 
-vi.mock('./storage', () => ({ account: vi.fn(), readPush: vi.fn(), savePush: vi.fn(), prunePushes: vi.fn(async () => {}) }));
+vi.mock('./storage', () => ({ account: vi.fn(), contactPhoto: vi.fn(), readPush: vi.fn(), savePush: vi.fn(), prunePushes: vi.fn(async () => {}) }));
 const owner: Account = { id: 'family', server: 'https://family.example', login: 'bob', token: 'test-token', name: 'Bob', deviceId: 'phone', sessionId: 'session' };
 const callId = '018f7d51-40a1-7bb5-a2d0-7e47f9180101';
 let record: PushRecord;
@@ -19,6 +19,7 @@ beforeEach(async () => {
   clients = [{ url: 'https://web.example/', visibilityState: 'hidden', focused: false, focus, postMessage }];
   record = { id: callKey(owner.id, callId), accountId: owner.id, callId, type: 'incoming_call', caller: 'alice', expiresAt: Date.now() + 40000, receivedAt: Date.now(), sessionId: owner.sessionId };
   vi.mocked(account).mockResolvedValue(owner);
+  vi.mocked(contactPhoto).mockReset().mockResolvedValue(undefined);
   vi.mocked(readPush).mockImplementation(async () => record);
   vi.mocked(savePush).mockImplementation(async value => { record = value; return value.id; });
   request.mockReset().mockResolvedValue(new Response(null, { status: 204 }));
@@ -51,6 +52,24 @@ async function incomingNotification(userAgent: string) {
   const options = showNotification.mock.calls[0][1];
   return { ...options, close: vi.fn() };
 }
+it('uses the caller photo from this account in an incoming notification', async () => {
+  vi.mocked(contactPhoto).mockResolvedValue({id: 'photo', accountId: owner.id, login: 'alice', dataUrl: 'data:image/png;base64,AAAA', updatedAt: 1});
+  const notification = await incomingNotification('Chrome/153 Android');
+  expect(notification.icon).toBe('data:image/png;base64,AAAA');
+});
+
+it('keeps the app icon when reading the photo fails', async () => {
+  vi.mocked(contactPhoto).mockRejectedValue(new Error('storage unavailable'));
+  const notification = await incomingNotification('Chrome/153 Android');
+  expect(notification.icon).toBe('https://web.example/icon-192.png');
+});
+
+it('never uses another account photo', async () => {
+  vi.mocked(contactPhoto).mockResolvedValue({id: 'photo', accountId: 'other', login: 'alice', dataUrl: 'data:image/png;base64,AAAA', updatedAt: 1});
+  const notification = await incomingNotification('Chrome/153 Android');
+  expect(notification.icon).toBe('https://web.example/icon-192.png');
+});
+
 function staysInBackground(): void {
   expect(focus).not.toHaveBeenCalled(); expect(openWindow).not.toHaveBeenCalled(); expect(showNotification).not.toHaveBeenCalled();
   expect(postMessage.mock.calls.every(([message]) => message.type !== 'open-call')).toBe(true);

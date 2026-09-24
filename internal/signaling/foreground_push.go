@@ -3,6 +3,7 @@ package signaling
 import (
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"tinitalk/internal/protocol"
@@ -88,7 +89,7 @@ func (h *Hub) WaitIncomingPush(user, deviceID, sessionID, callID string) bool {
 			h.mu.Unlock()
 			return true
 		}
-		deadline := c.startedAt.Add(time.Duration(protocol.RingTimeoutSecs) * time.Second)
+		deadline := c.incomingDeadline()
 		if deadline.Before(waitUntil) {
 			waitUntil = deadline
 		}
@@ -120,7 +121,7 @@ func (h *Hub) pendingIncomingPush(user, sessionID, callID string) *call {
 	currentSession, managed := h.sessions[user]
 	if !ok || c.callee != user || c.state != callRinging ||
 		(managed && currentSession != sessionID) ||
-		!h.now().Before(c.startedAt.Add(time.Duration(protocol.RingTimeoutSecs)*time.Second)) {
+		!h.now().Before(c.incomingDeadline()) {
 		return nil
 	}
 	return c
@@ -134,11 +135,14 @@ func (c *call) notifyPushWaiters() {
 }
 
 type ActiveCallSnapshot struct {
-	CallID   string
-	Incoming *IncomingCallSnapshot
+	CallID        string
+	Incoming      *IncomingCallSnapshot
+	IncomingCalls []IncomingCallSnapshot
 }
 
 type IncomingCallSnapshot struct {
+	CallID      string
+	Waiting     bool
 	CallerLogin string
 	StartedAt   time.Time
 	ExpiresAt   time.Time
@@ -151,8 +155,8 @@ type IncomingCallSnapshot struct {
 func (h *Hub) ActiveCallSnapshotForDevice(user, deviceID, sessionID string) (ActiveCallSnapshot, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	callID, ok := h.activeByUser[user]
-	if !ok {
+	callID := h.primaryCallID(user)
+	if callID == "" {
 		return ActiveCallSnapshot{}, errors.New("active call not found")
 	}
 	c := h.calls[callID]
@@ -163,12 +167,29 @@ func (h *Hub) ActiveCallSnapshotForDevice(user, deviceID, sessionID string) (Act
 		return ActiveCallSnapshot{}, errors.New("active call not found")
 	}
 	snapshot := ActiveCallSnapshot{CallID: callID}
-	expiresAt := c.startedAt.Add(time.Duration(protocol.RingTimeoutSecs) * time.Second)
+	for _, pending := range h.incomingByUser[user] {
+		if !h.now().Before(pending.incomingDeadline()) || !incomingSnapshotMatches(pending, deviceID, sessionID) {
+			continue
+		}
+		snapshot.IncomingCalls = append(snapshot.IncomingCalls, IncomingCallSnapshot{
+			CallID: pending.id, Waiting: pending.waiting, CallerLogin: pending.caller,
+			StartedAt: pending.startedAt, ExpiresAt: pending.incomingDeadline(), LastSeq: pending.incomingSeq,
+		})
+	}
+	sort.Slice(snapshot.IncomingCalls, func(i, j int) bool {
+		a, b := snapshot.IncomingCalls[i], snapshot.IncomingCalls[j]
+		if a.StartedAt.Equal(b.StartedAt) {
+			return a.CallID < b.CallID
+		}
+		return a.StartedAt.Before(b.StartedAt)
+	})
+	expiresAt := c.incomingDeadline()
 	if c.state != callRinging || c.callee != user || !h.now().Before(expiresAt) ||
 		!incomingSnapshotMatches(c, deviceID, sessionID) {
 		return snapshot, nil
 	}
 	snapshot.Incoming = &IncomingCallSnapshot{
+		CallID: c.id, Waiting: c.waiting,
 		CallerLogin: c.caller,
 		StartedAt:   c.startedAt,
 		ExpiresAt:   expiresAt,

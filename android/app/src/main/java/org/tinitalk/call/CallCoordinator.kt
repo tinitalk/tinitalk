@@ -68,6 +68,12 @@ class CallCoordinator(
         machine.transition(CallPhase.Active, callId)
     }
 
+    /** Waiting-call signaling has already accepted this call. Replay media, do not accept twice. */
+    fun restoreAcceptedIncoming(callId: String, lastSeq: Long) {
+        restoreIncoming(callId, lastSeq, acknowledgeRinging = false)
+        machine.transition(CallPhase.Active, callId)
+    }
+
     fun reject(onSettled: (() -> Unit)? = null) {
         sendTerminal("call.reject", onSettled)
     }

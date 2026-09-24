@@ -1,4 +1,7 @@
 {
+  "waiting_calls_title": "대기 중인 전화",
+  "waiting_answer_ends_current": "응답하면 현재 통화가 종료됩니다",
+  "waiting_call_unavailable": "더 이상 응답할 수 없는 전화입니다",
   "language_title": "언어",
   "language_system": "시스템 언어",
   "web_this_account_is_open_on_another_device_sign_in_again_0": "다른 기기에서 이 계정을 열었습니다. 다시 로그인하세요.",

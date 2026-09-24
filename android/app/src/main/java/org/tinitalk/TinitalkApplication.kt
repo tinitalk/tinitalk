@@ -105,6 +105,7 @@ class TinitalkApplication : Application() {
             publish = { snapshot -> missedCallNotifier.render(snapshot) },
         )
         authStore = AuthStore(SharedPreferencesKeyValueStore(this), AndroidKeystoreTokenCipher())
+        org.tinitalk.call.WaitingCalls.initialize(this, authStore)
         contactShortcuts = ContactShortcuts(this, contactPhotoStore, authStore, ContactCache(SharedPreferencesKeyValueStore(this)))
         contactShortcuts.observeChanges()
         contactPhotoAccountLifecycle = ContactPhotoAccountLifecycle(contactPhotoStore) { serverUrl ->
@@ -146,6 +147,7 @@ class TinitalkApplication : Application() {
         AuthSessionEvents.removeObserver(authSessionObserver)
         mainHandler.removeCallbacksAndMessages(null)
         foregroundIncoming.close()
+        org.tinitalk.call.WaitingCalls.close()
         contactShortcuts.close()
         missedCallsExecutor.shutdown()
         super.onTerminate()

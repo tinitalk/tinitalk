@@ -37,30 +37,34 @@ fun EndedCallScreen(
             appString(R.string.text_you_have_not_been_added_to_contacts_yet_92)
         else -> null
     }
-    CallScreenSurface(
-        status = if (durationText != null) appString(R.string.text_call_ended_93) else when (reason) {
-            CallEndReason.Busy -> appString(R.string.text_busy_91)
-            CallEndReason.NotInContacts, CallEndReason.Failed, CallEndReason.ConnectionLost ->
-                if (direction == CallDirection.Outgoing) appString(R.string.text_could_not_connect_192) else appString(R.string.text_call_ended_93)
-            CallEndReason.Rejected -> if (direction == CallDirection.Outgoing) appString(R.string.text_call_declined_193) else appString(R.string.text_call_ended_93)
-            CallEndReason.TimedOut -> if (direction == CallDirection.Outgoing) appString(R.string.text_no_answer_194) else appString(R.string.text_call_ended_93)
-            else -> appString(R.string.text_call_ended_93)
-        },
-        peerName = peerName,
-        contactAddress = contactAddress,
-        fallbackLogin = fallbackLogin,
-        detail = durationText,
-        prominentAvatar = true,
-        scrollable = true,
-        detailAccessory = {
-            if (explanation != null) {
-                Spacer(Modifier.height(16.dp))
-                Text(explanation, color = Color.White,
-                    style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().testTag(if (reply != null) "call_reply_result" else "call_end_explanation"))
-            }
-        },
-    ) {
-        Spacer(Modifier.height(18.dp))
+    val preserveIncomingLayout = direction == CallDirection.Incoming && durationText == null
+    IncomingReplyLayout { handleHeight ->
+        CallScreenSurface(
+            status = if (durationText != null) appString(R.string.text_call_ended_93) else when (reason) {
+                CallEndReason.Busy -> appString(R.string.text_busy_91)
+                CallEndReason.NotInContacts, CallEndReason.Failed, CallEndReason.ConnectionLost ->
+                    if (direction == CallDirection.Outgoing) appString(R.string.text_could_not_connect_192) else appString(R.string.text_call_ended_93)
+                CallEndReason.Rejected -> if (direction == CallDirection.Outgoing) appString(R.string.text_call_declined_193) else appString(R.string.text_call_ended_93)
+                CallEndReason.TimedOut -> if (direction == CallDirection.Outgoing) appString(R.string.text_no_answer_194) else appString(R.string.text_call_ended_93)
+                else -> appString(R.string.text_call_ended_93)
+            },
+            peerName = peerName,
+            contactAddress = contactAddress,
+            fallbackLogin = fallbackLogin,
+            detail = durationText,
+            prominentAvatar = true,
+            keepFooterVisible = preserveIncomingLayout,
+            scrollable = !preserveIncomingLayout,
+            detailAccessory = {
+                if (explanation != null) {
+                    Spacer(Modifier.height(16.dp))
+                    Text(explanation, color = Color.White,
+                        style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().testTag(if (reply != null) "call_reply_result" else "call_end_explanation"))
+                }
+            },
+        ) {
+            Spacer(Modifier.height(if (preserveIncomingLayout) IncomingCallActionHeight + handleHeight + 40.dp else 18.dp))
+        }
     }
 }

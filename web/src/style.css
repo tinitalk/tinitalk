@@ -1446,6 +1446,62 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .contact-morph.morph-name-expanded { white-space: normal; text-overflow: clip; }
 .collapsing-contact .popup-menu { z-index: 6; }
 .morph-name-compact { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 1.25rem; }
+.waiting-calls-panel {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: 12px;
+  right: 12px;
+  z-index: 8;
+  max-height: calc((var(--app-height) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px) * .65);
+  overflow-y: auto;
+  padding: 16px;
+  border-radius: 20px;
+  background: #36383c;
+  overscroll-behavior: contain;
+}
+.waiting-calls-panel h3 { margin: 0; font-size: 1rem; }
+.waiting-calls-hint { margin: 4px 0 12px; color: #ffffffb8; font-size: .8rem; }
+.waiting-call-row { display: grid; gap: 12px; }
+.waiting-call-row + .waiting-call-row { margin-top: 12px; padding-top: 12px; border-top: 1px solid #ffffff1f; }
+.waiting-call-identity { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.waiting-call-avatar { width: 40px; height: 40px; flex: 0 0 40px; font-size: 1rem; border: 0; }
+.waiting-call-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.waiting-call-actions { display: grid; grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr); gap: 12px; }
+.waiting-call-reply { background: #4a4c50; color: var(--on-surface); }
+.waiting-reply-overlay { z-index: 100; }
+.waiting-reply-overlay .bottom-sheet {
+  max-height: 100%;
+  overflow-y: auto;
+  grid-auto-rows: max-content;
+  gap: 0;
+  padding: 16px 0 calc(24px + env(safe-area-inset-bottom));
+  /* Match the native Material bottom sheet, without changing other sheets. */
+  background: #1d1b20;
+}
+.waiting-reply-overlay .bottom-sheet::before { margin-bottom: 16px; }
+.waiting-reply-overlay .text-action {
+  min-height: 64px;
+  margin: 0;
+  padding: 20px 24px;
+  border-radius: 0;
+  color: var(--on-surface);
+  text-align: start;
+  justify-content: flex-start;
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.5rem;
+  overflow-wrap: anywhere;
+}
+.waiting-reply-header { display: flex; align-items: center; gap: 16px; margin: 0 24px; padding: 4px 0 20px; border-bottom: 1px solid color-mix(in srgb, var(--outline-variant) 50%, transparent); }
+.waiting-reply-avatar { width: 48px; height: 48px; flex: 0 0 48px; font-size: 1.25rem; border: 0; }
+.waiting-reply-identity { min-width: 0; }
+.waiting-reply-identity h2 { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.waiting-reply-identity p { margin: 4px 0 0; color: var(--on-variant); font-size: .875rem; line-height: 1.25rem; }
+.waiting-call-actions button { width: 100%; min-height: 48px; margin: 0; padding: 10px 8px; border-radius: 999px; font-size: .875rem; font-weight: 500; line-height: 1.25rem; overflow-wrap: anywhere; }
+.waiting-call-actions .waiting-call-reply { width: 48px; height: 48px; padding: 0; border-radius: 50%; align-self: center; }
+.waiting-call-reject, .waiting-call-reject:active { background: #4a4c50; color: var(--on-surface); border: 0; box-shadow: none; transform: none; transition: none; -webkit-tap-highlight-color: transparent; }
+.waiting-call-answer { background: var(--brand-gold); color: var(--on-primary); border: 0; }
+
 #call-content {
   position: relative;
   z-index: 1;
@@ -1546,19 +1602,19 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-weight: 800;
   overflow-wrap: anywhere;
 }
-.incoming-call-screen .call-status {
+.incoming-call-screen .call-status, .ended-incoming-call-screen .call-status {
   min-height: 0;
   font-size: 1rem;
   line-height: 1.5rem;
   font-weight: 500;
   color: rgba(255, 255, 255, .76);
 }
-.incoming-call-screen .call-avatar {
+.incoming-call-screen .call-avatar, .ended-incoming-call-screen .call-avatar {
   width: min(224px, calc(var(--app-width) - 40px));
   height: min(224px, calc(var(--app-width) - 40px));
   margin-top: 44px;
 }
-.incoming-call-screen .call-name {
+.incoming-call-screen .call-name, .ended-incoming-call-screen .call-name {
   margin-top: 20px;
   line-height: 2.5rem;
 }
@@ -1734,7 +1790,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 .incoming-reply-shell {
   width: 100%;
-  max-width: 460px;
+  max-width: 430px;
   min-height: 61px;
   margin-top: 40px;
 }
@@ -1888,6 +1944,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   transform: scale(1.73684);
   }
 }
+.incoming-reply-reservation { padding: 0 16px; visibility: hidden; pointer-events: none; }
+.incoming-reply-sheet.initializing { visibility: hidden; transition: none; }
 
 .video-call-screen {
   position: relative;
@@ -2086,7 +2144,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 
 @container (max-height: 640px) {
-  .call-avatar, .incoming-call-screen .call-avatar {
+  .call-avatar, .incoming-call-screen .call-avatar, .ended-incoming-call-screen .call-avatar {
     width: 142px;
     height: 142px;
     margin-top: 22px;
@@ -2096,7 +2154,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 
 @container (max-height: 580px) {
-  .incoming-call-screen .call-avatar {
+  .incoming-call-screen .call-avatar, .ended-incoming-call-screen .call-avatar {
     width: 112px;
     height: 112px;
     margin-top: 16px;

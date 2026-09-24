@@ -1,4 +1,7 @@
 {
+  "waiting_calls_title": "Wartende Anrufe",
+  "waiting_answer_ends_current": "Beim Annehmen wird das aktuelle Gespräch beendet",
+  "waiting_call_unavailable": "Dieser Anruf ist nicht mehr verfügbar",
   "language_title": "Sprache",
   "language_system": "Wie im System",
   "web_this_account_is_open_on_another_device_sign_in_again_0": "Dieses Konto ist auf einem anderen Gerät geöffnet. Melden Sie sich erneut an.",

@@ -84,7 +84,8 @@ fun IncomingCallScreen(
                     )
                 }
             }
-            if (replySupported) Spacer(Modifier.height(handleHeight + 40.dp))
+            // Capabilities can arrive after the first frame; keep the controls in place.
+            Spacer(Modifier.height(handleHeight + 40.dp))
         }
     }
 }

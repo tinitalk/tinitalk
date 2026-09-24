@@ -20,6 +20,10 @@ import android.widget.Toast
 import org.tinitalk.call.CallReplyResultStore
 import org.tinitalk.call.callReplyResult
 import org.tinitalk.call.SignalSendResult
+import org.tinitalk.call.InitialCallReplay
+import org.tinitalk.call.SequencedSignalEvent
+import org.tinitalk.data.signal.SignalEvent
+import com.google.gson.JsonObject
 import org.tinitalk.push.CallReplyNotifier
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -140,6 +144,8 @@ class CallForegroundService : Service() {
     @Volatile private var runtime: CallRuntime? = null
     private val socket get() = runtime?.socket
     private val coordinator get() = runtime?.coordinator
+    private var initialCallReplay: InitialCallReplay? = null
+    private var resumeSignaling: (() -> Unit)? = null
     private val media get() = runtime?.media
     private val mediaDispatcher get() = runtime?.mediaDispatcher
     @Volatile private var connected = false
@@ -282,6 +288,8 @@ class CallForegroundService : Service() {
     }
 
     private fun resetReleasedRuntime() {
+        initialCallReplay = null
+        resumeSignaling = null
         cancelEndMediaTimeout()
         val releasedKey = callOwner?.key
         runtimeGeneration++
@@ -302,6 +310,8 @@ class CallForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        initialCallReplay = null
+        resumeSignaling = null
         cancelEndMediaTimeout()
         unregisterReceiver(screenOffReceiver)
         val unexpected = !finishing
@@ -554,78 +564,113 @@ class CallForegroundService : Service() {
                 )
             }
         }
-        newSocket.connect(
-            onEvent = { incoming ->
-                handler.post {
-                    if (socket !== newSocket || finishing) return@post
-                    try {
-                        val beforeEvent = CallUiStateStore.snapshot()
-                        if (newCoordinator.onEvent(incoming)) {
-                            val reply = callReplyResult(
-                                beforeEvent, incoming.event.type,
-                                AccountCallKey(owner.key.accountId, incoming.event.callId),
-                                incoming.event.payload["reply_code"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString,
-                            )?.takeIf {
-                                resolvePinnedCallSession(auth, owner.key.accountId, owner.sessionBinding) != null
-                            }?.copy(sessionBinding = owner.sessionBinding)
-                            if (reply != null) {
-                                CallReplyResultStore(this@CallForegroundService).save(reply)
-                                CallReplyNotifier(this@CallForegroundService).showUnlessDisplayed(reply)
-                            }
-                            val snapshot = newCoordinator.snapshot()
-                            routeMediaCallback(onFailure = ::failCurrentMedia) {
-                                it.onSignalEvent(snapshot, incoming.event)
-                            }
-                        }
-                    } catch (_: Exception) {
-                        newCoordinator.fail()
-                        publish()
-                        finishCallSoon()
-                        return@post
+        initialCallReplay = null
+        val processSignal: (SequencedSignalEvent) -> Unit = process@ { incoming ->
+            if (socket !== newSocket || finishing) return@process
+            val currentCall = newCoordinator.snapshot()
+            val crossed = incoming.event.type == "call.accept" && incoming.event.payload["crossed"]
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean == true
+            if (currentCall.callId != null && currentCall.callId != incoming.event.callId && !crossed) return@process
+            try {
+                val beforeEvent = CallUiStateStore.snapshot()
+                if (newCoordinator.onEvent(incoming)) {
+                    val reply = callReplyResult(
+                        beforeEvent, incoming.event.type,
+                        AccountCallKey(owner.key.accountId, incoming.event.callId),
+                        incoming.event.payload["reply_code"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString,
+                    )?.takeIf {
+                        resolvePinnedCallSession(auth, owner.key.accountId, owner.sessionBinding) != null
+                    }?.copy(sessionBinding = owner.sessionBinding)
+                    if (reply != null) {
+                        CallReplyResultStore(this@CallForegroundService).save(reply)
+                        CallReplyNotifier(this@CallForegroundService).showUnlessDisplayed(reply)
                     }
-                    if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
-                        val eventKey = AccountCallKey(owner.key.accountId, incoming.event.callId)
-                        if (incoming.event.payload["crossed"]?.asBoolean == true) {
-                            outgoingPeer?.let { peer ->
-                                CallUiStateStore.begin(eventKey, peer, CallDirection.Outgoing, CallPhase.Active)
-                                CallUiStateStore.setAudioEndpoints(eventKey, CallAudioState.snapshot())
-                            }
-                            IncomingCallController().finishTerminalPresentation(
-                                this@CallForegroundService,
-                                AccountCallOwner(eventKey, owner.sessionBinding),
-                            ) {
-                                IncomingCallNotifier(this@CallForegroundService).cancel()
-                            }
-                            telecomCallKey?.takeIf { it != eventKey }?.let {
-                                telecom.cancel(it)
-                            }
-                        }
-                        routeMediaCallback { it.setActive(true) }
-                        val localCallKey = telecomCallKey ?: eventKey
-                        telecom.setActive(localCallKey) { success ->
-                            if (!success) {
-                                val snapshot = CallServiceState.snapshot()
-                                if (snapshot.callKey == eventKey &&
-                                    snapshot.phase == CallPhase.Active &&
-                                    telecomCallKey == localCallKey
-                                ) {
-                                    end(this)
-                                }
-                            }
-                        }
-                    }
-                    publish(incoming.event.endReason())
-                    if (newCoordinator.snapshot().phase == CallPhase.Ended) {
-                        finishCallUnlessAwaitingTerminalSignal()
+                    val snapshot = newCoordinator.snapshot()
+                    routeMediaCallback(onFailure = ::failCurrentMedia) {
+                        it.onSignalEvent(snapshot, incoming.event)
                     }
                 }
-            },
+            } catch (_: Exception) {
+                newCoordinator.fail()
+                publish()
+                finishCallSoon()
+                return@process
+            }
+            if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
+                val eventKey = AccountCallKey(owner.key.accountId, incoming.event.callId)
+                if (crossed) {
+                    outgoingPeer?.let { peer ->
+                        CallUiStateStore.begin(eventKey, peer, CallDirection.Outgoing, CallPhase.Active)
+                        CallUiStateStore.setAudioEndpoints(eventKey, CallAudioState.snapshot())
+                    }
+                    IncomingCallController().finishTerminalPresentation(
+                        this@CallForegroundService,
+                        AccountCallOwner(eventKey, owner.sessionBinding),
+                    ) {
+                        IncomingCallNotifier(this@CallForegroundService).cancel()
+                    }
+                    telecomCallKey?.takeIf { it != eventKey }?.let {
+                        telecom.cancel(it)
+                    }
+                }
+                routeMediaCallback { it.setActive(true) }
+                val localCallKey = telecomCallKey ?: eventKey
+                telecom.setActive(localCallKey) { success ->
+                    if (!success) {
+                        val snapshot = CallServiceState.snapshot()
+                        if (snapshot.callKey == eventKey &&
+                            snapshot.phase == CallPhase.Active &&
+                            telecomCallKey == localCallKey
+                        ) {
+                            end(this)
+                        }
+                    }
+                }
+            }
+            publish(incoming.event.endReason())
+            if (newCoordinator.snapshot().phase == CallPhase.Ended) {
+                finishCallUnlessAwaitingTerminalSignal()
+            }
+        }
+        val resumeCurrent: () -> Unit = {
+            val replay = initialCallReplay
+            if (replay == null) {
+                newCoordinator.resume()
+            } else if (replay.request()) {
+                val request = SignalEvent(
+                    UUID.randomUUID().toString(), replay.callId, "call.resume",
+                    System.currentTimeMillis(), JsonObject().apply { addProperty("last_seq", replay.lastSeq) },
+                )
+                newSocket.sendTracked(request) { result -> handler.post {
+                    if (socket !== newSocket || finishing || initialCallReplay !== replay) return@post
+                    if (result == SignalSendResult.Acknowledged) {
+                        initialCallReplay = null
+                        replay.drain().forEach(processSignal)
+                    } else {
+                        failCurrentMedia(IllegalStateException("Initial call replay was not acknowledged"))
+                    }
+                } }
+                handler.postDelayed({
+                    if (socket === newSocket && !finishing && initialCallReplay === replay) {
+                        failCurrentMedia(IllegalStateException("Initial call replay timed out"))
+                    }
+                }, 10_000)
+            }
+        }
+        resumeSignaling = resumeCurrent
+        newSocket.connect(
+            onEvent = { incoming -> handler.post {
+                if (socket !== newSocket || finishing) return@post
+                val replay = initialCallReplay
+                if (replay == null) processSignal(incoming)
+                else try { replay.add(incoming) } catch (failure: Exception) { failCurrentMedia(failure) }
+            } },
             onOpen = { connectionGeneration ->
                 handler.post {
                     if (socket !== newSocket || finishing || !newSocket.isOpen(connectionGeneration)) return@post
                     connected = true
                     routeMediaCallback(onFailure = ::failCurrentMedia) { it.onSignalConnected() }
-                    newCoordinator.resume()
+                    resumeCurrent()
                     if (newCoordinator.snapshot().phase == CallPhase.Ended) finishCallUnlessAwaitingTerminalSignal()
                 }
             },
@@ -795,8 +840,12 @@ class CallForegroundService : Service() {
                 invite.callerLogin?.let { caller ->
                     dispatchMedia { it.prepareSecurityCode(invite.callId, caller, localIsCaller = false) }
                 }
-                call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
-                call.resume()
+                if (invite.serverAccepted) {
+                    initialCallReplay = InitialCallReplay(invite.callId, invite.lastSeq)
+                    call.restoreAcceptedIncoming(invite.callId, invite.lastSeq)
+                }
+                else call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
+                resumeSignaling?.invoke()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
                 if (call.snapshot().phase == CallPhase.Active) dispatchMedia { it.setActive(true) }
                 acceptedIncomingOwner = invite.owner
@@ -1114,9 +1163,14 @@ class CallForegroundService : Service() {
             VideoCallStateStore.reset()
             endSystemCall(callKey)
         }
+        val retiringOwner = lease?.owner
+        retiringOwner?.let { org.tinitalk.call.WaitingCalls.mediaRetiring(it) }
         lease?.let(GlobalCallAdmission::release)
         admissionLease = null
-        releaseCallMedia(bypassMediaQueue)
+        val retiringRuntime = runtime
+        if (retiringRuntime != null) retiringRuntime.releaseMedia(bypassMediaQueue) {
+            retiringOwner?.let { org.tinitalk.call.WaitingCalls.mediaReleased(it) }
+        } else retiringOwner?.let { org.tinitalk.call.WaitingCalls.mediaReleased(it) }
     }
 
     private fun releaseCallMedia(bypassQueue: Boolean = false) {
@@ -1466,7 +1520,7 @@ internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: St
 }
 
 private fun org.tinitalk.data.signal.SignalEvent.endReason(): CallEndReason? = when (type) {
-    "call.reject" -> CallEndReason.Rejected
+    "call.reject" -> if (payload["reason"]?.takeIf { it.isJsonPrimitive }?.asString == "busy") CallEndReason.Busy else CallEndReason.Rejected
     "call.cancel" -> CallEndReason.Cancelled
     "call.end" -> CallEndReason.RemoteHangup
     "call.expire" -> CallEndReason.TimedOut

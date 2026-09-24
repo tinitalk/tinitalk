@@ -45,6 +45,8 @@ data class IncomingInvite(
     val callerLogin: String? = null,
     val lastSeq: Long = 0,
     val startedAt: Instant? = null,
+    val waitingSupported: Boolean = false,
+    val serverAccepted: Boolean = false,
 ) {
     val key: AccountCallKey get() = AccountCallKey(accountId, callId)
     val owner: AccountCallOwner get() = AccountCallOwner(key, sessionBinding)
@@ -494,6 +496,7 @@ object IncomingPushPayload {
             expiresAt = expiresAt,
             lastSeq = data["last_seq"]?.toLongOrNull() ?: 0,
             startedAt = data["started_at"]?.let { runCatching { Instant.parse(it) }.getOrNull() },
+            waitingSupported = data["call_waiting_supported"] == "true",
         )
     }
 

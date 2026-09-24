@@ -7,6 +7,7 @@ import (
 
 type DeliveredEvent struct {
 	protocol.Event
+	Acknowledgement        string `json:"-"`
 	Seq                    uint64 `json:"seq"`
 	TargetSessionID        string `json:"-"`
 	TargetDeviceID         string `json:"-"`
@@ -14,8 +15,17 @@ type DeliveredEvent struct {
 	TargetResolutionFailed bool   `json:"-"`
 }
 
+// Acknowledge queues the response after all events already delivered to this client.
+// In particular, a resume acknowledgement must not overtake its replay.
+func (h *Hub) Acknowledge(client *Client, eventID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.deliverClient(client, DeliveredEvent{Acknowledgement: eventID})
+}
+
 type Client struct {
 	contactChanges              bool
+	callWaiting                 bool
 	user                        string
 	deviceID                    string
 	sessionID                   string

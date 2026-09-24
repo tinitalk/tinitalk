@@ -1,4 +1,7 @@
 {
+  "waiting_calls_title": "Połączenia oczekujące",
+  "waiting_answer_ends_current": "Odebranie zakończy bieżącą rozmowę",
+  "waiting_call_unavailable": "To połączenie nie jest już dostępne",
   "language_title": "Język",
   "language_system": "Jak w systemie",
   "web_this_account_is_open_on_another_device_sign_in_again_0": "To konto jest otwarte na innym urządzeniu. Zaloguj się ponownie.",

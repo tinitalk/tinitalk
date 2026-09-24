@@ -1,4 +1,7 @@
 import { t } from './i18n';
+export function accountKey(accountId: string, login: string): string {
+  return `${accountId}:${login}`;
+}
 export type Account = {
   id: string; server: string; login: string; token: string; name: string;
   deviceId: string; sessionId: string; pushConfigId?: string; sessionReplaced?: boolean; passwordAuth?: true; passwordSet?: boolean;

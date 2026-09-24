@@ -1,6 +1,7 @@
 package signaling
 
 import (
+	"encoding/json"
 	"log"
 	"time"
 
@@ -11,9 +12,21 @@ import (
 // Client termination is committed before delivery or deduplication so the same
 // request can be retried safely if persistence fails. All helpers hold h.mu.
 func (h *Hub) completeClientCall(c *call, event protocol.Event, now time.Time, recipients, pushRecipients []string) error {
+	busy := busyRejection(c, event)
+	var rejection struct {
+		Seen bool `json:"seen"`
+	}
+	if busy {
+		_ = json.Unmarshal(event.Payload, &rejection)
+		event.Payload = []byte(`{"reason":"busy"}`)
+	}
 	if h.history != nil {
 		var err error
-		if event.Type == "call.reject" {
+		if busy && rejection.Seen {
+			err = h.history.FinishSeenBusyCall(c.id, now)
+		} else if busy {
+			err = h.history.FinishCall(c.id, state.CallOutcomeBusy, now)
+		} else if event.Type == "call.reject" {
 			var reply string
 			reply, err = protocol.ParseCallReplyCode(event.Payload)
 			if err == nil {
@@ -95,8 +108,12 @@ func (h *Hub) end(c *call) {
 	c.notifyPushWaiters()
 	c.clearScreen()
 	c.endedAt = h.now()
-	delete(h.activeByUser, c.caller)
-	delete(h.activeByUser, c.callee)
+	for _, user := range []string{c.caller, c.callee} {
+		if h.activeByUser[user] == c.id {
+			delete(h.activeByUser, user)
+		}
+	}
+	h.removeIncoming(c)
 }
 
 func outcomeForEvent(c *call, eventType string) state.CallOutcome {

@@ -38,6 +38,8 @@ type call struct {
 	aliases              []string
 	startedAt            time.Time
 	ringingAt            time.Time
+	waitingStartedAt     time.Time
+	waiting              bool
 	connectedAt          time.Time
 	endedAt              time.Time
 	pendingHistory       *pendingCallHistory

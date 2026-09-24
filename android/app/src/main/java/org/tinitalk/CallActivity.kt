@@ -26,6 +26,10 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -379,6 +383,7 @@ class CallActivity : ComponentActivity() {
                 val contactAddress = visibleState.peer?.contactAddress
                 val fallbackLogin = visibleState.peer?.login ?: peerName
 
+                Box(Modifier.fillMaxSize()) {
                 when {
                     visibleState.phase == CallPhase.Ended -> EndedCallScreen(
                         peerName,
@@ -400,10 +405,10 @@ class CallActivity : ComponentActivity() {
                         currentEndpoint = visibleState.currentAudioEndpoint,
                         availableEndpoints = visibleState.availableAudioEndpoints,
                         videoState = visibleVideoState,
-                        onMute = { CallForegroundService.mute(this, it) },
+                        onMute = { CallForegroundService.mute(this@CallActivity, it) },
                         onSelectEndpoint = { endpoint ->
                             visibleState.callKey?.let { callKey ->
-                                CallForegroundService.selectAudioEndpoint(this, callKey, endpoint.id)
+                                CallForegroundService.selectAudioEndpoint(this@CallActivity, callKey, endpoint.id)
                             }
                         },
                         onCamera = { enabled ->
@@ -415,7 +420,7 @@ class CallActivity : ComponentActivity() {
                         },
                         onEnd = { endCall(visibleState) },
                         onShareScreen = ::requestScreenSharing,
-                        onStopSharing = { visibleState.callKey?.let { CallForegroundService.stopScreen(this, it) } },
+                        onStopSharing = { visibleState.callKey?.let { CallForegroundService.stopScreen(this@CallActivity, it) } },
                         security = visibleState.security,
                     )
                     visibleState.direction == CallDirection.Incoming && visibleState.phase == CallPhase.Ringing -> {
@@ -431,7 +436,7 @@ class CallActivity : ComponentActivity() {
                                 replySupported = replySupported,
                                 onReply = { reject(invite, it) },
                                 onReplySheetExpanded = {
-                                    if (isCurrentIncoming(invite)) IncomingCallNotifier(this).silence(invite)
+                                    if (isCurrentIncoming(invite)) IncomingCallNotifier(this@CallActivity).silence(invite)
                                 },
                                 onAnswer = { answer(invite) },
                                 onReject = { reject(invite) },
@@ -447,16 +452,18 @@ class CallActivity : ComponentActivity() {
                             muted = visibleState.muted,
                             currentEndpoint = visibleState.currentAudioEndpoint,
                             availableEndpoints = visibleState.availableAudioEndpoints,
-                            onMute = { CallForegroundService.mute(this, it) },
+                            onMute = { CallForegroundService.mute(this@CallActivity, it) },
                             onSelectEndpoint = { endpoint ->
                                 visibleState.callKey?.let { callKey ->
-                                    CallForegroundService.selectAudioEndpoint(this, callKey, endpoint.id)
+                                    CallForegroundService.selectAudioEndpoint(this@CallActivity, callKey, endpoint.id)
                                 }
                             },
                             onCancel = { endCall(visibleState) },
                         )
                     }
                     else -> EmptyCallSurface()
+                }
+                org.tinitalk.ui.call.WaitingCallsPanel(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp))
                 }
 
                 LaunchedEffect(visibleState.callKey, visibleState.phase) {
@@ -573,10 +580,22 @@ class CallActivity : ComponentActivity() {
     }
 
     private fun applyIntent(intent: Intent?): Boolean {
+        if (intent?.action == org.tinitalk.call.WaitingAnswerAction) {
+            val owner = org.tinitalk.call.WaitingCalls.snapshot().calls.firstOrNull {
+                it.invite.owner.localId() == intent.getStringExtra(org.tinitalk.call.WaitingOwnerExtra)
+            }?.invite?.owner
+            intent.action = null
+            owner?.let(org.tinitalk.call.WaitingCalls::answer)
+            return true
+        }
         val invite = IncomingCallController.inviteFrom(intent)
         if (invite != null) {
             val endedCallMatches = callState.callKey == invite.key && callState.phase == CallPhase.Ended
-            if (!endedCallMatches && !incomingController.ownsIncoming(this, invite)) {
+            // The service may have cleared the ringing presentation before this
+            // Activity receives the already-accepted waiting call's intent.
+            val runningCallMatches = callState.callKey == invite.key && callState.phase == CallPhase.Active &&
+                GlobalCallAdmission.current()?.owner == invite.owner
+            if (!endedCallMatches && !runningCallMatches && !incomingController.ownsIncoming(this, invite)) {
                 if (callState.phase == CallPhase.Idle || callState.phase == CallPhase.Ended) finish()
                 return false
             }
@@ -864,6 +883,10 @@ class CallActivity : ComponentActivity() {
         if (isFinishing) return
         val state = visibleCallState()
         if (state.phase != CallPhase.Ended) return
+        if (org.tinitalk.call.WaitingCalls.snapshot().calls.isNotEmpty()) {
+            handler.postDelayed(endedScreenTimeout, 500)
+            return
+        }
         val remainingMillis = endedScreenRemainingMillis(state, endedScreenTimeoutMillis())
         if (remainingMillis == 0L) {
             if (replyResult != null) dismissReplyResult() else finish()

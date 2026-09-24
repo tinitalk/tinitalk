@@ -12,7 +12,7 @@ import (
 )
 
 func TestRejectCallFromNotification(t *testing.T) {
-	for _, scenario := range []string{"background", "closed", "accepted", "cancelled", "expired", "unknown", "caller", "third-party", "wrong-device", "stale-session", "missing-session", "invalid-id"} {
+	for _, scenario := range []string{"background", "waiting", "closed", "accepted", "cancelled", "expired", "unknown", "caller", "third-party", "wrong-device", "stale-session", "missing-session", "invalid-id"} {
 		t.Run(scenario, func(t *testing.T) {
 			db, tokens := testDB(t)
 			hub := signaling.NewHub(nil)
@@ -35,10 +35,17 @@ func TestRejectCallFromNotification(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if scenario == "waiting" {
+				hub.EnableCallWaiting(bob)
+			}
 			send("alice", "call.start", `{"callee_id":"bob"}`, "018f7d51-3f90-7e63-b657-4a83a6a90101")
 			login, token, device := "bob", tokens["bob"], "phone"
 			want := http.StatusNoContent
 			switch scenario {
+			case "waiting":
+				if err := hub.HandleClient(bob, protocol.Event{ID: "018f7d51-3f90-7e63-b657-4a83a6a90102", CallID: callID, Type: "call.waiting", Payload: []byte(`{"waiting":true}`)}); err != nil {
+					t.Fatal(err)
+				}
 			case "accepted":
 				send("bob", "call.accept", `{}`, "018f7d51-3f90-7e63-b657-4a83a6a90102")
 			case "cancelled":
@@ -97,7 +104,7 @@ func TestRejectCallFromNotification(t *testing.T) {
 			if response.Header().Get("Access-Control-Allow-Origin") != "*" {
 				t.Fatal("cross-origin request not allowed")
 			}
-			declined := scenario == "background" || scenario == "closed"
+			declined := scenario == "background" || scenario == "closed" || scenario == "waiting"
 			for _, client := range []*signaling.Client{alice, bob} {
 				if client == nil {
 					continue
@@ -118,7 +125,11 @@ func TestRejectCallFromNotification(t *testing.T) {
 					t.Fatal("call is still active")
 				}
 				page, err := db.CallHistory("bob", 0, 20)
-				if err != nil || len(page.Items) != 1 || page.Items[0].Outcome != state.CallOutcomeRejected {
+				outcome := state.CallOutcomeRejected
+				if scenario == "waiting" {
+					outcome = state.CallOutcomeBusy
+				}
+				if err != nil || len(page.Items) != 1 || page.Items[0].Outcome != outcome || page.UnreadMissed != 0 {
 					t.Fatalf("history = %+v, %v", page, err)
 				}
 				replay, err := hub.Resume("bob", callID, 0)

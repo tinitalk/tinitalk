@@ -6,6 +6,7 @@ import { bindHistoryScroll } from './historyScroll';
 import { showInstallationScreen } from './installScreen';
 import {
   accountForLogin,
+  accountKey,
   callKey,
   canOpenIncoming,
   normalizeServer,
@@ -24,6 +25,7 @@ import { IncomingCallVisibility } from './incomingVisibility';
 import { AudioCall, type CallSecurityState, type CallTransportRoute, type CallVideoState } from './media';
 import { securityEmoji, type CallSecurityFailureReason, type CallSecurityUnavailableReason } from './sas';
 import { CallToneController, type CallToneEndReason, type CallToneState } from './callTones';
+import { WaitingInvites, WaitingTone, type WaitingInvite } from './waitingCalls';
 import { buildTime, canUpdateApplication, fetchBuildVersions, inspectUpdates, updateStatus, waitForWorker, webBuild, webCommit, type UpdateReport } from './updates';
 import { microphoneControlIcon } from './callControls';
 import { AuthError, authenticate, authErrorMessage, changePassword, logout, personalPasswordError } from './auth';
@@ -73,6 +75,7 @@ type ActiveCall = {
 };
 type CallReplyCode = 'cannot_talk' | 'call_me_later' | 'will_call_back';
 type EndedCall = {
+  incomingLayout?: boolean;
   accountId: string;
   peer: string;
   peerLogin: string;
@@ -159,6 +162,11 @@ let updatingApp = false;
 let updateError = '';
 let accountSubmission: Promise<void> | undefined;
 let current: ActiveCall | null = null;
+const waitingCalls = new WaitingInvites();
+let waitingReply: {invite: WaitingInvite; close: () => void} | undefined;
+const waitingTone = new WaitingTone();
+let waitingTimer: ReturnType<typeof setTimeout> | undefined;
+const waitingPromotions = new Set<WaitingInvite>();
 let endedCall: EndedCall | null = null;
 let pullRefreshing: Tab | null = null;
 let callTicker: ReturnType<typeof setInterval> | undefined;
@@ -187,6 +195,7 @@ const selfPreviewCorners: SelfPreviewCorner[] = ['TopLeft', 'TopRight', 'BottomL
 type IconPath = string | { d: string; fill?: boolean; strokeWidth?: number };
 
 const iconPaths = {
+  mail: ['M20,4H4C2.9,4 2,4.9 2,6v12c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V6c0,-1.1 -0.9,-2 -2,-2zM20,8l-8,5 -8,-5V6l8,5 8,-5v2z'],
   arrowBack: ['M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.42,-1.41L7.83,13H20v-2z'],
   call: ['M6.62,10.79C8.06,13.62 10.38,15.93 13.21,17.38L15.41,15.18C15.68,14.91 16.08,14.82 16.43,14.94C17.55,15.31 18.75,15.5 20,15.5C20.55,15.5 21,15.95 21,16.5V20C21,20.55 20.55,21 20,21C10.61,21 3,13.39 3,4C3,3.45 3.45,3 4,3H7.5C8.05,3 8.5,3.45 8.5,4C8.5,5.25 8.69,6.45 9.06,7.57C9.17,7.92 9.09,8.31 8.81,8.59L6.62,10.79Z'],
   contacts: ['M9,11a4,4 0,1 0,0 -8a4,4 0,0 0,0 8M9,13c-4.42,0 -8,2.24 -8,5v2h16v-2c0,-2.76 -3.58,-5 -8,-5M17.5,11a3,3 0,1 0,0 -6a3,3 0,0 0,0 6M17.5,13c-0.54,0 -1.06,0.04 -1.55,0.11c1.87,1.1 3.05,2.82 3.05,4.89v2h5v-2c0,-2.76 -2.91,-5 -6.5,-5'],
@@ -313,10 +322,6 @@ function serverAddress(server: string): string {
 
 function serverHost(server: string): string {
   return new URL(normalizeServer(server)).host;
-}
-
-function accountKey(accountId: string, login: string): string {
-  return `${accountId}:${login}`;
 }
 
 function notificationCallAction(value: unknown): NotificationCallAction | undefined {
@@ -458,6 +463,8 @@ function connectAccount(account: Account, recoverActive = true): void {
     },
     (error, callId) => {
       if (error instanceof APIError && error.replaced) return;
+      const waiting = callId ? waitingCalls.get(account.id, callId) : undefined;
+      if (waiting) { removeWaiting(waiting); notice(t('waiting_call_unavailable')); return; }
       if (error instanceof SignalError && error.code?.startsWith('call_sas_') && current?.account.id === account.id && (!callId || current.id === callId)) {
         current.media.rejectSecurityFromServer(error.code);
         renderCall();
@@ -535,9 +542,14 @@ async function restorePushRegistration(account: Account): Promise<void> {
 }
 
 async function resumeActiveCall(account: Account): Promise<void> {
-  if (current || account.sessionReplaced || !list.includes(account)) return;
-  const active = await api<{ call_id: string }>(account, '/api/active-call').catch(() => null);
-  if (!active?.call_id || current || account.sessionReplaced || !list.includes(account)) return;
+  if (account.sessionReplaced || !list.includes(account)) return;
+  const active = await api<{ call_id: string; incoming_calls?: {call_id: string}[] }>(account, '/api/active-call?call_waiting=1').catch(() => null);
+  if (!active?.call_id || account.sessionReplaced || !list.includes(account)) return;
+  for (const incoming of active.incoming_calls ?? []) {
+    if (current?.account.id === account.id && current.id === incoming.call_id) continue;
+    connections.get(account.id)?.send(incoming.call_id, 'call.resume', {last_seq: 0});
+  }
+  if (current) return;
   if (openingNotificationCalls.has(callKey(account.id, active.call_id))) return;
   connections.get(account.id)?.send(active.call_id, 'call.resume', { last_seq: 0 });
 }
@@ -3169,6 +3181,7 @@ function showEndedCall(snapshot: EndedCall): void {
 function endedSnapshot(call: ActiveCall, status: string, explanation = ''): EndedCall {
   const detail = call.connectedAt ? callDurationText(Date.now() - call.connectedAt) : '';
   return {
+    incomingLayout: call.incoming && !call.accepted,
     accountId: call.account.id,
     peer: call.peer || 'TiniTalk',
     peerLogin: call.peerLogin || call.peer,
@@ -3201,6 +3214,7 @@ function finishCurrentCall(status: string, keepTerminal = false, explanation = '
   const snapshot = endedSnapshot(call, status, explanation);
   closeActiveCall(keepTerminal);
   showEndedCall(snapshot);
+  promoteWaiting();
   renderCall();
   void refreshAll(false).catch(() => undefined);
 }
@@ -3248,7 +3262,7 @@ function terminalStatus(call: ActiveCall, type: string): string {
 async function outgoing(account: Account, contact: Contact): Promise<void> {
   if (removingAccounts.has(account) || !list.includes(account)) throw new Error(t('web_disconnecting_account_74'));
   if (account.sessionReplaced) { navigate({ name: 'login', accountId: account.id }); return; }
-  if (current) throw new Error(t('text_end_the_current_call_first_207'));
+  if (current || waitingCalls.selected) throw new Error(t('text_end_the_current_call_first_207'));
   const call = createCall(account, crypto.randomUUID(), contactDisplayName(contact), contact.login, false);
   current = call;
   renderCall();
@@ -3415,7 +3429,21 @@ function audioRecoveryButton(call: ActiveCall): HTMLButtonElement {
 function renderCall(): void {
   if (current) callTones.update(callToneState(current));
   else if (!endedCall) callTones.idle();
-  callLayer.hidden = !current && !endedCall;
+  for (const pending of waitingCalls.entries.values()) {
+    if (pending.account.sessionReplaced || !list.includes(pending.account) || !waitingCalls.has(pending)) {
+      waitingCalls.remove(pending);
+      waitingPromotions.delete(pending);
+    }
+    if (current?.connectedAt && !pending.waiting && !waitingPromotions.has(pending)) {
+      waitingPromotions.add(pending);
+      connections.get(pending.account.id)?.send(pending.event.call_id, 'call.waiting', {waiting: true});
+    }
+  }
+  if (waitingReply && (!waitingCalls.has(waitingReply.invite) || waitingCalls.selected || waitingReply.invite.deadline <= Date.now())) waitingReply.close();
+  waitingTone.update(current?.connectedAt && !waitingCalls.selected
+    ? Math.max(0, ...[...waitingCalls.entries.values()].filter(item => item.confirmed).map(item => item.deadline)) : 0,
+    currentAudioOutputId());
+  callLayer.hidden = !current && !endedCall && !waitingCalls.entries.size;
   // Keep video mounted independently of voice. A negotiated video track may
   // never deliver a frame in a voice call, so its readiness cannot gate audio.
   remoteVideo.muted = true;
@@ -3431,6 +3459,7 @@ function renderCall(): void {
   callLayer.classList.toggle('has-remote-video', Boolean(current && videoModeActive(current)
     && current.video.remoteSending && current.video.remoteStream));
   callContent.replaceChildren();
+  if (waitingCalls.entries.size) callContent.append(waitingCallsPanel());
   if (!current) {
     incomingVisibility.refresh();
     if (endedCall) callContent.append(endedCallScreen(endedCall));
@@ -3697,7 +3726,7 @@ function isSelfPreviewCorner(value: unknown): value is SelfPreviewCorner {
 }
 
 function endedCallScreen(call: EndedCall): HTMLElement {
-  const view = element('div', 'call-screen ended-call-screen');
+  const view = element('div', `call-screen ended-call-screen${call.incomingLayout ? ' ended-incoming-call-screen' : ''}`);
   view.append(element('p', 'call-status', call.status));
   view.append(avatar(call.peer || 'TiniTalk', call.peerLogin || call.peer, 'call-avatar', photoForAccountPeer(call.accountId, call.peerLogin)));
   view.append(element('h2', 'call-name', call.peer || 'TiniTalk'));
@@ -3925,7 +3954,7 @@ function incomingReplySheet(): HTMLElement {
   const layer = element('div', 'incoming-reply-layer');
   const scrim = element('button', 'incoming-reply-scrim');
   const frame = element('div', 'incoming-reply-frame');
-  const sheet = element('div', 'incoming-reply-sheet');
+  const sheet = element('div', 'incoming-reply-sheet initializing');
   const handle = element('button', 'incoming-reply-handle');
   const panel = element('section', 'incoming-reply-panel');
   const listBox = element('div', 'incoming-reply-list');
@@ -4055,9 +4084,224 @@ function incomingReplySheet(): HTMLElement {
   sheet.append(handle, panel);
   frame.append(sheet);
   layer.append(scrim, frame);
-  shell.append(layer);
-  requestAnimationFrame(() => setOffset(openState ? 0 : measurePanel()));
+  // Reserve the actual translated handle height before the first paint.
+  const reservation = element('div', 'incoming-reply-reservation');
+  reservation.setAttribute('aria-hidden', 'true');
+  reservation.setAttribute('inert', '');
+  reservation.append(handle.cloneNode(true));
+  shell.append(reservation, layer);
+  requestAnimationFrame(() => {
+    setOffset(openState ? 0 : measurePanel());
+    sheet.getBoundingClientRect();
+    sheet.classList.remove('initializing');
+  });
   return shell;
+}
+
+function removeWaiting(invite: WaitingInvite, terminal = true): void {
+  waitingCalls.remove(invite, terminal);
+  waitingPromotions.delete(invite);
+  void closeCallNotification(invite.account.id, invite.event.call_id, base).catch(() => undefined);
+  renderCall();
+}
+
+function rejectWaiting(invite: WaitingInvite, seen = true): void {
+  if (!waitingCalls.has(invite) || waitingCalls.selected === invite) return;
+  connections.get(invite.account.id)?.send(invite.event.call_id, 'call.reject', {reason: 'busy', ...(seen ? {seen: true} : {})});
+  removeWaiting(invite);
+  promoteWaiting();
+}
+
+function tickWaiting(): void {
+  clearTimeout(waitingTimer);
+  for (const pending of waitingCalls.entries.values()) {
+    if (pending !== waitingCalls.selected && pending.deadline <= Date.now()) rejectWaiting(pending, false);
+  }
+  promoteWaiting();
+  if (waitingCalls.entries.size) waitingTimer = setTimeout(tickWaiting, 250);
+}
+
+function promoteWaiting(): void {
+  if (current || waitingCalls.selected) return;
+  for (const pending of waitingCalls.entries.values()) {
+    if (pending.deadline <= Date.now()) continue;
+    if (!pending.waiting) {
+      removeWaiting(pending, false);
+      dismissEndedCall(false);
+      void receive(pending.account, pending.event);
+      return;
+    }
+    if (pending.confirmed && !waitingPromotions.has(pending)) {
+      waitingPromotions.add(pending);
+      connections.get(pending.account.id)?.send(pending.event.call_id, 'call.waiting', {waiting: false});
+    }
+  }
+}
+
+function receiveWaiting(account: Account, event: SignalEvent): boolean {
+  if (event.type === 'call.incoming' && waitingCalls.isDismissed(account, event.call_id)) return true;
+  const pending = waitingCalls.get(account.id, event.call_id);
+  if (pending) {
+    if (event.seq && event.seq <= pending.seq && event.type !== 'call.incoming') return true;
+    if (event.type === 'call.waiting') {
+      waitingCalls.acknowledge(pending, event);
+      waitingPromotions.delete(pending);
+      promoteWaiting();
+    } else if (['call.end', 'call.cancel', 'call.reject', 'call.expire'].includes(event.type)) {
+      removeWaiting(pending);
+      if (current?.account.id === account.id && current.id === event.call_id) return false;
+      promoteWaiting();
+      void refreshAll(false).catch(() => undefined);
+    } else if (event.type.startsWith('rtc.') && waitingCalls.selected === pending) {
+      if (pending.buffered.length < 256) pending.buffered.push(event);
+    }
+    renderCall();
+    return true;
+  }
+  if (event.type !== 'call.incoming' || (!current && !waitingCalls.selected) ||
+      (current?.account.id === account.id && current.id === event.call_id)) return false;
+  if (event.payload.call_waiting_supported !== true || (!current?.connectedAt && !waitingCalls.selected)) {
+    connections.get(account.id)?.send(event.call_id, 'call.reject', {reason: 'busy'});
+    return true;
+  }
+  const login = String(event.payload.caller_login || '');
+  const contact = contactsByAccount.get(account.id)?.find(item => item.login === login);
+  const invite = waitingCalls.add(account, event, contact ? contactDisplayName(contact) : login);
+  if (!invite) connections.get(account.id)?.send(event.call_id, 'call.reject', {reason: 'busy'});
+  else {
+    connections.get(account.id)?.send(event.call_id, 'call.waiting', {waiting: true});
+    tickWaiting();
+    renderCall();
+  }
+  return true;
+}
+
+async function answerWaiting(invite: WaitingInvite): Promise<void> {
+  if (!waitingCalls.select(invite)) return;
+  waitingTone.stop();
+  renderCall();
+  const previous = current;
+  let accepted = false;
+  const switchTimeout = setTimeout(() => {
+    if (waitingCalls.selected !== invite) return;
+    connections.get(invite.account.id)?.send(invite.event.call_id, 'call.end');
+    if (current?.account.id === invite.account.id && current.id === invite.event.call_id) endLocal(true);
+    removeWaiting(invite);
+    notice(t('waiting_call_unavailable'));
+  }, 12_000);
+  try {
+    const connection = connections.get(invite.account.id);
+    if (!connection) throw new Error('Connection removed');
+    const replaceOnServer = previous?.account.id === invite.account.id && previous.accepted;
+    if (!replaceOnServer && previous) {
+      connections.get(previous.account.id)?.send(previous.id, previous.accepted ? 'call.end' : 'call.reject');
+      closeActiveCall(true);
+    }
+    await connection.sendConfirmed(invite.event.call_id, 'call.accept', {
+      supports_video: true, supports_call_sas: true,
+      ...(replaceOnServer ? {replace_call_id: previous.id} : {}),
+    });
+    accepted = true;
+    if (!waitingCalls.has(invite) || waitingCalls.selected !== invite) {
+      connection.send(invite.event.call_id, 'call.end');
+      return;
+    }
+    if (current === previous) closeActiveCall(true);
+    if (current) throw new Error('Call changed during acceptance');
+    dismissEndedCall(false);
+    const next = createCall(invite.account, invite.event.call_id, invite.peer, String(invite.event.payload.caller_login || ''), true);
+    next.accepted = true;
+    next.answering = true;
+    next.status = 'text_connecting_130';
+    next.seq = invite.seq;
+    current = next;
+    // Previous media is closed before acquiring another microphone.
+    await next.media.capture();
+    if (current !== next || !waitingCalls.has(invite)) {
+      next.media.close();
+      if (current === next) finishCurrentCall(t('text_call_ended_93'), true);
+      return;
+    }
+    next.answering = false;
+    removeWaiting(invite);
+    for (const buffered of invite.buffered) await receive(invite.account, buffered);
+    connection.send(next.id, 'call.resume', {last_seq: next.seq});
+    renderCall();
+  } catch {
+    // A lost ACK may hide a successful acceptance. End it explicitly, never retry
+    // the switch against whichever call happens to be current now.
+    connections.get(invite.account.id)?.send(invite.event.call_id, 'call.end');
+    if (accepted && current?.account.id === invite.account.id && current.id === invite.event.call_id) endLocal(true);
+    removeWaiting(invite);
+    notice(t('waiting_call_unavailable'));
+  } finally {
+    clearTimeout(switchTimeout);
+    if (waitingCalls.selected === invite) waitingCalls.selected = undefined;
+    promoteWaiting();
+    renderCall();
+  }
+}
+
+function replyToWaiting(invite: WaitingInvite, code: CallReplyCode): void {
+  if (!waitingCalls.has(invite) || waitingCalls.selected || !invite.confirmed) return;
+  if (invite.deadline <= Date.now()) { rejectWaiting(invite, false); return; }
+  connections.get(invite.account.id)?.send(invite.event.call_id, 'call.reject', {reply_code: code});
+  removeWaiting(invite);
+  promoteWaiting();
+}
+
+function waitingReplySheet(invite: WaitingInvite): void {
+  if (!waitingCalls.has(invite) || waitingCalls.selected || !invite.confirmed || invite.deadline <= Date.now()) return;
+  const overlay = element('div', 'sheet-overlay waiting-reply-overlay');
+  const panel = element('section', 'bottom-sheet');
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-modal', 'true');
+  panel.setAttribute('aria-label', `${t('call_reply_sheet_title')} — ${invite.peer}`);
+  const header = element('div', 'waiting-reply-header');
+  const login = String(invite.event.payload.caller_login || '');
+  const identity = element('div', 'waiting-reply-identity');
+  identity.append(element('h2', '', invite.peer), element('p', '', t('call_reply_sheet_title')));
+  header.append(avatar(invite.peer, login, 'waiting-reply-avatar', photoForAccountPeer(invite.account.id, login)), identity);
+  panel.append(header);
+  const close = registerActiveOverlay(() => { overlay.remove(); waitingReply = undefined; });
+  waitingReply = {invite, close};
+  for (const reply of callReplies()) {
+    panel.append(actionButton(reply.text, () => {
+      close();
+      replyToWaiting(invite, reply.code);
+    }, 'text-action wide'));
+  }
+  overlay.append(panel);
+  overlay.onclick = event => { if (event.target === overlay) close(); };
+  root.append(overlay);
+  panel.querySelector<HTMLButtonElement>('button')?.focus();
+}
+
+function waitingCallsPanel(): HTMLElement {
+  const panel = element('section', 'waiting-calls-panel');
+  panel.setAttribute('aria-label', t('waiting_calls_title'));
+  panel.append(element('h3', '', t('waiting_calls_title')),
+    element('p', 'waiting-calls-hint', t('waiting_answer_ends_current')));
+  for (const pending of waitingCalls.entries.values()) {
+    const row = element('div', 'waiting-call-row');
+    const identity = element('div', 'waiting-call-identity');
+    const login = String(pending.event.payload.caller_login || '');
+    identity.append(avatar(pending.peer, login, 'waiting-call-avatar', photoForAccountPeer(pending.account.id, login)),
+      element('span', 'waiting-call-name', pending.peer));
+    const actions = element('div', 'waiting-call-actions');
+    const reject = element('button', 'secondary waiting-call-reject', t('text_busy_91'));
+    const answer = element('button', 'primary waiting-call-answer', t('text_answer_64'));
+    const reply = iconButton(t('call_reply_sheet_title'), 'mail', () => waitingReplySheet(pending), 'secondary waiting-call-reply');
+    reply.disabled = Boolean(waitingCalls.selected) || !pending.confirmed;
+    reject.disabled = Boolean(waitingCalls.selected);
+    answer.disabled = Boolean(waitingCalls.selected) || !pending.confirmed;
+    reject.onclick = () => rejectWaiting(pending);
+    answer.onclick = () => { void answerWaiting(pending); };
+    actions.append(reject, reply, answer);
+    row.append(identity, actions);
+    panel.append(row);
+  }
+  return panel;
 }
 
 async function receive(account: Account, event: SignalEvent): Promise<void> {
@@ -4067,6 +4311,7 @@ async function receive(account: Account, event: SignalEvent): Promise<void> {
     void refreshAccountContacts(account).then(() => renderApp()).catch(() => undefined);
     return;
   }
+  if (receiveWaiting(account, event)) return;
   if (event.type === 'call.incoming' && !current) {
     if (Date.now() > event.sent_at + 45000) return;
     const login = String(event.payload.caller_login || '');
@@ -4088,7 +4333,7 @@ async function receive(account: Account, event: SignalEvent): Promise<void> {
     renderCall();
     if (notificationAction) applyNotificationCallAction(call, notificationAction);
   } else if (event.type === 'call.incoming' && current && (current.account.id !== account.id || current.id !== event.call_id)) {
-    connections.get(account.id)!.send(event.call_id, 'call.reject');
+    connections.get(account.id)!.send(event.call_id, 'call.reject', {reason: 'busy'});
     return;
   }
   const call = current;
@@ -4098,7 +4343,8 @@ async function receive(account: Account, event: SignalEvent): Promise<void> {
   if (['call.end', 'call.cancel', 'call.reject', 'call.expire', 'call.busy'].includes(event.type)) {
     connections.get(account.id)!.clearCall(call.id);
     const explanation = event.type === 'call.reject' && !call.incoming ? replyResultText(event.payload.reply_code) : '';
-    finishCurrentCall(terminalStatus(call, event.type), true, explanation, terminalToneReason(call, event.type));
+    const busy = event.type === 'call.reject' && event.payload.reason === 'busy';
+    finishCurrentCall(busy ? t('text_busy_91') : terminalStatus(call, event.type), true, explanation, busy ? 'busy' : terminalToneReason(call, event.type));
     return;
   }
   if (event.type === 'call.accept') {
@@ -4128,7 +4374,10 @@ async function syncPushCall(accountId: string, callId: string): Promise<void> {
     return;
   }
   const matchesIncoming = () => current?.account.id === accountId && current.id === callId && current.incoming && !current.accepted;
-  if (current && !matchesIncoming()) return;
+  if (current && !matchesIncoming()) {
+    connections.get(accountId)?.send(callId, 'call.resume', {last_seq: 0});
+    return;
+  }
   const state = await notificationCallState(account, callId);
   if (state === 'ended') {
     if (matchesIncoming()) finishCurrentCall(t('text_call_ended_93'), false, '', 'cancelled');
@@ -4173,6 +4422,14 @@ async function restoreNotificationCall(accountId: string, callId: string, action
   replaceRoute({ name: 'home' });
   if (current) {
     if (current.account.id !== accountId || current.id !== callId) {
+      const waiting = waitingCalls.get(accountId, callId);
+      if (waiting) {
+        const requested = takePendingNotificationAction(accountId, callId) ?? action;
+        if (requested === 'answer') void answerWaiting(waiting);
+        else if (requested === 'reject') rejectWaiting(waiting);
+        renderCall();
+        return;
+      }
       notice(t('text_end_the_current_call_first_207'));
       return;
     }

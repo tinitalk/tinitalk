@@ -69,6 +69,26 @@ class CallActivityEndedResultTest {
     @Test fun incomingLocalHangupKeepsFinalDuration() = checkConversation(CallDirection.Incoming, CallEndReason.LocalHangup)
     @Test fun incomingRemoteHangupKeepsFinalDuration() = checkConversation(CallDirection.Incoming, CallEndReason.RemoteHangup)
 
+    @Test fun acceptedWaitingCallReplacesOldScreenAfterRingingPresentationWasCleared() {
+        val activity = startConversation(CallDirection.Outgoing)
+        val next = invite.copy(callId = "accepted-waiting", caller = "Waiting caller", serverAccepted = true)
+        GlobalCallAdmission.stage(next.owner)
+        val lease = requireNotNull(GlobalCallAdmission.take(next.owner))
+        try {
+            compose.runOnIdle {
+                CallUiStateStore.begin(next.key, CallPeer("Waiting caller", "bob"), CallDirection.Incoming, CallPhase.Active)
+                incoming.finishTerminalPresentation(context, next.owner) {}
+                val intent = Shadows.shadowOf(incoming.activityIntent(context, IncomingCallController.ActionIncoming, next)).savedIntent
+                activity.newIntent(intent)
+            }
+            compose.onNodeWithText("Waiting caller").assertIsDisplayed()
+            assertFalse(activity.get().isFinishing)
+        } finally {
+            activity.pause().stop().destroy()
+            GlobalCallAdmission.release(lease)
+        }
+    }
+
     @Test fun outgoingScreenSwitchesToWaitingWhenPeerReportsRinging() {
         CallUiStateStore.begin(key, peer, CallDirection.Outgoing, CallPhase.Connecting)
         val activity = Robolectric.buildActivity(CallActivity::class.java, outgoingIntent()).setup()

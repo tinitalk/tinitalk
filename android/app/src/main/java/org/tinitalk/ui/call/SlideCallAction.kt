@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import org.tinitalk.R
 
 internal const val SlideCommitThreshold = 0.68f
+internal val IncomingCallActionHeight = 208.dp
 
 internal data class SlideCallActionState(
     val progress: Float = 0f,
@@ -115,7 +116,7 @@ internal fun SlideCallAction(
 
     // Keep the swipe path separate from the reply handle below the buttons.
     Box(
-        modifier = modifier.height(travel + 104.dp).widthIn(min = 104.dp),
+        modifier = modifier.height(IncomingCallActionHeight).widthIn(min = 104.dp),
         contentAlignment = Alignment.BottomCenter,
     ) {
         Box(

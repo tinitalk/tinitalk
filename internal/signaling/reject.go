@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"tinitalk/internal/protocol"
 	"tinitalk/internal/state"
@@ -39,7 +38,7 @@ func (h *Hub) RejectIncomingCall(user, deviceID, sessionID, callID string) error
 		return ErrNotCallCallee
 	}
 	now := h.now()
-	if c.state != callRinging || now.Sub(c.startedAt) >= time.Duration(protocol.RingTimeoutSecs)*time.Second {
+	if c.state != callRinging || !now.Before(c.incomingDeadline()) {
 		return nil // A stale notification must not end an accepted or newer call.
 	}
 	var id [16]byte
@@ -50,6 +49,10 @@ func (h *Hub) RejectIncomingCall(user, deviceID, sessionID, callID string) error
 	event := protocol.Event{
 		ID:     fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:]),
 		CallID: c.id, Type: "call.reject", SentAt: now.UnixMilli(), Payload: json.RawMessage(`{}`),
+	}
+	if c.waiting {
+		// The notification action is an explicit dismissal, not the waiting timeout.
+		event.Payload = json.RawMessage(`{"reason":"busy","seen":true}`)
 	}
 	// Also stop a background app that is already ringing, and include the
 	// terminal event in its replay if it reconnects after this request.

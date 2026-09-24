@@ -6,6 +6,9 @@ import org.tinitalk.i18n.appString
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -35,6 +38,72 @@ import org.tinitalk.ui.theme.TiniTalkTheme
 @Config(sdk = [35])
 class IncomingReplySheetTest {
     @get:Rule val composeRule = createEmptyComposeRule()
+
+    @Test
+    fun endedIncomingKeepsAvatarBounds() = assertStableEndedAvatar(1f)
+
+    @Test
+    @Config(qualifiers = "ru-w320dp-h640dp")
+    fun endedIncomingKeepsAvatarBoundsWithLargeText() = assertStableEndedAvatar(2f)
+
+    private fun assertStableEndedAvatar(fontScale: Float) {
+        val ended = mutableStateOf(false)
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        activity.get().setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
+                TiniTalkTheme {
+                    if (ended.value) EndedCallScreen("Alice", org.tinitalk.call.CallEndReason.Rejected,
+                        direction = org.tinitalk.call.CallDirection.Incoming)
+                    else IncomingCallScreen("stable-call", "Alice", replySupported = true, onAnswer = {}, onReject = {})
+                }
+            }
+        }
+        try {
+            val before = composeRule.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot
+            composeRule.runOnIdle { ended.value = true }
+            assertEquals(before, composeRule.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot)
+            composeRule.onNodeWithTag("incoming_reply_handle").assertDoesNotExist()
+        } finally {
+            activity.pause().stop().destroy()
+        }
+    }
+
+    @Test
+    fun lateReplyCapabilityDoesNotMoveCallButtons() = assertStableCallButtons(1f)
+
+    @Test
+    @Config(qualifiers = "ru-w320dp-h891dp")
+    fun lateReplyCapabilityDoesNotMoveCallButtonsWithLargeText() = assertStableCallButtons(2f)
+
+    private fun assertStableCallButtons(fontScale: Float) {
+        val supported = mutableStateOf(false)
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        activity.get().setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
+                TiniTalkTheme {
+                    IncomingCallScreen("stable-call", "Alice", replySupported = supported.value,
+                        onAnswer = {}, onReject = {})
+                }
+            }
+        }
+        try {
+            val answer = composeRule.onNodeWithContentDescription(appString(R.string.text_answer_64))
+            val reject = composeRule.onNodeWithContentDescription(appString(R.string.text_decline_63))
+            val answerBounds = answer.fetchSemanticsNode().boundsInRoot
+            val rejectBounds = reject.fetchSemanticsNode().boundsInRoot
+            composeRule.onNodeWithTag("incoming_reply_handle").assertDoesNotExist()
+            composeRule.runOnIdle { supported.value = true }
+            val handleBounds = composeRule.onNodeWithTag("incoming_reply_handle").fetchSemanticsNode().boundsInRoot
+            assertEquals(answerBounds, answer.fetchSemanticsNode().boundsInRoot)
+            assertEquals(rejectBounds, reject.fetchSemanticsNode().boundsInRoot)
+            org.junit.Assert.assertTrue("Reply handle must stay below the call controls", handleBounds.top >= rejectBounds.bottom)
+            composeRule.runOnIdle { supported.value = false }
+            assertEquals(answerBounds, answer.fetchSemanticsNode().boundsInRoot)
+            assertEquals(rejectBounds, reject.fetchSemanticsNode().boundsInRoot)
+        } finally {
+            activity.pause().stop().destroy()
+        }
+    }
 
     @Test
     @Config(qualifiers = "ru-w411dp-h891dp-420dpi")

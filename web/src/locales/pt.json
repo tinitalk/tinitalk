@@ -1,4 +1,7 @@
 {
+  "waiting_calls_title": "Chamadas em espera",
+  "waiting_answer_ends_current": "Atender encerrará a chamada atual",
+  "waiting_call_unavailable": "Esta chamada não está mais disponível",
   "language_title": "Idioma",
   "language_system": "Idioma do sistema",
   "web_this_account_is_open_on_another_device_sign_in_again_0": "Esta conta está aberta em outro dispositivo. Entre novamente.",

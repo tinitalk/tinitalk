@@ -161,6 +161,36 @@ class ForegroundCallControllerTest {
     }
 
     @Test
+    fun acceptedWaitingCallAnswersReplayedOfferAfterNewerLiveEvent() {
+        val signal = CapturingSignalClient()
+        val media = FakeMediaSession(answer = "local-answer")
+        val controller = ForegroundCallController(signal, { _, _, _, _, _ -> media }, ids)
+        val coordinator = CallCoordinator("callee", signal)
+        coordinator.restoreAcceptedIncoming(callId, 1)
+        val replay = InitialCallReplay(callId, 1)
+        replay.add(SequencedSignalEvent(event("rtc.ice", JsonObject().apply {
+            addProperty("sdp_mid", "audio")
+            addProperty("sdp_mline_index", 0)
+            addProperty("candidate", "candidate:remote")
+        }), 8))
+        replay.add(SequencedSignalEvent(event("rtc.config", emptyIceConfig()), 4))
+        replay.add(SequencedSignalEvent(event("rtc.offer", JsonObject().apply {
+            addProperty("sdp", "remote-offer")
+        }), 6))
+
+        replay.drain().forEach { incoming ->
+            if (coordinator.onEvent(incoming)) {
+                controller.onSignalEvent(coordinator.snapshot(), incoming.event)
+            }
+        }
+
+        assertEquals("remote-offer", media.acceptedOffer)
+        assertEquals("rtc.answer", signal.sent.single().type)
+        assertEquals("local-answer", signal.sent.single().payload["sdp"].asString)
+        controller.close()
+    }
+
+    @Test
     fun localIceCandidateIsSentThroughSignalClient() {
         val signal = CapturingSignalClient()
         lateinit var localIce: (IceCandidateData) -> Unit

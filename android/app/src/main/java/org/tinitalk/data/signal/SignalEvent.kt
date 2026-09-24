@@ -29,6 +29,12 @@ data class SignalEvent(
         // Incoming SAS payloads are checked by the handshake so errors invalidate
         // verification without being treated as fatal signaling failures.
         if (!validateSASPayload && type.startsWith("rtc.sas.")) return
+        if (type == "call.waiting") {
+            val waiting = payload["waiting"]
+            require(waiting != null && waiting.isJsonPrimitive && waiting.asJsonPrimitive.isBoolean) {
+                "waiting must be a boolean"
+            }
+        }
         if (type == "rtc.video" || type == "rtc.screen") {
             val enabled = payload["enabled"]
             require(enabled != null && enabled.isJsonPrimitive && enabled.asJsonPrimitive.isBoolean) {
@@ -61,6 +67,7 @@ data class SignalEvent(
             "call.start",
             "call.incoming",
             "call.ringing",
+            "call.waiting",
             "call.visibility",
             "call.accept",
             "call.connected",

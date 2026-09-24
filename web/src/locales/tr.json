@@ -1,4 +1,7 @@
 {
+  "waiting_calls_title": "Bekleyen aramalar",
+  "waiting_answer_ends_current": "Yanıtladığınızda mevcut görüşme sona erecek",
+  "waiting_call_unavailable": "Bu arama artık mevcut değil",
   "language_title": "Dil",
   "language_system": "Sistem dili",
   "web_this_account_is_open_on_another_device_sign_in_again_0": "Bu hesap başka bir cihazda açık. Yeniden giriş yapın.",

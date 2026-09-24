@@ -319,4 +319,7 @@
     <string name="text_change_password_326">"Changer le mot de passe"</string>
     <string name="text_set_password_327">"Définir un mot de passe"</string>
     <string name="text_current_password_328">"Mot de passe actuel"</string>
+    <string name="waiting_calls_title">"Appels en attente"</string>
+    <string name="waiting_answer_ends_current">"Répondre mettra fin à l’appel en cours"</string>
+    <string name="waiting_call_unavailable">"Cet appel n’est plus disponible"</string>
 </resources>

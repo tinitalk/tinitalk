@@ -133,6 +133,9 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acknowledgesEvents := r.Header.Get(signalAckHeader) == signalAckVersion
+	if r.URL.Query().Get("call_waiting") == "1" {
+		s.hub.EnableCallWaiting(client)
+	}
 	responseHeader := http.Header{signalProtocolHeader: []string{signalProtocolVersion}}
 	if r.URL.Path == "/api/browser/socket" {
 		if r.URL.Query().Get("contact_changes") == "1" {
@@ -183,7 +186,11 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	defer close(done)
 	go func() {
 		for event := range client.Events() {
-			if err := writeJSON(event); err != nil {
+			var message any = event
+			if event.Acknowledgement != "" {
+				message = map[string]string{"ack": event.Acknowledgement}
+			}
+			if err := writeJSON(message); err != nil {
 				_ = conn.Close()
 				return
 			}
@@ -262,7 +269,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if acknowledgesEvents {
-			if err := writeJSON(map[string]string{"ack": event.ID}); err != nil {
+			if !s.hub.Acknowledge(client, event.ID) {
 				return
 			}
 		}

@@ -231,13 +231,14 @@ type PushMessage struct {
 func WakeMessage(event signaling.DeliveredEvent, callerLogin, caller string, ttl time.Duration) PushMessage {
 	message := PushMessage{
 		Data: map[string]string{
-			"type":         "incoming_call",
-			"call_id":      event.CallID,
-			"caller":       caller,
-			"caller_login": callerLogin,
-			"last_seq":     strconv.FormatUint(event.Seq, 10),
-			"started_at":   time.UnixMilli(event.SentAt).UTC().Format(time.RFC3339Nano),
-			"expires_at":   time.UnixMilli(event.SentAt).Add(ttl).UTC().Format(time.RFC3339Nano),
+			"type":                   "incoming_call",
+			"call_waiting_supported": "true",
+			"call_id":                event.CallID,
+			"caller":                 caller,
+			"caller_login":           callerLogin,
+			"last_seq":               strconv.FormatUint(event.Seq, 10),
+			"started_at":             time.UnixMilli(event.SentAt).UTC().Format(time.RFC3339Nano),
+			"expires_at":             time.UnixMilli(event.SentAt).Add(ttl).UTC().Format(time.RFC3339Nano),
 		},
 		suppress: event.TargetResolutionFailed,
 		ttl:      ttl,

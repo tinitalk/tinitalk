@@ -101,6 +101,10 @@ internal class SharedSignalConnections(
             if (!closed) entry.socket.sendTracked(event) { result -> dispatch { onResult(result) } }
         }
 
+        override fun cancelQueued(eventId: String) = synchronized(lock) {
+            if (!closed) entry.socket.cancelQueued(eventId)
+        }
+
         override fun isOpen(): Boolean = synchronized(lock) { !closed && entry.socket.isOpen() }
         override fun isOpen(expectedGeneration: Long): Boolean = synchronized(lock) {
             !closed && entry.socket.isOpen(expectedGeneration)

@@ -481,41 +481,57 @@ class CallComponentsTest {
         val address = ContactAddress.of("https://calls.example", "alex")
         val reader = RecordingReader(address)
 
-        render(reader) {
-            IncomingCallScreen("call-1", "Алексей", address, "alex", onAnswer = {}, onReject = {})
-            OutgoingCallScreen(
-                callee = "Алексей",
-                contactAddress = address,
-                fallbackLogin = "alex",
-                muted = false,
-                currentEndpoint = null,
-                availableEndpoints = emptyList(),
-                onMute = {},
-                onSelectEndpoint = {},
-                onCancel = {},
-            )
-            ActiveCallScreen(
-                peerName = "Алексей",
-                contactAddress = address,
-                fallbackLogin = "alex",
-                durationText = "00:03",
-                muted = false,
-                connectionHealth = ConnectionHealth.Good,
-                currentEndpoint = null,
-                availableEndpoints = emptyList(),
-                videoState = CallVideoState(allowed = false),
-                onMute = {},
-                onSelectEndpoint = {},
-                onCamera = {},
-                onSwitchCamera = {},
-                onVideoVisibilityChanged = {},
-                onEnd = {},
-            )
-            EndedCallScreen("Алексей", CallEndReason.RemoteHangup, address, "alex")
+        val screen = mutableStateOf(0)
+        val activity = render(reader) {
+            when (screen.value) {
+                0 -> IncomingCallScreen("call-1", "Алексей", address, "alex", onAnswer = {}, onReject = {})
+                1 -> OutgoingCallScreen(
+                    callee = "Алексей",
+                    contactAddress = address,
+                    fallbackLogin = "alex",
+                    muted = false,
+                    currentEndpoint = null,
+                    availableEndpoints = emptyList(),
+                    onMute = {},
+                    onSelectEndpoint = {},
+                    onCancel = {},
+                )
+                2 -> ActiveCallScreen(
+                    peerName = "Алексей",
+                    contactAddress = address,
+                    fallbackLogin = "alex",
+                    durationText = "00:03",
+                    muted = false,
+                    connectionHealth = ConnectionHealth.Good,
+                    currentEndpoint = null,
+                    availableEndpoints = emptyList(),
+                    videoState = CallVideoState(allowed = false),
+                    onMute = {},
+                    onSelectEndpoint = {},
+                    onCamera = {},
+                    onSwitchCamera = {},
+                    onVideoVisibilityChanged = {},
+                    onEnd = {},
+                )
+                3 -> EndedCallScreen("Алексей", CallEndReason.RemoteHangup, address, "alex")
+            }
         }
 
-        composeRule.waitUntil(timeoutMillis = 5_000) { reader.requested.size >= 4 }
-        assertEquals(setOf(address), reader.requested.toSet())
+        try {
+            for (index in 0..3) {
+                if (index > 0) {
+                    composeRule.runOnIdle {
+                        reader.requested.clear()
+                        screen.value = index
+                    }
+                }
+                composeRule.onAllNodesWithTag("contact-avatar-photo", useUnmergedTree = true)
+                    .assertCountEquals(1)
+                assertEquals("Screen $index", setOf(address), reader.requested.toSet())
+            }
+        } finally {
+            activity.pause().stop().destroy()
+        }
     }
 
     private fun render(

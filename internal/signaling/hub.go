@@ -34,6 +34,7 @@ type CallHistoryStore interface {
 	MarkCallConnected(callID string, connectedAt time.Time) error
 	FinishCall(callID string, outcome state.CallOutcome, endedAt time.Time) error
 	FinishCallWithReply(callID string, outcome state.CallOutcome, endedAt time.Time, replyCode string) error
+	FinishSeenBusyCall(callID string, endedAt time.Time) error
 }
 
 type SessionStore interface {
@@ -56,6 +57,7 @@ type Hub struct {
 	calls          map[string]*call
 	callAliases    map[string]string
 	activeByUser   map[string]string
+	incomingByUser map[string]map[string]*call
 	callStartTimes map[string][]time.Time
 	now            func() time.Time
 	notifications  []notification
@@ -85,6 +87,7 @@ func NewHub(notifier Notifier) *Hub {
 		calls:          map[string]*call{},
 		callAliases:    map[string]string{},
 		activeByUser:   map[string]string{},
+		incomingByUser: map[string]map[string]*call{},
 		callStartTimes: map[string][]time.Time{},
 		reservedWake:   map[string]struct{}{},
 		now:            time.Now,
@@ -173,27 +176,21 @@ func (h *Hub) ReplaceSession(user, currentSessionID string) {
 			h.disconnectLocked(client)
 		}
 	}
-	callID, ok := h.activeByUser[user]
-	if !ok {
-		return
+	for _, c := range h.callsForUser(user) {
+		now := h.now()
+		event := protocol.Event{
+			ID:      sessionReplacedID(c.id),
+			CallID:  c.id,
+			Type:    "call.end",
+			SentAt:  now.UnixMilli(),
+			Payload: json.RawMessage(`{"reason":"session_replaced"}`),
+		}
+		outcome := state.CallOutcomeInterruptedBeforeAnswer
+		if c.state == callActive {
+			outcome = disconnectedOutcome(c)
+		}
+		h.completeServerCall(c, event, outcome, now, []string{c.caller, c.callee})
 	}
-	c := h.calls[callID]
-	if c == nil || c.state == callEnded {
-		return
-	}
-	now := h.now()
-	event := protocol.Event{
-		ID:      sessionReplacedID(c.id),
-		CallID:  c.id,
-		Type:    "call.end",
-		SentAt:  now.UnixMilli(),
-		Payload: json.RawMessage(`{"reason":"session_replaced"}`),
-	}
-	outcome := state.CallOutcomeInterruptedBeforeAnswer
-	if c.state == callActive {
-		outcome = disconnectedOutcome(c)
-	}
-	h.completeServerCall(c, event, outcome, now, []string{c.caller, c.callee})
 }
 
 func (h *Hub) Connected(client *Client) bool {
@@ -228,7 +225,7 @@ func (h *Hub) disconnectLocked(client *Client) {
 	}
 	wasOnline := client.online
 	client.closed = true
-	if c := h.calls[h.activeByUser[client.user]]; c != nil && c.callee == client.user {
+	for _, c := range h.incomingByUser[client.user] {
 		c.notifyPushWaiters()
 	}
 	delete(h.clients[client.user], client)
@@ -327,6 +324,9 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	if !c.participant(sender) {
 		return errors.New("sender is not a call participant")
 	}
+	if event.Type == "call.waiting" {
+		return h.setCallWaiting(client, c, event)
+	}
 	if event.Type == "call.resume" {
 		var payload struct {
 			LastSeq uint64 `json:"last_seq"`
@@ -374,6 +374,18 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	}
 	if err := c.validateTransition(sender, event.Type); err != nil {
 		return err
+	}
+	if c.state == callRinging && (c.waiting || event.Type == "call.accept") && !h.now().Before(c.incomingDeadline()) {
+		h.expireIncoming(c)
+		return errors.New("call has expired")
+	}
+	var replaced *call
+	if event.Type == "call.accept" {
+		var err error
+		replaced, err = h.validateWaitingAcceptance(client, c, event)
+		if err != nil {
+			return err
+		}
 	}
 	if isSASEvent(event.Type) {
 		if err := c.acceptSASEvent(sender, event.Type, h.now()); err != nil {
@@ -467,7 +479,13 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 		h.deliver(recipient, delivered)
 	}
 	if event.Type == "call.accept" {
+		if replaced != nil {
+			ended := protocol.Event{ID: event.ID, CallID: replaced.id, Type: "call.end", SentAt: now.UnixMilli(), Payload: json.RawMessage(`{"reason":"answered_another_call"}`)}
+			h.completeServerCall(replaced, ended, outcomeForEvent(replaced, "call.end"), now, []string{replaced.caller, replaced.callee})
+		}
 		c.state = callActive
+		c.waiting = false
+		h.activateCall(c)
 		c.notifyPushWaiters()
 		for _, participant := range []string{c.caller, c.callee} {
 			if !h.hasOnlineCallClient(c, participant) {
@@ -606,7 +624,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	if payload.CalleeID == sender {
 		return errors.New("cannot call yourself")
 	}
-	if callID, ok := h.activeByUser[sender]; ok {
+	if callID := h.primaryCallID(sender); callID != "" {
 		existing := h.calls[callID]
 		if existing != nil {
 			if _, seen := existing.seen[event.ID]; seen {
@@ -633,7 +651,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 			return ErrNotInContacts
 		}
 	}
-	if _, ok := h.activeByUser[payload.CalleeID]; ok {
+	if h.primaryCallID(payload.CalleeID) != "" && !h.canReceiveWaiting(payload.CalleeID) {
 		if h.history != nil {
 			if err := h.history.RecordBusyCall(event.CallID, sender, payload.CalleeID, h.now()); err != nil {
 				return err
@@ -669,7 +687,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	c.remember(event.ID)
 	h.calls[event.CallID] = c
 	h.activeByUser[sender] = event.CallID
-	h.activeByUser[payload.CalleeID] = event.CallID
+	h.addIncoming(c)
 
 	incoming := event
 	incoming.Type = "call.incoming"
@@ -679,6 +697,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	var incomingPayload map[string]any
 	_ = json.Unmarshal(incoming.Payload, &incomingPayload)
 	incomingPayload["caller_login"] = sender
+	incomingPayload["call_waiting_supported"] = true
 	incoming.Payload, _ = json.Marshal(incomingPayload)
 	delivered := h.next(c, incoming, payload.CalleeID)
 	h.deliver(payload.CalleeID, delivered)
@@ -720,6 +739,7 @@ func (h *Hub) acceptCrossed(c *call, calleeDeviceID string, source protocol.Even
 	h.callAliases[source.CallID] = c.id
 	c.aliases = append(c.aliases, source.CallID)
 	c.state = callActive
+	h.activateCall(c)
 	c.notifyPushWaiters()
 	for _, participant := range []string{c.caller, c.callee} {
 		if !h.hasOnlineCallClient(c, participant) {
@@ -805,17 +825,10 @@ func (h *Hub) Sweep() int {
 		if c.state != callRinging {
 			continue
 		}
-		if now.Sub(c.startedAt) < time.Duration(protocol.RingTimeoutSecs)*time.Second {
+		if now.Before(c.incomingDeadline()) {
 			continue
 		}
-		event := protocol.Event{
-			ID:      expireID(c.id),
-			CallID:  c.id,
-			Type:    "call.expire",
-			SentAt:  now.UnixMilli(),
-			Payload: json.RawMessage(`{}`),
-		}
-		h.completeServerCall(c, event, outcomeForEvent(c, event.Type), now, []string{c.callee})
+		h.expireIncoming(c)
 		expired++
 	}
 	return expired
@@ -1147,8 +1160,8 @@ func (h *Hub) ActiveCall(user string) (string, error) {
 func (h *Hub) ActiveCallForDevice(user, deviceID string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	callID, ok := h.activeByUser[user]
-	if !ok {
+	callID := h.primaryCallID(user)
+	if callID == "" {
 		return "", fmt.Errorf("active call not found")
 	}
 	c := h.calls[callID]
