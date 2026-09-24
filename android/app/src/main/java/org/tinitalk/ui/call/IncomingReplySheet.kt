@@ -38,8 +38,11 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
@@ -60,10 +63,40 @@ internal fun IncomingReplySheet(
     onExpanded: () -> Unit,
     content: @Composable (blocked: Boolean, handleHeight: Dp) -> Unit,
 ) {
-    if (!supported) {
-        content(false, 0.dp)
-        return
+    IncomingReplyLayout { handleHeight ->
+        IncomingReplySheetContent(callId, supported, enabled, onReply, onExpanded, handleHeight, content)
     }
+}
+
+/** Shared by ringing and its result so the avatar keeps the same fitting budget. */
+@Composable
+internal fun IncomingReplyLayout(content: @Composable (handleHeight: Dp) -> Unit) {
+    val textMeasurer = rememberTextMeasurer()
+    val title = stringResource(R.string.call_reply_sheet_title)
+    val titleStyle = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        // Measure before laying out the call controls, including wrapped translations
+        // and large fonts. Reserve the same space while capabilities are loading.
+        val titleHeight = textMeasurer.measure(
+            AnnotatedString(title), titleStyle,
+            constraints = Constraints(maxWidth = with(density) { (maxWidth - 40.dp).coerceAtLeast(0.dp).roundToPx() }),
+        ).size.height
+        val handleHeight = 37.dp + with(density) { titleHeight.toDp() }
+        content(handleHeight)
+    }
+}
+
+@Composable
+private fun IncomingReplySheetContent(
+    callId: String,
+    supported: Boolean,
+    enabled: Boolean,
+    onReply: (CallReplyCode) -> Unit,
+    onExpanded: () -> Unit,
+    reservedHandleHeight: Dp,
+    content: @Composable (blocked: Boolean, handleHeight: Dp) -> Unit,
+) {
     key(callId) {
         val state = remember { AnchoredDraggableState(ReplySheetPosition.Collapsed) }
         val interactions = remember { MutableInteractionSource() }
@@ -73,7 +106,6 @@ internal fun IncomingReplySheet(
         val bodyScroll = rememberScrollState()
         val bodyDragging by bodyScroll.interactionSource.collectIsDraggedAsState()
         var bodyHeight by remember { mutableIntStateOf(0) }
-        var handleHeight by remember { mutableIntStateOf(0) }
         var expandedReported by remember { mutableStateOf(false) }
         val currentOnExpanded by rememberUpdatedState(onExpanded)
         val currentEnabled by rememberUpdatedState(enabled)
@@ -106,32 +138,31 @@ internal fun IncomingReplySheet(
             }
         }
         fun close() { scope.launch { state.animateTo(ReplySheetPosition.Collapsed) } }
-        BackHandler(blocked) { close() }
-        LaunchedEffect(fullyOpen) {
-            if (fullyOpen && !expandedReported) {
+        BackHandler(supported && blocked) { close() }
+        LaunchedEffect(supported, fullyOpen) {
+            if (supported && fullyOpen && !expandedReported) {
                 expandedReported = true
                 currentOnExpanded()
             }
         }
         Box(Modifier.fillMaxSize().clipToBounds()) {
-            content(blocked, with(density) { handleHeight.toDp() })
-            if (blocked) {
+            content(supported && blocked, reservedHandleHeight)
+            if (supported && blocked) {
                 Box(Modifier.fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.65f * progress))
                     .testTag("incoming_reply_scrim")
                     .clickable(onClickLabel = stringResource(R.string.call_reply_close)) { close() })
             }
-            BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+            if (supported) BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
                 .padding(bottom = if (density.fontScale >= 1.5f) 12.dp else 24.dp)
                 .clipToBounds()) {
-                val maximumBodyHeight = (maxHeight - with(density) { handleHeight.toDp() }).coerceAtLeast(48.dp)
+                val maximumBodyHeight = (maxHeight - reservedHandleHeight).coerceAtLeast(48.dp)
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .offset { IntOffset(0, renderedOffset) }) {
                     val title = stringResource(R.string.call_reply_sheet_title)
                     val actionLabel = stringResource(if (blocked) R.string.call_reply_close else R.string.call_reply_open)
                     Column(Modifier.fillMaxWidth()
                         .testTag("incoming_reply_handle")
-                        .onSizeChanged { handleHeight = it.height }
                         .anchoredDraggable(state, Orientation.Vertical, enabled = enabled, interactionSource = interactions)
                         .semantics {
                             role = Role.Button

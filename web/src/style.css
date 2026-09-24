@@ -1571,19 +1571,19 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-weight: 800;
   overflow-wrap: anywhere;
 }
-.incoming-call-screen .call-status {
+.incoming-call-screen .call-status, .ended-incoming-call-screen .call-status {
   min-height: 0;
   font-size: 1rem;
   line-height: 1.5rem;
   font-weight: 500;
   color: rgba(255, 255, 255, .76);
 }
-.incoming-call-screen .call-avatar {
+.incoming-call-screen .call-avatar, .ended-incoming-call-screen .call-avatar {
   width: min(224px, calc(var(--app-width) - 40px));
   height: min(224px, calc(var(--app-width) - 40px));
   margin-top: 44px;
 }
-.incoming-call-screen .call-name {
+.incoming-call-screen .call-name, .ended-incoming-call-screen .call-name {
   margin-top: 20px;
   line-height: 2.5rem;
 }
@@ -1759,7 +1759,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 .incoming-reply-shell {
   width: 100%;
-  max-width: 460px;
+  max-width: 430px;
   min-height: 61px;
   margin-top: 40px;
 }
@@ -1913,6 +1913,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   transform: scale(1.73684);
   }
 }
+.incoming-reply-reservation { padding: 0 16px; visibility: hidden; pointer-events: none; }
+.incoming-reply-sheet.initializing { visibility: hidden; transition: none; }
 
 .video-call-screen {
   position: relative;
@@ -2111,7 +2113,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 
 @container (max-height: 640px) {
-  .call-avatar, .incoming-call-screen .call-avatar {
+  .call-avatar, .incoming-call-screen .call-avatar, .ended-incoming-call-screen .call-avatar {
     width: 142px;
     height: 142px;
     margin-top: 22px;
@@ -2121,7 +2123,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 
 @container (max-height: 580px) {
-  .incoming-call-screen .call-avatar {
+  .incoming-call-screen .call-avatar, .ended-incoming-call-screen .call-avatar {
     width: 112px;
     height: 112px;
     margin-top: 16px;

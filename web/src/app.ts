@@ -75,6 +75,7 @@ type ActiveCall = {
 };
 type CallReplyCode = 'cannot_talk' | 'call_me_later' | 'will_call_back';
 type EndedCall = {
+  incomingLayout?: boolean;
   accountId: string;
   peer: string;
   peerLogin: string;
@@ -3178,6 +3179,7 @@ function showEndedCall(snapshot: EndedCall): void {
 function endedSnapshot(call: ActiveCall, status: string, explanation = ''): EndedCall {
   const detail = call.connectedAt ? callDurationText(Date.now() - call.connectedAt) : '';
   return {
+    incomingLayout: call.incoming && !call.accepted,
     accountId: call.account.id,
     peer: call.peer || 'TiniTalk',
     peerLogin: call.peerLogin || call.peer,
@@ -3721,7 +3723,7 @@ function isSelfPreviewCorner(value: unknown): value is SelfPreviewCorner {
 }
 
 function endedCallScreen(call: EndedCall): HTMLElement {
-  const view = element('div', 'call-screen ended-call-screen');
+  const view = element('div', `call-screen ended-call-screen${call.incomingLayout ? ' ended-incoming-call-screen' : ''}`);
   view.append(element('p', 'call-status', call.status));
   view.append(avatar(call.peer || 'TiniTalk', call.peerLogin || call.peer, 'call-avatar', photoForAccountPeer(call.accountId, call.peerLogin)));
   view.append(element('h2', 'call-name', call.peer || 'TiniTalk'));
@@ -3949,7 +3951,7 @@ function incomingReplySheet(): HTMLElement {
   const layer = element('div', 'incoming-reply-layer');
   const scrim = element('button', 'incoming-reply-scrim');
   const frame = element('div', 'incoming-reply-frame');
-  const sheet = element('div', 'incoming-reply-sheet');
+  const sheet = element('div', 'incoming-reply-sheet initializing');
   const handle = element('button', 'incoming-reply-handle');
   const panel = element('section', 'incoming-reply-panel');
   const listBox = element('div', 'incoming-reply-list');
@@ -4079,8 +4081,17 @@ function incomingReplySheet(): HTMLElement {
   sheet.append(handle, panel);
   frame.append(sheet);
   layer.append(scrim, frame);
-  shell.append(layer);
-  requestAnimationFrame(() => setOffset(openState ? 0 : measurePanel()));
+  // Reserve the actual translated handle height before the first paint.
+  const reservation = element('div', 'incoming-reply-reservation');
+  reservation.setAttribute('aria-hidden', 'true');
+  reservation.setAttribute('inert', '');
+  reservation.append(handle.cloneNode(true));
+  shell.append(reservation, layer);
+  requestAnimationFrame(() => {
+    setOffset(openState ? 0 : measurePanel());
+    sheet.getBoundingClientRect();
+    sheet.classList.remove('initializing');
+  });
   return shell;
 }
 
