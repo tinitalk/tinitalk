@@ -558,6 +558,10 @@ class CallForegroundService : Service() {
             onEvent = { incoming ->
                 handler.post {
                     if (socket !== newSocket || finishing) return@post
+                    val currentCall = newCoordinator.snapshot()
+                    val crossed = incoming.event.type == "call.accept" && incoming.event.payload["crossed"]
+                        ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean == true
+                    if (currentCall.callId != null && currentCall.callId != incoming.event.callId && !crossed) return@post
                     try {
                         val beforeEvent = CallUiStateStore.snapshot()
                         if (newCoordinator.onEvent(incoming)) {
@@ -585,7 +589,7 @@ class CallForegroundService : Service() {
                     }
                     if (incoming.event.type == "call.accept" && newCoordinator.snapshot().phase == CallPhase.Active) {
                         val eventKey = AccountCallKey(owner.key.accountId, incoming.event.callId)
-                        if (incoming.event.payload["crossed"]?.asBoolean == true) {
+                        if (crossed) {
                             outgoingPeer?.let { peer ->
                                 CallUiStateStore.begin(eventKey, peer, CallDirection.Outgoing, CallPhase.Active)
                                 CallUiStateStore.setAudioEndpoints(eventKey, CallAudioState.snapshot())
@@ -795,7 +799,8 @@ class CallForegroundService : Service() {
                 invite.callerLogin?.let { caller ->
                     dispatchMedia { it.prepareSecurityCode(invite.callId, caller, localIsCaller = false) }
                 }
-                call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
+                if (invite.serverAccepted) call.restoreAcceptedIncoming(invite.callId, invite.lastSeq)
+                else call.restoreIncoming(invite.callId, invite.lastSeq, acknowledgeRinging = false)
                 call.resume()
                 if (call.snapshot().phase == CallPhase.Ringing) call.accept()
                 if (call.snapshot().phase == CallPhase.Active) dispatchMedia { it.setActive(true) }
@@ -1114,9 +1119,14 @@ class CallForegroundService : Service() {
             VideoCallStateStore.reset()
             endSystemCall(callKey)
         }
+        val retiringOwner = lease?.owner
+        retiringOwner?.let { org.tinitalk.call.WaitingCalls.mediaRetiring(it) }
         lease?.let(GlobalCallAdmission::release)
         admissionLease = null
-        releaseCallMedia(bypassMediaQueue)
+        val retiringRuntime = runtime
+        if (retiringRuntime != null) retiringRuntime.releaseMedia(bypassMediaQueue) {
+            retiringOwner?.let { org.tinitalk.call.WaitingCalls.mediaReleased(it) }
+        } else retiringOwner?.let { org.tinitalk.call.WaitingCalls.mediaReleased(it) }
     }
 
     private fun releaseCallMedia(bypassQueue: Boolean = false) {
@@ -1466,7 +1476,7 @@ internal fun signalingFailureEndReason(failure: SignalFailure, currentCallId: St
 }
 
 private fun org.tinitalk.data.signal.SignalEvent.endReason(): CallEndReason? = when (type) {
-    "call.reject" -> CallEndReason.Rejected
+    "call.reject" -> if (payload["reason"]?.takeIf { it.isJsonPrimitive }?.asString == "busy") CallEndReason.Busy else CallEndReason.Rejected
     "call.cancel" -> CallEndReason.Cancelled
     "call.end" -> CallEndReason.RemoteHangup
     "call.expire" -> CallEndReason.TimedOut

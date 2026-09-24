@@ -319,4 +319,7 @@
     <string name="text_change_password_326">"Parolayı değiştir"</string>
     <string name="text_set_password_327">"Parola belirle"</string>
     <string name="text_current_password_328">"Mevcut parola"</string>
+    <string name="waiting_calls_title">"Bekleyen aramalar"</string>
+    <string name="waiting_answer_ends_current">"Yanıtladığınızda mevcut görüşme sona erecek"</string>
+    <string name="waiting_call_unavailable">"Bu arama artık mevcut değil"</string>
 </resources>

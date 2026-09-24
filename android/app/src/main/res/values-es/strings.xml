@@ -319,4 +319,7 @@
     <string name="text_change_password_326">"Cambiar contraseña"</string>
     <string name="text_set_password_327">"Establecer contraseña"</string>
     <string name="text_current_password_328">"Contraseña actual"</string>
+    <string name="waiting_calls_title">"Llamadas en espera"</string>
+    <string name="waiting_answer_ends_current">"Al responder finalizará la llamada actual"</string>
+    <string name="waiting_call_unavailable">"Esta llamada ya no está disponible"</string>
 </resources>

@@ -319,4 +319,7 @@
     <string name="text_change_password_326">"修改密码"</string>
     <string name="text_set_password_327">"设置密码"</string>
     <string name="text_current_password_328">"当前密码"</string>
+    <string name="waiting_calls_title">"等待中的来电"</string>
+    <string name="waiting_answer_ends_current">"接听将结束当前通话"</string>
+    <string name="waiting_call_unavailable">"此来电已失效"</string>
 </resources>

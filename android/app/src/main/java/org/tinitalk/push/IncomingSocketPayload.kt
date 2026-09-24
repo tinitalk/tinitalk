@@ -21,6 +21,7 @@ internal object IncomingSocketPayload {
         val started = Instant.ofEpochMilli(event.sentAt)
         invite(account, event.callId, event.payload["caller_login"].asString, started,
             started.plusSeconds(SignalEvent.RING_TIMEOUT_SECONDS.toLong()), incoming.seq, name, now)
+            ?.copy(waitingSupported = event.payload["call_waiting_supported"]?.asBoolean == true)
     }.getOrNull()
 
     fun fromSnapshot(
@@ -31,7 +32,7 @@ internal object IncomingSocketPayload {
     ): IncomingInvite? = runCatching {
         invite(account, snapshot["call_id"].asString, snapshot["caller_login"].asString,
             Instant.parse(snapshot["started_at"].asString), Instant.parse(snapshot["expires_at"].asString),
-            snapshot["last_seq"].asLong, name, now)
+            snapshot["last_seq"].asLong, name, now)?.copy(waitingSupported = snapshot.has("waiting"))
     }.getOrNull()
 
     private fun invite(

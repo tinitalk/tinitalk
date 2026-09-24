@@ -25,6 +25,21 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class SignalSocketTest {
+    @Test fun cancelledAcceptanceIsNotReplayedWhenTheSharedConnectionOpens() {
+        val client = OkHttpClient()
+        val factory = FakeWebSocketFactory()
+        val socket = SignalSocket(client, Session("https://talk.example", "alice", "token", sessionId = "session"), socketFactory = factory)
+        try {
+            socket.connect(onEvent = {})
+            val accept = testEvent("call.accept")
+            socket.sendTracked(accept) { error("Cancelled acceptance must not complete") }
+            socket.cancelQueued(accept.id)
+            val connection = factory.connections.single()
+            connection.listener.onOpen(connection.webSocket, response(connection.webSocket.request(), acknowledgesEvents = true))
+            assertTrue(connection.webSocket.sent.isEmpty())
+        } finally { socket.close(); client.shutdown() }
+    }
+
     @Test fun pendingSessionsNeverOpenSocketsOnOldOrNewServers() {
         val client = OkHttpClient()
         try {
@@ -194,8 +209,9 @@ class SignalSocketTest {
             socket.connect(onEvent = {})
 
             val request = server.takeRequest()
-            assertEquals("/api/socket", request.path)
-            assertNull(request.requestUrl?.query)
+            assertEquals("/api/socket?call_waiting=1", request.path)
+            assertEquals(setOf("call_waiting"), request.requestUrl?.queryParameterNames)
+            assertEquals("1", request.requestUrl?.queryParameter("call_waiting"))
             assertEquals("Basic YWxpY2U6c2VjcmV0LXRva2Vu", request.getHeader("Authorization"))
             assertEquals("android-device-123", request.getHeader("X-TiniTalk-Device-ID"))
             assertEquals("session-123", request.getHeader("X-TiniTalk-Session-ID"))

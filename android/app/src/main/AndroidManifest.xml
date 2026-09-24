@@ -71,6 +71,7 @@
         <receiver
             android:name=".telecom.CallActionReceiver"
             android:exported="false" />
+        <receiver android:name=".call.WaitingCallActionReceiver" android:exported="false" />
         <service
             android:name=".push.TinitalkPushService"
             android:exported="false">

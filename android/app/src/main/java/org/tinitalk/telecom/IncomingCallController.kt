@@ -71,6 +71,7 @@ class IncomingCallController internal constructor(
                     .putString(ExtraExpiresAt, invite.expiresAt.toString())
                     .putString(ExtraStartedAt, invite.startedAt?.toString())
                     .putLong(ExtraLastSeq, invite.lastSeq)
+                    .putBoolean(ExtraServerAccepted, invite.serverAccepted)
                     .putString(ExtraAction, action)
                     .putString(ExtraReplyCode, replyCode?.wireValue)
                     .putString(ExtraTerminalEventId, terminalEventId)
@@ -402,6 +403,7 @@ class IncomingCallController internal constructor(
                 expiresAt = expiresAt,
                 callerLogin = prefs.getString(ExtraCallerLogin, null),
                 lastSeq = prefs.getLong(ExtraLastSeq, 0),
+                serverAccepted = prefs.getBoolean(ExtraServerAccepted, false),
                 startedAt = prefs.getString(ExtraStartedAt, null)?.let { runCatching { Instant.parse(it) }.getOrNull() },
             ),
             prefs.getString(ExtraAction, null),
@@ -619,6 +621,7 @@ class IncomingCallController internal constructor(
         private const val ExtraExpiresAt = "expires_at"
         private const val ExtraStartedAt = "started_at"
         private const val ExtraLastSeq = "last_seq"
+        private const val ExtraServerAccepted = "server_accepted"
         private const val ExtraAction = "action"
         internal const val ExtraReplyCode = "reply_code"
         internal const val ExtraTerminalEventId = "terminal_event_id"
@@ -646,6 +649,7 @@ class IncomingCallController internal constructor(
                 expiresAt = expiresAt,
                 callerLogin = intent.getStringExtra(ExtraCallerLogin),
                 lastSeq = intent.getLongExtra(ExtraLastSeq, 0),
+                serverAccepted = intent.getBooleanExtra(ExtraServerAccepted, false),
                 startedAt = intent.getStringExtra(ExtraStartedAt)?.let { runCatching { Instant.parse(it) }.getOrNull() },
             )
         }
@@ -705,6 +709,7 @@ class IncomingCallController internal constructor(
                 .putExtra(ExtraExpiresAt, invite.expiresAt.toString())
                 .putExtra(ExtraStartedAt, invite.startedAt?.toString())
                 .putExtra(ExtraLastSeq, invite.lastSeq)
+                .putExtra(ExtraServerAccepted, invite.serverAccepted)
                 .putExtra(ExtraReplyCode, replyCode?.wireValue)
                 .putExtra(ExtraTerminalEventId, terminalEventId)
 

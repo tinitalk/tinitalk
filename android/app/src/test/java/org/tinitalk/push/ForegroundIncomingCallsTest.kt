@@ -18,6 +18,12 @@ import org.robolectric.annotation.Config
 import org.tinitalk.call.SequencedSignalEvent
 import org.tinitalk.call.CallSessionBinding
 import org.tinitalk.call.GlobalCallAdmission
+import org.tinitalk.call.AccountCallKey
+import org.tinitalk.call.CallDirection
+import org.tinitalk.call.CallPeer
+import org.tinitalk.call.CallPhase
+import org.tinitalk.call.CallUiStateStore
+import org.tinitalk.media.MediaConnectionState
 import org.tinitalk.telecom.IncomingCallController
 import com.google.gson.JsonObject
 import okhttp3.mockwebserver.MockResponse
@@ -197,6 +203,61 @@ class ForegroundIncomingCallsTest {
                 controller.clear(app, invite.owner)
                 GlobalCallAdmission.releaseStaged(invite.owner)
             }
+        }
+    }
+
+    @Test fun recoveryPrefersWaitingListOverLegacyIncomingDuringAnotherServerConversation() {
+        checkIncomingRecovery(waitingList = true, waiting = true)
+    }
+
+    @Test fun recoveryRecognizesNewServerEvenWhenFalseWaitingFlagIsOmitted() {
+        checkIncomingRecovery(waitingList = true, waiting = false)
+    }
+
+    @Test fun recoveryFromOldServerKeepsOrdinaryIncomingWithoutWaitingSupport() {
+        checkIncomingRecovery(waitingList = false, waiting = false)
+    }
+
+    private fun checkIncomingRecovery(waitingList: Boolean, waiting: Boolean) {
+        unlock()
+        MockWebServer().use { server ->
+            server.start()
+            val account = auth.upsert(Session(server.url("/").toString(), "alice", "token", sessionId = "session"))
+            val ongoing = AccountCallKey(AccountId("other-server"), UUID.randomUUID().toString())
+            CallUiStateStore.begin(ongoing, CallPeer("Current conversation"), CallDirection.Outgoing, CallPhase.Active)
+            CallUiStateStore.onMediaConnection(MediaConnectionState.Connected)
+            try {
+                val id = UUID.randomUUID().toString()
+                val started = Instant.now().minusSeconds(5)
+                val incoming = JsonObject().apply {
+                    addProperty("call_id", id)
+                    addProperty("caller_login", "bob")
+                    addProperty("started_at", started.toString())
+                    addProperty("expires_at", started.plusSeconds(if (waiting) 15 else 45).toString())
+                    addProperty("last_seq", 1)
+                }
+                val response = JsonObject().apply {
+                    addProperty("call_id", id)
+                    add("incoming", incoming)
+                    if (waitingList) add("incoming_calls", com.google.gson.JsonArray().apply {
+                        add(incoming.deepCopy().apply { if (waiting) addProperty("waiting", true) })
+                    })
+                }
+                server.enqueue(MockResponse().setBody(response.toString()))
+                receiver.onActivityResumed(firstActivity)
+                await { sockets.size == 1 }
+                sockets.single().second.open(1)
+                await { presented.isNotEmpty() }
+                assertEquals("The legacy and new fields must not present the same call twice", 1, presented.size)
+                val invite = presented.single()
+                assertEquals(account.id, invite.accountId)
+                assertEquals(id, invite.callId)
+                assertEquals(waitingList, invite.waitingSupported)
+                assertEquals(started.plusSeconds(45), invite.expiresAt)
+                assertEquals(ongoing, CallUiStateStore.snapshot().callKey)
+                assertTrue(canceled.isEmpty())
+                assertEquals("/api/active-call?call_waiting=1", server.takeRequest().path)
+            } finally { CallUiStateStore.reset() }
         }
     }
 

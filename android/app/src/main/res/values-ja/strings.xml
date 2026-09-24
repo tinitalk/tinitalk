@@ -319,4 +319,7 @@
     <string name="text_change_password_326">"パスワードを変更"</string>
     <string name="text_set_password_327">"パスワードを設定"</string>
     <string name="text_current_password_328">"現在のパスワード"</string>
+    <string name="waiting_calls_title">"着信待ち"</string>
+    <string name="waiting_answer_ends_current">"応答すると現在の通話が終了します"</string>
+    <string name="waiting_call_unavailable">"この着信には応答できません"</string>
 </resources>

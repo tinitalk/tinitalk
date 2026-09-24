@@ -319,4 +319,7 @@
     <string name="text_change_password_326">"Сменить пароль"</string>
     <string name="text_set_password_327">"Задать пароль"</string>
     <string name="text_current_password_328">"Текущий пароль"</string>
+    <string name="waiting_calls_title">"Ожидающие вызовы"</string>
+    <string name="waiting_answer_ends_current">"При ответе текущий разговор завершится"</string>
+    <string name="waiting_call_unavailable">"Этот вызов больше недоступен"</string>
 </resources>

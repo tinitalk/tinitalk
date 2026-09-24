@@ -124,8 +124,10 @@ internal class IncomingCallHandler(
     },
 ) {
     fun present(invite: IncomingInvite) {
+        if (org.tinitalk.call.WaitingCalls.present(invite)) return
         val notifier = IncomingCallNotifier(context)
         val incoming = IncomingCallController()
+        if (incoming.load(context)?.invite?.let { it.owner == invite.owner && it.serverAccepted } == true) return
         when (incoming.admitIncoming(context, invite)) {
             IncomingAdmissionResult.Invalid -> return
             IncomingAdmissionResult.Busy -> {
@@ -169,6 +171,11 @@ internal class IncomingCallHandler(
             }
         }
         if (!stillOwned) return
+        if (invite.serverAccepted) {
+            incoming.answer(context, invite)
+            incoming.openScreen(context, invite)
+            return
+        }
         if (!IncomingCallForegroundService.show(context, invite)) {
             val mode = currentIncomingCallPresentation(context)
             val shown = notifier.presentIncoming(invite, mode) { notification ->
@@ -196,6 +203,12 @@ internal class IncomingCallHandler(
         val notifier = IncomingCallNotifier(context)
         val incoming = IncomingCallController()
         val owner = AccountCallOwner(cancellation.key, CallSessionBinding.from(account.session))
+        // call.accept cancels the ringing notification, not the selected handoff.
+        if (cancellation.eventType == "call.accept" && (
+                org.tinitalk.call.WaitingCalls.isAnswering(owner) ||
+                incoming.load(context)?.invite?.let { it.owner == owner && it.serverAccepted } == true
+            )) return
+        org.tinitalk.call.WaitingCalls.cancel(owner)
         if (!incoming.rememberTerminalIfCompatible(context, owner)) return
         val pending = incoming.load(context)?.invite
         val snapshot = CallServiceState.snapshot()

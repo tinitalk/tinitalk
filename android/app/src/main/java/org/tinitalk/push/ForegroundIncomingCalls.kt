@@ -43,7 +43,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.UUID
 
-/** Only foreground UI owns these subscriptions. Call services hold independent leases. */
+/** UI or an active conversation keeps all accounts listening, including other servers. */
 internal class ForegroundIncomingCalls(
     private val application: Application,
     private val authStore: AuthStore,
@@ -65,6 +65,11 @@ internal class ForegroundIncomingCalls(
     private var screenReceiverRegistered = false
     private var revision = 0L
     private var closed = false
+    private var hasActiveCall = false
+    private val callObserver: (org.tinitalk.call.CallUiState) -> Unit = { state -> handler.post {
+        val active = state.phase == org.tinitalk.call.CallPhase.Active
+        if (active != hasActiveCall) { hasActiveCall = active; refresh() }
+    } }
     private val reconcile = Runnable { refresh() }
     private val visibility = Runnable { updateVisibility() }
     private var hideScheduled = false
@@ -87,11 +92,12 @@ internal class ForegroundIncomingCalls(
         application.registerActivityLifecycleCallbacks(this)
         preferences.registerOnSharedPreferenceChangeListener(accountsObserver)
         IncomingCallScreenState.observe(screenObserver)
+        org.tinitalk.call.CallUiStateStore.observe(callObserver)
     }
 
-    private fun canListen(): Boolean = !closed && resumed.isNotEmpty() && networkAvailable() &&
+    private fun canListen(): Boolean = !closed && networkAvailable() && (hasActiveCall || (resumed.isNotEmpty() &&
         application.getSystemService(PowerManager::class.java)?.isInteractive != false &&
-        application.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != true
+        application.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != true))
 
     fun networkChanged() { handler.post(reconcile) }
 
@@ -212,7 +218,7 @@ internal class ForegroundIncomingCalls(
                 it.action == null && it.invite.accountId == account.id && it.invite.sessionBinding.matches(account.session)
             }?.invite
             val session = account.session
-            val request = Request.Builder().url(session.url.trimEnd('/') + "/api/active-call")
+            val request = Request.Builder().url(session.url.trimEnd('/') + "/api/active-call?call_waiting=1")
                 .header("Authorization", Credentials.basic(session.login, session.token))
                 .header("X-TiniTalk-Device-ID", DeviceIdentity.id(application))
                 .apply { session.sessionId?.let { header(SessionIdHeader, it) } }.build()
@@ -222,17 +228,28 @@ internal class ForegroundIncomingCalls(
                 override fun onFailure(call: Call, e: IOException) = Unit
                 override fun onResponse(call: Call, response: Response) {
                     val snapshot = response.use {
-                        if (it.code == 204) return@use ActiveIncomingSnapshot(null, null)
+                        if (it.code == 204) return@use ActiveIncomingSnapshot(null)
                         if (it.code != 200) return@use null
                         runCatching {
                             val json = JsonParser.parseString(it.body.string()).asJsonObject
                             val callId = json["call_id"].asString.takeIf(String::isNotBlank) ?: return@runCatching null
                             if (UUID.fromString(callId).toString() != callId.lowercase()) return@runCatching null
-                            val pending = json.getAsJsonObject("incoming")
-                            if (pending != null && pending["call_id"].asString != callId) return@runCatching null
-                            ActiveIncomingSnapshot(callId, pending?.let {
-                                IncomingSocketPayload.fromSnapshot(account, it, ::privateName)
-                            })
+                            val incomingCalls = json.getAsJsonArray("incoming_calls")
+                            // New servers also include the legacy primary invitation.
+                            // Present only one format: legacy decoding loses waiting support
+                            // and would reject the same call before the new list is handled.
+                            val invites = if (incomingCalls != null) {
+                                incomingCalls.mapNotNull { entry ->
+                                    IncomingSocketPayload.fromSnapshot(account, entry.asJsonObject, ::privateName)?.let { invite ->
+                                        invite.copy(waitingSupported = true, expiresAt = invite.startedAt!!.plusSeconds(45))
+                                    }
+                                }
+                            } else {
+                                val pending = json.getAsJsonObject("incoming")
+                                if (pending != null && pending["call_id"].asString != callId) return@runCatching null
+                                listOfNotNull(pending?.let { IncomingSocketPayload.fromSnapshot(account, it, ::privateName) })
+                            }
+                            ActiveIncomingSnapshot(callId, invites)
                         }.getOrNull()
                     } ?: return
                     handler.post {
@@ -246,7 +263,7 @@ internal class ForegroundIncomingCalls(
                                     admission?.owner == previous.owner && admission.state == CallAdmissionState.Reserved
                                 ) cancel(account, CallCancellation(previous.key, "call.cancel"))
                             }
-                            snapshot.invite?.let(present)
+                            snapshot.invites.forEach(present)
                         }
                     }
                 }
@@ -305,6 +322,7 @@ internal class ForegroundIncomingCalls(
         handler.removeCallbacks(visibility)
         handler.removeCallbacks(hideVisibility)
         IncomingCallScreenState.removeObserver(screenObserver)
+        org.tinitalk.call.CallUiStateStore.removeObserver(callObserver)
         preferences.unregisterOnSharedPreferenceChangeListener(accountsObserver)
         application.unregisterActivityLifecycleCallbacks(this)
         if (screenReceiverRegistered) application.unregisterReceiver(screenReceiver)
@@ -324,4 +342,4 @@ internal class ForegroundIncomingCalls(
     override fun onActivityDestroyed(activity: Activity) { resumed -= activity }
 }
 
-private data class ActiveIncomingSnapshot(val callId: String?, val invite: IncomingInvite?)
+private data class ActiveIncomingSnapshot(val callId: String?, val invites: List<IncomingInvite> = emptyList())

@@ -34,6 +34,7 @@ internal class CallRuntime(
     private var networkObserver: DefaultNetworkObserver? = null
     private var networkLock: CallNetworkLock? = null
     private var closed = false
+    private val mediaClosed = java.util.concurrent.CompletableFuture<Unit>()
 
     // Lifecycle mutations are made by the service on the main thread. Media callbacks
     // read the volatile references to reject work after the local resources are detached.
@@ -57,15 +58,18 @@ internal class CallRuntime(
         networkObserver = null
     }
 
-    fun releaseMedia(bypassQueue: Boolean = false) {
+    fun releaseMedia(bypassQueue: Boolean = false, onClosed: () -> Unit = {}) {
+        mediaClosed.thenRun(onClosed)
         val currentMedia = media
         val currentDispatcher = mediaDispatcher
         media = null
         mediaDispatcher = null
         if (currentMedia != null) {
             val cleanup = {
-                runCatching { currentMedia.close() }.onFailure { failure ->
+                runCatching { currentMedia.close { mediaClosed.complete(Unit) } }.onFailure { failure ->
                     Log.e("TiniTalkCall", "failed to release call media", failure)
+                    // A failed disposal must not allow a second microphone owner.
+                    mediaClosed.completeExceptionally(failure)
                 }
                 Unit
             }

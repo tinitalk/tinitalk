@@ -15,4 +15,6 @@ interface SignalConnection : SignalClient, AutoCloseable {
     fun isOpen(): Boolean
     fun isOpen(expectedGeneration: Long): Boolean
     fun sendVisibility(callId: String, visible: Boolean): Boolean
+    /** Stop retransmission; cannot undo a packet already received by the server. */
+    fun cancelQueued(eventId: String) {}
 }

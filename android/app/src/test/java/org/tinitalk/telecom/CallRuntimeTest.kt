@@ -70,6 +70,21 @@ class CallRuntimeTest {
         }
     }
 
+    @Test fun waitingSwitchIsNotReleasedUntilMediaCleanupCompletes() {
+        val f = fixture()
+        val unblock = CountDownLatch(1)
+        val completed = CountDownLatch(1)
+        try {
+            f.dispatcher.dispatch { unblock.await(3, TimeUnit.SECONDS) }
+            f.runtime.releaseMedia(onClosed = { completed.countDown() })
+            assertNull(f.runtime.media)
+            assertEquals(1L, completed.count)
+            unblock.countDown()
+            assertTrue(completed.await(3, TimeUnit.SECONDS))
+            assertEquals(1, f.mediaCloses.get())
+        } finally { unblock.countDown() }
+    }
+
     @Test fun fullCloseIsIdempotentAndHttpCleanupSurvivesSocketCloseFailure() {
         for (failClose in listOf(false, true)) {
             val f = fixture()
