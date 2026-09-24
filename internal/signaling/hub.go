@@ -34,6 +34,7 @@ type CallHistoryStore interface {
 	MarkCallConnected(callID string, connectedAt time.Time) error
 	FinishCall(callID string, outcome state.CallOutcome, endedAt time.Time) error
 	FinishCallWithReply(callID string, outcome state.CallOutcome, endedAt time.Time, replyCode string) error
+	FinishSeenBusyCall(callID string, endedAt time.Time) error
 }
 
 type SessionStore interface {
@@ -323,6 +324,9 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	if !c.participant(sender) {
 		return errors.New("sender is not a call participant")
 	}
+	if event.Type == "call.waiting" {
+		return h.setCallWaiting(client, c, event)
+	}
 	if event.Type == "call.resume" {
 		var payload struct {
 			LastSeq uint64 `json:"last_seq"`
@@ -370,6 +374,18 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 	}
 	if err := c.validateTransition(sender, event.Type); err != nil {
 		return err
+	}
+	if c.state == callRinging && (c.waiting || event.Type == "call.accept") && !h.now().Before(c.incomingDeadline()) {
+		h.expireIncoming(c)
+		return errors.New("call has expired")
+	}
+	var replaced *call
+	if event.Type == "call.accept" {
+		var err error
+		replaced, err = h.validateWaitingAcceptance(client, c, event)
+		if err != nil {
+			return err
+		}
 	}
 	if isSASEvent(event.Type) {
 		if err := c.acceptSASEvent(sender, event.Type, h.now()); err != nil {
@@ -463,7 +479,12 @@ func (h *Hub) handleLocked(sender, senderDeviceID string, clientAware bool, clie
 		h.deliver(recipient, delivered)
 	}
 	if event.Type == "call.accept" {
+		if replaced != nil {
+			ended := protocol.Event{ID: event.ID, CallID: replaced.id, Type: "call.end", SentAt: now.UnixMilli(), Payload: json.RawMessage(`{"reason":"answered_another_call"}`)}
+			h.completeServerCall(replaced, ended, outcomeForEvent(replaced, "call.end"), now, []string{replaced.caller, replaced.callee})
+		}
 		c.state = callActive
+		c.waiting = false
 		h.activateCall(c)
 		c.notifyPushWaiters()
 		for _, participant := range []string{c.caller, c.callee} {
@@ -630,7 +651,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 			return ErrNotInContacts
 		}
 	}
-	if h.primaryCallID(payload.CalleeID) != "" {
+	if h.primaryCallID(payload.CalleeID) != "" && !h.canReceiveWaiting(payload.CalleeID) {
 		if h.history != nil {
 			if err := h.history.RecordBusyCall(event.CallID, sender, payload.CalleeID, h.now()); err != nil {
 				return err
@@ -676,6 +697,7 @@ func (h *Hub) start(sender, senderDeviceID string, event protocol.Event) error {
 	var incomingPayload map[string]any
 	_ = json.Unmarshal(incoming.Payload, &incomingPayload)
 	incomingPayload["caller_login"] = sender
+	incomingPayload["call_waiting_supported"] = true
 	incoming.Payload, _ = json.Marshal(incomingPayload)
 	delivered := h.next(c, incoming, payload.CalleeID)
 	h.deliver(payload.CalleeID, delivered)
@@ -803,17 +825,10 @@ func (h *Hub) Sweep() int {
 		if c.state != callRinging {
 			continue
 		}
-		if now.Sub(c.startedAt) < time.Duration(protocol.RingTimeoutSecs)*time.Second {
+		if now.Before(c.incomingDeadline()) {
 			continue
 		}
-		event := protocol.Event{
-			ID:      expireID(c.id),
-			CallID:  c.id,
-			Type:    "call.expire",
-			SentAt:  now.UnixMilli(),
-			Payload: json.RawMessage(`{}`),
-		}
-		h.completeServerCall(c, event, outcomeForEvent(c, event.Type), now, []string{c.callee})
+		h.expireIncoming(c)
 		expired++
 	}
 	return expired

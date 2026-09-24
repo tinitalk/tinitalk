@@ -27,6 +27,7 @@ var allowedTypes = map[string]struct{}{
 	"call.start":          {},
 	"call.incoming":       {},
 	"call.ringing":        {},
+	"call.waiting":        {},
 	"call.visibility":     {},
 	"call.accept":         {},
 	"call.connected":      {},
@@ -101,6 +102,16 @@ func (e Event) Validate() error {
 
 func (e Event) validatePayload() error {
 	switch e.Type {
+	case "call.waiting":
+		var payload struct {
+			Waiting *bool `json:"waiting"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Waiting == nil {
+			return errors.New("waiting must be a boolean")
+		}
 	case "call.visibility":
 		var payload struct {
 			Visible *bool `json:"visible"`

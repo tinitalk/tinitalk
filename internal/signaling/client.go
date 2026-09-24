@@ -16,6 +16,7 @@ type DeliveredEvent struct {
 
 type Client struct {
 	contactChanges              bool
+	callWaiting                 bool
 	user                        string
 	deviceID                    string
 	sessionID                   string

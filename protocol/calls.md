@@ -305,6 +305,82 @@ ICE restart, it sends `rtc.restart.request`; the caller then sends
 
 With continual ICE gathering, `rtc.ice` also carries candidate removals. Such an event has `removed: true`, a non-empty `candidates` array, and repeats the first candidate in the top-level ICE fields so older clients can still decode it. `restart_id`, when present, scopes additions and removals to the current ICE generation.
 
+## Call waiting (`call_waiting_v1`)
+
+A receiving client opts in on each authenticated WebSocket connection with
+`?call_waiting=1` (combine with other existing query parameters). `/healthz`
+advertises `call_waiting_v1`; an absent feature means legacy immediate-busy
+behavior. No change to the HTTP or WebSocket protocol version is required.
+
+A connected, opted-in receiver may have up to eight incoming invitations while
+already in an established conversation. Outgoing dialing and calls without a
+media-connected acknowledgement remain busy. The active call retains its slot;
+ending an invitation never releases another call. Permissions, session/device
+binding and caller rate limits still apply. An old receiving client retains
+immediate busy behavior. Old callers receive familiar ringing and rejection
+events; they may display a generic decline instead of the new busy explanation.
+
+`call.incoming` includes `call_waiting_supported: true`. After actually presenting
+an invitation during another conversation, the receiver sends
+`call.waiting {"waiting":true}`. This also works when the conversation belongs
+to another server. The server acknowledges ringing to the caller using the
+existing `call.ringing` event and echoes `call.waiting` only to the receiving
+device, including `waiting`, `expires_at` and `remaining_ms`.
+
+The first waiting acknowledgement starts a 15-second server deadline, bounded
+by the original 45-second ringing deadline. Duplicate events and subsequent
+acknowledgements do not extend it. On expiry the server sends
+`call.reject {"reason":"busy"}` and records Busy, including the callee's unread
+missed count. An explicit decline without a message sends
+`call.reject {"reason":"busy","seen":true}`: it records Busy in history but
+does not add an unread missed call. The server strips `seen` from the event
+delivered to the caller. Timeout rejections omit `seen` and remain unread.
+Client UI timers do not own server expiry.
+
+After the other conversation ends, the receiver can send
+`call.waiting {"waiting":false}` to return to ordinary ringing. This is refused
+while this server still owns an active call for the receiver and never restarts
+the original ringing deadline. Previously elapsed deadlines cannot be revived.
+
+When replacing a conversation on the same server, `call.accept` can include
+`replace_call_id`. The server checks the selected invitation's deadline and
+device ownership and the current conversation before committing acceptance and
+ending the replaced call under the same hub lock. Invalid, cancelled or expired
+selections must not terminate the current conversation. Clients serialize local
+media teardown/startup; servers do not coordinate switches across accounts on
+different servers. A cross-server cancellation can still prevent connection
+after the previous conversation has ended.
+
+`GET /api/active-call?call_waiting=1` preserves the legacy `call_id` and `incoming`
+fields and adds `incoming_calls`, an oldest-first list of pending invitations.
+Each has `call_id`, `caller_login`, `started_at`, `expires_at`, `last_seq` and
+`waiting`. Only invitations matching the authenticated callee session/device
+are included. Resume each call separately; its sequence belongs to that call,
+not to the user's other conversation. Session replacement terminates all calls.
+
+### Client verification
+
+Clients keep one media conversation; waiting invitations have no microphone or
+camera. Answering closes the previous media before creating the next. Failed or
+cancelled selections are removed from the signaling retry queue. Each invitation
+has its own deadline; multiple invitations share a single local waiting tone.
+
+Before release, check on physical devices with three participants (four for
+multiple invitations):
+
+- While A talks to B, C calls A: the conversation continues, a waiting tone and
+  notification appear, and no action for 15 seconds returns Busy to C.
+- Decline C without ending B; answer C and verify B ends and audio reaches C.
+- Repeat with C calling A's account on another server, and with two invitations;
+  cancelling one must not remove the other.
+- End B naturally: a still-valid waiting invitation becomes an ordinary incoming
+  call. It must not be accepted automatically or ring past its original deadline.
+- Cancel C or interrupt networking just as A answers; no late acceptance, stuck
+  notification, or second microphone owner may remain.
+- Repeat in the background, with the screen locked, DND, and a Bluetooth headset.
+- An old receiving client still returns immediate Busy; a new client on an old
+  server does not send unsupported waiting commands.
+
 ## Replay after reconnect
 
 The server assigns a monotonic `seq` to delivered events. Re-sending the same `id` must not create a second action. A reconnecting client sends `call.resume` with `last_seq`; the server replays buffered events for the active call after that sequence.

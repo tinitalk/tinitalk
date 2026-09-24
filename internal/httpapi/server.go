@@ -115,7 +115,7 @@ func (s *Server) routes() {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	features := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1", "browser_v1", "password_auth_v1"}
+	features := []string{"video_1to1", "single_device_session", "webpush_v1", "personal_contacts", "call_sas_v1", "call_reply_v1", "browser_v1", "password_auth_v1", "call_waiting_v1"}
 	writeJSON(w, struct {
 		Service    string   `json:"service"`
 		Status     string   `json:"status"`

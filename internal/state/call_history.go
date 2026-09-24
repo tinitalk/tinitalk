@@ -187,6 +187,16 @@ func (db *DB) FinishCall(callID string, outcome CallOutcome, endedAt time.Time) 
 }
 
 func (db *DB) FinishCallWithReply(callID string, outcome CallOutcome, endedAt time.Time, replyCode string) error {
+	return db.finishCall(callID, outcome, endedAt, replyCode, false)
+}
+
+// FinishSeenBusyCall preserves history without creating an unread missed call.
+// Only an explicit rejection by the recipient uses this path, never a timeout.
+func (db *DB) FinishSeenBusyCall(callID string, endedAt time.Time) error {
+	return db.finishCall(callID, CallOutcomeBusy, endedAt, "", true)
+}
+
+func (db *DB) finishCall(callID string, outcome CallOutcome, endedAt time.Time, replyCode string, seen bool) error {
 	if outcome == CallOutcomePending {
 		return errors.New("terminal call outcome is required")
 	}
@@ -213,7 +223,7 @@ func (db *DB) FinishCallWithReply(callID string, outcome CallOutcome, endedAt ti
 	if err := requireAffected(result, "active call not found"); err != nil {
 		return err
 	}
-	if isUnreadMissedOutcome(outcome) {
+	if isUnreadMissedOutcome(outcome) && !seen {
 		if _, err := tx.Exec(`
 			INSERT INTO call_history_unread(call_history_id, user_id)
 			SELECT id, callee_id FROM call_history WHERE call_id = ?

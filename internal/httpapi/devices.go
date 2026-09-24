@@ -133,6 +133,9 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acknowledgesEvents := r.Header.Get(signalAckHeader) == signalAckVersion
+	if r.URL.Query().Get("call_waiting") == "1" {
+		s.hub.EnableCallWaiting(client)
+	}
 	responseHeader := http.Header{signalProtocolHeader: []string{signalProtocolVersion}}
 	if r.URL.Path == "/api/browser/socket" {
 		if r.URL.Query().Get("contact_changes") == "1" {

@@ -26,6 +26,15 @@ func (s *Server) activeCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response := activeCallResponse{CallID: snapshot.CallID}
+	if r.URL.Query().Get("call_waiting") == "1" {
+		response.IncomingCalls = make([]activeIncomingResponse, 0, len(snapshot.IncomingCalls))
+		for _, incoming := range snapshot.IncomingCalls {
+			response.IncomingCalls = append(response.IncomingCalls, activeIncomingResponse{
+				CallID: incoming.CallID, CallerLogin: incoming.CallerLogin, Waiting: incoming.Waiting,
+				StartedAt: incoming.StartedAt.UTC().Format(time.RFC3339Nano), ExpiresAt: incoming.ExpiresAt.UTC().Format(time.RFC3339Nano), LastSeq: incoming.LastSeq,
+			})
+		}
+	}
 	if snapshot.Incoming != nil {
 		response.Incoming = &activeIncomingResponse{
 			CallID:      snapshot.CallID,
@@ -39,11 +48,13 @@ func (s *Server) activeCall(w http.ResponseWriter, r *http.Request) {
 }
 
 type activeCallResponse struct {
-	CallID   string                  `json:"call_id"`
-	Incoming *activeIncomingResponse `json:"incoming,omitempty"`
+	CallID        string                   `json:"call_id"`
+	Incoming      *activeIncomingResponse  `json:"incoming,omitempty"`
+	IncomingCalls []activeIncomingResponse `json:"incoming_calls,omitempty"`
 }
 
 type activeIncomingResponse struct {
+	Waiting     bool   `json:"waiting,omitempty"`
 	CallID      string `json:"call_id"`
 	CallerLogin string `json:"caller_login"`
 	StartedAt   string `json:"started_at"`
