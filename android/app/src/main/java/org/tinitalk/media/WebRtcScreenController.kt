@@ -6,22 +6,20 @@ import org.tinitalk.R
 
 import android.content.Context
 import android.content.Intent
+import android.app.Activity
 import android.graphics.Point
 import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Display
 import android.view.WindowManager
-import org.webrtc.CapturerObserver
 import org.webrtc.EglBase
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpSender
-import org.webrtc.ScreenCapturerAndroid
-import org.webrtc.SurfaceTextureHelper
-import org.webrtc.VideoFrame
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import kotlin.math.roundToInt
@@ -38,12 +36,13 @@ internal class WebRtcScreenController(
     private val onStopped: (String?) -> Unit,
 ) {
     private val resources = NativeResourceOwner()
-    private var capturer: ScreenCapturerAndroid? = null
+    private var capturer: ScreenCaptureSession? = null
     private var source: VideoSource? = null
     private var track: VideoTrack? = null
     private var lease: SenderTrackLease<VideoTrack>? = null
     private var stopped = false
     private var started = false
+    private var captureStarted = false
     private var paused = false
     private var captureSize = 0 to 0
     private val firstFrame = AtomicBoolean(false)
@@ -65,27 +64,17 @@ internal class WebRtcScreenController(
     fun start(permission: Intent) = queue.execute {
         if (stopped || stopRequested.get()) return@execute
         try {
-            val helper = SurfaceTextureHelper.create("TiniTalkScreenCapture", egl)
-            resources.own(helper::dispose)
             val videoSource = factory.createVideoSource(true).also { source = it }
             resources.own(videoSource::dispose)
             val videoTrack = factory.createVideoTrack("screen", videoSource).also { track = it }
             resources.own(videoTrack::dispose)
-            val capture = ScreenCapturerAndroid(permission, object : MediaProjection.Callback() {
+            val projection = checkNotNull(context.getSystemService(MediaProjectionManager::class.java)
+                .getMediaProjection(Activity.RESULT_OK, permission))
+            val capture = ScreenCaptureSession(projection, object : MediaProjection.Callback() {
                 override fun onStop() { stop() }
                 override fun onCapturedContentResize(width: Int, height: Int) { resize(width, height) }
-            }).also { capturer = it }
-            resources.own(capture::dispose)
-            capture.initialize(helper, context, object : CapturerObserver {
-                override fun onCapturerStarted(success: Boolean) {
-                    videoSource.capturerObserver.onCapturerStarted(success)
-                    if (!success) {
-                        Log.e("TiniTalkScreen", "capturer reported start failure")
-                        stop(appString(R.string.text_could_not_start_screen_sharing_1))
-                    }
-                }
-                override fun onCapturerStopped() { videoSource.capturerObserver.onCapturerStopped() }
-                override fun onFrameCaptured(frame: VideoFrame) {
+            }) { width, height ->
+                screenCaptureOutput(width, height, egl) { frame ->
                     videoSource.capturerObserver.onFrameCaptured(frame)
                     if (firstFrame.compareAndSet(false, true)) queue.execute {
                         if (!stopped && !stopRequested.get() && !started) {
@@ -94,7 +83,8 @@ internal class WebRtcScreenController(
                         }
                     }
                 }
-            })
+            }.also { capturer = it }
+            resources.own(capture::close)
             val size = displaySize()
             val dimensions = screenCaptureSize(size.x, size.y)
             captureSize = dimensions
@@ -108,7 +98,9 @@ internal class WebRtcScreenController(
             ).also { lease = it }
             check(senderLease.attach()) { "failed to attach screen track" }
             videoTrack.setEnabled(!paused)
-            capture.startCapture(dimensions.first, dimensions.second, WebRtcPolicy.screenCaptureFps)
+            videoSource.capturerObserver.onCapturerStarted(true)
+            captureStarted = true
+            capture.resize(dimensions.first, dimensions.second)
             displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
         } catch (failure: Exception) {
             Log.e("TiniTalkScreen", "capture start failed", failure)
@@ -140,7 +132,7 @@ internal class WebRtcScreenController(
         val (w, h) = dimensions
         runCatching {
             source?.adaptOutputFormat(w, h, WebRtcPolicy.screenCaptureFps)
-            capturer?.changeCaptureFormat(w, h, WebRtcPolicy.screenCaptureFps)
+            capturer?.resize(w, h)
         }.onFailure {
             Log.e("TiniTalkScreen", "capture resize failed: ${w}x$h", it)
             stopOnQueue(appString(R.string.text_screen_sharing_stopped_48))
@@ -162,8 +154,12 @@ internal class WebRtcScreenController(
         runCatching { track?.setEnabled(false) }
         val released = lease?.release()
         awaitingPeerClose = released?.requiresPeerClosed == true
-        runCatching { capturer?.stopCapture() }
+        runCatching { capturer?.close() }
             .onFailure { Log.e("TiniTalkScreen", "capture stop failed", it) }
+        if (captureStarted) {
+            captureStarted = false
+            runCatching { source?.capturerObserver?.onCapturerStopped() }
+        }
         if (!awaitingPeerClose) runCatching { resources.close() }
             .onFailure { Log.e("TiniTalkScreen", "capture cleanup failed", it) }
         onStopped(message ?: released?.failure?.let { appString(R.string.text_screen_sharing_stopped_48) })
