@@ -48,6 +48,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -916,9 +917,23 @@ private fun HomeScreen(
                         NavigationRailItem(selected = pagerState.currentPage == 1,
                             onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
                             modifier = Modifier.semantics { contentDescription = historyTabDescription(state.unreadMissedCount) },
-                            icon = { Icon(painterResource(R.drawable.ic_history), null) },
-                            label = { Text(appString(R.string.text_history_251) +
-                                (historyBadgeText(state.unreadMissedCount)?.let { " · $it" } ?: "")) })
+                            icon = {
+                                BadgedBox(badge = {
+                                    historyBadgeText(state.unreadMissedCount)?.let { count ->
+                                        Badge(
+                                            modifier = Modifier.clearAndSetSemantics { },
+                                            containerColor = CallRejectRed,
+                                            contentColor = Color.White,
+                                        ) {
+                                            Text(count, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                                                maxLines = 1, softWrap = false)
+                                        }
+                                    }
+                                }) {
+                                    Icon(painterResource(R.drawable.ic_history), null)
+                                }
+                            },
+                            label = { Text(appString(R.string.text_history_251), maxLines = 1) })
                         Spacer(Modifier.weight(1f))
                         NavigationRailItem(selected = false, onClick = onOpenProfile,
                             modifier = Modifier.semantics { contentDescription = appString(R.string.text_profile_308) },
