@@ -31,6 +31,17 @@ export default defineConfig(async ({ command }) => {
   const pushWorker = command === 'build' ? await versionedWorker('src/push-worker.ts') : undefined;
   return {
     base: './',
+    build: {
+      rolldownOptions: {
+        output: {
+          // Keep language switching synchronous; preload and cache all catalogs
+          // separately from application code for offline use.
+          codeSplitting: {
+            groups: [{ name: 'translations', test: /[\\/]src[\\/]locales[\\/]/ }],
+          },
+        },
+      },
+    },
     define: {
       'import.meta.env.VITE_WEB_COMMIT': JSON.stringify(commit),
       ...(pushWorker ? {

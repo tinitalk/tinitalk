@@ -19,6 +19,28 @@ function navigate(): Promise<Response> {
   return result;
 }
 
+it('precaches modulepreloaded translations alongside the application for offline use', async () => {
+  const html = `<script type="module" src="./assets/index-app.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/translations-catalogs.js">
+    <link rel="stylesheet" href="./assets/index-style.css">
+    <link rel="manifest" href="./manifest.webmanifest">`;
+  const put = vi.fn().mockResolvedValue(undefined);
+  const addAll = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('fetch', async () => new Response(html));
+  vi.stubGlobal('caches', { open: async () => ({ put, addAll }) });
+
+  let installed!: Promise<void>;
+  listeners.install({ waitUntil: (task: Promise<void>) => { installed = task; } });
+  await installed;
+
+  expect(put).toHaveBeenCalledWith(new URL('https://web.example/index.html'), expect.any(Response));
+  expect(addAll).toHaveBeenCalledWith([
+    'https://web.example/assets/index-app.js',
+    'https://web.example/assets/translations-catalogs.js',
+    'https://web.example/assets/index-style.css',
+  ]);
+});
+
 it.each([502, 503, 'offline'])('opens the cached application when hosting returns %s', async status => {
   vi.stubGlobal('fetch', async () => {
     if (typeof status === 'string') throw new TypeError('offline');
