@@ -12,6 +12,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,6 +36,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
@@ -250,7 +253,8 @@ fun ActiveCallScreen(
                     onStopSharing()
                     showSharingNotice(appString(R.string.text_screen_sharing_stopped_48))
                 },
-                modifier = Modifier.align(Alignment.TopEnd),
+                modifier = Modifier.align(Alignment.TopEnd).then(
+                    if (org.tinitalk.ui.compactLandscape()) Modifier.navigationBarsPadding() else Modifier),
             )
         }
         AnimatedVisibility(
@@ -540,7 +544,7 @@ private fun AudioActiveCallScreen(
             fontScale = LocalDensity.current.fontScale,
             cameraActionVisible = cameraActionVisible,
         )
-        if (layout.scrollable) {
+        if (layout.scrollable && !org.tinitalk.ui.compactLandscape()) {
             ConstrainedAudioActiveCallScreen(
                 peerName = peerName,
                 contactAddress = contactAddress,
@@ -626,6 +630,13 @@ private fun RegularAudioActiveCallScreen(
         statusColor = statusColor,
         statusAccessory = { CallTransportRouteIndicator(transportRoute) },
         prominentAvatar = true,
+        landscapeControls = {
+            LandscapeCallControlGrid(muted, currentEndpoint, availableEndpoints,
+                cameraVisible = CallControlAction.Camera in layout.actions,
+                cameraEnabled = videoAllowed, cameraRequested = cameraRequested,
+                onMute = onMute, onSelectEndpoint = onSelectEndpoint,
+                onShowRoutePicker = onShowRoutePicker, onCamera = onCamera, onEnd = onEnd)
+        },
     ) {
         Text(
             text = appString(R.string.text_audio_value_166, audioEndpointLabel(currentEndpoint)),
@@ -727,7 +738,7 @@ private fun ConstrainedAudioActiveCallScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.34f))
+                .background(CallControlsOverlayBackground)
                 .navigationBarsPadding()
                 .heightIn(max = layout.viewportHeightDp.dp)
                 .verticalScroll(rememberScrollState())
@@ -831,10 +842,13 @@ private fun VideoActiveCallScreen(
     onVideoVisibilityChanged: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
+    val landscape = org.tinitalk.ui.compactLandscape()
     val localSource = videoState.localTrack
     val remoteSource = videoState.remoteTrack
     var localFrameVisible by remember(localSource) { mutableStateOf(false) }
+    var localFrameSize by remember(localSource) { mutableStateOf(0 to 0) }
     var remoteFrameVisible by remember(remoteSource) { mutableStateOf(false) }
+    var remoteFrameSize by remember(remoteSource) { mutableStateOf(0 to 0) }
     var remoteVideoWasVisible by remember(videoState.callId, videoState.remoteSending) {
         mutableStateOf(false)
     }
@@ -925,13 +939,19 @@ private fun VideoActiveCallScreen(
             fontScale = density.fontScale,
         )
         if (remoteSource != null) {
-            VideoCallRenderer(
-                source = remoteSource,
-                mirror = false,
-                localOverlay = false,
-                modifier = Modifier.fillMaxSize(),
-                onFrameVisibilityChanged = { remoteFrameVisible = it },
-            )
+            BoxWithConstraints(Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center) {
+                val frameSize = cameraVideoSize(maxWidth.value, maxHeight.value,
+                    remoteFrameSize.first, remoteFrameSize.second)
+                ScreenVideoRenderer(
+                    source = remoteSource,
+                    contentDescription = null,
+                    keepLastFrame = false,
+                    modifier = Modifier.size(frameSize.width.dp, frameSize.height.dp),
+                    onFrameSizeChanged = { width, height -> remoteFrameSize = width to height },
+                    onFrameVisibilityChanged = { remoteFrameVisible = it },
+                )
+            }
         }
         if (!presentation.remoteVideoVisible) {
             CallScreenSurface(
@@ -988,54 +1008,40 @@ private fun VideoActiveCallScreen(
             visible = controlsVisible && presentation.remoteVideoVisible,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .statusBarsPadding()
+                .videoCallHeaderInsets(landscape)
                 .onSizeChanged { size ->
                     if (size.height > 0) topControlsHeight = size.height
                 },
             enter = fadeIn(tween(VideoControlsFadeInMillis)),
             exit = fadeOut(tween(VideoControlsFadeOutMillis)),
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    text = status,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Color.Black.copy(alpha = 0.32f))
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                    color = statusColor,
-                    style = MaterialTheme.typography.titleSmall,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = peerName,
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = durationText,
-                    color = Color.White.copy(alpha = 0.82f),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-            }
+            VideoCallHeader(status, peerName, durationText, statusColor)
         }
 
         if (
             localSource != null &&
             videoState.requested &&
-            bottomControlsHeight > 0 &&
+            (landscape || bottomControlsHeight > 0) &&
             (topControlsHeight > 0 || !presentation.remoteVideoVisible)
         ) {
-            val compactPreview = density.fontScale >= 1.3f
-            val previewSize = selfPreviewSize(compactPreview)
+            val compactPreview = density.fontScale >= 1.3f || org.tinitalk.ui.compactLandscape()
+            val previewSize = selfPreviewSize(
+                compact = compactPreview,
+                frameWidth = localFrameSize.first,
+                frameHeight = localFrameSize.second,
+                landscape = maxWidth > maxHeight,
+                maxWidthDp = with(density) {
+                    (maxWidth.toPx() - safeDrawingInsets.getLeft(density, layoutDirection) -
+                        safeDrawingInsets.getRight(density, layoutDirection)).toDp().value
+                } - SelfPreviewEdgeSpacing.value * 2 - if (landscape && controlsVisible) LandscapeCallControlsWidth.value else 0f,
+                maxHeightDp = with(density) {
+                    val top = if (controlsVisible) maxOf(safeDrawingInsets.getTop(density), topControlsHeight)
+                        else safeDrawingInsets.getTop(density)
+                    val bottom = if (controlsVisible && !landscape) maxOf(safeDrawingInsets.getBottom(density), bottomControlsHeight)
+                        else safeDrawingInsets.getBottom(density)
+                    (maxHeight.toPx() - top - bottom).toDp().value
+                } - SelfPreviewEdgeSpacing.value * 2,
+            )
             val previewWidth = with(density) { previewSize.widthDp.dp.toPx() }
             val previewHeight = with(density) { previewSize.heightDp.dp.toPx() }
             val previewBounds = selfPreviewBounds(
@@ -1045,10 +1051,11 @@ private fun VideoActiveCallScreen(
                 previewHeight = previewHeight,
                 safeLeft = safeDrawingInsets.getLeft(density, layoutDirection).toFloat(),
                 safeTop = safeDrawingInsets.getTop(density).toFloat(),
-                safeRight = safeDrawingInsets.getRight(density, layoutDirection).toFloat(),
+                safeRight = safeDrawingInsets.getRight(density, layoutDirection).toFloat() +
+                    if (landscape && controlsVisible) with(density) { LandscapeCallControlsWidth.toPx() } else 0f,
                 safeBottom = safeDrawingInsets.getBottom(density).toFloat(),
                 topControlsHeight = topControlsHeight.toFloat(),
-                bottomControlsHeight = bottomControlsHeight.toFloat(),
+                bottomControlsHeight = if (landscape) 0f else bottomControlsHeight.toFloat(),
                 controlsVisible = controlsVisible,
                 edgeSpacing = with(density) { SelfPreviewEdgeSpacing.toPx() },
             )
@@ -1090,6 +1097,7 @@ private fun VideoActiveCallScreen(
                 VideoCallRenderer(
                     source = localSource,
                     mirror = videoState.facing == CameraFacing.Front,
+                    onFrameSizeChanged = { width, height -> localFrameSize = width to height },
                     localOverlay = true,
                     modifier = Modifier.fillMaxSize(),
                     onClick = toggleControls.takeIf { controlsMayAutoHide },
@@ -1125,7 +1133,38 @@ private fun VideoActiveCallScreen(
             }
         }
 
-        AnimatedVisibility(
+        if (landscape) {
+            val videoNotice = weakNetworkVideoMessage(videoState.allowed, videoState.requested, videoState.networkGated)
+                ?: if (videoState.failure != null && !videoState.sending) {
+                    appString(R.string.text_could_not_turn_on_the_camera_172)
+                } else null
+            if (videoNotice != null) {
+                Box(Modifier.align(Alignment.BottomCenter).safeDrawingPadding()
+                    .padding(end = LandscapeCallControlsWidth, bottom = 8.dp)) {
+                    Text(videoNotice, Modifier.background(CallBackgroundTop.copy(alpha = 0.9f))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        color = Color(0xFFFFCA6A), style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center)
+                }
+            }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+                AnimatedVisibility(visible = controlsVisible,
+                    enter = slideInHorizontally(tween(VideoControlsSlideMillis)) { it },
+                    exit = slideOutHorizontally(tween(VideoControlsSlideMillis)) { it }) {
+                    LandscapeCallControls(muted, currentEndpoint, availableEndpoints,
+                        cameraVisible = true, cameraEnabled = !videoState.screen.requested,
+                        backgroundColor = CallControlsOverlayBackground,
+                        switchCameraVisible = true,
+                        switchCameraEnabled = presentation.switchCameraEnabled,
+                        onSwitchCamera = { restartControlsAutoHide(); onSwitchCamera() },
+                        cameraRequested = videoState.requested,
+                        onMute = { restartControlsAutoHide(); onMute(it) },
+                        onSelectEndpoint = { restartControlsAutoHide(); onSelectEndpoint(it) },
+                        onShowRoutePicker = { restartControlsAutoHide(); onShowRoutePicker() },
+                        onCamera = { restartControlsAutoHide(); onCamera(it) }, onEnd = onEnd)
+                }
+            }
+        } else AnimatedVisibility(
             visible = controlsVisible,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -1145,7 +1184,7 @@ private fun VideoActiveCallScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.34f))
+                    .background(CallControlsOverlayBackground)
                     .navigationBarsPadding()
                     .then(
                         if (controlLayout.scrollable) {
@@ -1373,7 +1412,7 @@ private fun AdaptiveVideoControls(
 }
 
 @Composable
-private fun SwitchCameraCallAction(
+internal fun SwitchCameraCallAction(
     enabled: Boolean,
     modifier: Modifier,
     onSwitchCamera: () -> Unit,
@@ -1496,6 +1535,7 @@ internal fun AudioRoutePicker(
 ) {
     if (!visible) return
     ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
         Text(
             text = appString(R.string.text_audio_output_185),
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
@@ -1535,6 +1575,7 @@ internal fun AudioRoutePicker(
             }
         }
         Spacer(Modifier.navigationBarsPadding().height(12.dp))
+        }
     }
 }
 

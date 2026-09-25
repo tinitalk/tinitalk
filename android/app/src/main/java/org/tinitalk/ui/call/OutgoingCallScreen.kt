@@ -42,6 +42,13 @@ fun OutgoingCallScreen(
         fallbackLogin = fallbackLogin,
         pulsingAvatar = true,
         prominentAvatar = true,
+        landscapeControls = {
+            LandscapeCallControlGrid(muted, currentEndpoint, availableEndpoints,
+                cameraVisible = true, cameraEnabled = false, cameraRequested = false,
+                onMute = onMute, onSelectEndpoint = onSelectEndpoint,
+                onShowRoutePicker = { routePickerVisible = true }, onCamera = {},
+                onEnd = onCancel, endLabel = appString(R.string.call_cancel))
+        },
     ) {
         val buttonSize = CompactCallActionSizeDp.dp
         Row(

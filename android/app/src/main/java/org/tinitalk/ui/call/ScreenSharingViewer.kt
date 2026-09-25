@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -78,8 +79,12 @@ internal fun ScreenSharingViewer(
         onVideoVisibilityChanged(true)
         onDispose { onVideoVisibilityChanged(false) }
     }
-    // Keep both the image and our panels outside the phone's system bars and cutouts.
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding().clipToBounds()) {
+    val landscape = org.tinitalk.ui.compactLandscape()
+    val safePadding = WindowInsets.safeDrawing.asPaddingValues()
+    val layoutDirection = LocalLayoutDirection.current
+    // Landscape panel backgrounds reach the edges; their contents handle safe insets separately.
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)
+        .then(if (landscape) Modifier else Modifier.safeDrawingPadding()).clipToBounds()) {
         val status = when {
             connectionHealth == ConnectionHealth.Reconnecting || connectionHealth == ConnectionHealth.Connecting -> appString(R.string.text_reconnecting_131)
             !frameVisible -> appString(R.string.text_connecting_screen_sharing_197)
@@ -93,7 +98,22 @@ internal fun ScreenSharingViewer(
         val panelSemantics = if (controlsVisible) Modifier else Modifier.clearAndSetSemantics {}
         ScreenSharingPanels(
             progress = panelProgress,
+            sideControls = org.tinitalk.ui.compactLandscape(),
             header = {
+                if (org.tinitalk.ui.compactLandscape()) {
+                    androidx.compose.foundation.layout.Row(
+                        Modifier.fillMaxWidth().then(panelSemantics).background(ScreenPanelBackground)
+                            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Start))
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(status, color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.bodySmall)
+                        Text(peerName, Modifier.weight(1f), color = Color.White,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(durationText, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
+                    }
+                } else {
                 Column(Modifier.fillMaxWidth().then(panelSemantics).background(ScreenPanelBackground)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
@@ -105,10 +125,20 @@ internal fun ScreenSharingViewer(
                     Text(durationText, Modifier.padding(top = 4.dp), color = Color.White.copy(alpha = 0.7f),
                         style = MaterialTheme.typography.bodySmall)
                 }
+                }
             },
             controls = {
+                if (org.tinitalk.ui.compactLandscape()) {
+                    LandscapeCallControls(muted, currentEndpoint, availableEndpoints,
+                        backgroundColor = ScreenPanelBackground,
+                        cameraVisible = false, cameraEnabled = false, cameraRequested = false,
+                        onMute = { touch(); onMute(it) },
+                        onSelectEndpoint = { touch(); onSelectEndpoint(it) },
+                        onShowRoutePicker = { touch(); onShowRoutePicker() },
+                        onCamera = {}, onEnd = onEnd, modifier = panelSemantics)
+                } else {
                 Box(Modifier.fillMaxWidth().then(panelSemantics).background(ScreenPanelBackground)
-                    .padding(horizontal = 12.dp, vertical = 16.dp)) {
+                    .padding(horizontal = 12.dp, vertical = if (org.tinitalk.ui.compactLandscape()) 6.dp else 16.dp)) {
                     AdaptiveAudioControls(
                         muted, currentEndpoint, availableEndpoints, layout,
                         videoAllowed = false, cameraRequested = false,
@@ -118,9 +148,16 @@ internal fun ScreenSharingViewer(
                         onCamera = {}, onEnd = onEnd,
                     )
                 }
+                }
             },
         ) {
-            ScreenImage(source, shareId, controlsVisible, Modifier.fillMaxSize(),
+            ScreenImage(source, shareId, controlsVisible, Modifier.fillMaxSize().then(
+                if (landscape) Modifier.padding(
+                    start = safePadding.calculateStartPadding(layoutDirection),
+                    end = safePadding.calculateEndPadding(layoutDirection) * (1f - panelProgress.value),
+                    top = safePadding.calculateTopPadding() * (1f - panelProgress.value),
+                    bottom = safePadding.calculateBottomPadding(),
+                ) else Modifier),
                 onFrameVisibilityChanged = { frameVisible = it },
                 onTap = { touch(); if (frameVisible) controlsVisible = !controlsVisible },
                 onInteraction = touch,
@@ -128,6 +165,7 @@ internal fun ScreenSharingViewer(
         }
         if (panelsHidden) {
             Text(status, Modifier.align(Alignment.TopCenter)
+                .then(if (landscape) Modifier.statusBarsPadding() else Modifier)
                 .padding(horizontal = 12.dp, vertical = 8.dp)
                 .background(ScreenPanelBackground, RoundedCornerShape(12.dp))
                 .padding(horizontal = 12.dp, vertical = 6.dp),
@@ -138,14 +176,16 @@ internal fun ScreenSharingViewer(
     }
 }
 
-/** A single slide progress reserves exactly the space exposed by the two panels. */
+/** Reserve only the exposed panel space: bottom in portrait, right in landscape. */
 @Composable
 internal fun ScreenSharingPanels(
     progress: State<Float>,
     header: @Composable () -> Unit,
     controls: @Composable () -> Unit,
+    sideControls: Boolean = false,
     content: @Composable () -> Unit,
 ) {
+    val endInset = WindowInsets.safeDrawing.asPaddingValues().calculateEndPadding(LocalLayoutDirection.current)
     Layout(
         modifier = Modifier.fillMaxSize().clipToBounds(),
         content = {
@@ -156,10 +196,24 @@ internal fun ScreenSharingPanels(
     ) { children, constraints ->
         val width = constraints.maxWidth
         val height = constraints.maxHeight
+        val shown = progress.value.coerceIn(0f, 1f)
+        if (sideControls) {
+            val sideWidth = (LandscapeCallControlsWidth + endInset).roundToPx().coerceAtMost(width)
+            val side = children[2].measure(Constraints.fixed(sideWidth, height))
+            val sideSpace = (sideWidth * shown).roundToInt()
+            val contentWidth = (width - sideSpace).coerceAtLeast(0)
+            val top = children[1].measure(Constraints(minWidth = contentWidth, maxWidth = contentWidth, maxHeight = height))
+            val topSpace = (top.height * shown).roundToInt()
+            val image = children[0].measure(Constraints.fixed(contentWidth, (height - topSpace).coerceAtLeast(0)))
+            return@Layout layout(width, height) {
+                image.placeRelative(0, topSpace)
+                top.placeRelative(0, topSpace - top.height)
+                side.placeRelative(width - sideSpace, 0)
+            }
+        }
         val panelConstraints = constraints.copy(minHeight = 0)
         val top = children[1].measure(panelConstraints)
         val bottom = children[2].measure(panelConstraints)
-        val shown = progress.value.coerceIn(0f, 1f)
         val topSpace = (top.height * shown).roundToInt()
         val bottomSpace = (bottom.height * shown).roundToInt()
         val image = children[0].measure(Constraints.fixed(width, (height - topSpace - bottomSpace).coerceAtLeast(0)))

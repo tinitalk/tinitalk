@@ -19,6 +19,25 @@ internal data class StableVideoSurfaceSize(
     val height: Int,
 )
 
+internal data class FittedVideoSize(val width: Float, val height: Float)
+
+/** The Surface itself must have the frame's aspect ratio, not the enclosing screen's. */
+internal fun fittedVideoSize(viewWidth: Float, viewHeight: Float, frameWidth: Int, frameHeight: Int): FittedVideoSize {
+    if (frameWidth <= 0 || frameHeight <= 0) return FittedVideoSize(viewWidth, viewHeight)
+    val scale = minOf(viewWidth / frameWidth, viewHeight / frameHeight)
+    return FittedVideoSize(frameWidth * scale, frameHeight * scale)
+}
+
+/** Camera video fills matching orientations; unlike a shared screen, its edges may be cropped. */
+internal fun cameraVideoSize(viewWidth: Float, viewHeight: Float, frameWidth: Int, frameHeight: Int): FittedVideoSize {
+    val sameOrientation = frameWidth > 0 && frameHeight > 0 &&
+        ((viewWidth > viewHeight && frameWidth > frameHeight) ||
+            (viewWidth < viewHeight && frameWidth < frameHeight))
+    // EglRenderer center-crops without stretching when its viewport differs from the frame ratio.
+    return if (sameOrientation) FittedVideoSize(viewWidth, viewHeight)
+        else fittedVideoSize(viewWidth, viewHeight, frameWidth, frameHeight)
+}
+
 internal fun stableVideoSurfaceSize(
     viewWidth: Int,
     viewHeight: Int,
@@ -35,9 +54,22 @@ internal fun stableVideoSurfaceSize(
     )
 }
 
-internal fun selfPreviewSize(compact: Boolean): SelfPreviewSize {
-    val widthDp = if (compact) 84f else 96f
-    return SelfPreviewSize(widthDp = widthDp, heightDp = widthDp * 16f / 9f)
+internal fun selfPreviewSize(
+    compact: Boolean,
+    frameWidth: Int = 0,
+    frameHeight: Int = 0,
+    landscape: Boolean = false,
+    maxWidthDp: Float = Float.POSITIVE_INFINITY,
+    maxHeightDp: Float = Float.POSITIVE_INFINITY,
+): SelfPreviewSize {
+    val shortEdge = if (compact) 84f else 96f
+    val aspect = if (frameWidth > 0 && frameHeight > 0) frameWidth.toFloat() / frameHeight
+        else if (landscape) 16f / 9f else 9f / 16f
+    val longEdge = shortEdge * 16f / 9f
+    val width = if (aspect >= 1f) longEdge else longEdge * aspect
+    val height = width / aspect
+    val scale = minOf(1f, maxWidthDp.coerceAtLeast(1f) / width, maxHeightDp.coerceAtLeast(1f) / height)
+    return SelfPreviewSize(width * scale, height * scale)
 }
 
 internal enum class SelfPreviewCorner {

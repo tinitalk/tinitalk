@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -125,11 +127,15 @@ internal fun WaitingCallsPanel(
         }
     }
     if (state.calls.isEmpty()) return
-    BoxWithConstraints(modifier.fillMaxWidth()) {
+    BoxWithConstraints(modifier.fillMaxWidth().then(
+        if (org.tinitalk.ui.compactLandscape()) Modifier.navigationBarsPadding()
+            .padding(end = LandscapeCallControlsWidth) else Modifier)) {
         // Grow with the callers instead of clipping the second row at a fixed height.
         // Keep part of the ongoing call accessible; longer lists can still scroll.
         Surface(
-            modifier = Modifier.fillMaxWidth().heightIn(max = maxHeight * 0.65f),
+            modifier = Modifier.align(Alignment.TopEnd).widthIn(max = if (org.tinitalk.ui.compactLandscape()) 380.dp else maxWidth)
+                .fillMaxWidth().heightIn(max = if (org.tinitalk.ui.compactLandscape())
+                    (maxHeight - 144.dp).coerceAtLeast(80.dp) else maxHeight * 0.65f),
             shape = MaterialTheme.shapes.large,
             color = Color(0xFF36383C),
             contentColor = MaterialTheme.colorScheme.onSurface,

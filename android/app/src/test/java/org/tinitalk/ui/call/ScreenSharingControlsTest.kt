@@ -43,6 +43,42 @@ import org.robolectric.annotation.GraphicsMode
 class ScreenSharingControlsTest {
     @get:Rule val compose = createEmptyComposeRule()
 
+    @Test
+    @Config(qualifiers = "ru-w640dp-h320dp-land")
+    fun landscapeSharingReservesRightPanelWithoutCoveringImage() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        val progress = mutableFloatStateOf(1f)
+        compose.runOnUiThread {
+            activity.get().setContent {
+                Box(Modifier.fillMaxSize().testTag("sharing-frame")) {
+                    ScreenSharingPanels(progress, sideControls = true,
+                        header = { Box(Modifier.fillMaxWidth().height(40.dp).testTag("sharing-header")) },
+                        controls = { Box(Modifier.fillMaxSize().testTag("sharing-controls")) },
+                    ) { Box(Modifier.fillMaxSize().testTag("shared-image")) }
+                }
+            }
+        }
+        try {
+            val sideWidth = compose.onNodeWithTag("sharing-controls").fetchSemanticsNode().boundsInRoot.width
+            val topHeight = compose.onNodeWithTag("sharing-header").fetchSemanticsNode().boundsInRoot.height
+            for (shown in listOf(1f, 0.5f, 0f, 0.5f, 1f)) {
+                compose.runOnIdle { progress.floatValue = shown }
+                val frame = compose.onNodeWithTag("sharing-frame").fetchSemanticsNode().boundsInRoot
+                val image = compose.onNodeWithTag("shared-image").fetchSemanticsNode().boundsInRoot
+                assertEquals(frame.left, image.left, 0.5f)
+                assertEquals(frame.top + topHeight * shown, image.top, 0.5f)
+                assertEquals(frame.bottom, image.bottom, 0.5f)
+                assertEquals(frame.right - sideWidth * shown, image.right, 0.5f)
+                if (shown > 0f) {
+                    val controls = compose.onNodeWithTag("sharing-controls").fetchSemanticsNode().boundsInRoot
+                    assertEquals(controls.left, image.right, 0.5f)
+                }
+            }
+        } finally {
+            activity.pause().stop().destroy()
+        }
+    }
+
     @Test fun imageUsesOnlyTheSpaceBetweenSlidingPanels() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
         val progress = mutableFloatStateOf(1f)

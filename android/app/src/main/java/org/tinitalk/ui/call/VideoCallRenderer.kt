@@ -106,7 +106,7 @@ private fun VideoCallRendererForSource(
         modifier = modifier,
         update = { renderer ->
             renderer.setMirror(mirror)
-            renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+            renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
             renderer.contentDescription = contentDescription
             val clickEnabled = currentClick.value != null
             renderer.setOnClickListener(

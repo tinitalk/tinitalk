@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,15 +20,22 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +43,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -45,11 +55,73 @@ import androidx.compose.ui.unit.sp
 import org.tinitalk.R
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.ui.ContactAvatar
+import org.tinitalk.ui.compactLandscape
+import org.tinitalk.ui.landscapeIdentityPane
+import org.tinitalk.ui.LandscapeIdentityPaneWeight
 import org.tinitalk.ui.theme.CallBackgroundBottom
 import org.tinitalk.ui.theme.CallBackgroundTop
 
+internal val LocalCallActionLabelsVisible = staticCompositionLocalOf { true }
+
 internal fun prominentCallAvatarSize(fontScale: Float): Dp =
     if (fontScale >= 1.5f) 168.dp else 224.dp
+
+/** Video is centered in the entire viewport, including the area behind the control rail. */
+@Composable
+internal fun Modifier.videoCallHeaderInsets(
+    landscape: Boolean,
+    safeInsets: WindowInsets = WindowInsets.safeDrawing,
+): Modifier {
+    if (!landscape) return statusBarsPadding()
+    val direction = LocalLayoutDirection.current
+    val sidePadding = with(LocalDensity.current) {
+        maxOf(safeInsets.getLeft(this, direction),
+            safeInsets.getRight(this, direction) + LandscapeCallControlsWidth.roundToPx()).toDp()
+    }
+    // Equal clearance on both sides avoids shifting the text away from the video's center.
+    return padding(horizontal = sidePadding).windowInsetsPadding(safeInsets.only(WindowInsetsSides.Top))
+}
+
+/** Keep the same stacked identity and status badge in both video orientations. */
+@Composable
+internal fun VideoCallHeader(
+    status: String,
+    peerName: String,
+    durationText: String,
+    statusColor: Color,
+) {
+    Column(
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = status,
+            modifier = Modifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color.Black.copy(alpha = 0.32f))
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            color = statusColor,
+            style = MaterialTheme.typography.titleSmall,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = peerName,
+            color = Color.White,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = durationText,
+            color = Color.White.copy(alpha = 0.82f),
+            style = MaterialTheme.typography.titleSmall,
+        )
+    }
+}
 
 @Composable
 internal fun CallScreenSurface(
@@ -65,8 +137,12 @@ internal fun CallScreenSurface(
     prominentAvatar: Boolean = false,
     keepFooterVisible: Boolean = false,
     scrollable: Boolean = false,
+    landscapeControls: (@Composable () -> Unit)? = null,
+    landscapeHasActions: Boolean = true,
+    landscapeStatusDetail: (@Composable () -> Unit)? = null,
     footer: @Composable ColumnScope.() -> Unit,
 ) {
+    val landscape = compactLandscape()
     val compact = LocalDensity.current.fontScale >= 1.5f
     val avatarSize = if (prominentAvatar) {
         prominentCallAvatarSize(LocalDensity.current.fontScale)
@@ -91,7 +167,7 @@ internal fun CallScreenSurface(
         1f
     }
 
-    val header: @Composable (Dp) -> Unit = { fittedAvatarSize ->
+    val statusHeader: @Composable () -> Unit = {
         Text(
             text = status,
             color = statusColor,
@@ -107,6 +183,8 @@ internal fun CallScreenSurface(
         ) {
             statusAccessory?.invoke()
         }
+    }
+    val avatar: @Composable (Dp) -> Unit = { fittedAvatarSize ->
         Box(
             modifier = Modifier
                 .size(fittedAvatarSize)
@@ -121,7 +199,8 @@ internal fun CallScreenSurface(
                 borderWidth = 0.dp,
             )
         }
-        Spacer(Modifier.height(if (compact) 12.dp else 20.dp))
+    }
+    val identity: @Composable () -> Unit = {
         Text(
             text = peerName,
             color = Color.White,
@@ -142,12 +221,75 @@ internal fun CallScreenSurface(
         }
         detailAccessory?.invoke()
     }
+    val header: @Composable (Dp) -> Unit = { fittedAvatarSize ->
+        statusHeader()
+        avatar(fittedAvatarSize)
+        Spacer(Modifier.height(if (compact) 12.dp else 20.dp))
+        identity()
+    }
+    val landscapeStatus: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth().testTag("landscape-call-status"),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(status, color = statusColor,
+                style = if (landscapeHasActions) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall,
+                fontWeight = if (landscapeHasActions) FontWeight.Medium else FontWeight.SemiBold,
+                textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            // Keep this slot during dialing as well, so discovering the route does not move the buttons.
+            if (landscapeHasActions || statusAccessory != null) {
+                Box(Modifier.fillMaxWidth().height(26.dp), contentAlignment = Alignment.Center) {
+                    statusAccessory?.invoke()
+                }
+            }
+            landscapeStatusDetail?.invoke()
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(CallBackgroundTop, CallBackgroundBottom))),
     ) {
+        if (landscape) {
+            Row(
+                Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+            ) {
+                Column(Modifier.weight(LandscapeIdentityPaneWeight).fillMaxSize()
+                    .testTag("landscape-identity-panel").landscapeIdentityPane()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(),
+                        contentAlignment = Alignment.Center) {
+                        // Keep the photo centered in the remaining space, with a bounded diameter.
+                        // Include the pulse's maximum extent in both the cap and available space.
+                        val fittedAvatar = minOf(180.dp, maxWidth, maxHeight) / if (pulsingAvatar) 1.04f else 1f
+                        if (fittedAvatar > 0.dp) avatar(fittedAvatar)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    identity()
+                }
+                Box(Modifier.weight(1f - LandscapeIdentityPaneWeight).fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.End))
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
+                    .testTag("landscape-call-info"), contentAlignment = Alignment.Center) {
+                    if (!landscapeHasActions) {
+                        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                            landscapeStatus()
+                        }
+                    } else Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        landscapeStatus()
+                        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            if (landscapeControls != null) landscapeControls()
+                            else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Bottom,
+                                content = footer)
+                        }
+                    }
+                }
+            }
+        } else {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -180,6 +322,7 @@ internal fun CallScreenSurface(
                 footer()
             }
         }
+        }
     }
 }
 
@@ -194,7 +337,11 @@ internal fun RoundCallAction(
     iconRotation: Float = 0f,
     iconResource: Int = R.drawable.ic_call,
     buttonSize: Dp = 72.dp,
-    iconSize: Dp = if (buttonSize == 72.dp) 31.dp else 28.dp,
+    iconSize: Dp = when {
+        buttonSize >= 88.dp -> 36.dp
+        buttonSize == 72.dp -> 31.dp
+        else -> 28.dp
+    },
     labelMaxLines: Int = 1,
     showLabel: Boolean = true,
 ) {
@@ -217,7 +364,7 @@ internal fun RoundCallAction(
                     .graphicsLayer(rotationZ = iconRotation),
             )
         }
-        if (showLabel) {
+        if (showLabel && LocalCallActionLabelsVisible.current) {
             Spacer(Modifier.height(10.dp))
             Text(
                 text = label,

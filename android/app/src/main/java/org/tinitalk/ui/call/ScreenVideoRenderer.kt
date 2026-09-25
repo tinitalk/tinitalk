@@ -29,13 +29,15 @@ internal fun ScreenVideoRenderer(
     contentDescription: String?,
     onFrameSizeChanged: (Int, Int) -> Unit,
     onFrameVisibilityChanged: (Boolean) -> Unit,
+    keepLastFrame: Boolean = true,
 ) {
-    key(source) {
+    key(source, keepLastFrame) {
         val context = LocalContext.current
         val currentSize = rememberUpdatedState(onFrameSizeChanged)
         val currentVisibility = rememberUpdatedState(onFrameVisibilityChanged)
         val handle = remember {
             ScreenVideoRendererHandle(context, source,
+                keepLastFrame = keepLastFrame,
                 onFrameSizeChanged = { width, height -> currentSize.value(width, height) },
                 onVisibilityChanged = { currentVisibility.value(it) },
             )
@@ -56,6 +58,7 @@ private class ScreenVideoRendererHandle(
     private val source: VideoRenderSource,
     private val onFrameSizeChanged: (Int, Int) -> Unit,
     private val onVisibilityChanged: (Boolean) -> Unit,
+    private val keepLastFrame: Boolean,
 ) : TextureView.SurfaceTextureListener, AutoCloseable {
     val view = TextureView(context).apply { surfaceTextureListener = this@ScreenVideoRendererHandle }
     private val renderer = EglRenderer("SharedScreen")
@@ -74,7 +77,7 @@ private class ScreenVideoRendererHandle(
         renderer.setLayoutAspectRatio(width.toFloat() / height.coerceAtLeast(1))
         renderer.createEglSurface(surface)
         // Attach only after EGL surface creation is queued, including after returning from background.
-        val next = GuardedRendererSink(renderer, onVisibilityChanged, onFrameSizeChanged, keepLastFrame = true)
+        val next = GuardedRendererSink(renderer, onVisibilityChanged, onFrameSizeChanged, keepLastFrame = keepLastFrame)
         sink = next
         if (!source.attach(next)) next.close()
     }

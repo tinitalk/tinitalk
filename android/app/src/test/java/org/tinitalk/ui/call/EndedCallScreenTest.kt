@@ -31,6 +31,57 @@ import org.tinitalk.ui.theme.TiniTalkTheme
 class EndedCallScreenTest {
     @get:Rule val compose = createEmptyComposeRule()
 
+    @Test @Config(qualifiers = "ru-w640dp-h360dp-land-mdpi")
+    fun landscapeCallResultsAreCenteredOnTheRightWithoutMovingIdentity() {
+        val reason = mutableStateOf(CallEndReason.Busy)
+        val reply = mutableStateOf<CallReplyCode?>(null)
+        val duration = mutableStateOf<String?>(null)
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        activity.get().setContent {
+            TiniTalkTheme {
+                EndedCallScreen("Alice", reason.value, reply = reply.value,
+                    direction = CallDirection.Outgoing, durationText = duration.value)
+            }
+        }
+        try {
+            val identity = compose.onNodeWithTag("landscape-identity-panel").fetchSemanticsNode().boundsInRoot
+            val initialAvatar = compose.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot
+            val initialName = compose.onNodeWithText("Alice").fetchSemanticsNode().boundsInRoot
+            val cases = listOf(
+                CallEndReason.Busy to R.string.text_busy_91,
+                CallEndReason.Failed to R.string.text_could_not_connect_192,
+                CallEndReason.Rejected to R.string.text_call_declined_193,
+                CallEndReason.TimedOut to R.string.text_no_answer_194,
+                CallEndReason.NotInContacts to R.string.text_could_not_connect_192,
+                CallEndReason.RemoteHangup to R.string.text_call_ended_93,
+            )
+            for ((endReason, message) in cases) {
+                compose.runOnIdle {
+                    reason.value = endReason
+                    reply.value = if (endReason == CallEndReason.Rejected) CallReplyCode.CallMeLater else null
+                }
+                val info = compose.onNodeWithTag("landscape-call-info").fetchSemanticsNode().boundsInRoot
+                val status = compose.onNodeWithTag("landscape-call-status").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                val text = compose.onNodeWithText(appString(message)).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                assertTrue(text.left >= identity.right)
+                assertEquals(info.center.x, status.center.x, 1f)
+                assertEquals(info.center.y, status.center.y, 1f)
+                assertEquals(initialAvatar, compose.onNodeWithTag("call-peer-avatar").fetchSemanticsNode().boundsInRoot)
+                assertEquals(initialName, compose.onNodeWithText("Alice").fetchSemanticsNode().boundsInRoot)
+                for (tag in listOf("call_reply_result", "call_end_explanation")) {
+                    compose.onAllNodesWithTag(tag).fetchSemanticsNodes().forEach {
+                        assertTrue(it.boundsInRoot.left >= identity.right)
+                        assertTrue(it.boundsInRoot.top >= text.bottom)
+                    }
+                }
+                compose.onAllNodes(hasClickAction()).assertCountEquals(0)
+            }
+            compose.runOnIdle { duration.value = "02:15" }
+            val timer = compose.onNodeWithText("02:15").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            assertTrue(timer.right <= identity.right)
+        } finally { activity.pause().stop().destroy() }
+    }
+
     @Test fun failedAttemptExplainsContactRestrictionBelowName() {
         val reason = mutableStateOf(CallEndReason.NotInContacts)
         val duration = mutableStateOf<String?>(null)

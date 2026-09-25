@@ -20,6 +20,7 @@ import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallReplyCode
 import org.tinitalk.data.ContactAddress
+import org.tinitalk.ui.compactLandscape
 
 @Composable
 fun EndedCallScreen(
@@ -38,6 +39,14 @@ fun EndedCallScreen(
         else -> null
     }
     val preserveIncomingLayout = direction == CallDirection.Incoming && durationText == null
+    val explanationContent: @Composable () -> Unit = {
+        if (explanation != null) {
+            Spacer(Modifier.height(16.dp))
+            Text(explanation, color = Color.White,
+                style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().testTag(if (reply != null) "call_reply_result" else "call_end_explanation"))
+        }
+    }
     IncomingReplyLayout { handleHeight ->
         CallScreenSurface(
             status = if (durationText != null) appString(R.string.text_call_ended_93) else when (reason) {
@@ -55,14 +64,9 @@ fun EndedCallScreen(
             prominentAvatar = true,
             keepFooterVisible = preserveIncomingLayout,
             scrollable = !preserveIncomingLayout,
-            detailAccessory = {
-                if (explanation != null) {
-                    Spacer(Modifier.height(16.dp))
-                    Text(explanation, color = Color.White,
-                        style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().testTag(if (reply != null) "call_reply_result" else "call_end_explanation"))
-                }
-            },
+            detailAccessory = if (compactLandscape()) null else explanationContent,
+            landscapeHasActions = false,
+            landscapeStatusDetail = explanationContent,
         ) {
             Spacer(Modifier.height(if (preserveIncomingLayout) IncomingCallActionHeight + handleHeight + 40.dp else 18.dp))
         }

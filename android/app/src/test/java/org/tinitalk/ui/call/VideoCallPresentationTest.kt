@@ -145,6 +145,67 @@ class VideoCallPresentationTest {
     }
 
     @Test
+    fun matchingCameraOrientationsFillViewportEvenWithDifferentAspectRatios() {
+        assertEquals(FittedVideoSize(800f, 360f), cameraVideoSize(800f, 360f, 1280, 720))
+        assertEquals(FittedVideoSize(360f, 800f), cameraVideoSize(360f, 800f, 720, 1280))
+        assertEquals(FittedVideoSize(800f, 360f), cameraVideoSize(800f, 360f, 640, 480))
+    }
+
+    @Test
+    fun oppositeCameraOrientationsKeepTheEntireFrame() {
+        assertEquals(FittedVideoSize(202.5f, 360f), cameraVideoSize(800f, 360f, 720, 1280))
+        assertEquals(FittedVideoSize(360f, 202.5f), cameraVideoSize(360f, 800f, 1280, 720))
+    }
+
+    @Test
+    fun cameraViewportRecalculatesWhenEitherPhoneRotates() {
+        assertEquals(FittedVideoSize(360f, 800f), cameraVideoSize(360f, 800f, 720, 1280))
+        assertEquals(FittedVideoSize(202.5f, 360f), cameraVideoSize(800f, 360f, 720, 1280))
+        assertEquals(FittedVideoSize(800f, 360f), cameraVideoSize(800f, 360f, 1280, 720))
+    }
+
+    @Test
+    fun squareCameraFramesAreNotCroppedAndUnknownFramesWaitInFullViewport() {
+        assertEquals(FittedVideoSize(360f, 360f), cameraVideoSize(800f, 360f, 480, 480))
+        assertEquals(FittedVideoSize(800f, 360f), cameraVideoSize(800f, 360f, 0, 0))
+    }
+
+    @Test
+    fun portraitVideoInLandscapeUsesFullHeightWithPillarboxing() {
+        val fitted = fittedVideoSize(800f, 360f, 720, 1280)
+        assertEquals(360f, fitted.height, 0.001f)
+        assertEquals(202.5f, fitted.width, 0.001f)
+    }
+
+    @Test
+    fun landscapeVideoInPortraitUsesFullWidthWithLetterboxing() {
+        val fitted = fittedVideoSize(360f, 800f, 1280, 720)
+        assertEquals(360f, fitted.width, 0.001f)
+        assertEquals(202.5f, fitted.height, 0.001f)
+    }
+
+    @Test
+    fun rotatedAndAdaptiveVideoKeepsAspectWithoutCropping() {
+        assertEquals(fittedVideoSize(800f, 360f, 1280, 720), fittedVideoSize(800f, 360f, 640, 360))
+        assertEquals(FittedVideoSize(640f, 360f), fittedVideoSize(800f, 360f, 1280, 720))
+    }
+
+    @Test
+    fun selfiePreviewFollowsRotatedFrameAndFitsBetweenControls() {
+        val horizontal = selfPreviewSize(false, 1280, 720)
+        assertTrue(horizontal.widthDp > horizontal.heightDp)
+        assertEquals(16f / 9f, horizontal.widthDp / horizontal.heightDp, 0.0001f)
+        val vertical = selfPreviewSize(false, 720, 1280, landscape = true)
+        assertTrue(vertical.heightDp > vertical.widthDp)
+        val fitted = selfPreviewSize(false, 640, 480, maxWidthDp = 120f, maxHeightDp = 60f)
+        assertTrue(fitted.widthDp <= 120f)
+        assertTrue(fitted.heightDp <= 60f)
+        assertEquals(4f / 3f, fitted.widthDp / fitted.heightDp, 0.0001f)
+        val pendingFrame = selfPreviewSize(false, landscape = true)
+        assertTrue(pendingFrame.widthDp > pendingFrame.heightDp)
+    }
+
+    @Test
     fun selfiePreviewMatchesPortraitOutgoingVideoAspectRatio() {
         val regular = selfPreviewSize(compact = false)
         val compact = selfPreviewSize(compact = true)
