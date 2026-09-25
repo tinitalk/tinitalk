@@ -27,6 +27,11 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -54,6 +59,8 @@ import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -84,6 +91,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -93,6 +101,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.tinitalk.BuildConfig
@@ -468,7 +477,6 @@ fun MainScreen(
                 )
                 !state.permissions.allRequiredGranted -> PermissionsScreen(
                     permissions = state.permissions,
-                    multipleAccounts = state.accounts.size > 1,
                     onRequestNotifications = onRequestNotifications,
                     onRequestMicrophone = onRequestMicrophone,
                     onRequestFullScreenCalls = onRequestFullScreenCalls,
@@ -617,7 +625,7 @@ private fun LoginScreen(
                 .padding(horizontal = 24.dp, vertical = if (sharedKeyboardVisible) 12.dp else 28.dp),
             contentAlignment = Alignment.TopCenter,
         ) {
-            Column(Modifier.fillMaxWidth().widthIn(max = 420.dp), horizontalAlignment = Alignment.Start) {
+            Column(Modifier.widthIn(max = 420.dp).fillMaxWidth(), horizontalAlignment = Alignment.Start) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     AppMark(52.dp)
                     Spacer(Modifier.width(14.dp))
@@ -626,7 +634,7 @@ private fun LoginScreen(
                         Text(appString(R.string.text_calls_for_your_circle_288), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                Spacer(Modifier.height(if (sharedKeyboardVisible) 16.dp else 28.dp))
+                Spacer(Modifier.height(if (compactLandscape()) 8.dp else if (sharedKeyboardVisible) 16.dp else 28.dp))
                 AccountCredentialsForm(
                     credentials, loading, errorMessage, internetAvailable, appString(R.string.text_sign_in_115), sharedKeyboardVisible,
                     onSignIn, onCheckServer, retryAtMillis,
@@ -641,7 +649,6 @@ private fun LoginScreen(
 @Composable
 private fun PermissionsScreen(
     permissions: AppPermissionsState,
-    multipleAccounts: Boolean,
     onRequestNotifications: () -> Unit,
     onRequestMicrophone: () -> Unit,
     onRequestFullScreenCalls: () -> Unit,
@@ -649,7 +656,7 @@ private fun PermissionsScreen(
     onAbout: () -> Unit,
     onOpenProfile: () -> Unit,
 ) {
-    AppPage(multipleAccounts, onAbout, onOpenProfile) {
+    AppPage(onAbout, onOpenProfile) {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         ) {
@@ -780,7 +787,6 @@ private fun HomeScreen(
     val context = LocalContext.current
     val favoritesStore = remember(context) { FavoriteContactsStore(context) }
     var favoriteKeys by remember(favoritesStore) { mutableStateOf(favoritesStore.load()) }
-    var showFavorites by rememberSaveable { mutableStateOf(true) }
     DisposableEffect(favoritesStore) {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
             favoriteKeys = favoritesStore.load()
@@ -802,6 +808,7 @@ private fun HomeScreen(
         val byKey = visibleContacts.associateBy { it.peerKey }
         favoriteKeys.mapNotNull(byKey::get)
     }
+    val contactsPagerState = rememberPagerState(pageCount = { if (favoriteContacts.isNotEmpty()) 2 else 1 })
     val selectedAccountContact = visibleContacts.firstOrNull { it.peerKey == selectedContactKey }
     val selectedPhotoTarget = selectedAccountContact?.let { contact ->
         ContactPhotoEditTarget(
@@ -880,64 +887,116 @@ private fun HomeScreen(
         Box(
             modifier = if (selectedAccountContact == null) Modifier else Modifier.clearAndSetSemantics {},
         ) {
-            AppPage(state.accounts.size > 1, onAbout, onOpenProfile) {
-                Column(modifier = Modifier.fillMaxSize()) {
+            AppPage(onAbout, onOpenProfile, showHeader = !compactLandscape(), hasNavigation = true) {
+                val landscape = compactLandscape()
+                val navigationDividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                Row(Modifier.fillMaxSize()) {
+                    if (landscape) NavigationRail(
+                        modifier = Modifier.leftNavigationBarBackdrop().drawWithContent {
+                            drawContent()
+                            val thickness = 1.dp.toPx()
+                            val x = if (layoutDirection == LayoutDirection.Ltr) size.width - thickness / 2 else thickness / 2
+                            drawLine(navigationDividerColor, Offset(x, 0f), Offset(x, size.height), thickness)
+                        },
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start),
+                    ) {
+                        CompositionLocalProvider(LocalRippleConfiguration provides null) {
+                            Box(Modifier.size(56.dp).clickable(onClick = onAbout)
+                                .semantics { contentDescription = appString(R.string.text_about_102) },
+                                contentAlignment = Alignment.Center) {
+                                AppMark(56.dp)
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        NavigationRailItem(selected = pagerState.currentPage == 0,
+                            onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                            icon = { Icon(painterResource(R.drawable.ic_contacts), null) },
+                            label = { Text(appString(R.string.text_contacts_298)) })
+                        NavigationRailItem(selected = pagerState.currentPage == 1,
+                            onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                            modifier = Modifier.semantics { contentDescription = historyTabDescription(state.unreadMissedCount) },
+                            icon = { Icon(painterResource(R.drawable.ic_history), null) },
+                            label = { Text(appString(R.string.text_history_251) +
+                                (historyBadgeText(state.unreadMissedCount)?.let { " · $it" } ?: "")) })
+                        Spacer(Modifier.weight(1f))
+                        NavigationRailItem(selected = false, onClick = onOpenProfile,
+                            modifier = Modifier.semantics { contentDescription = appString(R.string.text_profile_308) },
+                            icon = {
+                                Icon(painterResource(R.drawable.ic_profile), contentDescription = null,
+                                    modifier = Modifier.size(32.dp).testTag("profile-icon"))
+                            },
+                            label = { Text(appString(R.string.text_profile_308)) })
+                    }
+                Column(modifier = Modifier.fillMaxSize().then(if (landscape)
+                    Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.End))
+                    else Modifier), horizontalAlignment = Alignment.CenterHorizontally) {
                     if (ongoingCall != null) {
                         OngoingCallBanner(ongoingCall, onOpenCall)
                     }
                     HorizontalPager(
                         state = pagerState,
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        userScrollEnabled = false,
+                        modifier = Modifier.weight(1f).fillMaxWidth().testTag("main-pager"),
                     ) { page ->
-                        if (page == 0) {
-                            Column(Modifier.fillMaxSize()) {
-                                if (favoriteContacts.isNotEmpty()) {
-                                    FavoriteContactTabs(showFavorites) { showFavorites = it }
+                        Box(Modifier.fillMaxSize().testTag("main-page-$page"), contentAlignment = Alignment.TopCenter) {
+                            if (page == 0) {
+                                FavoriteContactsPager(contactsPagerState, favoriteContacts.isNotEmpty()) { favorites ->
+                                    ContactsPage(
+                                        contacts = if (favorites) favoriteContacts else visibleContacts,
+                                        favoriteKeys = favoriteKeys,
+                                        latestUnreadMissedByContact = state.latestUnreadMissedByAccountContact,
+                                        internetAvailable = state.networkAvailable,
+                                        listState = if (favorites) favoritesListState else contactsListState,
+                                        refreshing = state.contactsRefreshing,
+                                        onRefresh = onRefreshContacts,
+                                        onAddContact = onOpenAddContact,
+                                        onReorder = if (favorites) favoritesStore::reorder else null,
+                                        onContactSelected = {
+                                            selectedContactAccountId = it.accountId.value
+                                            selectedContactLogin = it.login
+                                        },
+                                    )
                                 }
-                                ContactsPage(
-                                    contacts = if (showFavorites && favoriteContacts.isNotEmpty()) favoriteContacts else visibleContacts,
-                                    favoriteKeys = favoriteKeys,
-                                    latestUnreadMissedByContact = state.latestUnreadMissedByAccountContact,
-                                    internetAvailable = state.networkAvailable,
-                                    listState = if (showFavorites && favoriteContacts.isNotEmpty()) favoritesListState else contactsListState,
-                                    refreshing = state.contactsRefreshing,
-                                    onRefresh = onRefreshContacts,
-                                    onAddContact = onOpenAddContact,
-                                    onReorder = if (showFavorites && favoriteContacts.isNotEmpty()) favoritesStore::reorder else null,
-                                    onContactSelected = {
-                                        selectedContactAccountId = it.accountId.value
-                                        selectedContactLogin = it.login
-                                    },
-                                )
+                            } else {
+                                Box(Modifier.then(if (landscape) Modifier.widthIn(max = 600.dp) else Modifier)
+                                    .fillMaxSize().testTag("main-page-content-$page")) {
+                                    HistoryScreen(
+                                        items = historyWindow.items,
+                                        itemKeys = historyWindow.items.map { accountScopedKey(it.accountId, it.id.toString()) },
+                                        internetAvailable = state.networkAvailable,
+                                        loaded = state.historyLoaded,
+                                        loading = state.historyLoading,
+                                        loadingMore = state.historyLoadingMore,
+                                        hasMore = historyWindow.hasMore,
+                                        errorMessage = state.historyErrorMessage,
+                                        unavailableServers = unavailableHistoryServers,
+                                        onLoadMore = onLoadMoreHistory,
+                                        onRefresh = onHistoryVisible,
+                                        onContactSelected = { peer ->
+                                            val contact = visibleContacts.firstOrNull { it.peerKey == peer }
+                                            if (contact == null) {
+                                                snackbarScope.launch {
+                                                    snackbarHostState.showSnackbar(appString(R.string.text_contact_no_longer_available_211))
+                                                }
+                                            } else {
+                                                selectedContactAccountId = contact.accountId.value
+                                                selectedContactLogin = contact.login
+                                            }
+                                        },
+                                    )
+                                }
                             }
-                        } else {
-                            HistoryScreen(
-                                items = historyWindow.items,
-                                itemKeys = historyWindow.items.map { accountScopedKey(it.accountId, it.id.toString()) },
-                                internetAvailable = state.networkAvailable,
-                                loaded = state.historyLoaded,
-                                loading = state.historyLoading,
-                                loadingMore = state.historyLoadingMore,
-                                hasMore = historyWindow.hasMore,
-                                errorMessage = state.historyErrorMessage,
-                                unavailableServers = unavailableHistoryServers,
-                                onLoadMore = onLoadMoreHistory,
-                                onRefresh = onHistoryVisible,
-                                onContactSelected = { peer ->
-                                    val contact = visibleContacts.firstOrNull { it.peerKey == peer }
-                                    if (contact == null) {
-                                        snackbarScope.launch {
-                                            snackbarHostState.showSnackbar(appString(R.string.text_contact_no_longer_available_211))
-                                        }
-                                    } else {
-                                        selectedContactAccountId = contact.accountId.value
-                                        selectedContactLogin = contact.login
-                                    }
-                                },
-                            )
                         }
                     }
-                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                    if (!landscape) NavigationBar(
+                        modifier = Modifier.drawWithContent {
+                            drawContent()
+                            val thickness = 1.dp.toPx()
+                            drawLine(navigationDividerColor, Offset(0f, thickness / 2), Offset(size.width, thickness / 2), thickness)
+                        },
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ) {
                         NavigationBarItem(
                             selected = pagerState.currentPage == 0,
                             onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
@@ -987,6 +1046,7 @@ private fun HomeScreen(
                         )
                     }
                 }
+                }
             }
         }
         selectedAccountContact?.let { contact ->
@@ -998,7 +1058,7 @@ private fun HomeScreen(
                     val adding = position < 0
                     favoritesStore.setFavorite(contact.peerKey, adding)
                     favoriteKeys = favoritesStore.load()
-                    if (adding && favoriteKeys.size == 1) showFavorites = true
+                    if (adding && favoriteKeys.size == 1) scope.launch { contactsPagerState.scrollToPage(0) }
                     if (!adding) snackbarScope.launch {
                         snackbarHostState.currentSnackbarData?.dismiss()
                         val result = snackbarHostState.showSnackbar(appString(R.string.text_removed_from_favorites_299), actionLabel = appString(R.string.text_undo_196))
@@ -1281,7 +1341,7 @@ private fun ContactRow(
         serverHostname,
         appString(R.string.text_calls_not_available_yet_305).takeIf { !contact.canCall },
     ).joinToString(" • ").takeIf(String::isNotEmpty)
-    val rowHeight = 82.dp
+    val rowHeight = if (compactLandscape()) 64.dp else 82.dp
     val avatarInset = 4.dp
     val avatarSize = rowHeight - avatarInset * 2
     Surface(
@@ -1381,15 +1441,22 @@ private fun ContactRow(
 
 @Composable
 private fun AppPage(
-    multipleAccounts: Boolean,
     onAbout: () -> Unit,
     onOpenProfile: () -> Unit,
+    showHeader: Boolean = true,
+    hasNavigation: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().height(68.dp).padding(horizontal = 20.dp),
+        // Navigation components paint to the edge and apply their own content insets.
+        val pageInsets = when {
+            hasNavigation && compactLandscape() -> Modifier
+            hasNavigation -> Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+            else -> Modifier.safeDrawingPadding()
+        }
+        Column(modifier = Modifier.fillMaxSize().then(pageInsets)) {
+            if (showHeader) Row(
+                modifier = Modifier.fillMaxWidth().height(if (compactLandscape()) 48.dp else 68.dp).padding(horizontal = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CompositionLocalProvider(LocalRippleConfiguration provides null) {
@@ -1400,7 +1467,7 @@ private fun AppPage(
                             .semantics { contentDescription = appString(R.string.text_about_102) },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        AppMark(42.dp)
+                        AppMark(if (compactLandscape()) 32.dp else 42.dp)
                         Spacer(Modifier.width(12.dp))
                         Text("TiniTalk", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     }
@@ -1408,11 +1475,9 @@ private fun AppPage(
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = onOpenProfile) {
                     Icon(
-                        painter = painterResource(
-                            if (multipleAccounts) R.drawable.ic_contacts else R.drawable.ic_person,
-                        ),
+                        painter = painterResource(R.drawable.ic_profile),
                         contentDescription = appString(R.string.text_profile_308),
-                        modifier = Modifier.size(26.dp),
+                        modifier = Modifier.size(32.dp).testTag("profile-icon"),
                         tint = Color.White,
                     )
                 }

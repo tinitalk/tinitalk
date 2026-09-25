@@ -90,7 +90,7 @@ internal fun PasswordSetupScreen(
             ).statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()),
         ) {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp),
+                Modifier.fillMaxWidth().heightIn(min = if (compactLandscape()) 48.dp else 64.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CompositionLocalProvider(LocalRippleConfiguration provides null) {
@@ -100,7 +100,8 @@ internal fun PasswordSetupScreen(
                 }
                 Text(appString(R.string.text_choose_a_password_317), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
-            Column(Modifier.align(Alignment.CenterHorizontally).widthIn(max = 468.dp).fillMaxWidth().padding(24.dp)) {
+            Column(Modifier.align(Alignment.CenterHorizontally).widthIn(max = 468.dp).fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = if (compactLandscape()) 8.dp else 24.dp)) {
                 Text(
                     appString(R.string.text_at_least_8_characters_we_recommend_combining_lowercase_and_upperc_318),
                     style = MaterialTheme.typography.bodyMedium,

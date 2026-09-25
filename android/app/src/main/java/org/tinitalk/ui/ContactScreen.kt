@@ -108,6 +108,7 @@ fun ContactScreen(
         if (contact.canCall != false) unavailableCallVisible = false
     }
     val name = contactDisplayName(contact.displayName)
+    val landscape = compactLandscape()
     val action = contactCallAction(
         contact.login,
         ongoingCall,
@@ -145,11 +146,31 @@ fun ContactScreen(
                 listState = listState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding(),
+                    .then(if (landscape) Modifier else Modifier.statusBarsPadding().navigationBarsPadding()),
+                landscapeProfile = {
+                    Text(contact.login + (accountServerUrl?.let { "@${serverAddress(it)}" } ?: ""),
+                        style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(vertical = 6.dp))
+                    Button(onClick = {
+                        when {
+                            action.opensCurrentCall -> onOpenCall()
+                            action.explainsUnavailableContact -> unavailableCallVisible = true
+                            else -> onCall(contact)
+                        }
+                    }, enabled = action.enabled,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (action.explainsUnavailableContact)
+                                MaterialTheme.colorScheme.surfaceVariant else CallAnswerGreen,
+                            contentColor = Color.White)) {
+                        Icon(painterResource(R.drawable.ic_call), null, Modifier.size(24.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(action.label, textAlign = TextAlign.Center)
+                    }
+                },
                 toolbar = { titleModifier ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 8.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = if (landscape) 48.dp else 64.dp).padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         CompositionLocalProvider(LocalRippleConfiguration provides null) {
@@ -169,6 +190,8 @@ fun ContactScreen(
                             modifier = Modifier.weight(1f).then(titleModifier),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         IconButton(onClick = onToggleFavorite, modifier = Modifier.size(48.dp)) {
                             Icon(
@@ -303,13 +326,13 @@ fun ContactScreen(
                     modifier = Modifier
                         .fillMaxSize(),
                     contentPadding = PaddingValues(
-                        start = 20.dp, top = ContactProfileTopPadding, end = 20.dp,
+                        start = 20.dp, top = if (landscape) 4.dp else ContactProfileTopPadding, end = 20.dp,
                         bottom = if (history.items.isEmpty()) 22.dp else 84.dp,
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    item(key = "contact-profile") {
+                    if (!landscape) item(key = "contact-profile") {
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -392,7 +415,7 @@ fun ContactScreen(
                             Spacer(Modifier.height(22.dp))
                         }
                     }
-                    item(key = "contact-history-title") {
+                    if (!landscape) item(key = "contact-history-title") {
                         Text(
                             appString(R.string.text_call_history_233),
                             modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp, bottom = 4.dp),

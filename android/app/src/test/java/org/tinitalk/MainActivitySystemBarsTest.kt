@@ -1,8 +1,10 @@
 package org.tinitalk
 
 import android.graphics.Color
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -11,20 +13,20 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
-class CallActivitySystemBarsTest {
+class MainActivitySystemBarsTest {
+    @get:Rule val compose = createEmptyComposeRule()
+
     @Test
-    fun navigationStaysTransparentAfterWindowDecorIsCreated() {
-        val activity = Robolectric.buildActivity(CallActivity::class.java).create()
+    fun navigationRemainsTransparentAfterThemeAndContentAreInstalled() {
+        val activity = Robolectric.buildActivity(MainActivity::class.java).create()
         try {
             val window = activity.get().window
-            window.decorView // Theme attributes have now been applied to the window.
-            assertFalse(window.isNavigationBarContrastEnforced)
+            window.decorView
+            assertFalse("The system must not darken the app's panel background", window.isNavigationBarContrastEnforced)
             @Suppress("DEPRECATION")
             assertEquals(Color.TRANSPARENT, window.navigationBarColor)
             @Suppress("DEPRECATION")
             assertEquals(Color.TRANSPARENT, window.navigationBarDividerColor)
-            @Suppress("DEPRECATION")
-            assertEquals(Color.TRANSPARENT, window.statusBarColor)
         } finally {
             activity.destroy()
         }

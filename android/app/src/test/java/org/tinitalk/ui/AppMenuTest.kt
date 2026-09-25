@@ -5,22 +5,34 @@ import org.tinitalk.i18n.appString
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import org.tinitalk.data.ServerCheckDetails
 import org.tinitalk.data.ServerCheckResult
 import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountContact
 import org.tinitalk.data.Contact
+import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.ui.theme.TiniTalkTheme
 import org.junit.Rule
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -37,20 +49,26 @@ class AppMenuTest {
     val composeRule = createEmptyComposeRule()
 
     @Test
-    fun headerOpensAboutAndProfileDirectly() {
+    fun headerOpensAboutAndProfileWithSameIconForOneOrMoreAccounts() = checkAboutAndProfileNavigation()
+
+    @Test
+    @Config(qualifiers = "ru-w800dp-h360dp-land-mdpi")
+    fun railOpensAboutAndProfileWithSameIconForOneOrMoreAccounts() = checkAboutAndProfileNavigation()
+
+    private fun checkAboutAndProfileNavigation() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
         var profileOpened = false
+        var state by mutableStateOf(MainScreenState(
+            restoring = false,
+            signedIn = true,
+            permissions = AppPermissionsState(true, true, true),
+            accounts = listOf(AccountSummary(AccountId("account"), "https://talk.example", "alex", "Alex")),
+        ))
         composeRule.runOnUiThread {
             activity.get().setContent {
                 TiniTalkTheme(darkTheme = true) {
                     MainScreen(
-                        state = MainScreenState(
-                            restoring = false,
-                            signedIn = true,
-                            accounts = listOf(
-                                AccountSummary(AccountId("account"), "https://talk.example", "alex", "Alex"),
-                            ),
-                        ),
+                        state = state,
                         contactNameUpdate = ContactNameUpdateState(),
                         ongoingCall = null,
                         loginResetKey = 0,
@@ -91,6 +109,21 @@ class AppMenuTest {
         composeRule.onNodeWithContentDescription(appString(R.string.text_about_102)).performClick()
         composeRule.onNodeWithText(appString(R.string.text_about_102)).assertIsDisplayed()
         composeRule.onNodeWithContentDescription(appString(R.string.text_back_101)).performClick()
+        val icon = composeRule.onNodeWithTag("profile-icon", useUnmergedTree = true)
+            .assertWidthIsEqualTo(32.dp).assertHeightIsEqualTo(32.dp)
+        fun iconPixels(): IntArray {
+            val pixels = icon.captureToImage().toPixelMap()
+            return IntArray(pixels.width * pixels.height) { pixels[it % pixels.width, it / pixels.width].toArgb() }
+        }
+        val singleAccountIcon = iconPixels()
+        composeRule.onNodeWithContentDescription(appString(R.string.text_profile_308)).performClick()
+        assertTrue(profileOpened)
+        composeRule.runOnIdle {
+            profileOpened = false
+            state = state.copy(accounts = state.accounts +
+                AccountSummary(AccountId("second"), "https://second.example", "maria", "Maria"))
+        }
+        assertArrayEquals("Account count must not change the profile icon", singleAccountIcon, iconPixels())
         composeRule.onNodeWithContentDescription(appString(R.string.text_profile_308)).performClick()
         assertTrue(profileOpened)
 

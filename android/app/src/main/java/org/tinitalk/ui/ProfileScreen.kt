@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
@@ -88,7 +89,7 @@ internal fun ProfileScreen(
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             Row(
-                modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp),
+                modifier = Modifier.fillMaxWidth().height(if (compactLandscape()) 48.dp else 64.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CompositionLocalProvider(LocalRippleConfiguration provides null) {
@@ -99,7 +100,7 @@ internal fun ProfileScreen(
                 Text(appString(R.string.text_profile_308), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
             LazyColumn(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally).widthIn(max = 640.dp).fillMaxWidth(),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -308,7 +309,7 @@ private fun ChangePasswordDialog(
     var confirmation by remember { mutableStateOf("") }
     var validationMessage by remember { mutableStateOf<String?>(null) }
     val retry = retrySeconds(retryAtMillis)
-    AlertDialog(
+    AccountPasswordDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (passwordSet == false) appString(R.string.text_set_password_327) else appString(R.string.text_change_password_326)) },
         text = {

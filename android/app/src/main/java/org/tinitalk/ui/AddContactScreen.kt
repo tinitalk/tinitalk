@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
@@ -95,7 +96,7 @@ internal fun AddContactScreen(
         ) {
             Column(Modifier.fillMaxWidth()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp),
+                    modifier = Modifier.fillMaxWidth().height(if (compactLandscape()) 48.dp else 64.dp).padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CompositionLocalProvider(LocalRippleConfiguration provides null) {
@@ -106,8 +107,8 @@ internal fun AddContactScreen(
                     Text(appString(R.string.text_add_contact_125), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
                 Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
-                        .padding(top = 20.dp, bottom = if (keyboardVisible) 12.dp else 28.dp),
+                    modifier = Modifier.align(Alignment.CenterHorizontally).widthIn(max = 520.dp).fillMaxWidth().padding(horizontal = 24.dp)
+                        .padding(top = if (compactLandscape()) 4.dp else 20.dp, bottom = if (keyboardVisible) 12.dp else 28.dp),
                 ) {
                     if (accounts.size > 1) {
                         Box(Modifier.fillMaxWidth()) {
@@ -202,6 +203,7 @@ internal fun AddContactScreen(
 
     if (serverMenuVisible) {
         ModalBottomSheet(onDismissRequest = { serverMenuVisible = false }) {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
             Text(
                 appString(R.string.text_choose_a_server_126),
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
@@ -229,6 +231,7 @@ internal fun AddContactScreen(
                         )
                     }
                 }
+            }
             }
             Spacer(Modifier.height(12.dp))
         }

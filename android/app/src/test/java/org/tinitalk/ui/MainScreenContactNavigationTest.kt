@@ -8,13 +8,20 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import org.tinitalk.ContactOpenRequest
 import org.tinitalk.data.AccountContact
 import org.tinitalk.data.AccountHistory
@@ -22,12 +29,14 @@ import org.tinitalk.data.AccountId
 import org.tinitalk.data.AccountPeerKey
 import org.tinitalk.data.CallHistoryItem
 import org.tinitalk.data.Contact
+import org.tinitalk.data.FavoriteContactsStore
 import org.tinitalk.data.ServerCheckDetails
 import org.tinitalk.data.ServerCheckResult
 import org.tinitalk.permissions.AppPermissionsState
 import org.tinitalk.ui.theme.TiniTalkTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -42,6 +51,133 @@ import org.robolectric.annotation.GraphicsMode
 class MainScreenContactNavigationTest {
     @get:Rule
     val composeRule = createEmptyComposeRule()
+
+    @Test
+    @Config(qualifiers = "w1000dp-h400dp-land-mdpi")
+    fun landscapeSwipesSwitchOnlyContactTabsIncludingTheirGutters() {
+        checkSwipesSwitchOnlyContactTabs()
+    }
+
+    @Test
+    @Config(qualifiers = "w360dp-h800dp-port-mdpi")
+    fun portraitSwipesSwitchOnlyContactTabs() {
+        checkSwipesSwitchOnlyContactTabs()
+    }
+
+    private fun checkSwipesSwitchOnlyContactTabs() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        val account = AccountId("account")
+        val contact = AccountContact(account, "https://example.com", Contact("alice", "Alice"))
+        val other = AccountContact(account, contact.serverUrl, Contact("bob", "Bob"))
+        val store = FavoriteContactsStore(activity.get())
+        var visiblePage = -1
+        composeRule.runOnUiThread {
+            activity.get().setContent {
+                TiniTalkTheme(darkTheme = true) {
+                    MainScreen(
+                        state = MainScreenState(
+                            restoring = false, signedIn = true,
+                            accountContacts = listOf(contact, other), historyLoaded = true,
+                            permissions = AppPermissionsState(true, true, true),
+                            accounts = listOf(AccountSummary(account, contact.serverUrl, "owner", "Owner")),
+                        ),
+                        contactNameUpdate = ContactNameUpdateState(), ongoingCall = null, loginResetKey = 0,
+                        onSignIn = { _, _, _ -> },
+                        onCheckServer = { ServerCheckResult.Available },
+                        onCheckServerDetails = { ServerCheckDetails(ServerCheckResult.Available, apiVersion = 1) },
+                        onRequestNotifications = {}, onRequestMicrophone = {}, onRequestFullScreenCalls = {},
+                        onRefreshPermissions = {}, onCall = {}, onRenameContact = { _, _ -> },
+                        onRenameHandled = {}, onOpenCall = {},
+                        onContactsVisible = { visiblePage = 0 }, onHistoryVisible = { visiblePage = 1 },
+                        onRefreshContacts = {}, onContactsRefreshMessageHandled = {}, onLoadMoreHistory = {},
+                        onContactHistoryVisible = {}, onContactHistoryHidden = {},
+                        onLoadMoreContactHistory = {}, onRetryContactHistory = {},
+                        onOpenProfile = {}, onCloseProfile = {}, onOpenAddAccount = {}, onCloseAddAccount = {},
+                        onAddAccount = { _, _, _ -> }, onRemoveAccount = {},
+                    )
+                }
+            }
+        }
+        try {
+            val pager = composeRule.onNodeWithTag("main-pager")
+            val viewport = pager.fetchSemanticsNode().boundsInRoot
+            val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+            assertEquals(root.right, viewport.right, 1f)
+            fun assertPage(page: Int) {
+                composeRule.waitForIdle()
+                assertEquals(page, visiblePage)
+                val bounds = composeRule.onNodeWithTag("main-page-$page").fetchSemanticsNode().boundsInRoot
+                val content = composeRule.onNodeWithTag(if (page == 0) "contacts-page-content-0" else "main-page-content-$page")
+                    .fetchSemanticsNode().boundsInRoot
+                assertEquals(viewport, bounds)
+                assertEquals(minOf(600f, viewport.width), content.width, 1f)
+                assertEquals(viewport.center.x, content.center.x, 1f)
+                if (viewport.width > 600f) {
+                    assertTrue(content.left > viewport.left + 12f && content.right < viewport.right - 12f)
+                }
+            }
+            fun swipe(tag: String, left: Boolean) {
+                // In landscape, begin outside the centered list to exercise the gutters too.
+                composeRule.onNodeWithTag(tag).performTouchInput {
+                    val start = Offset(if (left) width - 12f else 12f, centerY)
+                    val end = Offset(if (left) 12f else width - 12f, centerY)
+                    swipe(start, end, durationMillis = 300)
+                }
+            }
+            assertPage(0)
+            // With no favorites there are no tabs, and neither swipe opens history.
+            composeRule.onNodeWithText(appString(R.string.text_favorites_247)).assertDoesNotExist()
+            swipe("contacts-pager", left = true)
+            assertPage(0)
+            swipe("contacts-pager", left = false)
+            assertPage(0)
+            composeRule.onNodeWithContentDescription(appString(R.string.text_history_251)).performClick()
+            assertPage(1)
+            swipe("main-pager", left = false)
+            assertPage(1)
+            swipe("main-pager", left = true)
+            assertPage(1)
+            composeRule.onNodeWithText(appString(R.string.text_contacts_298)).performClick()
+            assertPage(0)
+
+            composeRule.runOnIdle { store.setFavorite(contact.peerKey, true) }
+            val favoritesTab = composeRule.onNodeWithText(appString(R.string.text_favorites_247))
+            val allTab = composeRule.onNodeWithText(appString(R.string.text_all_248))
+            favoritesTab.assertIsSelected()
+            composeRule.onNodeWithText("Bob").assertIsNotDisplayed()
+            swipe("contacts-pager", left = true)
+            allTab.assertIsSelected()
+            composeRule.onNodeWithText("Bob").assertIsDisplayed()
+            composeRule.onNodeWithText(appString(R.string.text_add_303)).assertIsDisplayed()
+            swipe("contacts-pager", left = true)
+            allTab.assertIsSelected()
+            assertEquals(0, visiblePage)
+            swipe("contacts-pager", left = false)
+            favoritesTab.assertIsSelected()
+            composeRule.onNodeWithText("Bob").assertIsNotDisplayed()
+            composeRule.onNodeWithText(appString(R.string.text_add_303)).assertIsNotDisplayed()
+            swipe("contacts-pager", left = false)
+            favoritesTab.assertIsSelected()
+            assertEquals(0, visiblePage)
+
+            allTab.performClick().assertIsSelected()
+            composeRule.onNodeWithText("Bob").assertIsDisplayed()
+            composeRule.onNodeWithContentDescription(appString(R.string.text_history_251)).performClick()
+            assertPage(1)
+            composeRule.onNodeWithText(appString(R.string.text_contacts_298)).performClick()
+            allTab.assertIsSelected()
+            // Removing the last favorite while on All collapses to one ordinary contact list.
+            composeRule.runOnIdle { store.setFavorite(contact.peerKey, false) }
+            favoritesTab.assertDoesNotExist()
+            allTab.assertDoesNotExist()
+            composeRule.onNodeWithText("Bob").assertIsDisplayed()
+            assertPage(0)
+            swipe("contacts-pager", left = true)
+            assertPage(0)
+        } finally {
+            activity.pause().stop().destroy()
+        }
+    }
 
     @Test
     fun requestWaitsForContactsAndSelectsExactAccountWhenLoginsMatch() {

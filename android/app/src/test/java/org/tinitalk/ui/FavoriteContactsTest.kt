@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -75,7 +76,7 @@ class FavoriteContactsTest {
     }
 
     @Test
-    fun draggingReordersOnlyOnReleaseAndCancellationRestoresOrder() {
+    fun draggingWithinPagerReordersOnlyOnReleaseAndCancellationRestoresOrder() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
         var contacts by mutableStateOf(List(4) {
             AccountContact(AccountId("one"), "https://example.com", Contact("person-$it", "Человек $it"))
@@ -84,12 +85,18 @@ class FavoriteContactsTest {
         composeRule.runOnUiThread {
             activity.get().setContent {
                 TiniTalkTheme(darkTheme = true) {
-                    ReorderableFavoriteContacts(contacts, rememberLazyListState(), onReorder = { order ->
-                        saves++
-                        contacts = order.map { key -> contacts.first { it.peerKey == key } }
-                    }) { contact, modifier ->
-                        Surface(onClick = {}, modifier = modifier.fillMaxWidth().height(82.dp).testTag(contact.login)) {
-                            Text(contact.displayName)
+                    FavoriteContactsPager(rememberPagerState(pageCount = { 2 }), hasFavorites = true) { favorites ->
+                        if (favorites) {
+                            ReorderableFavoriteContacts(contacts, rememberLazyListState(), onReorder = { order ->
+                                saves++
+                                contacts = order.map { key -> contacts.first { it.peerKey == key } }
+                            }) { contact, modifier ->
+                                Surface(onClick = {}, modifier = modifier.fillMaxWidth().height(82.dp).testTag(contact.login)) {
+                                    Text(contact.displayName)
+                                }
+                            }
+                        } else {
+                            Text("All contacts")
                         }
                     }
                 }
@@ -134,7 +141,7 @@ class FavoriteContactsTest {
             }
         }
         composeRule.waitForIdle()
-        composeRule.onNode(hasScrollAction()).performScrollToIndex(0)
+        composeRule.onNode(hasScrollAction() and !hasTestTag("contacts-pager")).performScrollToIndex(0)
         val start = composeRule.onNodeWithTag("person-0").fetchSemanticsNode().boundsInRoot.center
         composeRule.mainClock.autoAdvance = false
         list.performTouchInput { down(Offset(start.x, start.y - listTop)) }
@@ -151,6 +158,7 @@ class FavoriteContactsTest {
             assertTrue("Dragging near the bottom should scroll beyond the initial viewport: ${contacts.map { it.login }}",
                 contacts.indexOfFirst { it.login == "person-0" } > 8)
         }
+        composeRule.onNodeWithText(appString(R.string.text_favorites_247)).assertIsSelected()
         activity.pause().stop().destroy()
     }
 }

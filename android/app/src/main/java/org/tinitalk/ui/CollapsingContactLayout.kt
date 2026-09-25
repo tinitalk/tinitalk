@@ -20,12 +20,21 @@ import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
@@ -77,10 +86,54 @@ internal fun CollapsingContactLayout(
     listState: LazyListState,
     modifier: Modifier = Modifier,
     toolbar: @Composable (titleModifier: Modifier) -> Unit,
+    landscapeProfile: @Composable () -> Unit = {},
     content: @Composable (identityHeight: Dp, flingBehavior: FlingBehavior) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     BoxWithConstraints(modifier) {
+        if (compactLandscape()) {
+            Row(Modifier.fillMaxSize()) {
+                Column(Modifier.weight(LandscapeIdentityPaneWeight).fillMaxSize()
+                    .testTag("landscape-identity-panel").landscapeIdentityPane()) {
+                    toolbar(Modifier)
+                    Column(Modifier.weight(1f).fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(),
+                            contentAlignment = Alignment.Center) {
+                            val photoSize = minOf(maxWidth, maxHeight)
+                            if (photoSize > 0.dp) ContactAvatar(
+                                address = address, displayName = name, fallbackLogin = login,
+                                size = photoSize, borderWidth = 2.dp)
+                        }
+                        Text(name, Modifier.padding(top = 8.dp),
+                            style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        landscapeProfile()
+                    }
+                }
+                    Box(Modifier.weight(1f - LandscapeIdentityPaneWeight).fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.End))) {
+                        content(0.dp, ScrollableDefaults.flingBehavior())
+                        val showUp by remember(listState) {
+                            derivedStateOf { listState.firstVisibleItemIndex > 0 }
+                        }
+                        if (showUp) Surface(
+                            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+                            shape = CircleShape, color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            shadowElevation = 6.dp,
+                        ) {
+                            IconButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }) {
+                                Icon(painterResource(R.drawable.ic_chevron_right),
+                                    appString(R.string.text_back_to_top_204),
+                                    Modifier.size(26.dp).graphicsLayer { rotationZ = -90f })
+                            }
+                        }
+                    }
+            }
+            return@BoxWithConstraints
+        }
         val density = LocalDensity.current
         val measurer = rememberTextMeasurer()
         val expandedStyle = MaterialTheme.typography.headlineMedium.copy(

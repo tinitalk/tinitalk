@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -131,7 +132,7 @@ fun ContactPhotoCropOverlay(
         ) {
             Text(appString(R.string.text_adjust_photo_218), style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(18.dp))
-            Box(
+            BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
@@ -140,7 +141,7 @@ fun ContactPhotoCropOverlay(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(280.dp)
+                        .size(minOf(280.dp, maxWidth, maxHeight))
                         .onSizeChanged { size ->
                             if (size.width > 0 && size.height > 0) cropViewport = size
                         }

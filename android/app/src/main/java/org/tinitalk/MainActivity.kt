@@ -179,7 +179,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Apply the theme before disabling its navigation contrast scrim.
+        // Otherwise decor creation restores the dark overlay above our panel backgrounds.
+        window.decorView
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            @Suppress("DEPRECATION")
+            window.navigationBarDividerColor = android.graphics.Color.TRANSPARENT
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            window.isNavigationBarContrastEnforced = false
+        }
         val localStore = SharedPreferencesKeyValueStore(this)
         authStore = AuthStore(localStore, AndroidKeystoreTokenCipher())
         contactCache = ContactCache(localStore)

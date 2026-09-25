@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Text
@@ -29,6 +31,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -38,9 +41,41 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import org.tinitalk.data.AccountContact
 import org.tinitalk.data.AccountPeerKey
 import kotlin.math.roundToInt
+
+@Composable
+internal fun FavoriteContactsPager(
+    state: PagerState,
+    hasFavorites: Boolean,
+    content: @Composable (favorites: Boolean) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val contentWidth = if (compactLandscape()) Modifier.widthIn(max = 600.dp) else Modifier
+    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (hasFavorites) {
+            Box(contentWidth.fillMaxWidth()) {
+                FavoriteContactTabs(state.currentPage == 0) { favorites ->
+                    scope.launch { state.animateScrollToPage(if (favorites) 0 else 1) }
+                }
+            }
+        }
+        HorizontalPager(
+            state = state,
+            userScrollEnabled = hasFavorites,
+            modifier = Modifier.weight(1f).fillMaxWidth().testTag("contacts-pager"),
+        ) { page ->
+            // Gutters belong to the swipe area; only the list itself stays narrow.
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                Box(contentWidth.fillMaxSize().testTag("contacts-page-content-$page")) {
+                    content(hasFavorites && page == 0)
+                }
+            }
+        }
+    }
+}
 
 @Composable
 internal fun FavoriteContactTabs(favorites: Boolean, onSelect: (Boolean) -> Unit) {

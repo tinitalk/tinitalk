@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
@@ -95,7 +96,7 @@ internal fun AddAccountScreen(
         ) {
             Column(Modifier.fillMaxWidth()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp),
+                    modifier = Modifier.fillMaxWidth().height(if (compactLandscape()) 48.dp else 64.dp).padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CompositionLocalProvider(LocalRippleConfiguration provides null) {
@@ -106,10 +107,10 @@ internal fun AddAccountScreen(
                     Text(if (signInRecovery == null) appString(R.string.text_add_account_112) else appString(R.string.text_sign_in_again_113), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
                 Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                    Modifier.align(Alignment.CenterHorizontally).widthIn(max = 520.dp).fillMaxWidth().padding(horizontal = 24.dp)
                         .padding(bottom = if (keyboardVisible) 12.dp else 28.dp),
                 ) {
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(if (compactLandscape()) 4.dp else 20.dp))
                     AccountCredentialsForm(
                         credentials, loading, errorMessage, internetAvailable, if (signInRecovery == null) appString(R.string.text_add_114) else appString(R.string.text_sign_in_115), keyboardVisible,
                         onAdd, onCheckServer, retryAtMillis,

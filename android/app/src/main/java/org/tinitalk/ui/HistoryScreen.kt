@@ -344,8 +344,8 @@ internal fun HistoryRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = if (showPeer) 78.dp else 70.dp)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .heightIn(min = if (compactLandscape()) 60.dp else if (showPeer) 78.dp else 70.dp)
+                .padding(horizontal = 14.dp, vertical = if (compactLandscape()) 8.dp else 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (showPeer) {
@@ -353,7 +353,7 @@ internal fun HistoryRow(
                     address = contactAddress,
                     displayName = name,
                     fallbackLogin = item.peerLogin,
-                    size = 50.dp,
+                    size = if (compactLandscape()) 40.dp else 50.dp,
                     borderWidth = 1.dp,
                 )
                 Spacer(Modifier.width(14.dp))
