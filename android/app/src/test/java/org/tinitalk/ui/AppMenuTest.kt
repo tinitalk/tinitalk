@@ -55,6 +55,40 @@ class AppMenuTest {
     @Config(qualifiers = "ru-w800dp-h360dp-land-mdpi")
     fun railOpensAboutAndProfileWithSameIconForOneOrMoreAccounts() = checkAboutAndProfileNavigation()
 
+    @Test fun profileAddActionIsInPortraitHeader() = checkProfileAddHeader()
+
+    @Test
+    @Config(qualifiers = "ru-w800dp-h360dp-land-mdpi")
+    fun profileAddActionIsInLandscapeHeader() = checkProfileAddHeader()
+
+    private fun checkProfileAddHeader() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        var added = false
+        composeRule.runOnUiThread {
+            activity.get().setContent {
+                TiniTalkTheme {
+                    ProfileScreen(accounts = emptyList(), internetAvailable = false,
+                        onCheckServer = { error("No accounts to check") },
+                        onBack = {}, onAdd = { added = true }, onRemoveAccount = {})
+                }
+            }
+        }
+        try {
+            val addLabel = appString(R.string.text_add_303)
+            composeRule.onAllNodesWithText(addLabel).assertCountEquals(1)
+            val add = composeRule.onNodeWithText(addLabel).assertIsDisplayed()
+            val addBounds = add.fetchSemanticsNode().boundsInRoot
+            val title = composeRule.onNodeWithText(appString(R.string.text_profile_308))
+                .fetchSemanticsNode().boundsInRoot
+            assertTrue(addBounds.left >= title.right)
+            assertEquals(title.center.y, addBounds.center.y, 2f)
+            add.performClick()
+            assertTrue(added)
+        } finally {
+            activity.pause().stop().destroy()
+        }
+    }
+
     private fun checkAboutAndProfileNavigation() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
         var profileOpened = false

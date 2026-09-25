@@ -97,7 +97,12 @@ internal fun ProfileScreen(
                         Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = appString(R.string.text_back_101))
                     }
                 }
-                Text(appString(R.string.text_profile_308), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(appString(R.string.text_profile_308), modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                CompositionLocalProvider(LocalRippleConfiguration provides null) {
+                    AddListButton(onClick = onAdd, enabled = true)
+                }
             }
             LazyColumn(
                 modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally).widthIn(max = 640.dp).fillMaxWidth(),
@@ -116,9 +121,6 @@ internal fun ProfileScreen(
                             passwordAccount = account.id.value
                         },
                     )
-                }
-                item {
-                    AddListButton(onClick = onAdd, enabled = true, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
@@ -238,10 +240,22 @@ private fun ProfileAccountCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                val apiVersion = details?.apiVersion
+                val commit = details?.commit
+                if (apiVersion != null && !commit.isNullOrBlank()) {
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        "API v$apiVersion ($commit)",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Light,
+                        maxLines = 1,
+                    )
+                }
             }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                verticalAlignment = Alignment.Bottom,
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 when (presentation.indicator) {
                     ServerCheckIndicator.Checking -> CircularProgressIndicator(
@@ -273,22 +287,14 @@ private fun ProfileAccountCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                val apiVersion = details?.apiVersion
-                val commit = details?.commit
-                if (apiVersion != null && !commit.isNullOrBlank()) {
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        "API v$apiVersion ($commit)",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Light,
-                        maxLines = 1,
-                    )
-                }
-            }
-            if (internetAvailable && !checking && details?.result == ServerCheckResult.Available && passwordSet != null) {
-                TextButton(onClick = { onChangePassword(passwordSet) }, modifier = Modifier.align(Alignment.End)) {
-                    Text(if (passwordSet == true) appString(R.string.text_change_password_326) else appString(R.string.text_set_password_327))
+                if (internetAvailable && !checking && details?.result == ServerCheckResult.Available && passwordSet != null) {
+                    CompositionLocalProvider(LocalRippleConfiguration provides null) {
+                        TextButton(onClick = { onChangePassword(passwordSet) },
+                            modifier = Modifier.height(32.dp),
+                            contentPadding = PaddingValues(start = 12.dp, end = 0.dp)) {
+                            Text(if (passwordSet == true) appString(R.string.text_change_password_326) else appString(R.string.text_set_password_327))
+                        }
+                    }
                 }
             }
         }
@@ -309,12 +315,19 @@ private fun ChangePasswordDialog(
     var confirmation by remember { mutableStateOf("") }
     var validationMessage by remember { mutableStateOf<String?>(null) }
     val retry = retrySeconds(retryAtMillis)
+    val landscape = compactLandscape()
+    val passwordHint: @Composable () -> Unit = {
+        Text(appString(R.string.text_at_least_8_characters_we_recommend_combining_lowercase_and_upperc_318),
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = if (landscape) androidx.compose.ui.text.style.TextAlign.Center else androidx.compose.ui.text.style.TextAlign.Start)
+    }
     AccountPasswordDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (passwordSet == false) appString(R.string.text_set_password_327) else appString(R.string.text_change_password_326)) },
+        landscapeDescription = passwordHint,
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(appString(R.string.text_at_least_8_characters_we_recommend_combining_lowercase_and_upperc_318), style = MaterialTheme.typography.bodySmall)
+                if (!landscape) passwordHint()
                 if (passwordSet != false) {
                     OutlinedTextField(
                         currentPassword,

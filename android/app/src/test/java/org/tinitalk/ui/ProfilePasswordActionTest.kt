@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performClick
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -36,6 +37,46 @@ class ProfilePasswordActionTest {
     @Test fun existingPasswordShowsChangeActionOnlyAfterCheck() = checkAction(true)
     @Test fun oldServerDoesNotShowActionEvenWithCachedPassword() = checkAction(null)
     @Test fun failedCheckDoesNotShowActionEvenWithCachedPassword() = checkAction(null, fail = true)
+
+    @Test fun compactAccountRowsInPortrait() = checkCompactAccountRows()
+
+    @Test
+    @Config(qualifiers = "en-w800dp-h360dp-land-mdpi")
+    fun compactAccountRowsInLandscape() = checkCompactAccountRows()
+
+    private fun checkCompactAccountRows() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        compose.runOnUiThread {
+            activity.get().setContent {
+                TiniTalkTheme {
+                    ProfileScreen(
+                        accounts = listOf(AccountSummary(AccountId("account"), "https://family.example", "alice", null)),
+                        internetAvailable = true,
+                        onCheckServer = { ServerCheckDetails(ServerCheckResult.Available, apiVersion = 3, commit = "12345678") },
+                        onCheckPasswordSet = { true },
+                        onBack = {}, onAdd = {}, onRemoveAccount = {},
+                    )
+                }
+            }
+        }
+        try {
+            val passwordLabel = appString(R.string.text_change_password_326)
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithText(passwordLabel).fetchSemanticsNodes().isNotEmpty()
+            }
+            val address = compose.onNodeWithText("family.example").fetchSemanticsNode().boundsInRoot
+            val version = compose.onNodeWithText("API v3 (12345678)").fetchSemanticsNode().boundsInRoot
+            val status = compose.onNodeWithText(appString(R.string.text_server_available_119)).fetchSemanticsNode().boundsInRoot
+            val password = compose.onNodeWithText(passwordLabel).fetchSemanticsNode().boundsInRoot
+            assertEquals(address.center.y, version.center.y, 1f)
+            assertTrue(version.left > address.right)
+            assertEquals(status.center.y, password.center.y, 1f)
+            assertTrue(password.left >= status.right)
+            assertEquals(version.right, password.right, 1f)
+        } finally {
+            activity.pause().stop().destroy()
+        }
+    }
 
     @Test fun logoutWithoutPasswordShowsRegularConfirmationAndDoesNotOpenPasswordForm() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup()

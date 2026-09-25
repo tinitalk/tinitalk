@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
@@ -83,6 +86,7 @@ internal fun AccountPasswordDialog(
     text: @Composable () -> Unit,
     confirmButton: @Composable () -> Unit,
     dismissButton: @Composable () -> Unit,
+    landscapeDescription: @Composable () -> Unit = {},
 ) {
     if (!compactLandscape()) {
         AlertDialog(onDismissRequest = onDismissRequest, title = title, text = text,
@@ -95,14 +99,19 @@ internal fun AccountPasswordDialog(
                     Column(Modifier.weight(0.4f).fillMaxHeight()
                         .background(MaterialTheme.colorScheme.surface).padding(16.dp)) {
                         ProvideTextStyle(MaterialTheme.typography.titleLarge, title)
-                        Spacer(Modifier.weight(1f))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        Box(Modifier.weight(1f).fillMaxWidth().padding(vertical = 12.dp)
+                            .verticalScroll(rememberScrollState()), contentAlignment = Alignment.Center) {
+                            landscapeDescription()
+                        }
+                        Row(Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                             verticalAlignment = Alignment.CenterVertically) {
                             dismissButton()
                             confirmButton()
                         }
                     }
-                    Box(Modifier.weight(0.6f).fillMaxHeight().padding(16.dp)) { text() }
+                    Box(Modifier.weight(0.6f).fillMaxHeight().padding(16.dp),
+                        contentAlignment = Alignment.Center) { text() }
                 }
             }
         }
