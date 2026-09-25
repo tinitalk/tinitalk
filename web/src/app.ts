@@ -29,6 +29,7 @@ import { WaitingInvites, WaitingTone, type WaitingInvite } from './waitingCalls'
 import { buildTime, canUpdateApplication, fetchBuildVersions, inspectUpdates, updateStatus, waitForWorker, webBuild, webCommit, type UpdateReport } from './updates';
 import { microphoneControlIcon } from './callControls';
 import { ScreenViewTransform, bindScreenViewer } from './screenViewer';
+import { DesktopVideoExpansion } from './desktopVideo';
 import { AuthError, authenticate, authErrorMessage, changePassword, logout, personalPasswordError } from './auth';
 
 const base = new URL('./', document.baseURI).href;
@@ -40,6 +41,9 @@ const callLayer = document.querySelector<HTMLElement>('#call-layer')!;
 const callContent = document.querySelector<HTMLElement>('#call-content')!;
 const audio = document.querySelector<HTMLAudioElement>('#remote-audio')!;
 const remoteVideo = document.querySelector<HTMLVideoElement>('#remote-media')!;
+const desktopVideo = new DesktopVideoExpansion(() => {
+  positionLocalPreview(callLayer.querySelector<HTMLElement>('.local-video-preview'));
+});
 
 type Route =
   | { name: 'home' }
@@ -3479,6 +3483,9 @@ function renderCall(): void {
   callLayer.classList.toggle('has-remote-video', Boolean(current && videoModeActive(current)
     && current.video.remoteSending && current.video.remoteStream && (!current.video.screen.remote || current.video.screen.ready)));
   callLayer.classList.toggle('has-remote-screen', Boolean(current?.video.screen.remote));
+  desktopVideo.update(current?.accepted && current.video.allowed &&
+    (current.video.screen.remote || current.video.remoteSending)
+    ? callKey(current.account.id, current.id) : null);
   if (!current?.video.screen.remote) remoteVideo.style.transform = '';
   callContent.replaceChildren();
   if (waitingCalls.entries.size) callContent.append(waitingCallsPanel());

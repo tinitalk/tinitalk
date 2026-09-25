@@ -1,4 +1,6 @@
 {
+  "video_expand": "展开视频",
+  "video_collapse": "收起视频",
   "text_sharing_paused_reconnecting_134": "共享已暂停 · 正在重新连接",
   "text_screen_sharing_stopped_48": "屏幕共享已停止",
   "text_stop_screen_sharing_164": "停止屏幕共享",

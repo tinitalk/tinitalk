@@ -2219,6 +2219,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   }
 }
 
+.desktop-video-toggle { display: none; }
+
 @media (min-width: 760px) and (hover: hover) and (pointer: fine) {
   :root {
     --app-height: min(860px, calc(100dvh - 48px));
@@ -2248,6 +2250,37 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   .call-screen:not(.video-call-screen) {
     overflow-y: auto;
   }
+  .desktop-video-toggle {
+    appearance: none;
+    position: fixed;
+    z-index: 45;
+    top: calc((100dvh - var(--app-height)) / 2 + 8px);
+    left: calc(50% + var(--app-width) / 2 + 12px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    line-height: 1;
+    border: 1px solid #ffffff1f;
+    border-radius: 50%;
+    background: #263447cc;
+    color: #dce3ed;
+    cursor: pointer;
+    transition: background 150ms ease, color 150ms ease;
+  }
+  .desktop-video-toggle svg { display: block; width: 24px; height: 24px; flex: 0 0 24px; }
+  .desktop-video-toggle:focus-visible { outline: none; }
+  .desktop-video-toggle:hover, .desktop-video-toggle:focus-visible { background: #35445b; color: #fff; }
+  body.video-expanded {
+    --app-height: 100dvh;
+    --app-width: 100dvw;
+  }
+  body.video-expanded #app { border-radius: 0; box-shadow: none; }
+  body.video-expanded #remote-media { object-fit: contain; }
+  body.video-expanded .desktop-video-toggle { top: 12px; right: 12px; left: auto; }
+  body.video-expanded .video-call-top { padding-left: 64px; padding-right: 64px; }
 }
 
 @container (max-height: 640px) {

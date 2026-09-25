@@ -48,6 +48,7 @@ const createUI = localizedFunction('environment', `
   const waitingCalls = {entries: new Map()}, waitingTone = {update() {}}, waitingPromotions = new Set(), list = [];
   let waitingReply;
   let screenViewerObserver;
+  const desktopVideo = { update() {} }, callKey = (account, call) => account + '/' + call;
   const applyVideoControlsVisibility = () => {};
   const videoModeActive = () => true;
   const videoCallScreen = () => element('div', 'video-call-screen');
