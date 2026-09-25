@@ -13,6 +13,19 @@ export type { CallSecurityState } from './sas';
 
 export type CallTransportRoute = 'unknown' | 'direct' | 'turn';
 export type CallVideoFacing = 'front' | 'back';
+export type CallScreenState = {
+  id?: string;
+  allowed: boolean;
+  captureSupported: boolean;
+  requested: boolean;
+  remote: boolean;
+  ready: boolean;
+  sending: boolean;
+  failure?: Message;
+};
+export function screenCaptureSupported(): boolean {
+  return typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+}
 export type CallVideoState = {
   allowed: boolean;
   requested: boolean;
@@ -20,6 +33,7 @@ export type CallVideoState = {
   remoteSending: boolean;
   canSwitchCamera: boolean;
   facing: CallVideoFacing;
+  screen: CallScreenState;
   localStream?: MediaStream;
   remoteStream?: MediaStream;
   failure?: string;
@@ -64,6 +78,15 @@ export class AudioCall {
   private cameraFacing: CallVideoFacing = 'front';
   private cameraRevision = 0;
   private cameraOperation: Promise<void> = Promise.resolve();
+  private screenAllowed = false;
+  private screenRequest?: { id: string; stream?: MediaStream; submitted: boolean };
+  private screenPreparationId?: string;
+  private screenRemoteId?: string;
+  private screenReady = false;
+  private screenSending = false;
+  private screenStopping = false;
+  private screenFailure?: Message;
+  private screenTimeout?: ReturnType<typeof setTimeout>;
   private queued: RTCIceCandidateInit[] = [];
   private generation = '';
   private configuredGeneration?: string;
@@ -124,6 +147,16 @@ export class AudioCall {
       remoteSending: this.remoteVideoSending,
       canSwitchCamera: this.canSwitchCamera,
       facing: this.cameraFacing,
+      screen: {
+        id: this.screenRemoteId ?? this.screenRequest?.id,
+        allowed: this.screenAllowed,
+        captureSupported: screenCaptureSupported(),
+        requested: Boolean(this.screenRequest) || this.screenStopping,
+        remote: Boolean(this.screenRemoteId),
+        ready: this.screenReady,
+        sending: this.screenSending,
+        failure: this.screenFailure,
+      },
       ...(this.localVideoStream ? { localStream: this.localVideoStream } : {}),
       ...(this.remoteVideoStream ? { remoteStream: this.remoteVideoStream } : {}),
     };
@@ -131,12 +164,12 @@ export class AudioCall {
 
   resendVideoState(): void {
     if (this.videoAllowed && this.peer && !this.closed) {
-      this.send('rtc.video', { enabled: this.videoSending });
+      this.send('rtc.video', { enabled: this.videoSending || this.screenSending });
     }
   }
 
   async setVideoRequested(requested: boolean): Promise<void> {
-    if (this.closed) return;
+    if (this.closed || this.screenRequest || this.screenRemoteId || this.screenStopping) return;
     this.videoRequested = requested;
     this.publishVideo();
     await this.updateCamera();
@@ -149,9 +182,141 @@ export class AudioCall {
     await this.updateCamera();
   }
 
+  async startScreen(): Promise<void> {
+    if (this.closed || !this.screenAllowed || !screenCaptureSupported() || !this.videoSender ||
+        this.screenRequest || this.screenRemoteId || this.screenStopping ||
+        this.videoRequested || this.videoSending || this.remoteVideoSending) return;
+    const request = { id: crypto.randomUUID(), submitted: false, stream: undefined as MediaStream | undefined };
+    this.screenRequest = request;
+    this.screenFailure = undefined;
+    this.publishVideo();
+    try {
+      // Browser permission must be requested in the click's user activation.
+      // Capture stays local (disabled and unattached) until both peers are ready.
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 30 } }, audio: false });
+      if (this.closed || this.screenRequest !== request) { stream.getTracks().forEach(track => track.stop()); return; }
+      request.stream = stream;
+      const track = stream.getVideoTracks()[0];
+      if (!track || track.readyState === 'ended') throw new Error('Screen capture ended');
+      track.enabled = false;
+      track.contentHint = 'detail';
+      track.onended = () => { if (this.screenRequest === request) void this.stopScreen(); };
+      request.submitted = true;
+      this.screenTimeout = setTimeout(() => { void this.stopScreen('text_could_not_start_screen_sharing_try_again_2'); }, 15_000);
+      this.send('rtc.screen', { enabled: true, share_id: request.id });
+    } catch (error) {
+      if (this.screenRequest === request) {
+        const cancelled = error instanceof DOMException && error.name === 'NotAllowedError';
+        await this.stopScreen(cancelled ? undefined : 'text_could_not_start_screen_sharing_1');
+      }
+    }
+  }
+
+  async stopScreen(failure?: Message): Promise<void> {
+    const request = this.screenRequest;
+    if (!request) return;
+    this.screenRequest = undefined;
+    this.screenStopping = true;
+    this.screenFailure = failure;
+    clearTimeout(this.screenTimeout);
+    const wasSending = this.screenSending;
+    this.screenSending = false;
+    this.releaseScreenCapture(request.stream);
+    if (this.screenPreparationId === request.id) {
+      this.screenPreparationId = undefined;
+      this.screenReady = false;
+    }
+    if (!this.closed && request.submitted) this.send('rtc.screen', { enabled: false, share_id: request.id });
+    if (!this.closed && wasSending) this.send('rtc.video', { enabled: false });
+    this.publishVideo();
+    // Serialize with camera changes and an in-flight screen attachment. A late
+    // replaceTrack completion must not resurrect a stopped capture.
+    await this.enqueueVideoOperation(async () => {
+      try { await this.videoSender?.replaceTrack(null); } catch { /* The peer may be closing. */ }
+    });
+    this.screenStopping = false;
+    if (!this.closed) this.publishVideo();
+  }
+
+  rejectScreenFromServer(code: string): void {
+    if (code === 'screen_share_camera_blocked') {
+      this.videoRequested = false;
+      if (!this.screenRequest) void this.updateCamera();
+    } else {
+      void this.stopScreen(code === 'screen_share_busy'
+        ? 'text_the_other_person_is_already_sharing_their_screen_0' : 'text_could_not_start_screen_sharing_1');
+    }
+  }
+
+  private async receiveScreen(payload: Record<string, unknown>): Promise<void> {
+    if (!this.screenAllowed || typeof payload.enabled !== 'boolean' || typeof payload.share_id !== 'string') return;
+    const id = payload.share_id;
+    if (!payload.enabled) {
+      const wasPreparing = Boolean(this.screenPreparationId);
+      this.screenPreparationId = undefined;
+      this.screenRemoteId = undefined;
+      this.screenReady = false;
+      if (wasPreparing) {
+        // Resume delivers rtc.video before this snapshot. Screen-off does not
+        // mean video-off: the presenter may already have switched to a camera.
+        await this.stopScreen(this.screenSending ? undefined : 'text_could_not_start_screen_sharing_1');
+      }
+      this.publishVideo();
+      return;
+    }
+    const self = this.caller ? this.options.callerLogin : this.options.calleeLogin;
+    const peer = this.caller ? this.options.calleeLogin : this.options.callerLogin;
+    if (!self || (payload.presenter_id !== self && payload.presenter_id !== peer)) return;
+    const local = payload.presenter_id === self;
+    if (local && (this.screenRequest?.id !== id || !this.screenRequest.stream)) {
+      // Replayed grants are not user consent to start capturing again.
+      this.send('rtc.screen', { enabled: false, share_id: id });
+      return;
+    }
+    if (!local) {
+      this.screenRemoteId = id;
+      await this.stopScreen('text_the_other_person_is_already_sharing_their_screen_0');
+    }
+    const fresh = this.screenPreparationId !== id;
+    this.screenPreparationId = id;
+    this.screenReady = payload.ready === true;
+    if (fresh) {
+      this.videoRequested = false;
+      // A ready snapshot can follow replayed video-on for an ongoing share.
+      // Only a new preparation invalidates the previous camera's video state.
+      if (!this.screenReady) this.remoteVideoSending = false;
+      this.publishVideo();
+      await this.updateCamera();
+    }
+    if (this.closed || this.screenPreparationId !== id) return;
+    if (fresh || !this.screenReady) this.send('rtc.screen.ready', { share_id: id });
+    if (local && this.screenReady && !this.screenSending) {
+      const request = this.screenRequest!;
+      await this.enqueueVideoOperation(async () => {
+        if (this.closed || this.screenRequest !== request || this.screenSending) return;
+        const track = request.stream?.getVideoTracks()[0];
+        if (!track || track.readyState === 'ended') throw new Error('Screen capture ended');
+        await this.videoSender!.replaceTrack(track);
+        if (this.closed || this.screenRequest !== request) return;
+        await this.configureVideoSender(true);
+        if (this.closed || this.screenRequest !== request) return;
+        track.enabled = true;
+        this.screenSending = true;
+        clearTimeout(this.screenTimeout);
+        this.send('rtc.video', { enabled: true });
+      }).catch(async () => { await this.stopScreen('text_could_not_start_screen_sharing_1'); });
+    }
+    if (!this.closed) this.publishVideo();
+  }
+
+  private releaseScreenCapture(stream?: MediaStream): void {
+    stream?.getTracks().forEach(track => { track.onended = null; track.stop(); });
+  }
+
   async receive(event: SignalEvent): Promise<void> {
     if (this.closed) return;
     const payload = event.payload;
+    if (event.type === 'rtc.screen') { await this.receiveScreen(payload); return; }
     if (event.type === 'rtc.sas.commit') { await this.sas?.onCommitment(payload); return; }
     if (event.type === 'rtc.sas.key') { await this.sas?.onKey(payload); return; }
     if (event.type === 'rtc.sas.reveal') { await this.sas?.onReveal(payload); return; }
@@ -178,6 +343,13 @@ export class AudioCall {
       this.remoteReady = false;
       const iceServers = Array.isArray(payload.ice_servers) ? payload.ice_servers as (RTCIceServer & { expires_at?: string })[] : [];
       await this.setVideoAllowed(payload.video_allowed === true);
+      this.screenAllowed = this.videoAllowed && payload.screen_sharing_allowed === true;
+      if (!this.screenAllowed) {
+        await this.stopScreen();
+        this.screenPreparationId = this.screenRemoteId = undefined;
+        this.screenReady = false;
+      }
+      this.publishVideo();
       if (!this.peer) this.createPeer(iceServers); else this.peer.setConfiguration({ iceServers });
       this.configuredGeneration = generation;
       // A fresh configuration also satisfies a pending restart request from the peer.
@@ -401,11 +573,15 @@ export class AudioCall {
     const requested = this.videoRequested;
     // Capture and sender replacement must finish before another camera operation
     // begins. A newer request invalidates the result of the current operation.
-    const operation = this.cameraOperation.then(async () => {
+    return this.enqueueVideoOperation(async () => {
       if (!this.cameraUpdateCurrent(revision)) return;
       if (requested) await this.startCamera(revision, facing);
       else await this.stopCamera(true);
     });
+  }
+
+  private enqueueVideoOperation(action: () => Promise<void>): Promise<void> {
+    const operation = this.cameraOperation.then(action);
     this.cameraOperation = operation.catch(() => {});
     return operation;
   }
@@ -517,7 +693,7 @@ export class AudioCall {
     }
   }
 
-  private async configureVideoSender(): Promise<void> {
+  private async configureVideoSender(screen = this.screenSending): Promise<void> {
     const sender = this.videoSender;
     if (!sender?.getParameters || !sender.setParameters) return;
     try {
@@ -525,7 +701,7 @@ export class AudioCall {
       parameters.encodings ??= [{}];
       Object.assign(parameters.encodings[0], videoEncodingParameters());
       delete parameters.encodings[0].scaleResolutionDownBy;
-      parameters.degradationPreference = 'maintain-framerate';
+      parameters.degradationPreference = screen ? 'maintain-resolution' : 'maintain-framerate';
       await sender.setParameters(parameters);
     } catch {
       // Browsers differ in which RTP parameters may be changed; keep the call alive.
@@ -548,6 +724,11 @@ export class AudioCall {
 
   close(): void {
     this.closed = true;
+    clearTimeout(this.screenTimeout);
+    this.releaseScreenCapture(this.screenRequest?.stream);
+    this.screenRequest = undefined;
+    this.screenPreparationId = this.screenRemoteId = undefined;
+    this.screenSending = this.screenReady = false;
     this.cameraRevision++;
     this.videoRequested = false;
     this.videoSending = false;

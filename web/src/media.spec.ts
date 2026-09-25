@@ -589,7 +589,220 @@ it('turns video off when the current camera ends unexpectedly, without stopping 
   expect(send).toHaveBeenLastCalledWith('rtc.video', { enabled: false });
 });
 
-async function cameraCall() {
+function screenEvent(presenter = 'bob', ready = false, id = 'share'): SignalEvent {
+  return { id: crypto.randomUUID(), call_id: 'call', type: 'rtc.screen', sent_at: Date.now(),
+    payload: { enabled: Boolean(presenter), presenter_id: presenter, share_id: id, ready } };
+}
+
+async function sharingCall() {
+  const h = await cameraCall(true);
+  const screen = track('video');
+  const getDisplayMedia = vi.fn(async () => mediaStream([screen], [screen]));
+  Object.assign(navigator.mediaDevices, { getDisplayMedia });
+  return { ...h, screen, getDisplayMedia };
+}
+
+it('receives screen sharing without a capture API, releasing the camera before acknowledging readiness', async () => {
+  const h = await cameraCall(true);
+  await h.call.setVideoRequested(true);
+  expect(h.call.videoState().screen.captureSupported).toBe(false);
+  const detach = deferred<void>();
+  h.sender.replaceTrack.mockImplementationOnce(async next => { await detach.promise; h.sender.track = next; });
+  const preparing = h.call.receive(screenEvent());
+  await vi.waitFor(() => expect(h.front.readyState).toBe('ended'));
+  expect(h.send).not.toHaveBeenCalledWith('rtc.screen.ready', expect.anything());
+  detach.resolve();
+  await preparing;
+  expect(h.send).toHaveBeenLastCalledWith('rtc.screen.ready', { share_id: 'share' });
+  await h.call.receive(screenEvent('bob', true));
+  await h.call.receive({ ...screenEvent(), type: 'rtc.video', payload: { enabled: true } });
+  expect(h.call.videoState()).toMatchObject({ requested: false, sending: false, remoteSending: true, screen: { remote: true, ready: true } });
+  await h.call.setVideoRequested(true);
+  expect(h.call.videoState().requested).toBe(false);
+  expect(h.getUserMedia).toHaveBeenCalledTimes(2); // microphone + initial camera, not screen viewing
+  await h.call.receive({ ...screenEvent(), type: 'rtc.video', payload: { enabled: false } });
+  await h.call.receive(screenEvent(''));
+  expect(h.call.videoState()).toMatchObject({ remoteSending: false, requested: false, screen: { remote: false } });
+  expect(h.microphone.readyState).toBe('live');
+});
+
+it.each([true, false])('preserves replayed remote video state after a stopped-screen snapshot (camera=%s)', async camera => {
+  const h = await cameraCall(true);
+  await h.call.receive(screenEvent());
+  await h.call.receive(screenEvent('bob', true));
+  await h.call.receive({ ...screenEvent(), type: 'rtc.video', payload: { enabled: true } });
+
+  // Resume replays rtc.video first, then supplies the current screen snapshot.
+  // The presenter stopped sharing and may have enabled the camera while offline.
+  await h.call.receive({ ...screenEvent(), type: 'rtc.video', payload: { enabled: false } });
+  if (camera) await h.call.receive({ ...screenEvent(), type: 'rtc.video', payload: { enabled: true } });
+  await h.call.receive(screenEvent('', false, 'resume'));
+  expect(h.call.videoState()).toMatchObject({ remoteSending: camera, screen: { remote: false, ready: false } });
+  expect(h.microphone.readyState).toBe('live');
+});
+
+it('preserves replayed video when the first screen snapshot is already ready', async () => {
+  const h = await cameraCall(true);
+  await h.call.receive({ ...screenEvent(), type: 'rtc.video', payload: { enabled: true } });
+  await h.call.receive(screenEvent('bob', true));
+  expect(h.call.videoState()).toMatchObject({ remoteSending: true, screen: { remote: true, ready: true } });
+  expect(h.send).toHaveBeenCalledWith('rtc.screen.ready', { share_id: 'share' });
+});
+
+it.each([true, false])('stops viewing when video-off arrives before/after screen-off (video first=%s)', async videoFirst => {
+  const h = await cameraCall(true);
+  await h.call.receive(screenEvent());
+  await h.call.receive(screenEvent('bob', true));
+  await h.call.receive({ ...screenEvent(), type: 'rtc.video', payload: { enabled: true } });
+  const videoOff = { ...screenEvent(), type: 'rtc.video', payload: { enabled: false } };
+  const screenOff = screenEvent('');
+  for (const event of videoFirst ? [videoOff, screenOff] : [screenOff, videoOff]) await h.call.receive(event);
+  expect(h.call.videoState()).toMatchObject({ remoteSending: false, screen: { remote: false, ready: false } });
+  expect(h.microphone.readyState).toBe('live');
+});
+
+it('requests capture in the gesture but transmits only after both peers are ready, prioritizing text resolution', async () => {
+  const h = await sharingCall();
+  const start = h.call.startScreen();
+  expect(h.getDisplayMedia).toHaveBeenCalledExactlyOnceWith({ video: { frameRate: { ideal: 30, max: 30 } }, audio: false });
+  await start;
+  const id = h.send.mock.calls.find(([type]) => type === 'rtc.screen')![1].share_id;
+  expect(h.screen.enabled).toBe(false);
+  expect(h.sender.track).toBeNull();
+  await h.call.receive(screenEvent('alice', false, id));
+  expect(h.sender.track).toBeNull();
+  await h.call.receive(screenEvent('alice', true, id));
+  expect(h.sender.track).toBe(h.screen);
+  expect(h.screen.enabled).toBe(true);
+  expect(h.screen.contentHint).toBe('detail');
+  expect(h.sender.setParameters).toHaveBeenLastCalledWith(expect.objectContaining({ degradationPreference: 'maintain-resolution', encodings: [expect.objectContaining({ maxBitrate: 4_000_000, maxFramerate: 30 })] }));
+  expect(h.call.videoState().screen.sending).toBe(true);
+  h.call.resendVideoState();
+  expect(h.send).toHaveBeenLastCalledWith('rtc.video', { enabled: true });
+  await h.call.receive(screenEvent('alice', true, id));
+  expect(h.getDisplayMedia).toHaveBeenCalledOnce();
+  await h.call.stopScreen();
+  expect(h.screen.readyState).toBe('ended');
+  expect(h.sender.track).toBeNull();
+  expect(h.call.videoState().screen.requested).toBe(false);
+  expect(h.microphone.readyState).toBe('live');
+  await h.call.setVideoRequested(true);
+  expect(h.sender.track).toBe(h.front);
+  expect(h.sender.setParameters).toHaveBeenLastCalledWith(expect.objectContaining({ degradationPreference: 'maintain-framerate' }));
+});
+
+it.each(['hangup', 'cancel', 'remote'] as const)('disposes capture selected after %s while the browser picker was open', async action => {
+  const h = await sharingCall();
+  const picker = deferred<MediaStream>();
+  h.getDisplayMedia.mockReturnValueOnce(picker.promise);
+  const start = h.call.startScreen();
+  if (action === 'hangup') h.call.close();
+  else if (action === 'cancel') await h.call.stopScreen();
+  else await h.call.receive(screenEvent());
+  picker.resolve(mediaStream([h.screen], [h.screen]));
+  await start;
+  expect(h.screen.readyState).toBe('ended');
+  expect(h.send.mock.calls.filter(([type, payload]) => type === 'rtc.screen' && payload.enabled)).toHaveLength(0);
+  expect(h.sender.track).toBeNull();
+});
+
+it('treats picker cancellation as cancellation, and capture failure as nonfatal to the audio call', async () => {
+  const h = await sharingCall();
+  h.getDisplayMedia.mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'));
+  await h.call.startScreen();
+  expect(h.call.videoState().screen).toMatchObject({ requested: false, failure: undefined });
+  h.getDisplayMedia.mockRejectedValueOnce(new Error('capture failed'));
+  await h.call.startScreen();
+  expect(h.call.videoState().screen).toMatchObject({ requested: false, failure: 'text_could_not_start_screen_sharing_1' });
+  expect(h.microphone.readyState).toBe('live');
+});
+
+it('times out preparation, ignores replayed local grants, and never reopens capture without a gesture', async () => {
+  vi.useFakeTimers();
+  const h = await sharingCall();
+  await h.call.startScreen();
+  const id = h.send.mock.calls.find(([type]) => type === 'rtc.screen')![1].share_id;
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(h.screen.readyState).toBe('ended');
+  expect(h.call.videoState().screen.requested).toBe(false);
+  await h.call.receive(screenEvent('alice', true, id));
+  expect(h.send).toHaveBeenLastCalledWith('rtc.screen', { enabled: false, share_id: id });
+  expect(h.getDisplayMedia).toHaveBeenCalledOnce();
+  expect(h.sender.track).toBeNull();
+  h.call.close();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('stops screen transmission when the browser ends capture or the server rejects a start', async () => {
+  const h = await sharingCall();
+  await h.call.startScreen();
+  h.call.rejectScreenFromServer('screen_share_busy');
+  await vi.waitFor(() => expect(h.call.videoState().screen.requested).toBe(false));
+  expect(h.screen.readyState).toBe('ended');
+  expect(h.call.videoState().screen.failure).toBe('text_the_other_person_is_already_sharing_their_screen_0');
+  const next = track('video');
+  h.getDisplayMedia.mockResolvedValueOnce(mediaStream([next], [next]));
+  await h.call.startScreen();
+  const id = h.send.mock.calls.filter(([type, payload]) => type === 'rtc.screen' && payload.enabled).at(-1)![1].share_id;
+  await h.call.receive(screenEvent('alice', true, id));
+  next.stop();
+  next.onended!(new Event('ended'));
+  await vi.waitFor(() => expect(h.call.videoState().screen.requested).toBe(false));
+  expect(h.sender.track).toBeNull();
+  expect(h.send).toHaveBeenCalledWith('rtc.video', { enabled: false });
+});
+
+it('does not resurrect a screen whose sender attachment completed after stop', async () => {
+  const h = await sharingCall();
+  await h.call.startScreen();
+  const id = h.send.mock.calls.find(([type]) => type === 'rtc.screen')![1].share_id;
+  await h.call.receive(screenEvent('alice', false, id));
+  const attached = deferred<void>();
+  h.sender.replaceTrack.mockImplementationOnce(async next => { await attached.promise; h.sender.track = next; });
+  const ready = h.call.receive(screenEvent('alice', true, id));
+  await vi.waitFor(() => expect(h.sender.replaceTrack).toHaveBeenLastCalledWith(h.screen));
+  const stopping = h.call.stopScreen();
+  attached.resolve();
+  await Promise.all([ready, stopping]);
+  expect(h.sender.track).toBeNull();
+  expect(h.screen.readyState).toBe('ended');
+  expect(h.send).not.toHaveBeenCalledWith('rtc.video', { enabled: true });
+});
+
+it('keeps sharing unavailable on old servers and never opens the picker while either camera is on', async () => {
+  const old = await cameraCall();
+  const capture = vi.fn();
+  Object.assign(navigator.mediaDevices, { getDisplayMedia: capture });
+  await old.call.startScreen();
+  await old.call.receive(screenEvent());
+  expect(capture).not.toHaveBeenCalled();
+  expect(old.call.videoState().screen.remote).toBe(false);
+  const h = await sharingCall();
+  await h.call.setVideoRequested(true);
+  await h.call.startScreen();
+  expect(h.getDisplayMedia).not.toHaveBeenCalled();
+  await h.call.setVideoRequested(false);
+  await h.call.receive({ ...screenEvent(), type: 'rtc.video', payload: { enabled: true } });
+  await h.call.startScreen();
+  expect(h.getDisplayMedia).not.toHaveBeenCalled();
+});
+
+it('stops and releases a pending camera before granting remote screen readiness', async () => {
+  const h = await cameraCall(true);
+  const camera = deferred<MediaStream>();
+  h.getUserMedia.mockReturnValueOnce(camera.promise);
+  const opening = h.call.setVideoRequested(true);
+  await vi.waitFor(() => expect(h.getUserMedia).toHaveBeenCalledTimes(2));
+  const sharing = h.call.receive(screenEvent());
+  expect(h.send).not.toHaveBeenCalledWith('rtc.screen.ready', expect.anything());
+  camera.resolve(mediaStream([h.front], [h.front]));
+  await Promise.all([opening, sharing]);
+  expect(h.front.readyState).toBe('ended');
+  expect(h.sender.track).toBeNull();
+  expect(h.send).toHaveBeenLastCalledWith('rtc.screen.ready', { share_id: 'share' });
+});
+
+async function cameraCall(screenSharing = false) {
   const microphone = track('audio');
   const front = track('video');
   const back = track('video');
@@ -620,10 +833,10 @@ async function cameraCall() {
   vi.stubGlobal('RTCPeerConnection', class { constructor() { return peer; } });
   const send = vi.fn();
   const video = vi.fn();
-  const call = new AudioCall(true, { pause: vi.fn() } as unknown as HTMLAudioElement, send, vi.fn(), vi.fn(), { video });
+  const call = new AudioCall(true, { pause: vi.fn() } as unknown as HTMLAudioElement, send, vi.fn(), vi.fn(), { video, callerLogin: 'alice', calleeLogin: 'bob' });
   onTestFinished(() => call.close());
   await call.capture();
-  await call.receive({ id: 'config', call_id: 'call', type: 'rtc.config', sent_at: Date.now(), payload: { video_allowed: true, ice_servers: [] } });
+  await call.receive({ id: 'config', call_id: 'call', type: 'rtc.config', sent_at: Date.now(), payload: { video_allowed: true, screen_sharing_allowed: screenSharing, ice_servers: [] } });
   return { call, sender, front, back, microphone, getUserMedia, send, video };
 }
 

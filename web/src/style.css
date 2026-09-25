@@ -1516,6 +1516,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   max-width: calc(100% - 40px);
   white-space: nowrap;
 }
+#remote-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
 #remote-media {
   position: absolute;
   inset: 0;
@@ -1530,6 +1536,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 #call-layer.has-remote-video .video-call-screen,
 #call-layer.has-remote-video .video-stage { background: transparent; }
 .call-screen {
+  position: relative;
   min-height: var(--app-height);
   padding: calc(24px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));
   display: flex;
@@ -2101,6 +2108,106 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   line-height: 1.25;
   font-weight: 600;
   text-align: center;
+}
+
+.screen-share-tools {
+  position: absolute;
+  z-index: 3;
+  top: calc(8px + env(safe-area-inset-top));
+  right: calc(12px + env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+}
+.screen-share-start, .screen-share-stop {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: none;
+}
+.screen-share-start { color: #ffffffad; background: transparent; }
+.screen-share-start:disabled { color: #ffffff47; opacity: 1; }
+.screen-share-tools .icon { width: 32px; height: 32px; }
+.screen-share-stop, .screen-share-stop:active { color: #fff; background: #315ea8; }
+.screen-sharing-label {
+  max-width: 260px;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: 14px;
+  background: #0000007a;
+  color: #ffffffb8;
+  font-size: .75rem;
+  line-height: 1rem;
+  text-align: right;
+}
+.screen-sharing-notice {
+  position: absolute;
+  z-index: 3;
+  bottom: calc(132px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(360px, calc(100% - 48px));
+  margin: 0;
+  padding: 14px 24px;
+  border-radius: 28px;
+  background: #4d4d52;
+  color: white;
+  font-size: 1rem;
+  line-height: 1.5rem;
+  pointer-events: none;
+}
+#call-layer.has-remote-screen { background: #000; }
+#call-layer.has-remote-screen #remote-media { object-fit: contain; }
+#call-layer.has-remote-screen #remote-viewport {
+  top: var(--screen-top, 0px);
+  height: max(0px, calc(100% - var(--screen-top, 0px) - var(--screen-bottom, 0px)));
+  transition: top 260ms ease, height 260ms ease;
+}
+#call-layer.has-remote-screen.screen-controls-hidden #remote-viewport {
+  top: env(safe-area-inset-top);
+  height: calc(100% - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+}
+.screen-sharing-viewer .video-call-top, .screen-sharing-viewer .video-controls {
+  background: #263447e6;
+  opacity: 1;
+  transition: transform 260ms ease;
+}
+.screen-sharing-viewer.controls-hidden .video-call-top { opacity: 1; transform: translateY(-100%); }
+.screen-sharing-viewer.controls-hidden .video-controls { opacity: 1; }
+.screen-sharing-viewer .video-stage {
+  inset: var(--screen-top, 0px) 0 var(--screen-bottom, 0px);
+  background: transparent;
+  touch-action: none;
+  transition: top 260ms ease, bottom 260ms ease;
+}
+.screen-sharing-viewer.controls-hidden .video-stage { top: env(safe-area-inset-top); bottom: env(safe-area-inset-bottom); }
+.screen-sharing-fit { position: absolute; right: 12px; top: 50%; z-index: 3; border: 0; border-radius: 999px; padding: 10px 14px; background: #000a; color: white; font: inherit; }
+.screen-sharing-fit[hidden], .controls-hidden .screen-sharing-fit { display: none; }
+.screen-sharing-badge {
+  display: none;
+  position: absolute;
+  z-index: 2;
+  top: max(8px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 7px 14px;
+  border-radius: 999px;
+  color: #ffffffb8;
+  background: #20242b99;
+  font-size: .85rem;
+  pointer-events: none;
+}
+.screen-sharing-viewer.controls-hidden .screen-sharing-badge { display: block; }
+@media (prefers-reduced-motion: reduce) {
+  #call-layer.has-remote-screen #remote-viewport, .screen-sharing-viewer .video-stage, .screen-sharing-viewer .video-call-top, .screen-sharing-viewer .video-controls { transition: none; }
 }
 
 /* In iOS standalone mode the translucent status bar can leave dvh shorter

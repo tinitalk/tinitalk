@@ -138,14 +138,20 @@ Screen sharing is an optional extension. Both bound devices advertise
 Clients request `rtc.screen` with `enabled` and a UUID `share_id`. The server
 allows one presenter and broadcasts the authoritative `enabled`, `presenter_id`
 and `share_id` to both devices, initially with `ready: false`. Both clients turn
-off camera capture and sending, then acknowledge native camera release with
+off camera capture and sending, then acknowledge camera release with
 `rtc.screen.ready {share_id}`. Only after both acknowledgements does the server
 broadcast `ready: true`, allowing the presenter to start capture. Preparation
 expires after 15 seconds without ending the audio call. Cameras stay off after
 sharing until explicitly enabled again. A competing start returns `screen_share_busy`.
 A stop only releases the matching presenter's share ID. Resume sends the current
-screen state after replay. Grants alone must never start capture without a live,
-locally approved Android projection request. Older clients receive no screen events.
+screen state after replay. Grants alone must never start capture without live,
+local user consent. Android requires an approved projection request. Browsers
+must open `getDisplayMedia` from a user gesture, so may acquire a local capture
+before requesting the share; its track stays disabled and unattached until
+`ready: true`. Both platforms stop the capture when its request is cancelled or
+the call ends. Receive-only clients also advertise the extension: the flag
+means protocol support, not local screen-capture availability. Older clients
+receive no screen events.
 
 ## Rejection replies
 

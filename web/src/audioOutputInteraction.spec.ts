@@ -47,6 +47,8 @@ const createUI = localizedFunction('environment', `
   const callToneState = () => ({});
   const waitingCalls = {entries: new Map()}, waitingTone = {update() {}}, waitingPromotions = new Set(), list = [];
   let waitingReply;
+  let screenViewerObserver;
+  const applyVideoControlsVisibility = () => {};
   const videoModeActive = () => true;
   const videoCallScreen = () => element('div', 'video-call-screen');
   const incomingVisibility = { refresh() {} };
@@ -224,13 +226,14 @@ function setup(outputs: Output[] = [
   const callContent = new FakeElement('div');
   const remoteVideoStream = {} as MediaStream;
   const remoteVideo = Object.assign(new FakeElement('video'), {
+    style: { transform: '' },
     srcObject: null as MediaStream | null, muted: false, paused: true,
     play: vi.fn(async () => { remoteVideo.paused = false; }),
     pause: vi.fn(() => { remoteVideo.paused = true; }),
   });
   callLayer.append(remoteVideo, callContent);
   const current = {
-    video: { remoteSending: true, remoteStream: remoteVideoStream as MediaStream | undefined },
+    video: { remoteSending: true, remoteStream: remoteVideoStream as MediaStream | undefined, screen: {remote: false} },
     media: { setAudioOutput: (id: string) => playback.setOutputDevice(id) },
   };
   const failure = vi.fn();

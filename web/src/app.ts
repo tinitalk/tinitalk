@@ -22,17 +22,18 @@ import { api, APIError, setSessionReplacedHandler } from './api';
 import { closeCallNotification, enablePush, disablePush, isActiveNotificationCall, notificationCallState, pushEnabled, pushSupport, requestPushPermission, updatePushWorker, syncPushLanguage } from './push';
 import { SignalConnection, SignalError } from './signal';
 import { IncomingCallVisibility } from './incomingVisibility';
-import { AudioCall, type CallSecurityState, type CallTransportRoute, type CallVideoState } from './media';
+import { AudioCall, screenCaptureSupported, type CallSecurityState, type CallTransportRoute, type CallVideoState } from './media';
 import { securityEmoji, type CallSecurityFailureReason, type CallSecurityUnavailableReason } from './sas';
 import { CallToneController, type CallToneEndReason, type CallToneState } from './callTones';
 import { WaitingInvites, WaitingTone, type WaitingInvite } from './waitingCalls';
 import { buildTime, canUpdateApplication, fetchBuildVersions, inspectUpdates, updateStatus, waitForWorker, webBuild, webCommit, type UpdateReport } from './updates';
 import { microphoneControlIcon } from './callControls';
+import { ScreenViewTransform, bindScreenViewer } from './screenViewer';
 import { AuthError, authenticate, authErrorMessage, changePassword, logout, personalPasswordError } from './auth';
 
 const base = new URL('./', document.baseURI).href;
 const root = document.querySelector<HTMLDivElement>('#app')!;
-root.innerHTML = '<audio id="remote-audio" autoplay playsinline></audio><div id="screen"></div><section id="call-layer" hidden><video id="remote-media" autoplay playsinline muted></video><div id="call-content"></div></section><p id="notice" role="status" aria-live="polite" hidden></p>';
+root.innerHTML = '<audio id="remote-audio" autoplay playsinline></audio><div id="screen"></div><section id="call-layer" hidden><div id="remote-viewport"><video id="remote-media" autoplay playsinline muted></video></div><div id="call-content"></div></section><p id="notice" role="status" aria-live="polite" hidden></p>';
 
 const screen = document.querySelector<HTMLDivElement>('#screen')!;
 const callLayer = document.querySelector<HTMLElement>('#call-layer')!;
@@ -72,6 +73,7 @@ type ActiveCall = {
   connectedAt?: number;
   expiry?: ReturnType<typeof setTimeout>;
   incomingExpiresAt?: number;
+  sharingNotice?: { message: Message; until: number };
 };
 type CallReplyCode = 'cannot_talk' | 'call_me_later' | 'will_call_back';
 type EndedCall = {
@@ -180,6 +182,9 @@ let localPreviewCorner: SelfPreviewCorner = readSelfPreviewCorner();
 let videoControlsCallId = '';
 let videoControlsVisible = true;
 let videoControlsHideTimer: ReturnType<typeof setTimeout> | undefined;
+let screenViewerObserver: ResizeObserver | undefined;
+let screenViewKey = '';
+let screenViewTransform = new ScreenViewTransform();
 const callTones = new CallToneController();
 const incomingVisibility = new IncomingCallVisibility(
   () => current?.incoming && !current.accepted && !callLayer.hidden &&
@@ -195,6 +200,7 @@ const selfPreviewCorners: SelfPreviewCorner[] = ['TopLeft', 'TopRight', 'BottomL
 type IconPath = string | { d: string; fill?: boolean; strokeWidth?: number };
 
 const iconPaths = {
+  screenShare: [{ d: 'M4,3 L20,3 Q22,3 22,5 L22,16 Q22,18 20,18 L4,18 Q2,18 2,16 L2,5 Q2,3 4,3 M8,22 L16,22 M12,18 L12,22 M12,14 L12,7 M8,11 L12,7 L16,11', fill: false, strokeWidth: 1.8 }],
   mail: ['M20,4H4C2.9,4 2,4.9 2,6v12c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V6c0,-1.1 -0.9,-2 -2,-2zM20,8l-8,5 -8,-5V6l8,5 8,-5v2z'],
   arrowBack: ['M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.42,-1.41L7.83,13H20v-2z'],
   call: ['M6.62,10.79C8.06,13.62 10.38,15.93 13.21,17.38L15.41,15.18C15.68,14.91 16.08,14.82 16.43,14.94C17.55,15.31 18.75,15.5 20,15.5C20.55,15.5 21,15.95 21,16.5V20C21,20.55 20.55,21 20,21C10.61,21 3,13.39 3,4C3,3.45 3.45,3 4,3H7.5C8.05,3 8.5,3.45 8.5,4C8.5,5.25 8.69,6.45 9.06,7.57C9.17,7.92 9.09,8.31 8.81,8.59L6.62,10.79Z'],
@@ -465,6 +471,10 @@ function connectAccount(account: Account, recoverActive = true): void {
       if (error instanceof APIError && error.replaced) return;
       const waiting = callId ? waitingCalls.get(account.id, callId) : undefined;
       if (waiting) { removeWaiting(waiting); notice(t('waiting_call_unavailable')); return; }
+      if (error instanceof SignalError && error.code?.startsWith('screen_share_') && current?.account.id === account.id && current.id === callId) {
+        current.media.rejectScreenFromServer(error.code);
+        return;
+      }
       if (error instanceof SignalError && error.code?.startsWith('call_sas_') && current?.account.id === account.id && (!callId || current.id === callId)) {
         current.media.rejectSecurityFromServer(error.code);
         renderCall();
@@ -3096,7 +3106,8 @@ function createCall(account: Account, id: string, peer: string, peerLogin: strin
     status: incoming ? 'text_incoming_call_62' : 'text_trying_to_connect_5',
     security: { state: 'establishing' },
     transportRoute: 'unknown',
-    video: { allowed: false, requested: false, sending: false, remoteSending: false, canSwitchCamera: false, facing: 'front' },
+    video: { allowed: false, requested: false, sending: false, remoteSending: false, canSwitchCamera: false, facing: 'front',
+      screen: { allowed: false, captureSupported: screenCaptureSupported(), requested: false, remote: false, ready: false, sending: false } },
     muted: false,
     media: null as unknown as AudioCall,
   };
@@ -3125,7 +3136,10 @@ function createCall(account: Account, id: string, peer: string, peerLogin: strin
       },
       video: state => {
         if (current !== value) return;
+        const wasSending = value.video.screen.sending;
         value.video = state;
+        if (state.screen.sending && !wasSending) setScreenSharingNotice(value, 'text_screen_sharing_started_129');
+        else if (wasSending && !state.screen.requested && !state.screen.failure) setScreenSharingNotice(value, 'text_screen_sharing_stopped_48');
         renderCall();
       },
       playbackBlocked: blocked => {
@@ -3273,7 +3287,7 @@ async function outgoing(account: Account, contact: Contact): Promise<void> {
     if (current !== call) return;
     await connections.get(account.id)!.connect();
     if (current !== call) return;
-    connections.get(account.id)!.send(call.id, 'call.start', { callee_id: contact.login, supports_video: true, supports_call_sas: true, supports_cross_call: false });
+    connections.get(account.id)!.send(call.id, 'call.start', { callee_id: contact.login, supports_video: true, supports_exclusive_screen_sharing: true, supports_call_sas: true, supports_cross_call: false });
     call.started = true;
     call.expiry = setTimeout(() => {
       if (current !== call || call.accepted) return;
@@ -3306,7 +3320,7 @@ async function accept(): Promise<void> {
     call.accepted = true;
     clearTimeout(call.expiry);
     call.status = 'text_connecting_130';
-    connections.get(call.account.id)!.send(call.id, 'call.accept', { supports_video: true, supports_call_sas: true });
+    connections.get(call.account.id)!.send(call.id, 'call.accept', { supports_video: true, supports_exclusive_screen_sharing: true, supports_call_sas: true });
     void closeCallNotification(call.account.id, call.id, base).catch(() => undefined);
     renderCall();
   } catch (error) {
@@ -3357,11 +3371,11 @@ async function switchCamera(call: ActiveCall): Promise<void> {
 }
 
 function videoModeActive(call: ActiveCall): boolean {
-  return call.accepted && call.video.allowed && (call.video.sending || call.video.remoteSending);
+  return call.accepted && call.video.allowed && (call.video.screen.remote || call.video.sending || call.video.remoteSending);
 }
 
 function videoControlsMayAutoHide(call: ActiveCall): boolean {
-  return Boolean(call.video.remoteSending && call.video.remoteStream);
+  return Boolean(call.video.remoteSending && call.video.remoteStream && (!call.video.screen.remote || call.video.screen.ready));
 }
 
 function prepareVideoControls(call: ActiveCall): void {
@@ -3400,7 +3414,7 @@ function scheduleVideoControlsAutoHide(call: ActiveCall): void {
     if (current !== call || !videoControlsMayAutoHide(call)) return;
     videoControlsVisible = false;
     applyVideoControlsVisibility();
-  }, videoControlsAutoHideMs);
+  }, call.video.screen.remote ? 3_000 : videoControlsAutoHideMs);
 }
 
 function stopVideoControlsAutoHide(): void {
@@ -3411,6 +3425,9 @@ function stopVideoControlsAutoHide(): void {
 function applyVideoControlsVisibility(): void {
   const screen = callLayer.querySelector<HTMLElement>('.video-call-screen');
   screen?.classList.toggle('controls-hidden', !videoControlsVisible);
+  callLayer.classList.toggle('screen-controls-hidden', !videoControlsVisible);
+  const controls = screen?.querySelector<HTMLElement>('.video-controls');
+  if (controls) controls.inert = !videoControlsVisible;
   positionLocalPreview(screen?.querySelector<HTMLElement>('.local-video-preview') ?? null);
 }
 
@@ -3429,6 +3446,9 @@ function audioRecoveryButton(call: ActiveCall): HTMLButtonElement {
 function renderCall(): void {
   if (current) callTones.update(callToneState(current));
   else if (!endedCall) callTones.idle();
+  screenViewerObserver?.disconnect();
+  screenViewerObserver = undefined;
+  remoteVideo.onresize = null;
   for (const pending of waitingCalls.entries.values()) {
     if (pending.account.sessionReplaced || !list.includes(pending.account) || !waitingCalls.has(pending)) {
       waitingCalls.remove(pending);
@@ -3457,7 +3477,9 @@ function renderCall(): void {
   }
   // Redraw only controls, retaining both players and their original tracks.
   callLayer.classList.toggle('has-remote-video', Boolean(current && videoModeActive(current)
-    && current.video.remoteSending && current.video.remoteStream));
+    && current.video.remoteSending && current.video.remoteStream && (!current.video.screen.remote || current.video.screen.ready)));
+  callLayer.classList.toggle('has-remote-screen', Boolean(current?.video.screen.remote));
+  if (!current?.video.screen.remote) remoteVideo.style.transform = '';
   callContent.replaceChildren();
   if (waitingCalls.entries.size) callContent.append(waitingCallsPanel());
   if (!current) {
@@ -3471,11 +3493,20 @@ function renderCall(): void {
   if (videoModeActive(call)) {
     const videoScreen = videoCallScreen(call);
     callContent.append(videoScreen);
+    if (call.video.screen.remote) observeScreenViewer(videoScreen, call);
+    applyVideoControlsVisibility();
     incomingVisibility.refresh();
     positionLocalPreview(videoScreen.querySelector<HTMLElement>('.local-video-preview'));
     return;
   }
   const view = element('div', `call-screen ${incomingPending ? 'incoming-call-screen' : ''}`.trim());
+  const sharingControls = screenSharingControls(call);
+  if (sharingControls) view.append(sharingControls);
+  if (call.sharingNotice && call.sharingNotice.until > Date.now()) {
+    const notice = element('p', 'screen-sharing-notice', t(call.sharingNotice.message));
+    notice.setAttribute('role', 'status');
+    view.append(notice);
+  }
   view.append(element('p', 'call-status', callStatusText(call)));
   if (call.connectedAt) view.append(transportRouteIndicator(call.transportRoute));
   view.append(avatar(call.peer || 'TiniTalk', call.peerLogin || call.peer, 'call-avatar', photoForAccountPeer(call.account.id, call.peerLogin)));
@@ -3496,7 +3527,7 @@ function renderCall(): void {
   } else {
     if (!call.incoming && !call.accepted) {
       actions.append(roundCallAction(t('text_camera_175'), 'videoCamera', 'disabled', () => undefined, true));
-    } else {
+    } else if (!call.video.screen.requested) {
       const cameraDisabled = !call.video.allowed;
       actions.append(roundCallAction(t('text_camera_175'), 'videoCamera', call.video.requested ? 'camera-active' : cameraDisabled ? 'disabled' : 'neutral', () => toggleCamera(call), cameraDisabled));
     }
@@ -3508,6 +3539,7 @@ function renderCall(): void {
     }));
     actions.append(roundCallAction(call.accepted ? t('text_end_call_98') : t('text_undo_196'), 'call', 'end rotated', hangup));
     if (call.video.failure) view.append(element('p', 'call-video-warning', t('text_could_not_turn_on_the_camera_172')));
+    if (call.video.screen.failure) view.append(element('p', 'call-video-warning', t(call.video.screen.failure)));
     view.append(element('span', 'call-spacer'), actions);
   }
   callContent.append(view);
@@ -3519,9 +3551,10 @@ function videoCallScreen(call: ActiveCall): HTMLElement {
     localPreviewCallId = call.id;
     localPreviewDragPosition = undefined;
   }
-  const remoteVisible = call.video.remoteSending && call.video.remoteStream;
+  const sharing = call.video.screen.remote;
+  const remoteVisible = call.video.remoteSending && call.video.remoteStream && (!sharing || call.video.screen.ready);
   prepareVideoControls(call);
-  const view = element('div', `call-screen video-call-screen ${videoControlsVisible ? '' : 'controls-hidden'}`.trim());
+  const view = element('div', `call-screen video-call-screen ${sharing ? 'screen-sharing-viewer' : ''} ${videoControlsVisible ? '' : 'controls-hidden'}`.trim());
   view.onclick = event => {
     if (!videoControlsMayAutoHide(call)) return;
     if ((event.target as HTMLElement).closest('.video-controls, .local-video-preview')) return;
@@ -3530,22 +3563,24 @@ function videoCallScreen(call: ActiveCall): HTMLElement {
   const stage = element('div', 'video-stage');
   // Without remote video Android keeps the full CallScreenSurface: status,
   // prominent avatar, name and duration. The compact header belongs over video.
-  const identity = element('div', remoteVisible ? 'video-call-top' : 'video-fallback');
-  identity.append(element('p', 'call-status', callStatusText(call)));
-  if (!remoteVisible) {
+  const identity = element('div', remoteVisible || sharing ? 'video-call-top' : 'video-fallback');
+  const sharingStatus = call.status === 'text_reconnecting_131' ? t(call.status)
+    : t(remoteVisible ? 'text_screen_sharing_in_progress_198' : 'text_connecting_screen_sharing_197');
+  identity.append(element('p', 'call-status', sharing ? sharingStatus : callStatusText(call)));
+  if (!remoteVisible && !sharing) {
     identity.append(avatar(call.peer || 'TiniTalk', call.peerLogin || call.peer, 'call-avatar', photoForAccountPeer(call.account.id, call.peerLogin)));
   }
   const duration = element('p', 'call-detail', callDurationText(Date.now() - (call.connectedAt ?? Date.now())));
   duration.dataset.callDuration = 'true';
   identity.append(element('h2', 'call-name', call.peer || 'TiniTalk'), duration);
-  if (remoteVisible) {
+  if (remoteVisible || sharing) {
     view.append(identity);
   } else {
     stage.append(identity);
   }
 
   const localStream = call.video.localStream;
-  if (localStream && call.video.requested) {
+  if (localStream && call.video.requested && !sharing) {
     const preview = element('div', 'local-video-preview');
     if (call.video.facing === 'front') preview.classList.add('mirrored');
     preview.append(videoElement('local-video', localStream));
@@ -3556,13 +3591,13 @@ function videoCallScreen(call: ActiveCall): HTMLElement {
   const controls = element('div', 'video-controls');
   if (call.video.failure && !call.video.sending) controls.append(element('p', 'call-video-warning', t('text_could_not_turn_on_the_camera_172')));
   const actions = element('div', 'call-actions video-actions');
-  if (call.video.sending && call.video.canSwitchCamera) {
+  if (!sharing && call.video.sending && call.video.canSwitchCamera) {
     actions.append(roundCallAction(t('text_rotate_173'), 'switchCamera', 'neutral', () => {
       restartVideoControlsAutoHide(call);
       return switchCamera(call);
     }));
   }
-  actions.append(roundCallAction(t('text_camera_175'), 'videoCamera', call.video.requested ? 'camera-active' : 'neutral', () => {
+  if (!sharing) actions.append(roundCallAction(t('text_camera_175'), 'videoCamera', call.video.requested ? 'camera-active' : 'neutral', () => {
     restartVideoControlsAutoHide(call);
     return toggleCamera(call);
   }));
@@ -3584,8 +3619,81 @@ function videoCallScreen(call: ActiveCall): HTMLElement {
   }));
   if (audioOutputSelectionSupported()) controls.append(element('p', 'video-route-label', t('text_audio_value_166', currentAudioOutputLabel())));
   controls.append(actions);
+  controls.inert = !videoControlsVisible;
   view.append(stage, controls);
+  if (sharing) {
+    view.append(element('p', 'screen-sharing-badge', sharingStatus));
+    const fit = element('button', 'screen-sharing-fit', t('text_fit_to_screen_201'));
+    fit.hidden = true;
+    view.append(fit);
+  }
   return view;
+}
+
+function screenSharingControls(call: ActiveCall): HTMLElement | undefined {
+  const sharing = call.video.screen;
+  if (!call.connectedAt || !sharing.allowed || sharing.remote) return;
+  if (!sharing.requested && (call.video.requested || call.video.sending || call.video.remoteSending)) return;
+  if (!sharing.requested && !sharing.captureSupported) return;
+  const row = element('div', 'screen-share-tools');
+  if (sharing.requested) {
+    const stop = iconButton(t('text_stop_screen_sharing_164'), 'screenShare', () => {}, 'screen-share-stop');
+    stop.onclick = () => {
+      if (current !== call) return;
+      void call.media.stopScreen();
+      setScreenSharingNotice(call, 'text_screen_sharing_stopped_48');
+      renderCall();
+    };
+    row.append(stop);
+    const status = call.status === 'text_reconnecting_131' ? 'text_sharing_paused_reconnecting_134'
+      : !sharing.sending ? 'text_preparing_to_share_135' : undefined;
+    if (status) {
+      const label = element('span', 'screen-sharing-label', t(status));
+      label.setAttribute('role', 'status');
+      row.append(label);
+    }
+  } else {
+    const start = iconButton(t('text_share_screen_165'), 'screenShare', () => {}, 'screen-share-start');
+    start.disabled = call.status !== 'web_in_call_73';
+    start.onclick = () => { if (current === call) void call.media.startScreen(); };
+    row.append(start);
+  }
+  return row;
+}
+
+function setScreenSharingNotice(call: ActiveCall, message: Message): void {
+  const notice = { message, until: Date.now() + 2_000 };
+  call.sharingNotice = notice;
+  setTimeout(() => {
+    if (current !== call || call.sharingNotice !== notice) return;
+    call.sharingNotice = undefined;
+    renderCall();
+  }, 2_000);
+}
+
+function observeScreenViewer(view: HTMLElement, call: ActiveCall): void {
+  const top = view.querySelector<HTMLElement>('.video-call-top')!;
+  const bottom = view.querySelector<HTMLElement>('.video-controls')!;
+  const stage = view.querySelector<HTMLElement>('.video-stage')!;
+  const key = `${callKey(call.account.id, call.id)}/${call.video.screen.id}`;
+  if (screenViewKey !== key) { screenViewKey = key; screenViewTransform = new ScreenViewTransform(); }
+  const updateImage = bindScreenViewer(stage, remoteVideo, screenViewTransform,
+    view.querySelector<HTMLButtonElement>('.screen-sharing-fit')!, () => toggleVideoControls(call), () => {
+      if (videoControlsVisible) scheduleVideoControlsAutoHide(call);
+    });
+  remoteVideo.onresize = updateImage;
+  const measure = () => {
+    if (!view.isConnected) return;
+    callLayer.style.setProperty('--screen-top', `${top.getBoundingClientRect().height}px`);
+    callLayer.style.setProperty('--screen-bottom', `${bottom.getBoundingClientRect().height}px`);
+    updateImage();
+  };
+  // The persistent remote player stays mounted; only its available viewport changes.
+  measure();
+  screenViewerObserver = new ResizeObserver(measure);
+  screenViewerObserver.observe(top);
+  screenViewerObserver.observe(bottom);
+  screenViewerObserver.observe(stage);
 }
 
 function videoElement(className: string, stream: MediaStream): HTMLVideoElement {
@@ -4198,7 +4306,7 @@ async function answerWaiting(invite: WaitingInvite): Promise<void> {
       closeActiveCall(true);
     }
     await connection.sendConfirmed(invite.event.call_id, 'call.accept', {
-      supports_video: true, supports_call_sas: true,
+      supports_video: true, supports_exclusive_screen_sharing: true, supports_call_sas: true,
       ...(replaceOnServer ? {replace_call_id: previous.id} : {}),
     });
     accepted = true;
