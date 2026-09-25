@@ -1,8 +1,10 @@
 import { t, currentLocale, currentLanguage, selectedLanguage, selectLanguage, languages, browserLanguages, resolveLanguage, translate, onLanguageChange, relocalize, type Message } from './i18n';
 import { explainError, OperationError } from './userErrors';
 import './style.css';
+import { observeAdaptiveLayout, cameraFit, previewSize } from './adaptiveLayout';
 import { Favorites } from './favorites';
 import { bindHistoryScroll } from './historyScroll';
+import { bindPressRendering } from './pressRendering';
 import { showInstallationScreen } from './installScreen';
 import {
   accountForLogin,
@@ -204,6 +206,10 @@ const selfPreviewCorners: SelfPreviewCorner[] = ['TopLeft', 'TopRight', 'BottomL
 type IconPath = string | { d: string; fill?: boolean; strokeWidth?: number };
 
 const iconPaths = {
+  profile: [
+    { d: 'M12,2.75a9.25,9.25 0,1 0,0 18.5a9.25,9.25 0,1 0,0 -18.5', fill: false, strokeWidth: 1.2 },
+    'M12,11.5a3,3 0,1 0,0 -6a3,3 0,0 0,0 6M12,13c-3.315,0 -6,1.68 -6,3.75V16.905A7.75,7.75 0,0 0,18,16.905V16.75c0,-2.07 -2.685,-3.75 -6,-3.75Z',
+  ],
   screenShare: [{ d: 'M4,3 L20,3 Q22,3 22,5 L22,16 Q22,18 20,18 L4,18 Q2,18 2,16 L2,5 Q2,3 4,3 M8,22 L16,22 M12,18 L12,22 M12,14 L12,7 M8,11 L12,7 L16,11', fill: false, strokeWidth: 1.8 }],
   mail: ['M20,4H4C2.9,4 2,4.9 2,6v12c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V6c0,-1.1 -0.9,-2 -2,-2zM20,8l-8,5 -8,-5V6l8,5 8,-5v2z'],
   arrowBack: ['M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.42,-1.41L7.83,13H20v-2z'],
@@ -588,6 +594,10 @@ function renderApp(): void {
     writeAppHistory('replace');
   }
   const viewKey = JSON.stringify(route) + ':' + tab;
+  if (screen.dataset.viewKey === viewKey && screen.dataset.pressing === 'true') {
+    deferredRender = true;
+    return;
+  }
   if (screen.dataset.viewKey === viewKey && route.name === 'contact') {
     const key = accountKey(route.accountId, route.login);
     const contact = findContact(route.accountId, route.login);
@@ -607,7 +617,7 @@ function renderApp(): void {
   }
   const scrollKey = viewKey + (route.name === 'home' && tab === 'contacts' ? ':' + showFavorites : '');
   const oldScroller = screen.querySelector<HTMLElement>('.home-content, .contact-screen');
-  if (oldScroller && screen.dataset.scrollKey) viewScroll.set(screen.dataset.scrollKey, oldScroller.scrollTop);
+  if (oldScroller && screen.dataset.scrollKey) viewScroll.set(screen.dataset.scrollKey, historyScrollHost(oldScroller).scrollTop);
   if (screen.dataset.viewKey !== viewKey) notice('');
   // Background refreshes must not replace the form the user is editing.
   // Navigation changes the key and naturally discards the old form and token.
@@ -637,7 +647,7 @@ function renderApp(): void {
   screen.dataset.scrollKey = scrollKey;
   const scroller = screen.querySelector<HTMLElement>('.home-content, .contact-screen');
   if (scroller) wireHistoryScroll(scroller);
-  if (scroller) scroller.scrollTop = scrollTop;
+  if (scroller) historyScrollHost(scroller).scrollTop = scrollTop;
   const sentinel = screen.querySelector<HTMLElement>('[data-history-more]');
   if (sentinel && scroller) {
     historyObserver = new IntersectionObserver(entries => {
@@ -824,7 +834,7 @@ function appPage(content: HTMLElement, options: { title?: string; back?: () => v
     top.append(brand, element('span', 'top-spacer'));
   }
   if (!options.back) {
-    const profile = iconButton(t('text_profile_308'), list.length > 1 ? 'contacts' : 'person', () => navigate({ name: 'profile' }), 'profile-button');
+    const profile = iconButton(t('text_profile_308'), 'profile', () => navigate({ name: 'profile' }), 'profile-button');
     if (list.some(account => account.sessionReplaced)) {
       const dot = element('span', 'profile-attention-dot');
       dot.ariaHidden = 'true';
@@ -841,6 +851,7 @@ function appPage(content: HTMLElement, options: { title?: string; back?: () => v
 }
 
 function homeScreen(): HTMLElement {
+  let selectFavoriteTab = (favorite: boolean) => { showFavorites = favorite; renderApp(); };
   const content = element('main', `home-content pull-refresh-host ${pullRefreshing === tab ? 'refreshing' : ''}`.trim());
   const refreshText = tab === 'contacts' ? t('web_updating_contacts_10') : t('web_updating_history_11');
   const indicator = pullRefreshIndicator(pullRefreshing === tab ? refreshText : t('web_pull_down_to_refresh_12'));
@@ -862,15 +873,141 @@ function homeScreen(): HTMLElement {
     }
     tabs.setAttribute('role', 'tablist');
     for (const [index, label] of [t('text_favorites_247'), t('text_all_248')].entries()) {
-      const button = actionButton(label, () => { showFavorites = index === 0; renderApp(); }, 'favorite-tab');
+      const button = actionButton(label, () => selectFavoriteTab(index === 0), 'favorite-tab');
       button.setAttribute('role', 'tab');
       button.setAttribute('aria-selected', String(showFavorites === (index === 0)));
       tabs.append(button);
     }
     wrap.append(tabs);
   }
-  wrap.append(content, nav);
-  return appPage(wrap);
+  if (wrap.querySelector('.favorite-tabs')) {
+    const viewport = element('div', 'favorite-viewport');
+    viewport.append(content);
+    wrap.append(viewport, nav);
+  } else wrap.append(content, nav);
+  const page = appPage(wrap, { className: 'home-app-page' });
+  const rail = element('nav', 'landscape-nav');
+  const brand = iconButton(t('text_about_102'), 'call', () => navigate({ name: 'about' }), 'rail-brand');
+  brand.replaceChildren(appMark('56px'));
+  rail.append(brand,
+    navItem(t('text_contacts_298'), 'contacts', tab === 'contacts', () => switchHomeTab('contacts')),
+    navItem(t('text_history_251'), 'history', tab === 'history', () => switchHomeTab('history'), unreadCount()));
+  const profile = navItem(t('text_profile_308'), 'profile', false, () => navigate({ name: 'profile' }));
+  profile.classList.add('rail-profile');
+  if (list.some(account => account.sessionReplaced)) profile.classList.add('needs-sign-in');
+  rail.append(profile);
+  page.append(rail);
+  if (tab === 'contacts' && wrap.querySelector('.favorite-tabs')) selectFavoriteTab = wireFavoriteSwipe(content);
+  return page;
+}
+
+function wireFavoriteSwipe(content: HTMLElement): (favorite: boolean) => void {
+  const initial = showFavorites;
+  const tabs = content.closest('.home-wrap')!.querySelector<HTMLElement>('.favorite-tabs')!;
+  let start: { x: number; y: number; at: number } | undefined;
+  let claimed = false;
+  let preview: HTMLElement | undefined;
+  let offset = 0;
+  let settling = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const width = () => content.clientWidth;
+  const clean = () => {
+    clearTimeout(timer);
+    preview?.remove(); preview = undefined;
+    content.style.transform = '';
+    content.style.transition = '';
+    delete content.dataset.interacting;
+    tabs.classList.remove('swiping');
+    tabs.style.removeProperty('--favorite-offset');
+    start = undefined; claimed = false; settling = false; offset = 0;
+  };
+  const prepare = () => {
+    if (preview) return;
+    preview = element('div', 'home-content favorite-preview');
+    preview.inert = true;
+    preview.setAttribute('aria-hidden', 'true');
+    preview.append(contactsPage(!initial, false));
+    content.parentElement!.append(preview);
+    preview.scrollTop = viewScroll.get(`${screen.dataset.viewKey}:${!initial}`) ?? 0;
+    content.dataset.interacting = 'true';
+    tabs.classList.add('swiping');
+  };
+  const move = (dx: number) => {
+    offset = dx;
+    content.style.transform = `translateX(${dx}px)`;
+    if (preview) preview.style.transform = `translateX(${dx + (initial ? width() : -width())}px)`;
+    const progress = Math.max(0, Math.min(1, (initial ? 0 : 1) - dx / width()));
+    tabs.style.setProperty('--favorite-offset', String(progress));
+  };
+  const settle = (change: boolean) => {
+    if (settling) return;
+    settling = true;
+    const target = change ? (initial ? -width() : width()) : 0;
+    const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220;
+    // Both pages are already in place; animate from the current finger position.
+    content.getBoundingClientRect();
+    content.style.transition = `transform ${duration}ms cubic-bezier(.2,.8,.2,1)`;
+    if (preview) preview.style.transition = content.style.transition;
+    tabs.classList.remove('swiping');
+    move(target);
+    const complete = () => {
+      if (!content.isConnected) return;
+      if (change) {
+        // Keep the destination visible until renderApp actually replaces this
+        // view. A touch press can still defer that render after the animation.
+        delete content.dataset.interacting;
+        deferredRender = false;
+        showFavorites = !initial;
+        tabs.classList.toggle('all-selected', !showFavorites);
+        renderApp();
+      } else {
+        clean();
+        if (deferredRender) { deferredRender = false; renderApp(); }
+      }
+    };
+    if (duration) timer = setTimeout(complete, duration);
+    else complete();
+  };
+  content.addEventListener('touchstart', event => {
+    if (settling) return;
+    if (event.touches.length !== 1) { if (claimed) settle(false); return; }
+    start = { x: event.touches[0].clientX, y: event.touches[0].clientY, at: Date.now() };
+    claimed = false;
+  }, { passive: true });
+  content.addEventListener('touchmove', event => {
+    if (settling || !start) return;
+    if (event.touches.length !== 1 || content.querySelector('.drag-placeholder')) {
+      if (claimed) settle(false); else start = undefined;
+      return;
+    }
+    const dx = event.touches[0].clientX - start.x, dy = event.touches[0].clientY - start.y;
+    if (!claimed && (Math.abs(dy) > 16 || Date.now() - start.at > 300)) { start = undefined; return; }
+    if (Math.abs(dx) > 18 && Math.abs(dx) > Math.abs(dy) * 1.5) claimed = true;
+    if (claimed) {
+      event.preventDefault(); prepare();
+      const allowed = initial ? dx <= 0 : dx >= 0;
+      move(allowed ? Math.max(-width(), Math.min(width(), dx)) : dx * .15);
+    }
+  }, { passive: false });
+  const finish = (event: TouchEvent) => {
+    if (settling) return;
+    if (claimed) settle(event.type !== 'touchcancel' && Math.abs(offset) > 55 && initial === (offset < 0));
+    else start = undefined;
+  };
+  content.addEventListener('touchend', finish);
+  content.addEventListener('touchcancel', finish);
+  content.addEventListener('click', event => {
+    if (claimed || settling) { event.preventDefault(); event.stopPropagation(); }
+  }, true);
+  const cancel = () => { const active = claimed || settling; clean(); if (active && deferredRender) { deferredRender = false; renderApp(); } };
+  window.addEventListener('resize', cancel);
+  window.addEventListener('blur', cancel);
+  const previousDispose = disposeView;
+  disposeView = () => { clean(); window.removeEventListener('resize', cancel); window.removeEventListener('blur', cancel); previousDispose(); };
+  return favorite => {
+    if (settling || favorite === initial) return;
+    prepare(); move(0); settle(true);
+  };
 }
 
 function pullRefreshIndicator(text: string): HTMLElement {
@@ -885,6 +1022,7 @@ function wirePullRefresh(scroller: HTMLElement, indicator: HTMLElement, refreshT
   let tracking = false;
   let pulling = false;
   let startY = 0;
+  let startX = 0;
   let pull = 0;
   const text = indicator.querySelector<HTMLElement>('.pull-refresh-text');
 
@@ -912,11 +1050,16 @@ function wirePullRefresh(scroller: HTMLElement, indicator: HTMLElement, refreshT
     tracking = true;
     pulling = false;
     startY = event.touches[0].clientY;
+    startX = event.touches[0].clientX;
   }, { passive: true });
 
   scroller.addEventListener('touchmove', event => {
     if (!tracking || event.touches.length !== 1 || pullRefreshing) return;
     const delta = event.touches[0].clientY - startY;
+    if (!pulling && Math.abs(event.touches[0].clientX - startX) > Math.max(12, Math.abs(delta))) {
+      tracking = false;
+      return;
+    }
     if (delta <= 0) {
       if (pulling) resetPull();
       pulling = false;
@@ -966,7 +1109,7 @@ function navItem(label: string, iconName: keyof typeof iconPaths, selected: bool
   return btn;
 }
 
-function contactsPage(): HTMLElement {
+function contactsPage(favoriteSelection = showFavorites, interactive = true): HTMLElement {
   const page = element('section', 'page-list');
   if (loadingContacts && allContacts().length === 0) {
     page.append(loadingBlock());
@@ -975,7 +1118,7 @@ function contactsPage(): HTMLElement {
   const all = allContacts();
   const byKey = new Map(all.map(c => [accountKey(c.account.id, c.login), c]));
   const starred = favorites.keys.flatMap(key => byKey.has(key) ? [byKey.get(key)!] : []);
-  const favoriteMode = showFavorites && starred.length > 0;
+  const favoriteMode = favoriteSelection && starred.length > 0;
   const contacts = favoriteMode ? starred : all;
   if (!contacts.length) {
     const empty = element('div', 'empty-state');
@@ -996,7 +1139,7 @@ function contactsPage(): HTMLElement {
     }
     listEl.append(row);
   }
-  if (favoriteMode) wireFavoriteDrag(listEl);
+  if (favoriteMode && interactive) wireFavoriteDrag(listEl);
   const add = actionButton(t('text_add_303'), () => navigate({ name: 'add-contact' }), 'text-action list-add');
   page.append(listEl);
   if (!favoriteMode) page.append(add);
@@ -1126,17 +1269,25 @@ function wireFavoriteDrag(listEl: HTMLElement): void {
   for (const row of listEl.children) row.setAttribute('aria-description', t('web_hold_to_move_keyboard_alt_and_the_up_or_down_arrow_14'));
 }
 
+function historyScrollHost(scroller: HTMLElement): HTMLElement {
+  return scroller.closest('.compact-landscape')
+    ? scroller.querySelector<HTMLElement>('.contact-history') ?? scroller : scroller;
+}
+
 function wireHistoryScroll(scroller: HTMLElement): void {
   const page = scroller.closest<HTMLElement>('.app-page')!;
   const contact = page.classList.contains('collapsing-contact');
   if (!contact && !scroller.querySelector('.history-list')) return;
   const up = iconButton(t('text_back_to_top_204'), 'chevron', () => {}, 'scroll-top');
   page.append(up);
-  const cleanup = bindHistoryScroll(scroller, up, () => {
+  const idle = () => {
     if (deferredRender) { deferredRender = false; renderApp(); }
-  });
+  };
+  let cleanup = bindHistoryScroll(historyScrollHost(scroller), up, idle);
+  const rebind = () => { cleanup(); cleanup = bindHistoryScroll(historyScrollHost(scroller), up, idle); };
+  window.addEventListener('app-layout-change', rebind);
   const previousDispose = disposeView;
-  disposeView = () => { previousDispose(); cleanup(); };
+  disposeView = () => { previousDispose(); cleanup(); window.removeEventListener('app-layout-change', rebind); };
 }
 
 function contactRow(contact: AccountContact, showServer: boolean): HTMLElement {
@@ -1251,20 +1402,21 @@ function historyIconNames(item: HistoryItem): { direction: keyof typeof iconPath
 
 function aboutScreen(): HTMLElement {
   const body = element('main', 'about-page');
-  body.append(aboutBrandBlock());
+  const content = element('div', 'about-content');
+  body.append(aboutBrandBlock(), content);
   const entries = aboutServerEntries();
   for (const { account } of entries) ensureAboutServerDetails(account);
   if (!updateReport && !checkingUpdates && !updateError) void checkAppUpdates(false);
-  body.append(languageButton());
-  body.append(aboutApplicationCard());
+  content.append(languageButton());
+  content.append(aboutApplicationCard());
   for (const entry of entries) {
-    body.append(aboutInfoCard(t('text_server_106'), [
+    content.append(aboutInfoCard(t('text_server_106'), [
       [t('text_address_107'), serverAddress(entry.server)],
     ], [
       [t('text_api_version_109'), entry.state.details?.api_version ? String(entry.state.details.api_version) : t('text_not_specified_110')],
       [t('text_commit_105'), entry.state.details?.commit?.trim() || t('text_not_specified_108')],
     ]));
-    body.append(aboutServerStatusCard(entry.state));
+    content.append(aboutServerStatusCard(entry.state));
   }
   return appPage(body, { title: t('text_about_102'), back: () => goBack({ name: 'home' }), className: 'about-app-page' });
 }
@@ -1345,7 +1497,7 @@ async function updateWebApplication(): Promise<void> {
 
 function aboutBrandBlock(): HTMLElement {
   const block = element('section', 'about-brand');
-  block.append(appMark('84px'), element('h2', '', 'TiniTalk'));
+  block.append(appMark('112px'), element('h2', '', 'TiniTalk'));
   return block;
 }
 
@@ -1428,8 +1580,8 @@ function profileScreen(): HTMLElement {
   const accountsBlock = element('div', 'account-list');
   for (const account of list) accountsBlock.append(accountCard(account));
   body.append(accountsBlock);
-  body.append(actionButton(t('text_add_303'), () => navigate({ name: 'add-account' }), 'text-action list-add'));
-  return appPage(body, { title: t('text_profile_308'), back: () => goBack({ name: 'home' }) });
+  const add = actionButton(t('text_add_303'), () => navigate({ name: 'add-account' }), 'text-action profile-add');
+  return appPage(body, { title: t('text_profile_308'), back: () => goBack({ name: 'home' }), menu: add });
 }
 
 function accountCard(account: Account): HTMLElement {
@@ -1439,7 +1591,8 @@ function accountCard(account: Account): HTMLElement {
   const remove = iconButton(account.sessionReplaced ? t('text_delete_239') : t('text_sign_out_323'), account.sessionReplaced ? 'delete' : 'logout',
     () => confirmRemoveAccount(account), 'logout-button');
   top.append(remove);
-  const server = element('p', 'profile-server', serverAddress(account.server));
+  const server = element('div', 'profile-server');
+  server.append(element('span', 'profile-server-address', serverAddress(account.server)));
   const status = profileAccountStatus(account);
   const statusRow = element('div', `profile-server-status ${status.kind}`);
   if (status.kind === 'checking') statusRow.append(element('span', 'tiny-spinner'));
@@ -1467,15 +1620,20 @@ async function loadProfilePasswordAction(account: Account, actions: HTMLElement)
   try {
     // Do not show a cached action while checking, or on servers without password auth.
     const health = await api<ServerHealth>(account, '/healthz');
-    if (!stillCurrent() || !health.features?.includes('password_auth_v1') || !sessionId) return;
+    if (!stillCurrent()) return;
+    const card = actions.closest('.account-card');
+    if (health.api_version && health.commit) {
+      card?.querySelector('.profile-server')?.append(element('small', 'profile-server-version', `API v${health.api_version} (${health.commit})`));
+    }
+    if (!health.features?.includes('password_auth_v1') || !sessionId) return;
     const profile = await api<{ password_set?: unknown }>(account, '/api/me');
     if (!stillCurrent() || typeof profile.password_set !== 'boolean') return;
     account.passwordAuth = true;
     account.passwordSet = profile.password_set;
     await saveAccount(account);
     if (!stillCurrent()) return;
-    actions.append(actionButton(profile.password_set ? t('text_change_password_326') : t('text_set_password_327'),
-      () => changePasswordDialog(account), 'secondary profile-password-button'));
+    (card?.querySelector('.profile-server-status') ?? actions).append(actionButton(profile.password_set ? t('text_change_password_326') : t('text_set_password_327'),
+      () => changePasswordDialog(account), 'text-action profile-password-button'));
   } catch {
     // The account's existing connection status conveys connectivity problems.
     // Without a confirmed result, there is no password action to offer.
@@ -1592,17 +1750,21 @@ async function changePasswordDialog(account: Account): Promise<void> {
   if (account.passwordSet === undefined) throw new Error(t('web_could_not_check_whether_a_password_is_set_try_again_42'));
   const installing = account.passwordSet === false;
   const modal = dialog(installing ? t('text_set_password_327') : t('text_change_password_326'));
+  modal.overlay.classList.add('password-dialog-overlay');
   const form = element('form', 'material-form password-form');
   form.noValidate = true;
-  if (!installing) form.append(inputField(t('text_current_password_328'), 'current_password', 'password'));
-  form.append(inputField(t('text_new_password_319'), 'new_password', 'password'),
+  const fields = element('div', 'password-fields');
+  if (!installing) fields.append(inputField(t('text_current_password_328'), 'current_password', 'password'));
+  fields.append(inputField(t('text_new_password_319'), 'new_password', 'password'),
     inputField(t('text_repeat_password_320'), 'confirm_password', 'password'));
   const hint = element('small', 'supporting-text', installing
     ? t('text_at_least_8_characters_we_recommend_combining_lowercase_and_upperc_318')
     : t('web_enter_your_current_password_the_new_password_must_have_at_least_8_43'));
   const error = element('p', 'form-error');
   error.hidden = true;
-  form.append(hint, error);
+  hint.classList.add('password-hint');
+  fields.append(error);
+  form.append(fields, hint);
   const cancel = actionButton(t('text_cancel_12'), () => closeDialog(modal), 'secondary');
   const submit = element('button', 'primary', t('text_save_245'));
   submit.type = 'button';
@@ -1709,27 +1871,31 @@ function contactScreen(accountId: string, login: string): HTMLElement {
   const actions = element('div', 'contact-top-actions');
   actions.append(star, menu);
   const body = element('main', 'contact-screen');
-  body.append(avatar(name, contact.login, 'profile-avatar', photoForContact(contact)));
-  body.append(element('h2', 'profile-name', name));
-  body.append(element('p', 'profile-login', `${contact.login}${list.length > 1 ? `@${serverAddress(contact.account.server)}` : ''}`));
+  const identity = element('section', 'contact-identity');
+  const photo = element('div', 'contact-photo-space');
+  photo.append(avatar(name, contact.login, 'profile-avatar', photoForContact(contact)));
+  identity.append(photo, element('h2', 'profile-name', name));
+  identity.append(element('p', 'profile-login', `${contact.login}${list.length > 1 ? `@${serverAddress(contact.account.server)}` : ''}`));
   const call = actionButton(contactActionLabel(contact), () => contactCall(contact), `primary call-wide ${!contact.can_call ? 'call-unavailable' : ''}`.trim(), 'call');
   call.disabled = Boolean(current && !samePeer(contact, current));
-  body.append(call);
-  body.append(element('h3', 'section-title', t('text_call_history_233')));
+  identity.append(call);
+  const history = element('section', 'contact-history');
+  body.append(identity, history);
+  history.append(element('h3', 'section-title', t('text_call_history_233')));
   const rows = contactHistory.get(accountKey(accountId, login));
   const key = accountKey(accountId, login);
   if (!rows) {
-    if (!contactHistoryErrors.has(key)) body.append(loadingBlock());
+    if (!contactHistoryErrors.has(key)) history.append(loadingBlock());
     if (!loadingContactHistory.has(key) && !contactHistoryErrors.has(key)) void loadContactHistory(contact, true).catch(failure);
   } else if (!rows.length) {
-    body.append(contactHistoryMessage(t('text_no_calls_with_this_contact_yet_236')));
+    history.append(contactHistoryMessage(t('text_no_calls_with_this_contact_yet_236')));
   } else {
-    body.append(historyRows(rows, false));
+    history.append(historyRows(rows, false));
   }
   if (contactHistoryErrors.has(key)) {
-    body.append(actionButton(t('web_could_not_load_history_retry_15'), () => loadContactHistory(contact, true, Boolean(rows && contactHistoryCursors.get(key))), 'text-action'));
-  } else if (rows && loadingContactHistory.has(key)) body.append(loadingBlock());
-  else if (rows && (contactHistoryCursors.get(key) ?? 0) > 0) body.append(historyMoreButton(() => loadContactHistory(contact, false, true)));
+    history.append(actionButton(t('web_could_not_load_history_retry_15'), () => loadContactHistory(contact, true, Boolean(rows && contactHistoryCursors.get(key))), 'text-action'));
+  } else if (rows && loadingContactHistory.has(key)) history.append(loadingBlock());
+  else if (rows && (contactHistoryCursors.get(key) ?? 0) > 0) history.append(historyMoreButton(() => loadContactHistory(contact, false, true)));
   const page = appPage(body, { title: '', back: () => goBack({ name: 'home' }), menu: actions });
   page.classList.add('collapsing-contact');
   const compact = element('div', 'compact-contact');
@@ -1773,7 +1939,7 @@ function contactHistoryMessage(message: string): HTMLElement {
 
 function photoSheet(contact: AccountContact): void {
   const key = contactPhotoKey(contact.account.id, contact.login);
-  const overlay = element('div', 'sheet-overlay');
+  const overlay = element('div', 'sheet-overlay photo-sheet-overlay');
   const panel = element('section', 'bottom-sheet');
   const fileInput = element('input');
   fileInput.type = 'file';
@@ -1856,6 +2022,7 @@ function showPhotoEditor(contact: AccountContact, image: HTMLImageElement): void
   }
 
   function initialize(): void {
+    onResize();
     const cropViewport = currentViewport();
     transform = defaultCropTransform(image.naturalWidth, image.naturalHeight, cropViewport);
     initialized = true;
@@ -1901,6 +2068,10 @@ function showPhotoEditor(contact: AccountContact, image: HTMLImageElement): void
   }
 
   function onResize(): void {
+    // Use the actual space left after the title, actions and safe-area insets.
+    const size = Math.max(1, Math.min(280, stage.clientWidth, stage.clientHeight));
+    viewport.style.width = `${size}px`;
+    viewport.style.height = `${size}px`;
     render();
   }
 
@@ -1956,14 +2127,15 @@ function showPhotoEditor(contact: AccountContact, image: HTMLImageElement): void
     render();
   };
 
+  const resize = new ResizeObserver(onResize);
   const close = registerActiveOverlay(() => {
-    window.removeEventListener('resize', onResize);
+    resize.disconnect();
     overlay.remove();
   });
   root.append(overlay);
   overlay.dataset.closeId = 'photo-editor';
   (overlay as HTMLElement & { closeOverlay?: () => void }).closeOverlay = close;
-  window.addEventListener('resize', onResize);
+  resize.observe(stage);
   requestAnimationFrame(initialize);
 }
 
@@ -2947,6 +3119,7 @@ function openContact(contact: AccountContact): void {
 
 function renameDialog(contact: AccountContact): void {
   const modal = dialog(t('text_edit_name_242'));
+  modal.overlay.classList.add('rename-dialog-overlay');
   const input = element('input');
   input.value = contactDisplayName(contact);
   input.maxLength = 64;
@@ -3496,8 +3669,8 @@ function renderCall(): void {
   }
   const call = current;
   const incomingPending = call.incoming && !call.accepted;
-  if (call.audioBlocked) callContent.append(audioRecoveryButton(call));
   if (videoModeActive(call)) {
+    if (call.audioBlocked) callContent.append(audioRecoveryButton(call));
     const videoScreen = videoCallScreen(call);
     callContent.append(videoScreen);
     if (call.video.screen.remote) observeScreenViewer(videoScreen, call);
@@ -3507,6 +3680,7 @@ function renderCall(): void {
     return;
   }
   const view = element('div', `call-screen ${incomingPending ? 'incoming-call-screen' : ''}`.trim());
+  if (call.audioBlocked) view.append(audioRecoveryButton(call));
   const sharingControls = screenSharingControls(call);
   if (sharingControls) view.append(sharingControls);
   if (call.sharingNotice && call.sharingNotice.until > Date.now()) {
@@ -3516,15 +3690,15 @@ function renderCall(): void {
   }
   view.append(element('p', 'call-status', callStatusText(call)));
   if (call.connectedAt) view.append(transportRouteIndicator(call.transportRoute));
-  view.append(avatar(call.peer || 'TiniTalk', call.peerLogin || call.peer, 'call-avatar', photoForAccountPeer(call.account.id, call.peerLogin)));
+  const photoSpace = element('div', 'call-photo-space');
+  photoSpace.append(avatar(call.peer || 'TiniTalk', call.peerLogin || call.peer, 'call-avatar', photoForAccountPeer(call.account.id, call.peerLogin)));
+  view.append(photoSpace);
   view.append(element('h2', 'call-name', call.peer || 'TiniTalk'));
   if (call.connectedAt) {
     const duration = element('p', 'call-detail', callDurationText(Date.now() - call.connectedAt));
     duration.dataset.callDuration = 'true';
     view.append(duration);
     view.append(securityPanel(call.security));
-  } else if (call.accepted) {
-    view.append(element('p', 'call-detail', t(call.status)));
   }
   const actions = element('div', `call-actions ${incomingPending ? 'incoming-actions' : ''}`);
   if (incomingPending) {
@@ -3545,8 +3719,12 @@ function renderCall(): void {
       renderCall();
     }));
     actions.append(roundCallAction(call.accepted ? t('text_end_call_98') : t('text_undo_196'), 'call', 'end rotated', hangup));
-    if (call.video.failure) view.append(element('p', 'call-video-warning', t('text_could_not_turn_on_the_camera_172')));
-    if (call.video.screen.failure) view.append(element('p', 'call-video-warning', t(call.video.screen.failure)));
+    if (call.video.failure || call.video.screen.failure) {
+      const warnings = element('div', 'call-warnings');
+      if (call.video.failure) warnings.append(element('p', 'call-video-warning', t('text_could_not_turn_on_the_camera_172')));
+      if (call.video.screen.failure) warnings.append(element('p', 'call-video-warning', t(call.video.screen.failure)));
+      view.append(warnings);
+    }
     view.append(element('span', 'call-spacer'), actions);
   }
   callContent.append(view);
@@ -3590,7 +3768,9 @@ function videoCallScreen(call: ActiveCall): HTMLElement {
   if (localStream && call.video.requested && !sharing) {
     const preview = element('div', 'local-video-preview');
     if (call.video.facing === 'front') preview.classList.add('mirrored');
-    preview.append(videoElement('local-video', localStream));
+    const video = videoElement('local-video', localStream);
+    video.onresize = () => positionLocalPreview(preview);
+    preview.append(video);
     makeLocalPreviewDraggable(preview);
     view.append(preview);
   }
@@ -3598,11 +3778,11 @@ function videoCallScreen(call: ActiveCall): HTMLElement {
   const controls = element('div', 'video-controls');
   if (call.video.failure && !call.video.sending) controls.append(element('p', 'call-video-warning', t('text_could_not_turn_on_the_camera_172')));
   const actions = element('div', 'call-actions video-actions');
-  if (!sharing && call.video.sending && call.video.canSwitchCamera) {
+  if (!sharing) {
     actions.append(roundCallAction(t('text_rotate_173'), 'switchCamera', 'neutral', () => {
       restartVideoControlsAutoHide(call);
       return switchCamera(call);
-    }));
+    }, !call.video.sending || !call.video.canSwitchCamera));
   }
   if (!sharing) actions.append(roundCallAction(t('text_camera_175'), 'videoCamera', call.video.requested ? 'camera-active' : 'neutral', () => {
     restartVideoControlsAutoHide(call);
@@ -3716,8 +3896,21 @@ function videoElement(className: string, stream: MediaStream): HTMLVideoElement 
 
 function positionLocalPreview(preview: HTMLElement | null): void {
   if (!preview) return;
+  const container = localPreviewContainer(preview);
+  const video = preview.querySelector<HTMLVideoElement>('video');
+  const side = Boolean(preview.closest('.compact-landscape'));
+  const controls = container.querySelector<HTMLElement>('.video-controls');
+  const top = videoControlsVisible ? container.querySelector<HTMLElement>('.video-call-top')?.getBoundingClientRect().height ?? 0 : 0;
+  const availableWidth = container.clientWidth - 24 - (side && videoControlsVisible ? controls?.getBoundingClientRect().width ?? 0 : 0);
+  const availableHeight = container.clientHeight - top - 24 - (!side && videoControlsVisible ? controls?.getBoundingClientRect().height ?? 0 : 0);
+  const size = previewSize(video?.videoWidth ?? 0, video?.videoHeight ?? 0, availableWidth, availableHeight);
+  preview.style.width = `${size.width}px`;
+  preview.style.height = `${size.height}px`;
   const bounds = localPreviewBounds(preview);
-  applyLocalPreviewPosition(preview, localPreviewDragPosition ?? localPreviewPositionForCorner(localPreviewCorner, bounds));
+  const position = localPreviewDragPosition
+    ? clampLocalPreviewPosition(preview, localPreviewDragPosition.left, localPreviewDragPosition.top)
+    : localPreviewPositionForCorner(localPreviewCorner, bounds);
+  applyLocalPreviewPosition(preview, position);
 }
 
 function applyLocalPreviewPosition(preview: HTMLElement, position: LocalPreviewPosition): void {
@@ -3783,11 +3976,14 @@ function localPreviewBounds(preview: HTMLElement): LocalPreviewBounds {
   const previewWidth = rect.width || preview.offsetWidth || 96;
   const previewHeight = rect.height || preview.offsetHeight || Math.round(previewWidth * 16 / 9);
   const top = videoControlsVisible ? container.querySelector<HTMLElement>('.video-call-top')?.getBoundingClientRect().height ?? 0 : 0;
-  const bottom = videoControlsVisible ? container.querySelector<HTMLElement>('.video-controls')?.getBoundingClientRect().height ?? 0 : 0;
+  const side = Boolean(preview.closest('.compact-landscape'));
+  const controls = container.querySelector<HTMLElement>('.video-controls')?.getBoundingClientRect();
+  const bottom = videoControlsVisible && !side ? controls?.height ?? 0 : 0;
+  const sideWidth = videoControlsVisible && side ? controls?.width ?? 0 : 0;
   const margin = 12;
   const left = margin;
   const boundsTop = top + margin;
-  const right = Math.max(left, container.clientWidth - previewWidth - margin);
+  const right = Math.max(left, container.clientWidth - previewWidth - margin - sideWidth);
   const boundsBottom = Math.max(boundsTop, container.clientHeight - previewHeight - bottom - margin);
   return { left, top: boundsTop, right, bottom: boundsBottom };
 }
@@ -3843,7 +4039,9 @@ function isSelfPreviewCorner(value: unknown): value is SelfPreviewCorner {
 function endedCallScreen(call: EndedCall): HTMLElement {
   const view = element('div', `call-screen ended-call-screen${call.incomingLayout ? ' ended-incoming-call-screen' : ''}`);
   view.append(element('p', 'call-status', call.status));
-  view.append(avatar(call.peer || 'TiniTalk', call.peerLogin || call.peer, 'call-avatar', photoForAccountPeer(call.accountId, call.peerLogin)));
+  const photoSpace = element('div', 'call-photo-space');
+  photoSpace.append(avatar(call.peer || 'TiniTalk', call.peerLogin || call.peer, 'call-avatar', photoForAccountPeer(call.accountId, call.peerLogin)));
+  view.append(photoSpace);
   view.append(element('h2', 'call-name', call.peer || 'TiniTalk'));
   if (call.detail) view.append(element('p', 'call-detail', call.detail));
   if (call.explanation) view.append(element('p', 'call-ended-explanation', call.explanation));
@@ -4632,6 +4830,9 @@ async function init(): Promise<void> {
 }
 
 function startAppClient(): void {
+  bindPressRendering(screen, () => {
+    if (deferredRender) { deferredRender = false; renderApp(); }
+  });
   setSessionReplacedHandler(markSessionReplaced);
   document.addEventListener('click', () => callTones.unlock(), { capture: true });
   document.addEventListener('keydown', () => callTones.unlock(), { capture: true });
@@ -4687,7 +4888,11 @@ function languageButton(): HTMLElement {
   const selected = languages.find(language => language.tag === selectedLanguage());
   const button = actionButton('', showLanguagePicker, 'language-setting');
   const current = element('span', 'language-current', selected?.name || systemLanguageLabel());
-  button.append(element('span', 'language-label', t('language_title')), current);
+  const labels = element('span', 'language-labels');
+  labels.append(element('span', 'language-label', t('language_title')), current);
+  const arrow = element('span', 'chevron-bubble');
+  arrow.append(icon('chevron'));
+  button.append(labels, arrow);
   return button;
 }
 
@@ -4697,6 +4902,10 @@ function systemLanguageLabel(): string {
 
 function showLanguagePicker(): void {
   const modal = dialog(t('language_title'));
+  modal.overlay.classList.add('language-dialog-overlay');
+  modal.overlay.querySelector('h2')!.hidden = true;
+  modal.actions.hidden = true;
+  modal.overlay.onclick = event => { if (event.target === modal.overlay) modal.close(); };
   modal.body.classList.add('language-options');
   modal.body.setAttribute('role', 'radiogroup');
   modal.body.setAttribute('aria-label', t('language_title'));
@@ -4722,7 +4931,26 @@ function showLanguagePicker(): void {
     button.append(flag, name, check);
     modal.body.append(button);
   }
-  modal.actions.append(actionButton(t('text_cancel_12'), modal.close, 'text-action'));
+  const track = element('span', 'language-scroll-track');
+  const thumb = element('span', 'language-scroll-thumb');
+  track.ariaHidden = 'true'; track.append(thumb);
+  modal.body.parentElement!.append(track);
+  const updateScrollbar = () => {
+    const range = modal.body.scrollHeight - modal.body.clientHeight;
+    track.hidden = range <= 1;
+    const fraction = modal.body.clientHeight / Math.max(1, modal.body.scrollHeight);
+    const height = Math.max(24, track.clientHeight * fraction);
+    thumb.style.height = `${height}px`;
+    thumb.style.transform = `translateY(${Math.max(0, track.clientHeight - height) * modal.body.scrollTop / Math.max(1, range)}px)`;
+  };
+  modal.body.addEventListener('scroll', updateScrollbar, { passive: true });
+  const observer = new ResizeObserver(updateScrollbar);
+  observer.observe(modal.body);
+  const removed = new MutationObserver(() => {
+    if (!modal.overlay.isConnected) { observer.disconnect(); removed.disconnect(); }
+  });
+  removed.observe(root, { childList: true });
+  requestAnimationFrame(updateScrollbar);
 }
 
 let displayLanguage = currentLanguage();
@@ -4746,4 +4974,20 @@ onLanguageChange(() => {
   delete screen.dataset.viewKey;
   renderApp();
 });
-if (!showInstallationScreen(root, base)) { appStarted = true; startAppClient(); }
+if (!showInstallationScreen(root, base)) {
+  appStarted = true;
+  observeAdaptiveLayout(root, () => {
+    // Rebind only scrolling effects: forms, calls and media tracks must survive rotation.
+    window.dispatchEvent(new Event('app-layout-change'));
+    positionLocalPreview(callLayer.querySelector<HTMLElement>('.local-video-preview'));
+  });
+  const updateCameraFit = () => {
+    const box = remoteVideo.parentElement!;
+    remoteVideo.style.setProperty('--camera-fit', cameraFit(box.clientWidth, box.clientHeight, remoteVideo.videoWidth, remoteVideo.videoHeight));
+    positionLocalPreview(callLayer.querySelector<HTMLElement>('.local-video-preview'));
+  };
+  remoteVideo.addEventListener('resize', updateCameraFit);
+  const mediaLayoutObserver = new ResizeObserver(updateCameraFit);
+  mediaLayoutObserver.observe(remoteVideo.parentElement!);
+  startAppClient();
+}

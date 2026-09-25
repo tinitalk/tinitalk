@@ -11,16 +11,20 @@ function harness(initial: Language | '') {
   let selection = initial;
   let closed = false;
   const node = (_tag = '', className = '', text = ''): any => ({ className, text, children: [], attributes: {},
-    classList: { add() {} }, append(...children: unknown[]) { this.children.push(...children); },
+    classList: { add() {} }, style: {}, addEventListener() {}, append(...children: unknown[]) { this.children.push(...children); },
     setAttribute(key: string, value: string) { this.attributes[key] = value; },
   });
-  const modal = { body: node(), actions: node(), close() { closed = true; } };
+  const heading = node();
+  const modal = { overlay: { ...node(), querySelector: () => heading }, body: node(), actions: node(), close() { closed = true; } };
+  modal.body.parentElement = node();
+  class Observer { observe() {} disconnect() {} }
   const t = (key: Message, ...args: (string | number)[]) => translate(selection || 'de', key, ...args);
-  const ui = new Function('t', 'selectedLanguage', 'selectLanguage', 'languages', 'browserLanguages', 'resolveLanguage', 'translate', 'dialog', 'element', 'actionButton', 'closeDialog', `${code}; return { languageButton, showLanguagePicker, callToneState, callStatusText, callReplies };`)(
+  const ui = new Function('t', 'selectedLanguage', 'selectLanguage', 'languages', 'browserLanguages', 'resolveLanguage', 'translate', 'dialog', 'element', 'actionButton', 'closeDialog', 'ResizeObserver', 'MutationObserver', 'root', 'requestAnimationFrame', 'icon', `${code}; return { languageButton, showLanguagePicker, callToneState, callStatusText, callReplies };`)(
     t, () => selection, async (value: Language | '') => { expect(closed).toBe(true); selection = value; },
     languages, () => ['de-DE'], resolveLanguage, translate, () => modal, node,
     (label: string, action: () => unknown, cls: string) => ({ ...node('button', cls, label), click: action }),
     async () => { closed = true; },
+    Observer, Observer, node(), () => {}, () => node(),
   );
   return { ui, modal, selection: () => selection };
 }
@@ -37,7 +41,8 @@ it('shows all languages, a system-language label and a highlighted current selec
   expect(spanish.attributes['aria-checked']).toBe('true');
   await choices.find((n: any) => n.children[1].lang === 'ja').click();
   expect(selection()).toBe('ja');
-  expect(ui.languageButton().children[0].text).toBe(translate('ja', 'language_title'));
+  expect(ui.languageButton().children[0].children[0].text).toBe(translate('ja', 'language_title'));
+  expect(modal.actions.hidden).toBe(true);
 });
 
 it('changes call labels and reply choices without changing call phases', () => {

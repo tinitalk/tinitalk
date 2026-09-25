@@ -17,11 +17,11 @@ function passwordDialogHarness(passwordSet: boolean) {
   const account = { id: 'a', server: 'https://family.example', login: 'alice', token: 'old-token', passwordAuth: true, passwordSet };
   const nodes = new Map<string, any>();
   const element = (_tag: string, className: string, textContent = '') => {
-    const node = { textContent, append: vi.fn(), addEventListener: vi.fn(), isConnected: true };
+    const node = { textContent, classList: { add() {} }, append: vi.fn(), addEventListener: vi.fn(), isConnected: true };
     nodes.set(className, node);
     return node;
   };
-  const modal = { body: { append: vi.fn() }, actions: { append: vi.fn() } };
+  const modal = { overlay: { classList: { add() {} } }, body: { append: vi.fn() }, actions: { append: vi.fn() } };
   const closeDialog = vi.fn(), requireAccountLogin = vi.fn(), notice = vi.fn(), connectAccount = vi.fn();
   const fields = new Map([['current_password', 'old-password'], ['new_password', 'new-password'], ['confirm_password', 'new-password']]);
   class FormDataStub { get(name: string) { return name === 'current_password' && !passwordSet ? null : fields.get(name); } }

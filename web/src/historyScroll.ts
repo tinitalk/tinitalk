@@ -11,7 +11,7 @@ export function bindHistoryScroll(scroller: HTMLElement, up: HTMLButtonElement, 
   const small = page.querySelector<HTMLElement>('.compact-avatar');
   const smallName = page.querySelector<HTMLElement>('.compact-contact strong');
   const address = scroller.querySelector<HTMLElement>('.profile-login');
-  const contact = Boolean(large && name && small && smallName && address);
+  const contact = Boolean(large && name && small && smallName && address) && !page.closest('.compact-landscape');
   const dates = Array.from(scroller.querySelectorAll<HTMLElement>('.day-label'));
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const clones: HTMLElement[] = [];
@@ -221,6 +221,7 @@ export function bindHistoryScroll(scroller: HTMLElement, up: HTMLButtonElement, 
   return () => {
     disposed = true; cancelAnimation(); cancelAnimationFrame(paintFrame); resize.disconnect();
     clones.forEach(copy => copy.remove()); spacer?.remove();
+    page.classList.remove('is-collapsed'); pinned?.classList.remove('pinned');
     scroller.removeEventListener('scroll', onScroll); scroller.removeEventListener('wheel', onWheel);
     scroller.removeEventListener('touchstart', onTouchStart); scroller.removeEventListener('touchend', onTouchEnd); scroller.removeEventListener('touchcancel', onTouchEnd);
     scroller.removeEventListener('pointerdown', onPointerDown); scroller.removeEventListener('keydown', onKeyDown);

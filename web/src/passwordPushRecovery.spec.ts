@@ -28,7 +28,7 @@ function harness(enabled = true, passwordSet = true) {
   const notifications = new Map([[account.id, enabled]]);
   const elements: Record<string, { onsubmit?: (event: { preventDefault(): void }) => void }> = {};
   const element = vi.fn((_tag, className) => {
-    const node = { append() {}, addEventListener() {},
+    const node = { classList: { add() {} }, append() {}, addEventListener() {},
       onsubmit: undefined as ((event: { preventDefault(): void }) => void) | undefined };
     elements[className] = node;
     return node;
@@ -41,7 +41,7 @@ function harness(enabled = true, passwordSet = true) {
   const notice = vi.fn();
   const changePassword = vi.fn(async () => { order.push('password'); return { token: 'new-token' }; });
   const requireAccountLogin = vi.fn();
-  const modal = { body: { append() {} }, actions: { append() {} } };
+  const modal = { overlay: { classList: { add() {} } }, body: { append() {} }, actions: { append() {} } };
   const code = functionCode(['changePasswordDialog', 'resumeAccountActivation', 'restorePushRegistration']);
   const app = localizedFunction('dependencies', `
     const {account,list,notifications,saveAccount,claim,enablePush,connectAccount,closeDialog,notice,

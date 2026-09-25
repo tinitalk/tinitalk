@@ -16,7 +16,7 @@ function functionCode(names: string[]): string {
 function profilePasswordActionHarness(api: ReturnType<typeof vi.fn>) {
   const code = functionCode(['loadProfilePasswordAction']);
   const account = {id:'a', token:'token', sessionId:'session', passwordAuth:true, passwordSet:true};
-  const actions = {isConnected:true, append:vi.fn()};
+  const actions = {isConnected:true, append:vi.fn(), closest: () => null};
   const load = localizedFunction('api', 'account', `
     const list = [account], removingAccounts = new Set(), rotatingCredentials = new Set();
     const saveAccount = async () => {}, actionButton = label => label;

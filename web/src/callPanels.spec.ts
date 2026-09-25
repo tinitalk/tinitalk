@@ -149,6 +149,29 @@ it.each([true, false])('preserves incoming header geometry only when ending a ri
   expect((render(outgoing) as Node).className).not.toContain('ended-incoming-call-screen');
 });
 
+it.each([true, false])('keeps camera rotation visible without disabling audio selection (can switch: %s)', canSwitch => {
+  const call = { id: 'camera', peer: 'Bob', connectedAt: Date.now(), video: {
+    remoteSending: true, remoteStream: {}, requested: false, sending: canSwitch, canSwitchCamera: canSwitch,
+    screen: { remote: false },
+  } };
+  const action = (label: string, _icon: string, css: string, onclick: () => void, disabled = false) => {
+    const node = element('button', css, label); node.onclick = onclick; node.disabled = disabled; return node;
+  };
+  const render = new Function('element', 't', 'roundCallAction', `
+    let localPreviewCallId, localPreviewDragPosition, videoControlsVisible = true;
+    const prepareVideoControls = () => {}, callStatusText = () => 'In call', callDurationText = () => '1:00';
+    const audioOutputSelectionSupported = () => true, currentAudioOutputLabel = () => 'Speaker';
+    const microphoneControlIcon = () => 'mic';
+    ${code('videoCallScreen')} return videoCallScreen;
+  `)(element, (key: string) => key, action);
+  const view: Node = render(call);
+  const controls = view.children.find(node => node.className === 'video-controls')!;
+  const actions = controls.children.find(node => node.className === 'call-actions video-actions')!;
+  expect(actions.children.map(node => node.text)).toEqual(['text_rotate_173', 'text_camera_175', 'text_audio_181', 'text_microphone_178', 'text_end_call_98']);
+  expect(actions.children[0].disabled).toBe(!canSwitch);
+  expect(actions.children[2].disabled).toBe(false);
+});
+
 it('keeps waiting caller identity and photos above separate action rows', async () => {
   const calls = [
     {account: {id: 'one'}, event: {payload: {caller_login: 'same'}}, peer: 'A very long caller name', confirmed: true},
