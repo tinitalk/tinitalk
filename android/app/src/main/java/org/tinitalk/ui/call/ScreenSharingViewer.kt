@@ -200,15 +200,14 @@ private fun ScreenImage(
                 (pan.y * imagePixels.y).coerceIn(-limitY, limitY))
         }
         if (source != null) {
-            VideoCallRenderer(
-                source, mirror = false, localOverlay = false,
+            ScreenVideoRenderer(
+                source,
                 modifier = Modifier.size(imageWidth, imageHeight).graphicsLayer {
                     scaleX = zoom; scaleY = zoom
                     val translation = limitedPan(zoom)
                     translationX = translation.x; translationY = translation.y
                 },
                 contentDescription = appString(R.string.text_the_other_person_s_screen_199),
-                keepLastFrame = true,
                 onFrameSizeChanged = { w, h -> if (w > 0 && h > 0) aspect = w.toFloat() / h },
                 onFrameVisibilityChanged = { frameVisible = it },
             )

@@ -298,7 +298,7 @@ private class StableSurfaceViewRenderer(
 }
 
 /** Prevents an in-flight decoder callback from reaching a renderer after teardown begins. */
-private class GuardedRendererSink(
+internal class GuardedRendererSink(
     private val renderer: VideoSink,
     onVisibilityChanged: (Boolean) -> Unit,
     private val onFrameSizeChanged: (Int, Int) -> Unit,
