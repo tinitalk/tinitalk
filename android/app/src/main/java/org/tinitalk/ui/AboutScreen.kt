@@ -1,9 +1,12 @@
 package org.tinitalk.ui
+import androidx.compose.foundation.layout.fillMaxHeight
 
 import org.tinitalk.i18n.appString
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -13,16 +16,23 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,12 +40,16 @@ import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.Role
 import org.tinitalk.i18n.AppLanguage
@@ -49,9 +63,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import org.tinitalk.BuildConfig
 import org.tinitalk.R
 import org.tinitalk.data.ServerCheckDetails
@@ -69,12 +86,20 @@ internal fun AboutScreen(
 ) {
     var languagePicker by remember { mutableStateOf(false) }
     if (languagePicker) {
-        AlertDialog(
+        Dialog(
             onDismissRequest = { languagePicker = false },
-            title = { Text(appString(R.string.language_title)) },
-            text = {
+            properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = true),
+        ) {
+            Surface(
+                modifier = Modifier.padding(vertical = 16.dp).widthIn(max = 560.dp).fillMaxWidth()
+                    .testTag("language-picker").semantics { paneTitle = appString(R.string.language_title) },
+                shape = MaterialTheme.shapes.extraLarge,
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                val languageScrollState = rememberScrollState()
                 Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()).selectableGroup(),
+                    modifier = Modifier.testTag("language-list").languageScrollbar(languageScrollState)
+                        .verticalScroll(languageScrollState).padding(12.dp).selectableGroup(),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     (listOf("" to AppLanguage.systemLanguageLabel()) + AppLanguage.sortedLanguages()).forEach { (tag, label) ->
@@ -118,9 +143,8 @@ internal fun AboutScreen(
                         }
                     }
                 }
-            },
-            confirmButton = { TextButton(onClick = { languagePicker = false }) { Text(appString(R.string.text_cancel_12)) } },
-        )
+            }
+        }
     }
     var details by remember(serverUrl) { mutableStateOf<ServerCheckDetails?>(null) }
     var checking by remember(serverUrl) { mutableStateOf(serverUrl.isNotBlank()) }
@@ -143,6 +167,7 @@ internal fun AboutScreen(
     }
 
     BackHandler(onBack = onBack)
+    val landscape = compactLandscape()
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -155,11 +180,10 @@ internal fun AboutScreen(
                     }
                 },
             )
-            Column(
-                modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
-            ) {
+            val header: @Composable () -> Unit = {
                 Row(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 8.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("about-header")
+                        .heightIn(min = if (landscape) 48.dp else 64.dp).padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CompositionLocalProvider(LocalRippleConfiguration provides null) {
@@ -178,21 +202,23 @@ internal fun AboutScreen(
                     )
                 }
 
+            }
+            val content: @Composable (Modifier) -> Unit = { modifier ->
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = modifier.testTag("about-details"),
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    item(key = "about-brand") {
+                    if (!landscape) item(key = "about-brand") {
                         Column(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            AppMark(84.dp)
+                            AppMark(112.dp)
                             Spacer(Modifier.heightIn(min = 18.dp))
                             Text(
                                 "TiniTalk",
-                                style = MaterialTheme.typography.headlineMedium,
+                                style = MaterialTheme.typography.headlineLarge,
                                 fontWeight = FontWeight.Bold,
                             )
                         }
@@ -200,16 +226,29 @@ internal fun AboutScreen(
                     item(key = "about-language") {
                         Surface(
                             onClick = { languagePicker = true },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().testTag("about-language"),
                             shape = RoundedCornerShape(22.dp),
                             color = MaterialTheme.colorScheme.surface,
                         ) {
-                            Column(Modifier.padding(20.dp)) {
-                                Text(appString(R.string.language_title), style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    AppLanguage.supported[AppLanguage.selection] ?: AppLanguage.systemLanguageLabel(),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(appString(R.string.language_title), style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        AppLanguage.supported[AppLanguage.selection] ?: AppLanguage.systemLanguageLabel(),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Box(Modifier.size(48.dp).testTag("about-language-chevron")
+                                    .clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
+                                    contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_chevron_right),
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(23.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -239,7 +278,51 @@ internal fun AboutScreen(
                     }
                 }
             }
+            if (landscape) {
+                Row(Modifier.fillMaxSize()) {
+                    Column(Modifier.weight(LandscapeIdentityPaneWeight).fillMaxHeight()
+                        .testTag("landscape-identity-panel").landscapeIdentityPane()) {
+                        header()
+                        Column(Modifier.weight(1f).fillMaxWidth()
+                            .verticalScroll(rememberScrollState()).padding(top = 24.dp, bottom = 16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            AppMark(112.dp)
+                            Text("TiniTalk", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    content(Modifier.weight(1f - LandscapeIdentityPaneWeight).fillMaxHeight()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.End)))
+                }
+            } else {
+                Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                    header()
+                    content(Modifier.weight(1f).fillMaxWidth())
+                }
+            }
         }
+    }
+}
+
+/** Always show the scroll position when languages overflow, even before the first gesture. */
+@Composable
+private fun Modifier.languageScrollbar(state: ScrollState): Modifier {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    return drawWithContent {
+        drawContent()
+        val scrollRange = state.maxValue
+        if (scrollRange <= 0 || scrollRange == Int.MAX_VALUE) return@drawWithContent
+        val inset = 18.dp.toPx()
+        val trackHeight = size.height - inset * 2
+        if (trackHeight <= 0f) return@drawWithContent
+        val width = 4.dp.toPx()
+        val x = size.width - 8.dp.toPx()
+        val radius = CornerRadius(width / 2)
+        val thumbHeight = (trackHeight * size.height / (size.height + scrollRange))
+            .coerceIn(24.dp.toPx().coerceAtMost(trackHeight), trackHeight)
+        val thumbTop = inset + (trackHeight - thumbHeight) * (state.value.toFloat() / scrollRange).coerceIn(0f, 1f)
+        drawRoundRect(color.copy(alpha = 0.12f), Offset(x, inset), Size(width, trackHeight), radius)
+        drawRoundRect(color.copy(alpha = 0.65f), Offset(x, thumbTop), Size(width, thumbHeight), radius)
     }
 }
 
