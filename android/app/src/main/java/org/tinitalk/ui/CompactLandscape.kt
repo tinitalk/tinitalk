@@ -2,7 +2,8 @@ package org.tinitalk.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.background
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
@@ -43,8 +44,9 @@ internal fun usesLandscapeLayout(widthDp: Int, heightDp: Int): Boolean =
 
 @Composable
 internal fun landscapeLayout(): Boolean {
-    val configuration = LocalConfiguration.current
-    return usesLandscapeLayout(configuration.screenWidthDp, configuration.screenHeightDp)
+    val size = LocalWindowInfo.current.containerSize
+    val density = LocalDensity.current.density
+    return usesLandscapeLayout((size.width / density).toInt(), (size.height / density).toInt())
 }
 
 /** Only short landscape windows need reduced sizes and spacing. */
@@ -53,8 +55,9 @@ internal fun usesCompactLandscape(widthDp: Int, heightDp: Int): Boolean =
 
 @Composable
 internal fun compactLandscape(): Boolean {
-    val configuration = LocalConfiguration.current
-    return usesCompactLandscape(configuration.screenWidthDp, configuration.screenHeightDp)
+    val size = LocalWindowInfo.current.containerSize
+    val density = LocalDensity.current.density
+    return usesCompactLandscape((size.width / density).toInt(), (size.height / density).toInt())
 }
 
 internal const val LandscapeIdentityPaneWeight = 0.38f
