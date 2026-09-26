@@ -10,6 +10,56 @@ import java.util.concurrent.TimeUnit
 
 class SerializedCameraLifecycleTest {
     @Test
+    fun selectedCameraSurvivesPauseAndRepeatedCaptureRestart() {
+        val queue = ManualCameraQueue()
+        val attempts = mutableListOf<FakeCameraAttempt>()
+        val provider = object : CameraAttemptProvider<String> {
+            override fun candidates() = listOf(
+                CameraAttemptCandidate("front", CameraFacing.Front, "back"),
+                CameraAttemptCandidate("back", CameraFacing.Back, "front"),
+            )
+            override fun create(candidate: CameraAttemptCandidate, events: CameraAttemptEvents) =
+                FakeCameraAttempt(candidate.id, candidate.facing, candidate.oppositeTarget, queue)
+                    .also { it.events = events; attempts += it }
+        }
+        val lifecycle = SerializedCameraLifecycle(queue, ImmediateCameraQueue, ImmediateCameraQueue,
+            provider, CameraLifecycleCallbacks<String>())
+        lifecycle.start()
+        queue.runAll()
+        val front = attempts.last()
+        assertEquals(CameraFacing.Front, front.facing)
+        front.events.onFirstFrame()
+        queue.runAll()
+        lifecycle.switchCamera()
+        queue.runAll()
+        front.switchEvents.onDone(CameraFacing.Back)
+        queue.runAll()
+
+        repeat(2) {
+            lifecycle.pause()
+            queue.runAll()
+            lifecycle.start()
+            queue.runAll()
+            assertEquals("back", attempts.last().name)
+            attempts.last().events.onFirstFrame()
+            queue.runAll()
+        }
+
+        lifecycle.switchCamera()
+        queue.runAll()
+        attempts.last().switchEvents.onDone(CameraFacing.Front)
+        queue.runAll()
+        lifecycle.pause()
+        queue.runAll()
+        // A late callback from the old capture must not overwrite the selected camera.
+        front.switchEvents.onDone(CameraFacing.Back)
+        queue.runAll()
+        lifecycle.start()
+        queue.runAll()
+        assertEquals("front", attempts.last().name)
+    }
+
+    @Test
     fun failedStopRetriesAfterPeerCloseThenDisposesSafely() {
         val control = ManualCameraQueue()
         var shouldFailStop = true

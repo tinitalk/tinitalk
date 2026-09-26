@@ -108,6 +108,8 @@ internal class SerializedCameraLifecycle<Track>(
     private var current: CameraAttempt<Track>? = null
     private var firstFrameSeen = false
     private var switchPending = false
+    // The controller survives Activity recreation; capture attempts do not.
+    private var preferredFacing = CameraFacing.Front
 
     fun start() {
         val nextGeneration = generation.incrementAndGet()
@@ -201,7 +203,7 @@ internal class SerializedCameraLifecycle<Track>(
             candidates = runCatching(provider::candidates).getOrElse {
                 terminalFailure(expectedGeneration, it.message ?: "failed to enumerate cameras")
                 return@retireCurrent
-            }
+            }.sortedBy { it.facing != preferredFacing }
             candidateIndex = 0
             tryNext(expectedGeneration, null)
         }
@@ -263,6 +265,7 @@ internal class SerializedCameraLifecycle<Track>(
     private fun firstFrame(expectedGeneration: Long, attempt: CameraAttempt<Track>) {
         if (!isWanted(expectedGeneration) || current !== attempt || firstFrameSeen) return
         firstFrameSeen = true
+        preferredFacing = attempt.facing
         postMain(expectedGeneration) { callbacks.onCaptureStarted(attempt.facing) }
     }
 
@@ -290,6 +293,7 @@ internal class SerializedCameraLifecycle<Track>(
         if (!isWanted(expectedGeneration) || current !== attempt || !switchPending) return
         switchPending = false
         attempt.facing = facing
+        preferredFacing = facing
         postMain(expectedGeneration) { callbacks.onFacingChanged(facing) }
     }
 
