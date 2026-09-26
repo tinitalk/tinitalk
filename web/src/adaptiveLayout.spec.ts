@@ -1,7 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { compactLandscape, cameraFit, previewSize, observeAdaptiveLayout } from './adaptiveLayout';
+import { compactLandscape, landscapeLayout, cameraFit, previewSize, observeAdaptiveLayout } from './adaptiveLayout';
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('uses two panes on landscape tablets without compact phone sizing', () => {
+  for (const [width, height] of [[1280, 800], [1024, 768], [960, 600]]) {
+    expect(landscapeLayout(width, height)).toBe(true);
+    expect(compactLandscape(width, height)).toBe(false);
+    expect(landscapeLayout(height, width)).toBe(false);
+  }
+  expect(landscapeLayout(800, 800)).toBe(false);
+  expect(landscapeLayout(599, 360)).toBe(false);
+  expect(landscapeLayout(600, 360)).toBe(true);
+});
 
 describe('compact phone landscape', () => {
   it('uses the app bounds, not the desktop viewport', () => {
@@ -15,7 +26,7 @@ describe('compact phone landscape', () => {
 });
 
 it('preserves the layout while typing but reacts to a real rotation without replacing nodes', () => {
-  let bounds = { width: 800, height: 700 }, editing = false;
+  let bounds = { width: 600, height: 800 }, editing = false;
   let resize!: () => void;
   const classes = new Set<string>();
   const disconnect = vi.fn(), changed = vi.fn();
@@ -25,13 +36,13 @@ it('preserves the layout while typing but reacts to a real rotation without repl
     classList: { contains: (name: string) => classes.has(name), toggle: (name: string, value: boolean) => value ? classes.add(name) : classes.delete(name) } };
   const stop = observeAdaptiveLayout(root as unknown as HTMLElement, changed);
   editing = true;
-  bounds = { width: 800, height: 350 }; resize();
-  expect(classes.has('compact-landscape')).toBe(false);
+  bounds = { width: 600, height: 350 }; resize();
+  expect(classes.has('landscape-layout')).toBe(false);
   bounds = { width: 844, height: 390 }; resize();
-  expect(classes.has('compact-landscape')).toBe(true);
+  expect(classes.has('landscape-layout')).toBe(true);
   expect(changed).toHaveBeenCalledOnce();
   bounds = { width: 390, height: 500 }; resize();
-  expect(classes.has('compact-landscape')).toBe(false);
+  expect(classes.has('landscape-layout')).toBe(false);
   stop(); expect(disconnect).toHaveBeenCalledOnce();
 });
 

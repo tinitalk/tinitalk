@@ -1270,7 +1270,7 @@ function wireFavoriteDrag(listEl: HTMLElement): void {
 }
 
 function historyScrollHost(scroller: HTMLElement): HTMLElement {
-  return scroller.closest('.compact-landscape')
+  return scroller.closest('.landscape-layout')
     ? scroller.querySelector<HTMLElement>('.contact-history') ?? scroller : scroller;
 }
 
@@ -3898,7 +3898,7 @@ function positionLocalPreview(preview: HTMLElement | null): void {
   if (!preview) return;
   const container = localPreviewContainer(preview);
   const video = preview.querySelector<HTMLVideoElement>('video');
-  const side = Boolean(preview.closest('.compact-landscape'));
+  const side = Boolean(preview.closest('.landscape-layout'));
   const controls = container.querySelector<HTMLElement>('.video-controls');
   const top = videoControlsVisible ? container.querySelector<HTMLElement>('.video-call-top')?.getBoundingClientRect().height ?? 0 : 0;
   const availableWidth = container.clientWidth - 24 - (side && videoControlsVisible ? controls?.getBoundingClientRect().width ?? 0 : 0);
@@ -3976,7 +3976,7 @@ function localPreviewBounds(preview: HTMLElement): LocalPreviewBounds {
   const previewWidth = rect.width || preview.offsetWidth || 96;
   const previewHeight = rect.height || preview.offsetHeight || Math.round(previewWidth * 16 / 9);
   const top = videoControlsVisible ? container.querySelector<HTMLElement>('.video-call-top')?.getBoundingClientRect().height ?? 0 : 0;
-  const side = Boolean(preview.closest('.compact-landscape'));
+  const side = Boolean(preview.closest('.landscape-layout'));
   const controls = container.querySelector<HTMLElement>('.video-controls')?.getBoundingClientRect();
   const bottom = videoControlsVisible && !side ? controls?.height ?? 0 : 0;
   const sideWidth = videoControlsVisible && side ? controls?.width ?? 0 : 0;

@@ -20,7 +20,7 @@ import org.tinitalk.call.CallDirection
 import org.tinitalk.call.CallEndReason
 import org.tinitalk.call.CallReplyCode
 import org.tinitalk.data.ContactAddress
-import org.tinitalk.ui.compactLandscape
+import org.tinitalk.ui.landscapeLayout
 
 @Composable
 fun EndedCallScreen(
@@ -64,7 +64,7 @@ fun EndedCallScreen(
             prominentAvatar = true,
             keepFooterVisible = preserveIncomingLayout,
             scrollable = !preserveIncomingLayout,
-            detailAccessory = if (compactLandscape()) null else explanationContent,
+            detailAccessory = if (landscapeLayout()) null else explanationContent,
             landscapeHasActions = false,
             landscapeStatusDetail = explanationContent,
         ) {

@@ -1,6 +1,10 @@
-/** Match the Android short, wide layout, using the app viewport rather than the desktop window. */
+/** Match Android using the app bounds, not the surrounding desktop window. */
+export function landscapeLayout(width: number, height: number): boolean {
+  return width >= 600 && width > height;
+}
+
 export function compactLandscape(width: number, height: number): boolean {
-  return width >= 600 && height < 600 && width > height;
+  return landscapeLayout(width, height) && height < 600;
 }
 
 export function cameraFit(width: number, height: number, frameWidth: number, frameHeight: number): 'cover' | 'contain' {
@@ -24,9 +28,12 @@ export function observeAdaptiveLayout(root: HTMLElement, changed: () => void): (
     const editing = document.activeElement?.matches('input, textarea, [contenteditable=true]');
     if (editing && Math.abs(width - lastWidth) < 2) return;
     lastWidth = width;
-    const wide = compactLandscape(width, height);
-    if (root.classList.contains('compact-landscape') === wide) return;
-    root.classList.toggle('compact-landscape', wide);
+    const wide = landscapeLayout(width, height);
+    const compact = compactLandscape(width, height);
+    if (root.classList.contains('landscape-layout') === wide &&
+        root.classList.contains('compact-landscape') === compact) return;
+    root.classList.toggle('landscape-layout', wide);
+    root.classList.toggle('compact-landscape', compact);
     changed();
   };
   const observer = new ResizeObserver(update);

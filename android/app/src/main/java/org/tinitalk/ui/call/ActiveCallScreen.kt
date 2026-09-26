@@ -254,7 +254,7 @@ fun ActiveCallScreen(
                     showSharingNotice(appString(R.string.text_screen_sharing_stopped_48))
                 },
                 modifier = Modifier.align(Alignment.TopEnd).then(
-                    if (org.tinitalk.ui.compactLandscape()) Modifier.navigationBarsPadding() else Modifier),
+                    if (org.tinitalk.ui.landscapeLayout()) Modifier.navigationBarsPadding() else Modifier),
             )
         }
         AnimatedVisibility(
@@ -544,7 +544,7 @@ private fun AudioActiveCallScreen(
             fontScale = LocalDensity.current.fontScale,
             cameraActionVisible = cameraActionVisible,
         )
-        if (layout.scrollable && !org.tinitalk.ui.compactLandscape()) {
+        if (layout.scrollable && !org.tinitalk.ui.landscapeLayout()) {
             ConstrainedAudioActiveCallScreen(
                 peerName = peerName,
                 contactAddress = contactAddress,
@@ -842,7 +842,7 @@ private fun VideoActiveCallScreen(
     onVideoVisibilityChanged: (Boolean) -> Unit,
     onEnd: () -> Unit,
 ) {
-    val landscape = org.tinitalk.ui.compactLandscape()
+    val landscape = org.tinitalk.ui.landscapeLayout()
     val localSource = videoState.localTrack
     val remoteSource = videoState.remoteTrack
     var localFrameVisible by remember(localSource) { mutableStateOf(false) }

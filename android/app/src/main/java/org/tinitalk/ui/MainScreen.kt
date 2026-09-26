@@ -888,8 +888,8 @@ private fun HomeScreen(
         Box(
             modifier = if (selectedAccountContact == null) Modifier else Modifier.clearAndSetSemantics {},
         ) {
-            AppPage(onAbout, onOpenProfile, showHeader = !compactLandscape(), hasNavigation = true) {
-                val landscape = compactLandscape()
+            AppPage(onAbout, onOpenProfile, showHeader = !landscapeLayout(), hasNavigation = true) {
+                val landscape = landscapeLayout()
                 val navigationDividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
                 Row(Modifier.fillMaxSize()) {
                     if (landscape) NavigationRail(
@@ -1465,7 +1465,7 @@ private fun AppPage(
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         // Navigation components paint to the edge and apply their own content insets.
         val pageInsets = when {
-            hasNavigation && compactLandscape() -> Modifier
+            hasNavigation && landscapeLayout() -> Modifier
             hasNavigation -> Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
             else -> Modifier.safeDrawingPadding()
         }

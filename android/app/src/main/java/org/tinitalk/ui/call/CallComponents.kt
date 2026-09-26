@@ -55,7 +55,7 @@ import androidx.compose.ui.unit.sp
 import org.tinitalk.R
 import org.tinitalk.data.ContactAddress
 import org.tinitalk.ui.ContactAvatar
-import org.tinitalk.ui.compactLandscape
+import org.tinitalk.ui.landscapeLayout
 import org.tinitalk.ui.landscapeIdentityPane
 import org.tinitalk.ui.LandscapeIdentityPaneWeight
 import org.tinitalk.ui.theme.CallBackgroundBottom
@@ -142,7 +142,7 @@ internal fun CallScreenSurface(
     landscapeStatusDetail: (@Composable () -> Unit)? = null,
     footer: @Composable ColumnScope.() -> Unit,
 ) {
-    val landscape = compactLandscape()
+    val landscape = landscapeLayout()
     val compact = LocalDensity.current.fontScale >= 1.5f
     val avatarSize = if (prominentAvatar) {
         prominentCallAvatarSize(LocalDensity.current.fontScale)

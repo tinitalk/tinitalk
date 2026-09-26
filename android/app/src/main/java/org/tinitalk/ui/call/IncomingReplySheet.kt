@@ -157,8 +157,8 @@ private fun IncomingReplySheetContent(
                 .padding(bottom = if (density.fontScale >= 1.5f) 12.dp else 24.dp)
                 .clipToBounds()) {
                 val maximumBodyHeight = (maxHeight - reservedHandleHeight).coerceAtLeast(48.dp)
-                Column(Modifier.align(if (org.tinitalk.ui.compactLandscape()) Alignment.BottomEnd else Alignment.BottomCenter)
-                    .fillMaxWidth(if (org.tinitalk.ui.compactLandscape()) 0.56f else 1f)
+                Column(Modifier.align(if (org.tinitalk.ui.landscapeLayout()) Alignment.BottomEnd else Alignment.BottomCenter)
+                    .fillMaxWidth(if (org.tinitalk.ui.landscapeLayout()) 0.56f else 1f)
                     .offset { IntOffset(0, renderedOffset) }) {
                     val title = stringResource(R.string.call_reply_sheet_title)
                     val actionLabel = stringResource(if (blocked) R.string.call_reply_close else R.string.call_reply_open)

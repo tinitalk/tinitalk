@@ -128,13 +128,13 @@ internal fun WaitingCallsPanel(
     }
     if (state.calls.isEmpty()) return
     BoxWithConstraints(modifier.fillMaxWidth().then(
-        if (org.tinitalk.ui.compactLandscape()) Modifier.navigationBarsPadding()
+        if (org.tinitalk.ui.landscapeLayout()) Modifier.navigationBarsPadding()
             .padding(end = LandscapeCallControlsWidth) else Modifier)) {
         // Grow with the callers instead of clipping the second row at a fixed height.
         // Keep part of the ongoing call accessible; longer lists can still scroll.
         Surface(
-            modifier = Modifier.align(Alignment.TopEnd).widthIn(max = if (org.tinitalk.ui.compactLandscape()) 380.dp else maxWidth)
-                .fillMaxWidth().heightIn(max = if (org.tinitalk.ui.compactLandscape())
+            modifier = Modifier.align(Alignment.TopEnd).widthIn(max = if (org.tinitalk.ui.landscapeLayout()) 380.dp else maxWidth)
+                .fillMaxWidth().heightIn(max = if (org.tinitalk.ui.landscapeLayout())
                     (maxHeight - 144.dp).coerceAtLeast(80.dp) else maxHeight * 0.65f),
             shape = MaterialTheme.shapes.large,
             color = Color(0xFF36383C),

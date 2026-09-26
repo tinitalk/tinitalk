@@ -53,7 +53,7 @@ internal fun FavoriteContactsPager(
     content: @Composable (favorites: Boolean) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val contentWidth = if (compactLandscape()) Modifier.widthIn(max = 600.dp) else Modifier
+    val contentWidth = if (landscapeLayout()) Modifier.widthIn(max = 600.dp) else Modifier
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
         if (hasFavorites) {
             Box(contentWidth.fillMaxWidth()) {

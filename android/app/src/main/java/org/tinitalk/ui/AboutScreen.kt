@@ -167,7 +167,7 @@ internal fun AboutScreen(
     }
 
     BackHandler(onBack = onBack)
-    val landscape = compactLandscape()
+    val landscape = landscapeLayout()
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -183,7 +183,7 @@ internal fun AboutScreen(
             val header: @Composable () -> Unit = {
                 Row(
                     modifier = Modifier.fillMaxWidth().testTag("about-header")
-                        .heightIn(min = if (landscape) 48.dp else 64.dp).padding(horizontal = 8.dp),
+                        .heightIn(min = if (compactLandscape()) 48.dp else 64.dp).padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CompositionLocalProvider(LocalRippleConfiguration provides null) {

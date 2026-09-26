@@ -37,9 +37,19 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
-/** Use two panes only on wide, short windows; keyboard visibility must not change the layout. */
+/** Two panes fit both landscape phones and tablets. Dimensions refer to the app window. */
+internal fun usesLandscapeLayout(widthDp: Int, heightDp: Int): Boolean =
+    widthDp >= 600 && widthDp > heightDp
+
+@Composable
+internal fun landscapeLayout(): Boolean {
+    val configuration = LocalConfiguration.current
+    return usesLandscapeLayout(configuration.screenWidthDp, configuration.screenHeightDp)
+}
+
+/** Only short landscape windows need reduced sizes and spacing. */
 internal fun usesCompactLandscape(widthDp: Int, heightDp: Int): Boolean =
-    widthDp >= 600 && heightDp < 600 && widthDp > heightDp
+    usesLandscapeLayout(widthDp, heightDp) && heightDp < 600
 
 @Composable
 internal fun compactLandscape(): Boolean {
@@ -88,7 +98,7 @@ internal fun AccountPasswordDialog(
     dismissButton: @Composable () -> Unit,
     landscapeDescription: @Composable () -> Unit = {},
 ) {
-    if (!compactLandscape()) {
+    if (!landscapeLayout()) {
         AlertDialog(onDismissRequest = onDismissRequest, title = title, text = text,
             confirmButton = confirmButton, dismissButton = dismissButton)
     } else {

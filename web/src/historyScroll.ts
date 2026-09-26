@@ -11,7 +11,7 @@ export function bindHistoryScroll(scroller: HTMLElement, up: HTMLButtonElement, 
   const small = page.querySelector<HTMLElement>('.compact-avatar');
   const smallName = page.querySelector<HTMLElement>('.compact-contact strong');
   const address = scroller.querySelector<HTMLElement>('.profile-login');
-  const contact = Boolean(large && name && small && smallName && address) && !page.closest('.compact-landscape');
+  const contact = Boolean(large && name && small && smallName && address) && !page.closest('.landscape-layout');
   const dates = Array.from(scroller.querySelectorAll<HTMLElement>('.day-label'));
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const clones: HTMLElement[] = [];

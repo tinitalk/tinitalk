@@ -53,6 +53,12 @@ class MainScreenContactNavigationTest {
     val composeRule = createEmptyComposeRule()
 
     @Test
+    @Config(qualifiers = "w1280dp-h800dp-land-mdpi")
+    fun tabletLandscapeSwipesSwitchOnlyContactTabs() {
+        checkSwipesSwitchOnlyContactTabs()
+    }
+
+    @Test
     @Config(qualifiers = "w1000dp-h400dp-land-mdpi")
     fun landscapeSwipesSwitchOnlyContactTabsIncludingTheirGutters() {
         checkSwipesSwitchOnlyContactTabs()

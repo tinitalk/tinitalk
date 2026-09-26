@@ -108,7 +108,7 @@ fun ContactScreen(
         if (contact.canCall != false) unavailableCallVisible = false
     }
     val name = contactDisplayName(contact.displayName)
-    val landscape = compactLandscape()
+    val landscape = landscapeLayout()
     val action = contactCallAction(
         contact.login,
         ongoingCall,
@@ -170,7 +170,7 @@ fun ContactScreen(
                 },
                 toolbar = { titleModifier ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().heightIn(min = if (landscape) 48.dp else 64.dp).padding(horizontal = 8.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = if (compactLandscape()) 48.dp else 64.dp).padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         CompositionLocalProvider(LocalRippleConfiguration provides null) {

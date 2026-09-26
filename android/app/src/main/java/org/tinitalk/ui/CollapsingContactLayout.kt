@@ -91,7 +91,7 @@ internal fun CollapsingContactLayout(
 ) {
     val scope = rememberCoroutineScope()
     BoxWithConstraints(modifier) {
-        if (compactLandscape()) {
+        if (landscapeLayout()) {
             Row(Modifier.fillMaxSize()) {
                 Column(Modifier.weight(LandscapeIdentityPaneWeight).fillMaxSize()
                     .testTag("landscape-identity-panel").landscapeIdentityPane()) {
@@ -101,7 +101,7 @@ internal fun CollapsingContactLayout(
                         horizontalAlignment = Alignment.CenterHorizontally) {
                         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(),
                             contentAlignment = Alignment.Center) {
-                            val photoSize = minOf(maxWidth, maxHeight)
+                            val photoSize = minOf(280.dp, maxWidth, maxHeight)
                             if (photoSize > 0.dp) ContactAvatar(
                                 address = address, displayName = name, fallbackLogin = login,
                                 size = photoSize, borderWidth = 2.dp)

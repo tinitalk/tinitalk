@@ -315,7 +315,7 @@ private fun ChangePasswordDialog(
     var confirmation by remember { mutableStateOf("") }
     var validationMessage by remember { mutableStateOf<String?>(null) }
     val retry = retrySeconds(retryAtMillis)
-    val landscape = compactLandscape()
+    val landscape = landscapeLayout()
     val passwordHint: @Composable () -> Unit = {
         Text(appString(R.string.text_at_least_8_characters_we_recommend_combining_lowercase_and_upperc_318),
             style = MaterialTheme.typography.bodySmall,

@@ -79,7 +79,7 @@ internal fun ScreenSharingViewer(
         onVideoVisibilityChanged(true)
         onDispose { onVideoVisibilityChanged(false) }
     }
-    val landscape = org.tinitalk.ui.compactLandscape()
+    val landscape = org.tinitalk.ui.landscapeLayout()
     val safePadding = WindowInsets.safeDrawing.asPaddingValues()
     val layoutDirection = LocalLayoutDirection.current
     // Landscape panel backgrounds reach the edges; their contents handle safe insets separately.
@@ -98,9 +98,9 @@ internal fun ScreenSharingViewer(
         val panelSemantics = if (controlsVisible) Modifier else Modifier.clearAndSetSemantics {}
         ScreenSharingPanels(
             progress = panelProgress,
-            sideControls = org.tinitalk.ui.compactLandscape(),
+            sideControls = org.tinitalk.ui.landscapeLayout(),
             header = {
-                if (org.tinitalk.ui.compactLandscape()) {
+                if (org.tinitalk.ui.landscapeLayout()) {
                     androidx.compose.foundation.layout.Row(
                         Modifier.fillMaxWidth().then(panelSemantics).background(ScreenPanelBackground)
                             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Start))
@@ -128,7 +128,7 @@ internal fun ScreenSharingViewer(
                 }
             },
             controls = {
-                if (org.tinitalk.ui.compactLandscape()) {
+                if (org.tinitalk.ui.landscapeLayout()) {
                     LandscapeCallControls(muted, currentEndpoint, availableEndpoints,
                         backgroundColor = ScreenPanelBackground,
                         cameraVisible = false, cameraEnabled = false, cameraRequested = false,
